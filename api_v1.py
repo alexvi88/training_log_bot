@@ -443,6 +443,78 @@ async def _owned_workout(workout_id: int, user_id: int):
     return workout
 
 
+_SUGGESTION_COOLDOWN_DAYS = 2
+_SUGGESTION_RECENT_LIMIT = 2
+
+
+async def _suggested_next_exercise(
+    user_id: int, last_finished_id: Optional[int], done_ids: tuple[int, ...]
+) -> Optional[dict[str, Any]]:
+    """Что этот человек делал сразу после `last_finished_id` в прошлый раз —
+    та же подсказка одним тапом, что бот строит в `_idle_view`
+    (handlers/workout.py), только для REST: те же db-вызовы, то же решение,
+    просто без aiogram-клавиатуры вокруг."""
+    if last_finished_id is None:
+        return None
+    workout_id = await db.find_last_finished_workout_with_exercise(user_id, last_finished_id)
+    if workout_id is None:
+        return None
+    nxt = await db.get_next_exercise_in_workout(workout_id, last_finished_id)
+    if nxt is None or nxt["exercise_id"] == last_finished_id or nxt["exercise_id"] in done_ids:
+        return None
+    ex = await db.get_exercise(nxt["exercise_id"])
+    if ex is None or ex["is_archived"]:
+        return None
+    return {"id": ex["id"], "name": ex["display_name"]}
+
+
+async def next_exercise_suggestions(request: Request) -> JSONResponse:
+    """Подсказки на экране «упражнение не выбрано» без плана — те же два
+    источника, что и в боте (`handlers/workout._idle_view`): «что шло следом
+    в прошлый раз» одним упражнением и до двух «обычно идёт после» / просто
+    недавних, без повтора того, что уже открыто в этой тренировке или
+    сделано за последние двое суток.
+
+    Только для незапланированной тренировки: план (день программы, повтор)
+    приложение уже строит на своей стороне (`ActiveWorkoutViewModel.plan`) и
+    сюда за подсказкой не ходит вовсе, поэтому здесь ничего о плане не знают.
+    """
+    user_id = await _authed_user_id(request)
+    last_finished_param = request.query_params.get("last_finished_id")
+    last_finished_id: Optional[int] = None
+    if last_finished_param:
+        try:
+            last_finished_id = int(last_finished_param)
+        except ValueError as exc:
+            raise ApiError(400, "bad_request", "last_finished_id must be int") from exc
+        await _owned_exercise(last_finished_id, user_id)
+    done_param = request.query_params.get("done_ids", "")
+    try:
+        done_ids = tuple(int(x) for x in done_param.split(",") if x)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", "done_ids must be a comma-separated list of ints") from exc
+
+    suggested = await _suggested_next_exercise(user_id, last_finished_id, done_ids)
+    exclude = done_ids + ((suggested["id"],) if suggested else ())
+    cooldown = (dt.datetime.now() - dt.timedelta(days=_SUGGESTION_COOLDOWN_DAYS)).isoformat(timespec="seconds")
+    rows: list = []
+    if last_finished_id is not None:
+        rows = await db.list_common_followups(
+            user_id, last_finished_id, limit=_SUGGESTION_RECENT_LIMIT,
+            exclude_ids=exclude, not_used_since=cooldown,
+        )
+    if not rows:
+        rows = await db.list_recent_exercises(
+            user_id, limit=_SUGGESTION_RECENT_LIMIT, exclude_ids=exclude, not_used_since=cooldown
+        )
+    return JSONResponse(
+        {
+            "suggested": suggested,
+            "recent": [{"id": r["id"], "name": r["display_name"]} for r in rows],
+        }
+    )
+
+
 async def _owned_exercise(exercise_id: int, user_id: int):
     exercise = await db.get_exercise(exercise_id)
     if exercise is None or exercise["user_id"] != user_id:
@@ -1233,6 +1305,7 @@ routes = [
     Route("/exercises", list_exercises, methods=["GET"]),
     Route("/exercises", create_exercise, methods=["POST"]),
     Route("/exercises/merge", merge_exercises, methods=["POST"]),
+    Route("/exercises/next-suggestions", next_exercise_suggestions, methods=["GET"]),
     Route("/exercises/{exercise_id:int}", update_exercise, methods=["PATCH"]),
     Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/unarchive", unarchive_exercise, methods=["POST"]),
