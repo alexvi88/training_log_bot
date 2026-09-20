@@ -42,8 +42,15 @@ async def _linked_client(fresh_db, client_factory, telegram_id=111):
     return client
 
 
-async def _log_session(user_id: int, ex_id: int, day: int, sets: list[tuple[float, int]]) -> int:
-    """Одна законченная тренировка с перечисленными подходами этого упражнения."""
+async def _log_session(
+    user_id: int, ex_id: int, day: int, sets: list[tuple[float, int]],
+    rpes: list[float | None] | None = None,
+) -> int:
+    """Одна законченная тренировка с перечисленными подходами этого упражнения.
+
+    `rpes` — по одному на подход, `None` там, где RPE не проставляли; без
+    аргумента — вся тренировка без RPE, как у большинства существующих тестов.
+    """
     workout_id = await db.create_finished_workout(
         user_id,
         started_at=f"2026-03-{day:02d}T10:00:00",
@@ -52,7 +59,10 @@ async def _log_session(user_id: int, ex_id: int, day: int, sets: list[tuple[floa
     block_id = await db.create_block(workout_id, "single")
     await db.add_block_exercise(block_id, ex_id, 0)
     for i, (weight, reps) in enumerate(sets):
-        await db.add_set(block_id, ex_id, round_index=i + 1, order_in_round=0, weight=weight, reps=reps)
+        rpe = rpes[i] if rpes else None
+        await db.add_set(
+            block_id, ex_id, round_index=i + 1, order_in_round=0, weight=weight, reps=reps, rpe=rpe
+        )
     return workout_id
 
 
@@ -101,6 +111,36 @@ async def test_point_value_is_e1rm_not_the_heaviest_weight(fresh_db, client_fact
     assert point["value"] != 60.0
     # Лучший подход подписывается в том же виде, в каком продукт пишет подход везде.
     assert point["top_set"] == "50×10"
+
+
+# ---------- has_rpe ----------
+
+
+async def test_has_rpe_false_when_no_set_ever_recorded_one(fresh_db, client_factory):
+    """Клиент решает по этому флагу, объяснять ли RPE в подсказке под графиком
+    (progress.e1rm_hint) — у большинства подходов его вовсе не проставляют."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _exercise(user_id)
+    await _log_session(user_id, ex_id, 1, [(50.0, 10), (60.0, 2)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()
+
+    assert body["has_rpe"] is False
+
+
+async def test_has_rpe_true_when_any_set_has_one(fresh_db, client_factory):
+    """По ВСЕЙ истории, а не только по показанному окну — RPE у самой первой
+    тренировки тоже должен включить флаг."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _exercise(user_id)
+    await _log_session(user_id, ex_id, 1, [(50.0, 10), (60.0, 2)], rpes=[None, 9.0])
+    await _log_session(user_id, ex_id, 2, [(55.0, 8)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()
+
+    assert body["has_rpe"] is True
 
 
 # ---------- период ----------

@@ -165,6 +165,11 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
     sessions = await progress_data.load_sessions(exercise_id, user["e1rm_formula"])
     series = progress_data.chart_series(sessions)
     notes = await db.list_workout_notes_for_exercise(exercise_id)
+    # По ВСЕЙ истории упражнения, а не по показанному окну: RPE — не то, что
+    # меняется от периода к периоду, а факт «этим упражнением вообще
+    # пользуются RPE», и клиенту он нужен ровно чтобы решить, объяснять ли
+    # смысл @9 в подсказке под графиком (см. progress.e1rm_hint).
+    has_rpe = any(s.rpe is not None for session in sessions for s in session.sets)
 
     shown = series.sessions[-limit:]
     moments = series.points[-limit:]
@@ -200,6 +205,7 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
             "comparison": _comparison_json(
                 values, series.is_bodyweight, len(shown) == len(series.points), user["unit"]
             ),
+            "has_rpe": has_rpe,
         }
     return JSONResponse(payload)
 
