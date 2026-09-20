@@ -14,6 +14,12 @@ FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
 # переписываются — пользовательское фото пропало бы при первой же выкладке.
 EXERCISE_PHOTO_DIR = os.getenv("EXERCISE_PHOTO_DIR", "/data/media/exercise_photos")
 
+# Вложения к истории чата с AI-тренером (chat_attachments.py): фото к
+# вопросу и кадр-превью присланного видео. Тот же постоянный том, что и у
+# EXERCISE_PHOTO_DIR, своя подпапка — свой каталог, а не общий с фото
+# упражнений, чтобы очистка/бэкап одного не задевал другой ненароком.
+AI_CHAT_MEDIA_DIR = os.getenv("AI_CHAT_MEDIA_DIR", "/data/media/ai_chat")
+
 # Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 

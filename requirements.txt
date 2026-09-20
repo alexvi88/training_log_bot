@@ -8,3 +8,7 @@ python-dotenv==1.2.2
 PyJWT[crypto]==2.14.0
 # HTTP/2 для httpx: APNs принимает только его, без h2 пуши не уходят вовсе
 h2==4.4.1
+# Кадр-превью присланного видео (chat_attachments.py): статический ffmpeg-
+# бинарник внутри платформенного wheel, без системных зависимостей — на
+# Amvera нет ни apt, ни Dockerfile, только pip install (см. amvera.yaml).
+imageio-ffmpeg==0.5.1
