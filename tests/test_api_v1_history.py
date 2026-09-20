@@ -13,6 +13,7 @@ import pytest
 
 import api_v1
 import db
+import workout_card
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,6 +64,20 @@ async def test_workout_card_returns_png(fresh_db, client_factory):
     assert resp.headers["content-type"] == "image/png"
     # Магическая сигнатура PNG — не пустой ответ и правда картинка, а не JSON.
     assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+async def test_workout_card_uses_app_theme_not_bot_theme(fresh_db, client_factory):
+    """`/v1` просит theme="app" (см. api_v1_history.get_workout_card) — эта
+    ручка отдаёт не тот же растр, что рисует бот для того же хода."""
+    client = await _linked_client(fresh_db, client_factory, 111)
+    workout_id = await _finished_workout_with_set(111)
+    user = await db.get_user(111)
+
+    resp = await client.get(f"/workouts/{workout_id}/card")
+    assert resp.status_code == 200, resp.text
+
+    bot_card = await workout_card.build(workout_id, user)
+    assert resp.content != bot_card.png
 
 
 async def test_workout_card_someone_elses_workout_is_404(fresh_db, client_factory):

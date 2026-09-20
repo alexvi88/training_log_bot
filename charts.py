@@ -516,22 +516,42 @@ def _quote_marks() -> tuple[str, str]:
     return i18n.t("chart.quote_open"), i18n.t("chart.quote_close")
 
 
+#  bot — тёмная терминальная карточка, исходный и до сих пор единственный вид
+#  на стороне Telegram (handlers/history.py); менять её незачем — это
+#  визуальная идентичность самого бота, а не что-то унаследованное по ошибке.
+#  app — тёплая светлая палитра iOS-приложения (TrainingLog/DesignSystem/
+#  Theme.swift: paper/ink/brick/lamp), используется только вызовом из /v1
+#  (api_v1_history.py) — владелец продукта забраковал тёмную схему и в самом
+#  приложении (см. Backdrop.swift), и просил ту же гамму на визитке, которой
+#  делятся из него.
+_CARD_THEMES = {
+    "bot": {"BG": "#12161d", "FG": "#e6e6e6", "ACCENT": "#4f8cff", "MUTED": "#9aa4b2", "NOTE": "#d9c98a"},
+    "app": {"BG": "#faf7f4", "FG": "#161210", "ACCENT": "#b4472f", "MUTED": "#8a7f78", "NOTE": "#d4a32a"},
+}
+
+
 def render_workout_card(
     title: str,
     body_lines: list[str],
     footer: str,
     note: str | None = None,
+    theme: str = "bot",
 ) -> bytes:
-    """Render a workout breakdown as a dark, shareable card image.
+    """Render a workout breakdown as a shareable card image.
 
     Kept emoji-free on purpose: matplotlib's bundled font renders emoji as
     blank boxes, so the card relies on colour and weight for hierarchy instead.
+
+    `theme` picks the palette (see `_CARD_THEMES`) — everything below this
+    point (layout, wrapping, row styles) is identical between them, only the
+    five colours change.
     """
-    BG = "#12161d"
-    FG = "#e6e6e6"
-    ACCENT = "#4f8cff"
-    MUTED = "#9aa4b2"
-    NOTE = "#d9c98a"
+    colors = _CARD_THEMES[theme]
+    BG = colors["BG"]
+    FG = colors["FG"]
+    ACCENT = colors["ACCENT"]
+    MUTED = colors["MUTED"]
+    NOTE = colors["NOTE"]
 
     # (text, style) rows, top to bottom.
     rows: list[tuple[str, str]] = [(_workout_card_header(), "header"), (title, "muted"), ("", "normal")]

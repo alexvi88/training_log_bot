@@ -32,12 +32,17 @@ class WorkoutCardImage:
     footer: str
 
 
-async def build(workout_id: int, user) -> Optional[WorkoutCardImage]:
+async def build(workout_id: int, user, theme: str = "bot") -> Optional[WorkoutCardImage]:
     """Готовая картинка тренировки, или `None`, если тренировка не найдена.
 
     `user` — строка `users` того, кто просит карточку (для языка, единиц и
     формулы e1RM); её достаёт вызывающий, а не этот модуль, — ровно как
     `hint_for_workout` в `progression_data.py`.
+
+    `theme` — палитра растра (см. `charts.render_workout_card`): "bot"
+    (по умолчанию, тёмная терминальная — как в Telegram) или "app" (светлая,
+    в цветах iOS-приложения). Бот своё значение не передаёт вовсе — ему
+    положен дефолт; `api_v1_history.py` просит "app" явно.
     """
     workout = await db.get_workout(workout_id)
     if workout is None:
@@ -50,5 +55,5 @@ async def build(workout_id: int, user) -> Optional[WorkoutCardImage]:
         title, body, footer, note = formatting.build_workout_card(
             started, blocks, workout["note"], unit=user["unit"]
         )
-    png = await asyncio.to_thread(charts.render_workout_card, title, body, footer, note)
+    png = await asyncio.to_thread(charts.render_workout_card, title, body, footer, note, theme)
     return WorkoutCardImage(png=png, title=title, footer=footer)

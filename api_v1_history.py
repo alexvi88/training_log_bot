@@ -57,7 +57,10 @@ async def get_workout_card(request: Request) -> Response:
     workout_id = int(request.path_params["workout_id"])
     await _owned_workout(workout_id, user_id)
     user = await db.get_user(user_id)
-    card = await workout_card.build(workout_id, user)
+    # "app" — светлая палитра iOS-приложения (см. charts._CARD_THEMES), не
+    # тёмная терминальная бота: карточкой делятся прямо из приложения, и она
+    # не должна выглядеть вставкой из другого продукта.
+    card = await workout_card.build(workout_id, user, theme="app")
     if card is None:
         raise ApiError(404, "not_found", "workout not found")
     return Response(card.png, media_type="image/png")
