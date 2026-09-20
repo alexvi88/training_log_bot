@@ -3310,14 +3310,23 @@ async def discard_workout(workout_id: int) -> None:
 
     Порядок обязателен: `exercise_notes` держит FK на `workouts`, и без их
     удаления финальный DELETE падает по констрейнту уже после того, как
-    подходы и блоки стёрты. Отсюда же и rollback: частичное удаление,
-    оставленное в открытой транзакции, закоммитит первый же следующий
-    (чужой) commit на этом соединении — и тренировка останется в базе
-    выпотрошенной, без подходов, но со статусом.
+    подходы и блоки стёрты. `set_write_attempts` держит FK на `sets` —
+    появилась она позже (идемпотентность записи подхода по HTTP), и без её
+    чистки ПЕРЕД удалением подходов падает уже самый первый DELETE, стоило
+    хоть одному подходу этой тренировки прийти от приложения. Отсюда же и
+    rollback: частичное удаление, оставленное в открытой транзакции,
+    закоммитит первый же следующий (чужой) commit на этом соединении — и
+    тренировка останется в базе выпотрошенной, без подходов, но со статусом.
     """
     async with _write_lock:
         db = conn()
         try:
+            await db.execute(
+                "DELETE FROM set_write_attempts WHERE set_id IN "
+                "(SELECT s.id FROM sets s JOIN workout_blocks wb ON wb.id = s.block_id "
+                "WHERE wb.workout_id = ?)",
+                (workout_id,),
+            )
             await db.execute(
                 "DELETE FROM sets WHERE block_id IN "
                 "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
