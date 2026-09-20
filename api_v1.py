@@ -677,7 +677,14 @@ async def log_set(request: Request) -> JSONResponse:
     )
     cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     row = await cur.fetchone()
-    return JSONResponse(_set_json(row), status_code=201)
+    user = await db.get_user(user_id)
+    # Тот же 🔥, что бот ставит реакцией на сообщение с подходом
+    # (handlers.workout._sets_beat_record) — здесь это поле в ответе, а не
+    # реакция: у приложения нет своих Telegram-сообщений на подход.
+    is_record = await view_builder.sets_beat_record(
+        exercise_id, workout_id, [(weight, reps, rpe)], user["e1rm_formula"]
+    )
+    return JSONResponse({**_set_json(row), "is_record": is_record}, status_code=201)
 
 
 async def log_sets_from_text(request: Request) -> JSONResponse:
@@ -1174,6 +1181,15 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     с уже закрытой сессией."""
     data = _workout_json(workout)
     extras_by_exercise = await _history_extras_by_exercise(workout, user) if user is not None else {}
+    # 🥇 — тот же gold_index, что бот считает для живого трекера
+    # (handlers.workout._refresh_live, mark_golds=True): единственный сет ЭТОЙ
+    # тренировки, который бьёт до-этой-тренировки личный рекорд e1RM. Только
+    # для ещё идущей тренировки — у бота это только live-экран, финальная
+    # карточка отдаёт текстовый 🔥 (record_text) вместо него.
+    gold_formula = None
+    if workout["status"] != "finished":
+        formula_user = user or await db.get_user(workout["user_id"])
+        gold_formula = formula_user["e1rm_formula"]
     blocks_json = []
     for block in await db.list_blocks_for_workout(workout["id"]):
         exercises_json = []
@@ -1185,11 +1201,23 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
             # Заметка к упражнению в ЭТОЙ тренировке (live:note бота) — новое
             # поле, не ломает старых клиентов: они его просто не читают.
             exercise_note = await db.get_workout_exercise_note(workout["id"], be["exercise_id"])
+            gold_index = None
+            if gold_formula is not None and own_sets:
+                previous_best = await db.max_e1rm_before_workout(
+                    workout["user_id"], be["exercise_id"], workout["id"], gold_formula
+                )
+                gold_index = view_builder.best_gold_index(
+                    [(db.load_of(s), s["reps"], s["rpe"]) for s in own_sets],
+                    previous_best, gold_formula,
+                )
             exercises_json.append(
                 {
                     "exercise_id": be["exercise_id"],
                     "display_name": be["display_name"],
-                    "sets": [_set_json(s) for s in own_sets],
+                    "sets": [
+                        {**_set_json(s), "is_gold": i == gold_index}
+                        for i, s in enumerate(own_sets)
+                    ],
                     "record_text": record_text,
                     "has_record": record_text is not None,
                     "note": exercise_note,
