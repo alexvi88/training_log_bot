@@ -557,12 +557,16 @@ async def test_fb_ask_coach_dispatches_stored_voice_to_the_ai_handler(user_id, m
         called["file_id"] = msg.voice.file_id
         called["file_size"] = msg.voice.file_size
         called["duration"] = msg.voice.duration
+        # _handle_question (ai_trainer.py) читает msg.message_id напрямую,
+        # чтобы поставить реакцию 👀 — без него AttributeError на любом
+        # вопросе через «Спросить тренера про это» (см. _ReplayedMedia).
+        called["message_id"] = msg.message_id
 
     monkeypatch.setattr("handlers.ai_trainer.ai_voice_question", fake_ai_voice_question)
 
     await fallback.fb_ask_coach(callback, state)
 
-    assert called == {"file_id": "voice123", "file_size": 5000, "duration": 7}
+    assert called == {"file_id": "voice123", "file_size": 5000, "duration": 7, "message_id": 77}
     assert await state.get_state() == AITrainerFlow.chatting.state
     # Данные разово потрачены, повторный тап той же кнопки не сработает молча.
     assert (await state.get_data()).get("fb_file_id") is None
@@ -582,12 +586,13 @@ async def test_fb_ask_coach_dispatches_stored_photo_to_the_ai_handler(user_id, m
     async def fake_ai_photo_question(msg, st):
         called["file_id"] = msg.photo[-1].file_id
         called["caption"] = msg.caption
+        called["message_id"] = msg.message_id
 
     monkeypatch.setattr("handlers.ai_trainer.ai_photo_question", fake_ai_photo_question)
 
     await fallback.fb_ask_coach(callback, state)
 
-    assert called == {"file_id": "photo123", "caption": "жим лёжа"}
+    assert called == {"file_id": "photo123", "caption": "жим лёжа", "message_id": 78}
 
 
 async def test_fb_ask_coach_without_stored_media_answers_expired():

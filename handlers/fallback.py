@@ -143,6 +143,7 @@ class _ReplayedMedia:
     def __init__(
         self, callback: CallbackQuery, *, kind: str, file_id: str,
         file_size: Optional[int], duration: Optional[int], caption: str,
+        message_id: Optional[int] = None,
     ):
         self._bot = callback.bot
         self._chat_id = callback.message.chat.id
@@ -150,6 +151,11 @@ class _ReplayedMedia:
         self.from_user = callback.from_user
         self.chat = callback.message.chat
         self.caption = caption or None
+        # _handle_question (ai_trainer.py) реагирует 👀 на message.message_id —
+        # тот же исходный медиа-message, что человек прислал до кнопки «Спросить
+        # тренера про это». Без него — AttributeError, а не просто пропавшая
+        # реакция: код читает атрибут напрямую, не через getattr.
+        self.message_id = message_id
         if kind == "voice":
             self.voice = SimpleNamespace(file_id=file_id, file_size=file_size, duration=duration)
             self.photo = None
@@ -177,7 +183,7 @@ async def fb_ask_coach(callback: CallbackQuery, state: FSMContext) -> None:
     wrapper = _ReplayedMedia(
         callback, kind=kind, file_id=file_id,
         file_size=data.get("fb_file_size"), duration=data.get("fb_duration"),
-        caption=data.get("fb_caption") or "",
+        caption=data.get("fb_caption") or "", message_id=data.get("fb_message_id"),
     )
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=None)
