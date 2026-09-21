@@ -130,7 +130,12 @@ _DATA_URL_RE = re.compile(r"^data:([^;,]+);base64,(.+)$", re.DOTALL)
 
 
 def decode_data_url(
-    data_url: str, extension_by_mime: dict[str, str], *, field: str = "data_url"
+    data_url: str,
+    extension_by_mime: dict[str, str],
+    *,
+    field: str = "data_url",
+    max_bytes: Optional[int] = None,
+    too_big_error: Optional[tuple[int, str, str]] = None,
 ) -> tuple[bytes, str, str]:
     """`data:<mime>;base64,<payload>` → (сырые байты, mime, расширение по списку).
 
@@ -138,6 +143,20 @@ def decode_data_url(
     415, а не 400: тело запроса синтаксически валидно, просто формат вложения
     не поддержан. `field` — только для текста ошибки, чтобы «фото» и «видео»
     не путались в одном логе.
+
+    `max_bytes`/`too_big_error` — необязательная проверка потолка размера,
+    тем же кодом/текстом ошибки, что раньше собирал каждый вызывающий сам
+    ПОСЛЕ декодирования (`(status, code, message)`, ровно то, что уходит в
+    `ApiError(*too_big_error)`). Смысл лимитов не меняется — только момент
+    проверки: сперва оценка декодированного размера по длине самой base64-
+    строки, ДО base64.b64decode, а не после того, как заведомо огромное
+    вложение уже целиком легло в память. Base64 кодирует 3 байта в 4 символа
+    (плюс паддинг), поэтому декодированный размер не может быть больше
+    `ceil(len(payload) * 3 / 4)` — это гарантированная верхняя оценка, а не
+    догадка: она не может пропустить настоящее вложение мимо проверки, но
+    может (и должна) отсечь заведомо большее, не читая его байты. Точная
+    проверка после реального decode остаётся как второй барьер — на случай
+    percent-подобных искажений оценки, а не потому что ей не доверяют.
     """
     match = _DATA_URL_RE.match((data_url or "").strip())
     if not match:
@@ -151,10 +170,25 @@ def decode_data_url(
             "unsupported_media_type",
             f"unsupported format {mime!r} in {field}; allowed extensions: {allowed}",
         )
+    payload = match.group(2)
+    if max_bytes is not None and too_big_error is not None:
+        # Для валидного base64 (длина кратна 4, паддинг только "=" в конце)
+        # это точный декодированный размер, не просто прикидка сверху — учёт
+        # паддинга не даёт срезать честные вложения на самой границе лимита.
+        # Искажённый (не кратный 4, "=" не на месте) base64 всё равно упадёт
+        # чуть ниже, на настоящем b64decode, с тем же bad_request, что и
+        # раньше — эта оценка его не подменяет, только избегает лишнего
+        # decode для того, что уже видно как заведомо большое по длине строки.
+        padding = 2 if payload.endswith("==") else 1 if payload.endswith("=") else 0
+        estimated_bytes = (len(payload) * 3) // 4 - padding
+        if estimated_bytes > max_bytes:
+            raise ApiError(*too_big_error)
     try:
-        raw = base64.b64decode(match.group(2), validate=True)
+        raw = base64.b64decode(payload, validate=True)
     except Exception as exc:
         raise ApiError(400, "bad_request", f"invalid base64 payload in {field}") from exc
+    if max_bytes is not None and too_big_error is not None and len(raw) > max_bytes:
+        raise ApiError(*too_big_error)
     return raw, mime, ext
 
 

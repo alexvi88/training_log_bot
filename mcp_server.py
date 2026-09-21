@@ -48,6 +48,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import ai_trainer
 import api_v1
+import body_limit
 import config
 import db
 import game_server
@@ -431,7 +432,15 @@ def build_app():
     # first request would then fail with "Task group is not initialized").
     # A plain path-prefix dispatcher sidesteps that: lifespan always goes to
     # mcp_app, the only one of the two with startup/shutdown state.
-    return _PrefixDispatch(prefix="/v1", prefix_app=api_v1.build_app(), default_app=mcp_app)
+    app = _PrefixDispatch(prefix="/v1", prefix_app=api_v1.build_app(), default_app=mcp_app)
+    # Общий потолок на тело запроса — снаружи ОБОИХ приложений (см.
+    # body_limit.py про то, почему ни Starlette/uvicorn, ни amvera.yaml его
+    # не ставят сами): один процесс отвечает и за бота, и за весь этот порт,
+    # и слишком большое тело не должно валить его целиком, независимо от
+    # того, в /v1 оно пришло или в /mcp. Middleware пропускает lifespan-
+    # события мимо себя без изменений (см. её докстринг), так что порядок
+    # оборачивания здесь не важен для запуска/остановки mcp_app.
+    return body_limit.MaxBodySizeMiddleware(app, config.MAX_REQUEST_BODY_BYTES)
 
 
 class _PrefixDispatch:

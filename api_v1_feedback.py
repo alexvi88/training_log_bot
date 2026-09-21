@@ -52,6 +52,20 @@ JSON-теле, а не multipart. Формат и потолок байт — т
 своего»). Порядок ровно как в api_v1_ai.ask_question: проверка ДО вызова
 модели, `db.try_increment_ai_question_count` ПОСЛЕ успешного ответа — сбой
 провайдера не должен стоить человеку попытки.
+
+Busy-замок — тот же приём, что у `/ai/ask` (`api_v1_ai._busy`) и
+`/food/parse` (`api_v1_food._busy`), тот же общий примитив `busy_lock.py`, и
+своя, отдельная от них копия набора `_busy`: у бота фактчек тоже держит свой
+собственный набор, не общий с чатом тренера (см. `handlers.factcheck._busy`),
+по той же причине — разбор форварда не должен блокировать человеку основной
+чат и наоборот. Без замка два параллельных `POST /factcheck` одного
+пользователя оба читают ещё не увеличенный счётчик, оба проходят
+`ai_limits.check` и оба уходят в модель — `db.try_increment_ai_question_count`
+атомарен, но режет только сам счётчик, а не платные вызовы, которые к этому
+моменту уже сделаны. Бронь — ДО `ai_limits.check`, снимается в `finally` при
+любом исходе (исключение, таймаут, обычный успех); занятому человеку отдаём
+тот же 429/`busy`, что и у `/ai/ask`/`/food/parse` (`ai.screen.busy`), а не
+изобретаем свой текст.
 """
 
 from __future__ import annotations
@@ -69,6 +83,7 @@ import ai_limits
 import ai_trainer
 import api_v1_ai
 import api_v1_common as common
+import busy_lock
 import config
 import db
 import formatting
@@ -97,6 +112,11 @@ FEEDBACK_DAILY_LIMIT = 5
 
 # user_id -> (date отправки последнего отзыва, счётчик за этот день).
 _daily_counts: dict[int, tuple[dt.date, int]] = {}
+
+# Свой, отдельный от api_v1_ai._busy/api_v1_food._busy набор — см. докстринг
+# модуля про фактчек и почему он не делит замок ни с чатом тренера, ни с
+# разбором еды.
+_busy: set[int] = set()
 
 
 def _feedback_quota_left(user_id: int) -> bool:
@@ -162,14 +182,16 @@ async def submit_feedback(request: Request) -> JSONResponse:
         lang = user["lang"] if user is not None else "ru"
         with i18n.use_lang(lang):
             raw, _mime, _ext = common.decode_data_url(
-                image_data_url, api_v1_ai.IMAGE_EXTENSION_BY_MIME, field="image_data_url"
-            )
-            if len(raw) > MAX_IMAGE_BYTES:
-                raise ApiError(
+                image_data_url,
+                api_v1_ai.IMAGE_EXTENSION_BY_MIME,
+                field="image_data_url",
+                max_bytes=MAX_IMAGE_BYTES,
+                too_big_error=(
                     400,
                     "photo_too_big",
                     i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024)),
-                )
+                ),
+            )
         photo = raw
 
     if not _feedback_quota_left(user_id):
@@ -200,24 +222,35 @@ async def submit_factcheck(request: Request) -> JSONResponse:
     if len(text) > MAX_FACTCHECK_TEXT_LENGTH:
         raise ApiError(400, "bad_request", f"text must be at most {MAX_FACTCHECK_TEXT_LENGTH} characters")
 
-    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
-    if block is not None:
-        raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
 
+    # Бронь — ДО проверки лимита: см. докстринг модуля и `_busy` выше про то,
+    # почему без неё два параллельных запроса оба уходят в модель.
+    if not busy_lock.try_claim(_busy, user_id):
+        with i18n.use_lang(lang):
+            raise ApiError(429, "busy", i18n.t("ai.screen.busy"))
     try:
-        verdict = await asyncio.wait_for(
-            ai_trainer.fact_check_post(user_id, text, image_data_url),
-            timeout=config.AI_TOTAL_ANSWER_SECONDS,
-        )
-    except asyncio.TimeoutError as exc:
-        raise ApiError(504, "timeout", "fact-check did not answer in time") from exc
-    except Exception as exc:
-        raise ApiError(502, "factcheck_failed", "fact-check failed") from exc
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
 
-    # Квота — та же, что у /ai/ask (см. докстринг модуля): списывается только
-    # за состоявшийся разбор, сбой выше уже вернул бы 502/504 и до сюда не дошёл.
-    await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
-    return JSONResponse({"verdict": verdict})
+        try:
+            verdict = await asyncio.wait_for(
+                ai_trainer.fact_check_post(user_id, text, image_data_url),
+                timeout=config.AI_TOTAL_ANSWER_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ApiError(504, "timeout", "fact-check did not answer in time") from exc
+        except Exception as exc:
+            raise ApiError(502, "factcheck_failed", "fact-check failed") from exc
+
+        # Квота — та же, что у /ai/ask (см. докстринг модуля): списывается только
+        # за состоявшийся разбор, сбой выше уже вернул бы 502/504 и до сюда не дошёл.
+        await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
+        return JSONResponse({"verdict": verdict})
+    finally:
+        _busy.discard(user_id)
 
 
 routes = [
