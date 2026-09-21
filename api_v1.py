@@ -1250,9 +1250,35 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     (см. _history_extras_by_exercise). У прочих ручек (активная/бэкофилл-
     тренировка, правка заметки) `user` не передаётся: тренировка ещё не
     завершена, и этим полям взяться неоткуда — прошлое сравнивается только
-    с уже закрытой сессией."""
+    с уже закрытой сессией.
+
+    `group_tag` — готовый тег группы мышц у названия упражнения, тем же
+    способом и в том же регистре, что бот печатает в карточке и истории
+    (formatting.format_group_tag: локализованное имя капсом, скобки — на
+    вызывающем). Нужен и активной/бэкофилл-тренировке тоже (экран
+    предупреждения о зависшей тренировке показывает именно её), поэтому
+    считается не из extras_by_exercise, а всегда — язык берётся у `user`,
+    а если его не передали, подгружается тем же способом, что и для
+    gold_formula ниже.
+    """
     data = _workout_json(workout)
     extras_by_exercise = await _history_extras_by_exercise(workout, user) if user is not None else {}
+    lang_user = user or await db.get_user(workout["user_id"])
+    group_tag_cache: dict[int, str] = {}
+
+    async def group_tag_for(exercise_id: int) -> Optional[str]:
+        exercise = await db.get_exercise(exercise_id)
+        group_id = exercise["primary_group_id"] if exercise else None
+        if group_id is None:
+            return None
+        if group_id not in group_tag_cache:
+            group = await db.get_muscle_group(group_id)
+            if group is None:
+                return None
+            with i18n.use_lang(lang_user["lang"]):
+                group_tag_cache[group_id] = formatting.format_group_tag(group["name"])
+        return group_tag_cache[group_id]
+
     # 🥇 — тот же gold_index, что бот считает для живого трекера
     # (handlers.workout._refresh_live, mark_golds=True): единственный сет ЭТОЙ
     # тренировки, который бьёт до-этой-тренировки личный рекорд e1RM. Только
@@ -1260,8 +1286,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     # карточка отдаёт текстовый 🔥 (record_text) вместо него.
     gold_formula = None
     if workout["status"] != "finished":
-        formula_user = user or await db.get_user(workout["user_id"])
-        gold_formula = formula_user["e1rm_formula"]
+        gold_formula = lang_user["e1rm_formula"]
     blocks_json = []
     for block in await db.list_blocks_for_workout(workout["id"]):
         exercises_json = []
@@ -1295,6 +1320,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
                     "note": exercise_note,
                     "previous_sets_text": extras.get("previous_sets_text"),
                     "e1rm_text": extras.get("e1rm_text"),
+                    "group_tag": await group_tag_for(be["exercise_id"]),
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})
