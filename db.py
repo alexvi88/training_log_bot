@@ -3189,6 +3189,36 @@ async def get_or_create_active_workout(
         return cur.lastrowid, True
 
 
+async def get_or_create_backfill_workout(user_id: int, started_at: str) -> tuple[int, bool]:
+    """The user's open backfill workout, starting one if there isn't one.
+    Returns (workout_id, created).
+
+    Same incident as get_or_create_active_workout, just for the other status:
+    check and insert must happen under the same lock. api_v1.start_backfill_
+    workout used to look up get_backfill_workout, then call create_workout in
+    a separate step — two concurrent requests (bot + app, or a double tap)
+    both saw "no backfill workout" and each inserted one. There's no UNIQUE
+    constraint stopping that, and get_backfill_workout's `ORDER BY id LIMIT 1`
+    means the loser's row becomes a permanent ghost, invisible forever to
+    every caller that asks for "the" backfill workout.
+    """
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT id FROM workouts WHERE user_id = ? AND status = 'backfill' ORDER BY id LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"], False
+        cur = await db.execute(
+            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'backfill')",
+            (user_id, started_at),
+        )
+        await db.commit()
+        return cur.lastrowid, True
+
+
 async def create_workout(
     user_id: int,
     started_at: Optional[str] = None,
@@ -3305,6 +3335,35 @@ async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> Non
         await conn().commit()
 
 
+async def _delete_set_write_attempts(db: aiosqlite.Connection, where_sql: str, params: tuple) -> None:
+    """Снести строки `set_write_attempts`, ссылающиеся на подходы, которые
+    сейчас будут удалены — ОБЯЗАТЕЛЬНО до `DELETE FROM sets`, в той же
+    транзакции.
+
+    `set_write_attempts.set_id` — FK на `sets(id)` без `ON DELETE CASCADE`
+    (см. CREATE TABLE выше), а `PRAGMA foreign_keys=ON` включён на соединении.
+    Значит, `DELETE FROM sets` для подхода, у которого есть idempotency-запись
+    (то есть подход пришёл от приложения через HTTP с `idempotency_key` —
+    `append_set` ниже), падает `sqlite3.IntegrityError: FOREIGN KEY constraint
+    failed`, если строку `set_write_attempts` не убрать первой.
+
+    Этот же constraint ловил живой краш сразу в нескольких местах, которые
+    удаляют `sets` напрямую (discard_workout, delete_set,
+    delete_last_set_in_block, delete_last_set_for_exercise_in_block,
+    delete_block_and_sets) — каждое по одному и тому же сценарию «подход
+    записан приложением, потом удалён», поэтому чистка вынесена сюда одним
+    хелпером: новое место, удаляющее `sets`, не должно снова изобретать этот
+    же список и снова наступать на этот же баг. `where_sql` — условие на
+    таблицу `sets`, под которое подставляется `SELECT id FROM sets WHERE
+    <where_sql>`, так что вызывающая сторона просто описывает условием, какие
+    подходы удаляет.
+    """
+    await db.execute(
+        f"DELETE FROM set_write_attempts WHERE set_id IN (SELECT id FROM sets WHERE {where_sql})",
+        params,
+    )
+
+
 async def discard_workout(workout_id: int) -> None:
     """Снести тренировку целиком — вместе со всем, что на неё ссылается.
 
@@ -3313,8 +3372,9 @@ async def discard_workout(workout_id: int) -> None:
     подходы и блоки стёрты. `set_write_attempts` держит FK на `sets` —
     появилась она позже (идемпотентность записи подхода по HTTP), и без её
     чистки ПЕРЕД удалением подходов падает уже самый первый DELETE, стоило
-    хоть одному подходу этой тренировки прийти от приложения. Отсюда же и
-    rollback: частичное удаление, оставленное в открытой транзакции,
+    хоть одному подходу этой тренировки прийти от приложения (чистка —
+    `_delete_set_write_attempts`, общий хелпер, см. его докстроку). Отсюда же
+    и rollback: частичное удаление, оставленное в открытой транзакции,
     закоммитит первый же следующий (чужой) commit на этом соединении — и
     тренировка останется в базе выпотрошенной, без подходов, но со статусом.
 
@@ -3325,10 +3385,9 @@ async def discard_workout(workout_id: int) -> None:
     async with _write_lock:
         db = conn()
         try:
-            await db.execute(
-                "DELETE FROM set_write_attempts WHERE set_id IN "
-                "(SELECT s.id FROM sets s JOIN workout_blocks wb ON wb.id = s.block_id "
-                "WHERE wb.workout_id = ?)",
+            await _delete_set_write_attempts(
+                db,
+                "block_id IN (SELECT id FROM workout_blocks WHERE workout_id = ?)",
                 (workout_id,),
             )
             await db.execute(
@@ -4505,8 +4564,14 @@ async def delete_last_set_in_block(block_id: int) -> Optional[aiosqlite.Row]:
     if row is None:
         return None
     async with _write_lock:
-        await conn().execute("DELETE FROM sets WHERE id = ?", (row["id"],))
-        await conn().commit()
+        db = conn()
+        # Тот же FK, что в discard_workout: если этот подход пришёл от
+        # приложения (idempotency_key), у него есть строка в
+        # set_write_attempts, и без её чистки DELETE FROM sets падает
+        # constraint'ом (см. _delete_set_write_attempts).
+        await _delete_set_write_attempts(db, "id = ?", (row["id"],))
+        await db.execute("DELETE FROM sets WHERE id = ?", (row["id"],))
+        await db.commit()
     return row
 
 
@@ -4525,8 +4590,10 @@ async def delete_last_set_for_exercise_in_block(
     if row is None:
         return None
     async with _write_lock:
-        await conn().execute("DELETE FROM sets WHERE id = ?", (row["id"],))
-        await conn().commit()
+        db = conn()
+        await _delete_set_write_attempts(db, "id = ?", (row["id"],))
+        await db.execute("DELETE FROM sets WHERE id = ?", (row["id"],))
+        await db.commit()
     return row
 
 
@@ -4545,11 +4612,14 @@ async def delete_block_and_sets(block_id: int) -> None:
 
     Same rollback rule as discard_workout: a partial delete left uncommitted
     would ride in on the next unrelated commit on this connection and leave
-    the block gutted without actually being gone.
+    the block gutted without actually being gone. Same set_write_attempts FK
+    too — _delete_set_write_attempts clears the idempotency rows before the
+    sets they point at are deleted.
     """
     async with _write_lock:
         db = conn()
         try:
+            await _delete_set_write_attempts(db, "block_id = ?", (block_id,))
             await db.execute("DELETE FROM sets WHERE block_id = ?", (block_id,))
             await db.execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
             await db.execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
@@ -4621,8 +4691,13 @@ async def update_set(set_id: int, weight: float, reps: int, rpe: Optional[float]
 
 async def delete_set(set_id: int) -> None:
     async with _write_lock:
-        await conn().execute("DELETE FROM sets WHERE id = ?", (set_id,))
-        await conn().commit()
+        db = conn()
+        # Тот же FK, что в discard_workout: подход, записанный приложением с
+        # idempotency_key, оставляет строку в set_write_attempts, и без её
+        # чистки DELETE FROM sets падает constraint'ом.
+        await _delete_set_write_attempts(db, "id = ?", (set_id,))
+        await db.execute("DELETE FROM sets WHERE id = ?", (set_id,))
+        await db.commit()
 
 
 async def list_sets_for_exercise(exercise_id: int, exclude_workout_id: Optional[int] = None) -> list[aiosqlite.Row]:
