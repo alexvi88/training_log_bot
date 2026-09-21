@@ -32,6 +32,34 @@
 рассылка это наследует. Тихих часов тут нет намеренно: пояс у большинства
 неизвестен (см. разбор в engagement.py), а беззвучное сообщение никого не
 разбудит — ждать до утра ради этого не за чем.
+
+## App-only атлеты (Sign in with Apple без Telegram)
+
+`list_announcement_recipients` отдаёт получателей общим списком — телеграмных
+и app-only вперемешку (см. db.create_app_only_user: у app-only telegram_id из
+отрицательного диапазона, `telegram_linked = 0`, чата с ботом нет вовсе).
+Раньше `send_announcement` этого не различал и для app-only честно пытался
+`bot.send_message`/`send_photo` в несуществующий чат: Telegram отвечал
+ошибкой на каждого такого человека, `record_push` не писался, и на
+следующем перезапуске рассылка пыталась снова — а сам атлет анонс вообще не
+получал, хотя у него есть свой канал (APNs, см. engagement.py
+`_send_apns_push`/`_ios_device_token`), просто это не Telegram.
+
+Ветвление — по `users.telegram_linked`, тот же признак, каким engagement.py
+уже отличает app-only от обычных в `_deliver`. У app-only анонс уходит
+только в APNs (`_send_apns_announcement`) — Telegram-попытки для него нет
+вовсе, значит и дублировать анонс телеграмному каналу нечем. У обычных всё
+как раньше: только Telegram, без APNs — у них уже есть рабочая доставка, и
+класть баннер туда же означало бы получить один и тот же релиз дважды.
+`record_push` пишется в обоих случаях (даже если APNs не настроен или
+устройство не привязано) — ровно как в engagement.py: без отметки о
+доставке следующий тик рассылки увидит того же app-only человека как
+неотправленного и попробует снова, раз за разом.
+
+Баннер — генерический, `push_ios.ANNOUNCEMENT`: один и тот же текст
+("в дневнике что-то новое") для любого анонса, а не текст самого релиза —
+у APNs нет подписи к фото, и заводить отдельный короткий пул под каждый
+`ann.key` незачем (см. докстринг `push_ios.ANNOUNCEMENT`).
 """
 
 import asyncio
@@ -46,9 +74,11 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import FSInputFile
 
+import apns
 import config
 import db
 import keyboards
+import push_ios
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +241,31 @@ def _photo(ann: Announcement) -> FSInputFile | None:
     return None
 
 
+async def _ios_device_token(telegram_id: int) -> str | None:
+    """Тот же прямой SELECT, что engagement._ios_device_token, и по той же
+    причине: не своя функция в db.py, а короткое чтение уже существующей
+    таблицы push_tokens прямо здесь."""
+    cur = await db.conn().execute(
+        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = 'ios'",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    return row["device_token"] if row is not None else None
+
+
+async def _send_apns_announcement(telegram_id: int, ann: Announcement, lang: str) -> None:
+    """APNs-баннер анонса app-only атлету (см. докстринг модуля, «App-only
+    атлеты»). Ничего не делает молча, если APNs не настроен или устройство
+    не привязано — тот же контракт, что у engagement._send_apns_push."""
+    if not apns.is_configured():
+        return
+    device_token = await _ios_device_token(telegram_id)
+    if device_token is None:
+        return
+    title, body = await push_ios.ios_alert(telegram_id, push_ios.ANNOUNCEMENT, lang)
+    await apns.send_alert(telegram_id, device_token, title, body, category=push_ios.ANNOUNCEMENT)
+
+
 async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
     """Одна отправка, с одной повторной попыткой, если Telegram просит подождать."""
     kb = keyboards.announcement_keyboard(ann.buttons)
@@ -305,6 +360,20 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     sent = blocked = failed = 0
     today = dt.date.today().isoformat()
     for telegram_id in recipients:
+        user = await db.get_user(telegram_id)
+        if user is not None and not user["telegram_linked"]:
+            # App-only атлет — чата с ботом нет, Telegram-попытка тут ничего
+            # не доставит, только оставит ошибку в логе на каждого такого
+            # человека каждый прогон (см. докстринг модуля). Единственный
+            # канал у него — APNs, и она не должна ронять всю рассылку тем,
+            # кто идёт за ним по списку.
+            try:
+                await _send_apns_announcement(telegram_id, ann, user["lang"])
+            except Exception:
+                logger.exception("Announcement %s: APNs banner failed for user %s", ann.key, telegram_id)
+            sent += 1
+            await db.record_push(telegram_id, ann.key, ann.text, today)
+            continue
         try:
             await _send_one(bot, telegram_id, ann)
         except TelegramForbiddenError:

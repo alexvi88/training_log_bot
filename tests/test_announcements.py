@@ -7,8 +7,10 @@ import pytest
 from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError
 
 import announcements
+import apns
 import config
 import db as db_module
+import push_ios
 from handlers import admin
 
 pytestmark = pytest.mark.asyncio
@@ -452,6 +454,113 @@ async def test_failed_send_is_retried_on_the_next_start(fresh_db):
     second = FakeBot()
     assert await announcements.send_announcement(second, ann) == (1, 0, 0)
     assert [chat_id for chat_id, _ in second.sent] == [1]
+
+
+# ---------- app-only атлеты: APNs вместо Telegram ----------
+
+
+async def test_app_only_recipient_gets_apns_not_telegram(fresh_db, monkeypatch):
+    """У app-only атлета нет чата с ботом — Telegram-отправка для него не
+    вызывается вовсе, а анонс уходит баннером через APNs."""
+    app_user = await fresh_db.create_app_only_user()
+    app_id = app_user["telegram_id"]
+    await fresh_db.register_push_token(app_id, "ios", "device-token-1")
+    await _users(fresh_db, 1)  # обычный телеграмный получатель — контроль
+
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    sent_alerts = []
+
+    async def fake_send_alert(user_id, device_token, title, body, *, category=None):
+        sent_alerts.append((user_id, device_token, title, body, category))
+        return True
+
+    monkeypatch.setattr(apns, "send_alert", fake_send_alert)
+
+    bot = FakeBot()
+    ann = _announcement()
+    result = await announcements.send_announcement(bot, ann)
+
+    # Обычный получатель как и раньше — через Telegram.
+    assert [chat_id for chat_id, _ in bot.sent] == [1]
+    # App-only получатель — не через Telegram вовсе.
+    assert app_id not in [chat_id for chat_id, _ in bot.sent]
+    assert len(sent_alerts) == 1
+    user_id, device_token, title, body, category = sent_alerts[0]
+    assert user_id == app_id
+    assert device_token == "device-token-1"
+    assert category == push_ios.ANNOUNCEMENT
+    assert title and body
+
+    # Оба отметились доставленными — повторный прогон никому ничего не шлёт.
+    assert result == (2, 0, 0)
+    again = FakeBot()
+    sent_alerts.clear()
+    assert await announcements.send_announcement(again, ann) == (0, 0, 0)
+    assert again.sent == []
+    assert sent_alerts == []
+
+
+async def test_telegram_linked_recipient_never_gets_an_apns_duplicate(fresh_db, monkeypatch):
+    """Обычный (привязанный к Telegram) атлет получает анонс только там —
+    даже если у него на руках есть iOS-токен (например, поставил и приложение,
+    и продолжает пользоваться ботом)."""
+    await _users(fresh_db, 1)
+    await fresh_db.register_push_token(1, "ios", "device-token-linked")
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    send_alert = AsyncMock(return_value=True)
+    monkeypatch.setattr(apns, "send_alert", send_alert)
+
+    bot = FakeBot()
+    result = await announcements.send_announcement(bot, _announcement())
+
+    assert [chat_id for chat_id, _ in bot.sent] == [1]
+    send_alert.assert_not_awaited()
+    assert result == (1, 0, 0)
+
+
+async def test_app_only_without_device_token_does_not_break_the_broadcast(fresh_db, monkeypatch):
+    """Нет привязанного устройства — молча пропускаем APNs, отмечаем доставку
+    (иначе она повторялась бы вечно) и не мешаем остальным получателям."""
+    app_user = await fresh_db.create_app_only_user()
+    app_id = app_user["telegram_id"]
+    await _users(fresh_db, 1)
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    send_alert = AsyncMock(return_value=True)
+    monkeypatch.setattr(apns, "send_alert", send_alert)
+
+    bot = FakeBot()
+    ann = _announcement()
+    result = await announcements.send_announcement(bot, ann)
+
+    send_alert.assert_not_awaited()
+    assert [chat_id for chat_id, _ in bot.sent] == [1]
+    assert result == (2, 0, 0)
+    assert await db_module.has_announcement_push(app_id, ann.key)
+
+    # Следующий прогон не пытается снова — ни Telegram, ни APNs.
+    again = FakeBot()
+    assert await announcements.send_announcement(again, ann) == (0, 0, 0)
+    assert again.sent == []
+    send_alert.assert_not_awaited()
+
+
+async def test_apns_not_configured_still_records_delivery_for_app_only(fresh_db, monkeypatch):
+    """APNs выключен целиком (нет конфигурации) — app-only атлет всё равно
+    отмечается доставленным, а не крутится в очереди навсегда."""
+    app_user = await fresh_db.create_app_only_user()
+    app_id = app_user["telegram_id"]
+    await fresh_db.register_push_token(app_id, "ios", "device-token-2")
+    monkeypatch.setattr(apns, "is_configured", lambda: False)
+    send_alert = AsyncMock(return_value=True)
+    monkeypatch.setattr(apns, "send_alert", send_alert)
+
+    bot = FakeBot()
+    ann = _announcement()
+    result = await announcements.send_announcement(bot, ann)
+
+    send_alert.assert_not_awaited()
+    assert result == (1, 0, 0)
+    assert await db_module.has_announcement_push(app_id, ann.key)
 
 
 # ---------- /announce ----------
