@@ -286,6 +286,38 @@ def test_suggest_progression_ignores_inferred_step_coarser_than_default():
     assert s.target_weight == pytest.approx(102.5)
 
 
+# ---------- прогрессия не предлагает невозможное ----------
+#
+# `rule` — правило из routine_exercises.progression. Модель, собирающая
+# программу, чистит его перед записью (ai_trainer._clean_progression:
+# step зажат в [0.25, 25], rule — из закрытого списка), но это не
+# единственный писатель колонки: `PATCH /routine-exercises/{id}`
+# (api_v1_programs.update_routine_exercise) пишет присланный клиентом
+# progression дословно, без этой чистки вовсе — опечатка или баг в
+# приложении (`step: 999999`) долетает досюда как есть. suggest_progression —
+# то самое единственное место, что РЕШАЕТ цель (см. её же докстрингу и
+# progression_data.py), поэтому граница обязана стоять здесь, а не только
+# там, где правило когда-то записывается.
+
+
+def test_suggest_progression_clamps_an_absurd_linear_load_step():
+    # 60кг + необоснованный шаг в 999999 — цель «подойди с тонной» вместо
+    # честного шага, зажатого тем же потолком, что и у AI-тренера (25кг/lb).
+    rule = {"rule": "linear_load", "step": 999999}
+    s = analytics.suggest_progression([(60.0, 5)], rule=rule)
+    assert s.target_weight == pytest.approx(85.0)  # 60 + 25 (потолок), не 1 000 059
+
+
+def test_suggest_progression_clamps_an_absurd_reps_top():
+    # reps_top без разумной верхней границы держит человека на одном и том же
+    # весе бесконечно, гоняя повторы в сотни миллионов вместо честной прибавки
+    # веса на разумном верху диапазона.
+    rule = {"rule": "double_progression", "reps_top": 999_999_999}
+    s = analytics.suggest_progression([(80, 51)], rule=rule)
+    assert s.action == "add_weight"
+    assert s.target_reps <= analytics.PROGRESSION_MAX_REPS_TOP
+
+
 # ---------- infer_weight_step / weight_step_for ----------
 
 

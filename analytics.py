@@ -585,6 +585,25 @@ def _reps_holding_e1rm(
     return high
 
 
+# Границы шага и потолка повторов у правила прогрессии (routine_exercises.
+# progression), зажимаемые здесь — а не только там, где правило ЗАПИСЫВАЕТСЯ
+# (ai_trainer._clean_progression чистит то, что предложила модель). У правила
+# есть и второй, доверенный на глаз, но не проверяемый путь записи —
+# `PATCH /routine-exercises/{id}` (api_v1_programs.update_routine_exercise)
+# пишет присланный клиентом progression дословно, без всякой чистки. Без
+# клампа здесь опечатка или баг в приложении (step: 999999) переживает запись
+# и всплывает только тут, в цели: «🎯 Цель: 1000059×5» вместо «62.5×5» — ровно
+# то невозможное число, от которого и заведена вся эта функция. Один расчёт —
+# значит и одна граница того, что он готов предложить, а не по одной на
+# каждого, кто в состоянии дозаписать колонку в БД напрямую.
+PROGRESSION_MIN_STEP = 0.25
+PROGRESSION_MAX_STEP = 25.0
+# Верх диапазона повторов у явного правила — тот же потолок, что у схемы
+# подходов программы (ai_trainer.PROGRAM_MAX_REPS): невалидный reps_top не
+# должен требовать от человека забега на сотни повторов в одном подходе.
+PROGRESSION_MAX_REPS_TOP = 50
+
+
 def suggest_progression(
     last_sets: list[tuple[float, int]],
     *,
@@ -634,7 +653,11 @@ def suggest_progression(
 
     rule_name = (rule or {}).get("rule")
     rule_step = _positive_number((rule or {}).get("step"))
+    if rule_step is not None:
+        rule_step = max(PROGRESSION_MIN_STEP, min(rule_step, PROGRESSION_MAX_STEP))
     reps_top = _positive_int((rule or {}).get("reps_top"))
+    if reps_top is not None:
+        reps_top = min(reps_top, PROGRESSION_MAX_REPS_TOP)
 
     # linear_load: вес растёт каждую тренировку, повторы не при чём.
     if rule_name == "linear_load" and rule_step:
