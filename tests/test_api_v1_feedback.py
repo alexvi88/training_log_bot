@@ -7,6 +7,8 @@ tests/test_api_v1_*.py, приложение собирается вручную
 временный костыль ровно на время, пока маршруты не влиты в общий файл.
 """
 
+import base64
+
 import httpx
 import pytest
 from starlette.applications import Starlette
@@ -16,6 +18,7 @@ import ai_trainer
 import api_v1_common as common
 import api_v1_feedback
 import config
+from handlers import ai_trainer as ai_trainer_handlers
 
 ApiError = common.ApiError
 
@@ -190,6 +193,107 @@ async def test_feedback_respects_daily_limit(fresh_db, client_factory, monkeypat
     resp = await client.post("/feedback", json={"text": "ещё один отзыв"})
     assert resp.status_code == 429
     assert resp.json()["error"] == "feedback_limit_exceeded"
+
+
+def _image_data_url(mime="image/jpeg", payload=b"not-really-a-jpeg-but-fine-its-mocked"):
+    return f"data:{mime};base64,{base64.b64encode(payload).decode()}"
+
+
+@pytest.mark.asyncio
+async def test_feedback_with_photo_sends_text_then_photo(fresh_db, client_factory, monkeypatch):
+    """Фото к отзыву — текст и фото двумя разными вызовами (см. докстринг
+    api_v1_feedback._send_feedback_to_admin про CAPTION_LIMIT)."""
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    payload = b"\xff\xd8\xff-jpeg-ish-bytes-for-the-test"
+    sent_messages = []
+    sent_photos = []
+
+    class FakeBot:
+        def __init__(self, token):
+            self.session = self
+
+        async def send_message(self, chat_id, text):
+            sent_messages.append((chat_id, text))
+
+        async def send_photo(self, chat_id, photo):
+            sent_photos.append((chat_id, photo))
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("aiogram.Bot", FakeBot)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/feedback",
+        json={"text": "вот скрин бага", "image_data_url": _image_data_url(payload=payload)},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["delivered"] is True
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0][0] == 999
+    assert "вот скрин бага" in sent_messages[0][1]
+
+    assert len(sent_photos) == 1
+    chat_id, photo_file = sent_photos[0]
+    assert chat_id == 999
+    assert photo_file.data == payload
+
+
+@pytest.mark.asyncio
+async def test_feedback_without_photo_does_not_send_photo(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    sent_photos = []
+
+    class FakeBot:
+        def __init__(self, token):
+            self.session = self
+
+        async def send_message(self, chat_id, text):
+            pass
+
+        async def send_photo(self, chat_id, photo):
+            sent_photos.append((chat_id, photo))
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("aiogram.Bot", FakeBot)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/feedback", json={"text": "без фото"})
+    assert resp.status_code == 201, resp.text
+    assert sent_photos == []
+
+
+@pytest.mark.asyncio
+async def test_feedback_rejects_too_big_photo(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    monkeypatch.setattr(ai_trainer_handlers, "MAX_IMAGE_BYTES", 4)
+    monkeypatch.setattr(api_v1_feedback, "MAX_IMAGE_BYTES", 4)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/feedback", json={"text": "фото слишком большое", "image_data_url": _image_data_url()}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "photo_too_big"
+    # Отказ на слишком большое фото не должен тратить суточную квоту отзывов.
+    assert api_v1_feedback._feedback_quota_left(111) is True
+
+
+@pytest.mark.asyncio
+async def test_feedback_rejects_unsupported_photo_format(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/feedback",
+        json={"text": "странный формат", "image_data_url": _image_data_url(mime="application/pdf")},
+    )
+    assert resp.status_code == 415
+    assert resp.json()["error"] == "unsupported_media_type"
 
 
 # ---------- POST /factcheck ----------

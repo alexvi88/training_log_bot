@@ -66,9 +66,19 @@ _PARAM_CLIP_LIMIT = 24
 # of whether the AI digest text ended up being used for Telegram.
 _CATALOG_CATEGORY: dict[str, str] = {push_texts.AI_WEEKLY: push_texts.WEEKLY_DIGEST}
 
+# Разовые релизные анонсы (announcements.py) — не часть дневной ротации
+# push_texts (там у каждой рассылки свой ключ, announcement.key, произвольный
+# и заводится с каждым релизом), поэтому у неё нет и не будет отдельного
+# push_texts-пула на каждый ключ: банер один и тот же для ЛЮБОГО анонса
+# ("в дневнике что-то новое, глянь в приложении"), а сам текст релиза остаётся
+# только в телеграмной версии. Категория — своя, объявлена здесь же, а не в
+# push_texts.py: она не участвует в дневной цепочке приоритетов и не должна
+# заводить там пустой пул.
+ANNOUNCEMENT = "announcement"
+
 # Every category push_ios can produce a banner for: push_texts' own rotation
-# categories, plus AI_WEEKLY (aliased above).
-CATEGORIES: tuple[str, ...] = push_texts._CATEGORIES + (push_texts.AI_WEEKLY,)
+# categories, plus AI_WEEKLY (aliased above) and ANNOUNCEMENT.
+CATEGORIES: tuple[str, ...] = push_texts._CATEGORIES + (push_texts.AI_WEEKLY, ANNOUNCEMENT)
 
 
 def _catalog_category(category: str) -> str:

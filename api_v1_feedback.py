@@ -22,6 +22,24 @@
 event loop). Постоянного per-user rate-limit в проекте нет (db.py трогать
 нельзя), поэтому переиспечь готовое было не из чего.
 
+**Фото к отзыву.** У бота отзыв идёт `message.copy_to` — летит вообще всё,
+что человек прислал (фото, файлы, голос). HTTP не может скопировать чужое
+сообщение, поэтому здесь только один тип вложения — фото, `image_data_url`,
+тем же приёмом, что везде в `/v1` (см. `api_v1_ai.ask_question`,
+`api_v1_media.upload_exercise_photo`): `data:<mime>;base64,...` в обычном
+JSON-теле, а не multipart. Формат и потолок байт — те же самые
+(`api_v1_ai.IMAGE_EXTENSION_BY_MIME`, `handlers.ai_trainer.MAX_IMAGE_BYTES`)
+и тот же код ошибки на слишком большое фото (`photo_too_big`, 400) — это не
+новый лимит, а старый, продублированный ради того самого инцидента с
+пустым 413 от ingress Amvera: раздутое base64-тело клиент должен уметь
+понять как «слишком большое», а не как оборванное соединение, а раз коды
+ошибок для фото-вопроса тренеру клиент уже умеет показывать, заводить для
+фото к отзыву второй набор текстов незачем. Текст отзыва при этом всегда
+уходит отдельным `send_message` (см. `_send_feedback_to_admin`), а не
+подписью к фото: подпись у Telegram обрезана 1024 символами
+(`formatting.CAPTION_LIMIT`) против 4096 у отзыва (`MAX_FEEDBACK_LENGTH`) —
+длинный отзыв с фото не должен молча резаться.
+
 **Фактчек (`POST /factcheck`).** Разбирает та же `ai_trainer.fact_check_post`,
 что дёргает `handlers/factcheck.py` — она и так принимает голые
 `user_id`/`post_text`/`image_data_url`, без объекта телеграм-сообщения (тот
@@ -41,6 +59,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from typing import Optional
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -48,10 +67,13 @@ from starlette.routing import Route
 
 import ai_limits
 import ai_trainer
+import api_v1_ai
 import api_v1_common as common
 import config
 import db
 import formatting
+import i18n
+from handlers.ai_trainer import MAX_IMAGE_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +115,16 @@ def _record_feedback_sent(user_id: int) -> None:
     _daily_counts[user_id] = (today, count)
 
 
-async def _send_feedback_to_admin(user_id: int, text: str) -> None:
+async def _send_feedback_to_admin(user_id: int, text: str, photo: Optional[bytes]) -> None:
     """Короткоживущий Bot на одну отправку — см. докстринг модуля и
-    game_server._send_trainer_message, откуда взят этот приём."""
+    game_server._send_trainer_message, откуда взят этот приём.
+
+    Текст и фото — двумя отдельными сообщениями, а не подписью к фото: см.
+    докстринг модуля про CAPTION_LIMIT. Порядок — текст, потом фото: если
+    отправка фото упадёт (сеть моргнула между двумя вызовами), у админа уже
+    есть сам отзыв, и это не 503 — то, ради чего человек писал, долетело."""
     from aiogram import Bot
+    from aiogram.types import BufferedInputFile
 
     bot = Bot(token=config.BOT_TOKEN)
     try:
@@ -109,6 +137,8 @@ async def _send_feedback_to_admin(user_id: int, text: str) -> None:
             config.ADMIN_ID,
             f"📱 Фидбек из приложения от id {user_id}:\n\n{text}",
         )
+        if photo is not None:
+            await bot.send_photo(config.ADMIN_ID, BufferedInputFile(photo, filename="feedback.jpg"))
     finally:
         await bot.session.close()
 
@@ -125,11 +155,28 @@ async def submit_feedback(request: Request) -> JSONResponse:
     if len(text) > MAX_FEEDBACK_LENGTH:
         raise ApiError(400, "bad_request", f"text must be at most {MAX_FEEDBACK_LENGTH} characters")
 
+    image_data_url = common.optional_str(body, "image_data_url")
+    photo: Optional[bytes] = None
+    if image_data_url is not None:
+        user = await db.get_user(user_id)
+        lang = user["lang"] if user is not None else "ru"
+        with i18n.use_lang(lang):
+            raw, _mime, _ext = common.decode_data_url(
+                image_data_url, api_v1_ai.IMAGE_EXTENSION_BY_MIME, field="image_data_url"
+            )
+            if len(raw) > MAX_IMAGE_BYTES:
+                raise ApiError(
+                    400,
+                    "photo_too_big",
+                    i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024)),
+                )
+        photo = raw
+
     if not _feedback_quota_left(user_id):
         raise ApiError(429, "feedback_limit_exceeded", "daily feedback limit reached")
 
     try:
-        await _send_feedback_to_admin(user_id, text)
+        await _send_feedback_to_admin(user_id, text, photo)
     except Exception as exc:
         logger.exception("feedback: delivery to admin failed for user %s", user_id)
         raise ApiError(503, "delivery_failed", "feedback could not be delivered") from exc
