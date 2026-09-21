@@ -57,14 +57,14 @@ _BOOL_FIELDS = (
 # settings._converting у бота: рескейл всей истории подходов занимает время
 # дольше одного await, и без захвата второй запрос успел бы стартовать, пока
 # первый ещё читает старую единицу, и пересчитать веса дважды.
-_converting: set[int] = set()
-
-
-def _try_claim_converting(user_id: int) -> bool:
-    if user_id in _converting:
-        return False
-    _converting.add(user_id)
-    return True
+#
+# Захват общий с ботом (db.try_claim_unit_conversion), а не свой набор в этом
+# модуле: тот же аккаунт может переключить единицы и здесь, и в боте почти
+# одновременно, и два разных набора в памяти процесса не видят друг друга —
+# каждый гасит только повтор на своей же поверхности. См. комментарий в db.py
+# над scale_bodyweight_logs.
+_try_claim_converting = db.try_claim_unit_conversion
+_converting = db._unit_converting
 
 
 def _settings_json(user) -> dict[str, Any]:

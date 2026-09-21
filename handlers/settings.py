@@ -29,17 +29,14 @@ logger = logging.getLogger(__name__)
 # db.update_user → achievement_sync.resync) takes seconds — long enough for a
 # second tap to still see the old unit and convert the whole history a second
 # time. Same shape as handlers.workout._confirming / _try_claim_weight_confirm.
-_converting: set[int] = set()
-
-
-def _try_claim_converting(user_id: int) -> bool:
-    """Atomically check-and-reserve `_converting` for this user — no `await`
-    between the membership check and the `.add()`, same reasoning as
-    ai_trainer._try_claim_busy."""
-    if user_id in _converting:
-        return False
-    _converting.add(user_id)
-    return True
+#
+# The guard itself lives in db.py (db.try_claim_unit_conversion), not as a set
+# local to this module: api_v1_account.py runs the very same rescale for the
+# very same account from the iOS app, and a set private to each surface
+# couldn't see the other one running — see db.py's comment above
+# scale_bodyweight_logs for the double-rescale that caused.
+_try_claim_converting = db.try_claim_unit_conversion
+_converting = db._unit_converting
 
 
 async def show_settings(
