@@ -850,3 +850,48 @@ async def test_imported_program_name_fits_the_rename_limit(fresh_db, user_id):
     unique = await fresh_db.unique_program_name(user_id, long_name)
 
     assert len(unique) <= config.MAX_PROGRAM_NAME_LENGTH
+
+
+# ---------- переполнение дневного бюджета получателя двумя параллельными импортами ----------
+
+
+async def test_two_concurrent_imports_do_not_blow_past_the_routine_cap(fresh_db, user_id, monkeypatch):
+    """`share_add` проверяет `db.routine_budget` и только потом пишет программу
+    в базу — проверка и запись не атомарны. Два клика «➕ Добавить себе» почти
+    одновременно (или по двум визиткам одной и той же программы) читают один
+    и тот же бюджет до того, как первый успел закоммитить, оба проходят
+    проверку и вместе заводят у получателя больше программ, чем разрешает
+    `MAX_ROUTINES_PER_USER`, — переполнение бюджета вместо отказа второму.
+    """
+    import asyncio
+
+    import config
+
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 3)
+
+    db = fresh_db
+    # Программа на 1 день: получателю с 2 из 3 разрешённых программ одна такая
+    # визитка проходит бюджет с запасом ровно в 1 — и такая же вторая тоже
+    # проходит его в одиночку, но не обе вместе.
+    gid = await db.create_muscle_group(user_id, "Ноги")
+    squat = await db.create_exercise(user_id, "Присед", gid)
+    program_id = await db.create_program(user_id, "Сплит")
+    day = await db.create_routine(user_id, "Ноги", program_id=program_id)
+    await db.add_routine_exercise(day, squat, 0, "3×5")
+
+    await _tap(user_id, f"share:prg:{program_id}")
+    token1 = await _last_share_token(db)
+    await _tap(user_id, f"share:prg:{program_id}")
+    token2 = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=1234, username="racer"))["telegram_id"]
+    await db.create_muscle_group(recipient, "Другое")
+    await db.create_routine(recipient, "Existing1")
+    await db.create_routine(recipient, "Existing2")
+
+    await asyncio.gather(
+        sharing.share_add(_make_callback(recipient, f"share:add:{token1}"), await _state(recipient)),
+        sharing.share_add(_make_callback(recipient, f"share:add:{token2}"), await _state(recipient)),
+    )
+
+    assert await db.count_routines(recipient) <= config.MAX_ROUTINES_PER_USER

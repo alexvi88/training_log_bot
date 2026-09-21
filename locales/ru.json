@@ -1215,6 +1215,7 @@
   "share.add_exercise_button": "➕ Добавить упражнение себе",
   "share.add_program_button": "➕ Добавить программу себе",
   "share.added": "Добавил 👌",
+  "share.already_importing": "Уже добавляю, подожди немного",
   "share.and_n_more_days": "\n…и ещё {n, plural, one{# день} few{# дня} many{# дней} other{# дня}}",
   "share.card_ready": "Визитка готова — пересылай 📤",
   "share.card_ready_partial": "Визитка готова, но уехало {days} из {total}",

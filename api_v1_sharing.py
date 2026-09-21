@@ -200,6 +200,21 @@ async def import_share(request: Request) -> JSONResponse:
     """«➕ Добавить себе» — единственная ручка, которая правда что-то создаёт;
     get_share_preview выше нарочно этого не делает ни при каких условиях."""
     user_id = await _authed_user_id(request)
+    # Тот же приём, что у бота (handlers.sharing.share_add): проверка бюджета
+    # и сама запись программы не атомарны, и два запроса подряд (двойной тап
+    # в приложении, повтор после таймаута) видят один и тот же бюджет до того,
+    # как первый успел закоммитить — вместе заводят больше программ, чем
+    # разрешает db.routine_budget. Общий с ботом _importing — тот же процесс,
+    # тот же пользователь не может писать в двух местах сразу.
+    if not sharing._try_claim_importing(user_id):
+        raise ApiError(409, "import_in_progress", "an import for this account is already running")
+    try:
+        return await _do_import_share(request, user_id)
+    finally:
+        sharing._importing.discard(user_id)
+
+
+async def _do_import_share(request: Request, user_id: int) -> JSONResponse:
     token = request.path_params["token"]
     row = await db.get_shared_item(token)
     if row is None:

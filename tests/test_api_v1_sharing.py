@@ -372,6 +372,41 @@ async def test_import_respects_routine_budget(fresh_db, client_factory, monkeypa
     assert (await recipient.get("/programs")).json() == []
 
 
+@pytest.mark.asyncio
+async def test_two_concurrent_import_requests_do_not_blow_past_the_routine_budget(
+    fresh_db, client_factory, monkeypatch
+):
+    """Проверка бюджета (`db.routine_budget`) и сама запись импортированной
+    программы не атомарны — два запроса `/share/{token}/import` почти
+    одновременно (двойной тап в приложении, повтор после таймаута) читают
+    один и тот же бюджет до того, как первый успел закоммитить, и вместе
+    заводят у получателя больше программ, чем разрешает
+    `MAX_ROUTINES_PER_USER`."""
+    import asyncio
+
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    recipient = await _linked_client(fresh_db, client_factory, 222)
+    program_id, _ = await _program_with_one_day(111)
+    token1 = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    token2 = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+
+    await db.create_routine(222, "Existing1")
+    await db.create_routine(222, "Existing2")
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 3)
+
+    responses = await asyncio.gather(
+        recipient.post(f"/share/{token1}/import"),
+        recipient.post(f"/share/{token2}/import"),
+    )
+    statuses = sorted(r.status_code for r in responses)
+    # Один импорт проходит (201), второй либо честно отказывает по бюджету
+    # (403), либо натыкается на конкурентный импорт того же аккаунта (409) —
+    # но не проходят оба сразу.
+    assert statuses[0] == 201
+    assert statuses[1] in (403, 409)
+    assert await db.count_routines(222) <= 3
+
+
 # ---------- владелец: отзыв визитки ----------
 
 @pytest.mark.asyncio
