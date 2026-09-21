@@ -160,6 +160,85 @@ async def test_program_next_day_empty_program(fresh_db, client_factory):
     assert resp.json() is None
 
 
+# ---------- слияние программ ----------
+
+@pytest.mark.asyncio
+async def test_program_merge_moves_days_and_drops_source(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    source_id = (await client.post("/programs", json={"name": "PPL (копия)"})).json()["id"]
+    target_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    await client.post(f"/programs/{source_id}/days", json={"name": "Push"})
+    await client.post(f"/programs/{target_id}/days", json={"name": "Pull"})
+
+    resp = await client.post(f"/programs/{source_id}/merge", json={"into_id": target_id})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == target_id
+    assert {d["name"] for d in body["days"]} == {"Push", "Pull"}
+
+    # программа-источник растворилась
+    gone = await client.get(f"/programs/{source_id}")
+    assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_program_merge_renames_clashing_day_names(fresh_db, client_factory):
+    """Дни с одинаковым именем в обеих программах — как у «Дублировать» —
+    после слияния различимы (см. db.merge_programs/_unique_sibling_name)."""
+    client = await _linked_client(fresh_db, client_factory)
+    source_id = (await client.post("/programs", json={"name": "A"})).json()["id"]
+    target_id = (await client.post("/programs", json={"name": "B"})).json()["id"]
+    await client.post(f"/programs/{source_id}/days", json={"name": "День 1"})
+    await client.post(f"/programs/{target_id}/days", json={"name": "День 1"})
+
+    resp = await client.post(f"/programs/{source_id}/merge", json={"into_id": target_id})
+    assert resp.status_code == 200
+    names = [d["name"] for d in resp.json()["days"]]
+    assert len(names) == 2
+    assert len(set(names)) == 2
+
+
+@pytest.mark.asyncio
+async def test_program_merge_rejects_self_merge(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+
+    resp = await client.post(f"/programs/{program_id}/merge", json={"into_id": program_id})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bad_request"
+
+    # программа не задета — не удалилась
+    assert (await client.get(f"/programs/{program_id}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_program_merge_missing_target_is_not_found(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+
+    resp = await client.post(f"/programs/{program_id}/merge", json={"into_id": 999})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_program_merge_rejects_foreign_target(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    owner_program_id = (await owner.post("/programs", json={"name": "PPL"})).json()["id"]
+    intruder_program_id = (await intruder.post("/programs", json={"name": "Upper/Lower"})).json()["id"]
+
+    # свою программу нельзя слить в чужую
+    resp = await owner.post(f"/programs/{owner_program_id}/merge", json={"into_id": intruder_program_id})
+    assert resp.status_code == 404
+
+    # и наоборот — чужую программу нельзя слить, угадав её id из URL
+    resp = await intruder.post(f"/programs/{intruder_program_id}/merge", json={"into_id": owner_program_id})
+    assert resp.status_code == 404
+    # владелец другой программы её не потерял
+    assert (await owner.get(f"/programs/{owner_program_id}")).status_code == 200
+
+
 # ---------- самостоятельные дни ----------
 
 @pytest.mark.asyncio
@@ -204,6 +283,65 @@ async def test_routine_create_rejects_empty_name(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     resp = await client.post("/routines", json={"name": ""})
     assert resp.status_code == 400
+
+
+# ---------- «📤 Вынести из программы» ----------
+
+@pytest.mark.asyncio
+async def test_routine_take_out_of_program(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    day = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()
+    routine_id = day["id"]
+    assert day["program_id"] == program_id
+
+    resp = await client.patch(f"/routines/{routine_id}", json={"program_id": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["program_id"] is None
+
+    # день пережил вынос и виден как самостоятельный
+    standalone = await client.get("/routines")
+    assert [r["id"] for r in standalone.json()] == [routine_id]
+
+
+@pytest.mark.asyncio
+async def test_routine_take_out_of_program_already_standalone(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    routine_id = (await client.post("/routines", json={"name": "Full body"})).json()["id"]
+
+    resp = await client.patch(f"/routines/{routine_id}", json={"program_id": None})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "already_standalone"
+
+
+@pytest.mark.asyncio
+async def test_routine_update_rejects_setting_program_id(fresh_db, client_factory):
+    """Поле работает только на снятие из программы — поставить произвольный
+    program_id через него нельзя (у бота такого действия нет, и сюда
+    пришлось бы тащить бюджет дней и day_order — см. докстринг update_routine)."""
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    routine_id = (await client.post("/routines", json={"name": "Full body"})).json()["id"]
+
+    resp = await client.patch(f"/routines/{routine_id}", json={"program_id": program_id})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bad_request"
+
+
+@pytest.mark.asyncio
+async def test_routine_take_out_of_program_foreign_is_not_found(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    program_id = (await owner.post("/programs", json={"name": "PPL"})).json()["id"]
+    routine_id = (await owner.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+
+    resp = await intruder.patch(f"/routines/{routine_id}", json={"program_id": None})
+    assert resp.status_code == 404
+
+    # владелец её всё ещё видит внутри программы — чужой токен её не тронул
+    still_there = await owner.get(f"/routines/{routine_id}")
+    assert still_there.json()["program_id"] == program_id
 
 
 @pytest.mark.asyncio
@@ -557,6 +695,7 @@ async def test_reorder_routine_exercise_foreign_is_404(fresh_db, client_factory)
         ("GET", "/programs/1"),
         ("PATCH", "/programs/1"),
         ("DELETE", "/programs/1"),
+        ("POST", "/programs/1/merge"),
         ("GET", "/programs/1/next-day"),
         ("POST", "/programs/1/days"),
         ("GET", "/routines"),
