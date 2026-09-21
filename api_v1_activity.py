@@ -61,6 +61,8 @@ ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("POST", "/workouts/backfill"): "начал занесение задним числом",
     ("PATCH", "/workouts/{workout_id}/date"): "перенёс дату тренировки",
     ("POST", "/import/csv"): "импортировал CSV",
+    ("POST", "/ai/program/save"): "сохранил программу от тренера",
+    ("POST", "/ai/program/train"): "начал тренировку по плану от тренера",
 }
 
 # Вид события в ленте. Отдельный от телеграмных KIND_*: «нажал кнопку» и
