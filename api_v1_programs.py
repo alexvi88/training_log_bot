@@ -244,6 +244,34 @@ async def delete_program(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": True})
 
 
+async def merge_program(request: Request) -> JSONResponse:
+    """«Слить с существующей программой» — тот же db.merge_programs, который
+    в боте (handlers/routines.py rt_program_merge) вызывается только как
+    ответ на коллизию имён при переименовании программы.
+
+    В API у PATCH .../programs/{id} с именем коллизии нет — она уже 409
+    name_taken (update_program), без предложения слить. Слияние здесь —
+    отдельное явное действие, а не побочный эффект переименования: клиент,
+    решивший смерджить программы, знает id обеих заранее (например, из
+    /programs), а не угадывает его по тексту предложения, как бот.
+
+    Программа из URL растворяется в `into_id` — её дни переезжают туда (с
+    переименованием при совпадении имён, см. db.merge_programs) и сама она
+    удаляется; в ответе — уже объединённая программа-получатель."""
+    user_id = await _authed_user_id(request)
+    program_id = int(request.path_params["program_id"])
+    await _owned_program(program_id, user_id)
+    body = await _json_body(request)
+    into_id = _require(body, "into_id", int)
+    if into_id == program_id:
+        raise ApiError(400, "bad_request", "cannot merge a program with itself")
+    await _owned_program(into_id, user_id)
+    await db.merge_programs(user_id, program_id, into_id)
+    target = await _owned_program(into_id, user_id)
+    days = await db.list_program_days_by_id(into_id)
+    return JSONResponse(_program_detail_json(target, days))
+
+
 async def program_next_day(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     program_id = int(request.path_params["program_id"])
@@ -294,13 +322,29 @@ async def get_routine(request: Request) -> JSONResponse:
 
 
 async def update_routine(request: Request) -> JSONResponse:
+    """`program_id: null` — «📤 Вынести из программы» (rt:dayout в боте):
+    день становится самостоятельной рутиной. Тот же db.move_routine_to_program,
+    которым бот это делает; сюда, а не отдельной ручкой, потому что это
+    правка одного поля того же routine, как и name.
+
+    Ставить программу через это поле, а не только снимать, API не даёт —
+    у бота такого действия нет (день попадает в программу только через
+    add_program_day/create_routine_from_workout), и без него не нужны ни
+    проверка бюджета дней, ни выбор day_order, которые тогда пришлось бы
+    сюда тащить."""
     user_id = await _authed_user_id(request)
     routine_id = int(request.path_params["routine_id"])
-    await _owned_routine(routine_id, user_id)
+    routine = await _owned_routine(routine_id, user_id)
     body = await _json_body(request)
     name = _optional_str(body, "name")
     if name is not None:
         await db.rename_routine(routine_id, _clean_name(name))
+    if "program_id" in body:
+        if body["program_id"] is not None:
+            raise ApiError(400, "bad_request", "program_id can only be set to null")
+        if routine["program_id"] is None:
+            raise ApiError(400, "already_standalone", "day is already standalone")
+        await db.move_routine_to_program(routine_id, None)
     routine = await _owned_routine(routine_id, user_id)
     return JSONResponse(await _routine_detail_json(routine))
 
@@ -507,6 +551,7 @@ routes = [
     Route("/programs/{program_id:int}", get_program, methods=["GET"]),
     Route("/programs/{program_id:int}", update_program, methods=["PATCH"]),
     Route("/programs/{program_id:int}", delete_program, methods=["DELETE"]),
+    Route("/programs/{program_id:int}/merge", merge_program, methods=["POST"]),
     Route("/programs/{program_id:int}/next-day", program_next_day, methods=["GET"]),
     Route("/programs/{program_id:int}/days", add_program_day, methods=["POST"]),
     Route("/routines", list_routines, methods=["GET"]),
