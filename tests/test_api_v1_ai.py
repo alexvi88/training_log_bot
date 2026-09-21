@@ -587,6 +587,261 @@ async def test_save_program_does_not_save_someone_elses_draft(fresh_db, client_f
     assert await fresh_db.list_routines(222) == []
 
 
+# ---------- конфликт имени при сохранении (POST /ai/program/save, on_conflict) ----------
+
+
+async def _ask_and_get_draft_id(client, name: str = "Фуллбоди") -> str:
+    resp = await client.post("/ai/ask", json={"question": "Собери мне программу"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["program"]["draft_id"]
+
+
+@pytest.mark.asyncio
+async def test_save_program_without_on_conflict_returns_409_on_name_clash(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program("Фуллбоди"))
+    client = await _linked_client(fresh_db, client_factory)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    first = await client.post("/ai/program/save", json={"draft_id": draft_id})
+    assert first.status_code == 200, first.text
+
+    # Второе предложение под тем же именем — та же программа модели не
+    # называет replaces_program, поэтому это чистый конфликт имени.
+    draft_id_2 = await _ask_and_get_draft_id(client)
+    resp = await client.post("/ai/program/save", json={"draft_id": draft_id_2})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"] == "name_conflict"
+
+    # Черновик остаётся на месте — можно попробовать ещё раз с on_conflict.
+    routines = await fresh_db.list_routines(111)
+    assert len(routines) == 1
+    retry = await client.post("/ai/program/save", json={"draft_id": draft_id_2, "on_conflict": "copy"})
+    assert retry.status_code == 200, retry.text
+
+
+@pytest.mark.asyncio
+async def test_save_program_on_conflict_replace_replaces_existing_program(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program("Фуллбоди"))
+    client = await _linked_client(fresh_db, client_factory)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    first = await client.post("/ai/program/save", json={"draft_id": draft_id})
+    assert first.status_code == 200, first.text
+    old_program_id = first.json()["program_id"]
+
+    draft_id_2 = await _ask_and_get_draft_id(client)
+    conflict = await client.post("/ai/program/save", json={"draft_id": draft_id_2})
+    assert conflict.status_code == 409
+
+    resp = await client.post(
+        "/ai/program/save", json={"draft_id": draft_id_2, "on_conflict": "replace"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["replacing"] is True
+    assert body["program_id"] == old_program_id
+
+    # Ровно одна программа с этим именем осталась — правка на месте, а не
+    # вторая копия.
+    programs = await fresh_db.list_programs(111)
+    assert len([p for p in programs if p["name"] == "Фуллбоди"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_program_on_conflict_copy_creates_second_program(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program("Фуллбоди"))
+    client = await _linked_client(fresh_db, client_factory)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    first = await client.post("/ai/program/save", json={"draft_id": draft_id})
+    assert first.status_code == 200, first.text
+    old_program_id = first.json()["program_id"]
+
+    draft_id_2 = await _ask_and_get_draft_id(client)
+    conflict = await client.post("/ai/program/save", json={"draft_id": draft_id_2})
+    assert conflict.status_code == 409
+
+    resp = await client.post("/ai/program/save", json={"draft_id": draft_id_2, "on_conflict": "copy"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["replacing"] is False
+    assert body["program_id"] != old_program_id
+
+    programs = await fresh_db.list_programs(111)
+    names = {p["name"] for p in programs}
+    assert "Фуллбоди" in names
+    assert len(names) == 2  # исходное имя + свободное под копию
+
+
+@pytest.mark.asyncio
+async def test_save_program_rejects_invalid_on_conflict(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    resp = await client.post(
+        "/ai/program/save", json={"draft_id": draft_id, "on_conflict": "delete"}
+    )
+    assert resp.status_code == 400
+
+
+# ---------- «начать тренировку» по несохранённому черновику (POST /ai/program/train) ----------
+
+
+@pytest.mark.asyncio
+async def test_train_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.post("/ai/program/train", json={"draft_id": "whatever"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_train_rejects_missing_draft(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/program/train", json={"draft_id": "does-not-exist"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "draft_not_found"
+
+
+@pytest.mark.asyncio
+async def test_train_starts_workout_from_single_day_draft(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    resp = await client.post("/ai/program/train", json={"draft_id": draft_id})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["workout"]["status"] == "active"
+    assert body["plan"]["name"] == "День 1"
+    exercise_names = {item["display_name"] for item in body["plan"]["items"]}
+    assert exercise_names == {TEMPLATE_A, TEMPLATE_B}
+
+    workout = await fresh_db.get_active_workout(111)
+    assert workout is not None
+    assert workout["id"] == body["workout"]["id"]
+
+    # Черновик израсходован — по нему уже начали заниматься.
+    pending = await client.get("/ai/pending")
+    assert pending.json()["program"] is None
+
+
+def _fake_ask_proposing_multi_day_program(name: str = "Сплит"):
+    async def fake_ask(user_id, question, history, on_program=None, **kwargs):
+        tool_input = {
+            "name": name,
+            "days": [
+                {"name": "День 1", "exercises": [{"name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 8}]},
+                {"name": "День 2", "exercises": [{"name": TEMPLATE_B, "sets": 4, "reps_min": 6, "reps_max": 10}]},
+            ],
+            "description": None,
+        }
+        await ai_trainer.execute_tool(user_id, "propose_program", tool_input, on_program=on_program)
+        return "Собрал программу — жми кнопку под ответом."
+
+    return fake_ask
+
+
+@pytest.mark.asyncio
+async def test_train_rejects_multi_day_draft(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_multi_day_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    ask_resp = await client.post("/ai/ask", json={"question": "Собери мне сплит"})
+    program = ask_resp.json()["program"]
+    assert program["can_train_now"] is False
+    draft_id = program["draft_id"]
+
+    resp = await client.post("/ai/program/train", json={"draft_id": draft_id})
+    assert resp.status_code == 400
+
+    # Черновик остаётся — многодневный отказ ничего не расходует.
+    pending = await client.get("/ai/pending")
+    assert pending.json()["program"] is not None
+
+
+@pytest.mark.asyncio
+async def test_train_reuses_existing_active_workout_and_skips_done_exercises(
+    fresh_db, client_factory, monkeypatch
+):
+    """Поведение при уже открытой тренировке — как у обычного POST
+    /workouts/active: она не заменяется, а до-планируется (см.
+    ai_program_train в боте)."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    start_resp = await client.post("/workouts/active", json={})
+    assert start_resp.status_code == 201, start_resp.text
+    active_workout_id = start_resp.json()["id"]
+
+    # TEMPLATE_A уже отработан в этой тренировке до захода на план.
+    ex_a_id = await fresh_db.get_or_create_user_exercise_by_name(111, TEMPLATE_A)
+    block_id = await fresh_db.get_or_create_single_block_for_exercise(active_workout_id, ex_a_id)
+    await fresh_db.add_set(block_id, ex_a_id, 1, 1, weight=60, reps=5)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    resp = await client.post("/ai/program/train", json={"draft_id": draft_id})
+    assert resp.status_code == 200, resp.text  # тренировка уже была — не создана заново
+    body = resp.json()
+    assert body["workout"]["id"] == active_workout_id
+
+    # TEMPLATE_A уже сделан — в план добора попадает только TEMPLATE_B.
+    exercise_names = {item["display_name"] for item in body["plan"]["items"]}
+    assert exercise_names == {TEMPLATE_B}
+
+
+@pytest.mark.asyncio
+async def test_train_all_exercises_already_done_returns_409_and_keeps_draft(
+    fresh_db, client_factory, monkeypatch
+):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    start_resp = await client.post("/workouts/active", json={})
+    active_workout_id = start_resp.json()["id"]
+    for name in (TEMPLATE_A, TEMPLATE_B):
+        ex_id = await fresh_db.get_or_create_user_exercise_by_name(111, name)
+        block_id = await fresh_db.get_or_create_single_block_for_exercise(active_workout_id, ex_id)
+        await fresh_db.add_set(block_id, ex_id, 1, 1, weight=60, reps=5)
+
+    draft_id = await _ask_and_get_draft_id(client)
+    resp = await client.post("/ai/program/train", json={"draft_id": draft_id})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"] == "all_done"
+
+    pending = await client.get("/ai/pending")
+    assert pending.json()["program"] is not None
+
+
+@pytest.mark.asyncio
+async def test_train_does_not_start_from_someone_elses_draft(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    draft_id = await _ask_and_get_draft_id(client_a)
+
+    resp = await client_b.post("/ai/program/train", json={"draft_id": draft_id})
+    assert resp.status_code == 404
+    assert await fresh_db.get_active_workout(222) is None
+
+    resp_a = await client_a.post("/ai/program/train", json={"draft_id": draft_id})
+    assert resp_a.status_code == 201, resp_a.text
+    assert await fresh_db.get_active_workout(111) is not None
+
+
 @pytest.mark.asyncio
 async def test_ask_returns_mentioned_exercises_and_programs(fresh_db, client_factory, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)

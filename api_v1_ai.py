@@ -34,7 +34,13 @@
   (`program.draft_id` из ответа `/ai/ask`) точно так же, как кнопка «Забрать»
   в боте: запись идёт через ai_program_actions.finalize_program_save — тот же
   код, тот же create_routine_from_program/прогрессии, что и у кнопки
-  `ai:prog:save` (handlers/ai_trainer.ai_program_save).
+  `ai:prog:save` (handlers/ai_trainer.ai_program_save). Необязательный
+  `on_conflict` ("replace"/"copy") — HTTP-аналог экрана конфликта имени
+  (`ai:prog:replace`/`ai:prog:copy` в боте, см. `_resolve_conflict`); «отклонить»
+  — это просто не звать ручку повторно, отдельного маршрута под неё не завели.
+- `POST /ai/program/train` — «▶️ Начать тренировку» по несохранённому
+  черновику из одного дня (`ai:prog:train` в боте, см. `train_from_draft`):
+  тренировка стартует прямо из плана, без создания программы.
 - `POST /ai/questions/answer` — ответить на текущий вопрос опросника
   (`questions.index` из ответа `/ai/ask`) — HTTP-аналог тапа по варианту
   (`ai:qa:`) или «⏭ Пропустить» (`ai:qskip`) в боте. Отдаёт следующий вопрос
@@ -105,9 +111,6 @@ aiogram FSM (`ai_history` в state) — это отдельное окно ко�
   зашитой в конкретное сообщение Telegram; довести его до HTTP-протокола
   (подтверждение конкретного предложенного действия, а не первого попавшегося)
   — отдельная работа, не входившая в эту.
-- **Экрана конфликта имени при сохранении программы** (`ai:prog:replace`/
-  `ai:prog:copy` в боте) — `POST /ai/program/save` в этом случае просто
-  отдаёт 409 `name_conflict`; отдельных маршрутов «заменить»/«копия» пока нет.
 
 Лимиты — ровно та же точка входа, что у бота (`ai_limits.check`), и тот же
 порядок: проверка ДО вызова модели, инкремент счётчика ПОСЛЕ успешного
@@ -696,6 +699,33 @@ async def answer_setup_question(request: Request) -> JSONResponse:
         _busy.discard(user_id)
 
 
+async def _resolve_conflict(user_id: int, draft: dict[str, Any], on_conflict: str) -> dict[str, Any]:
+    """Тот же выбор, что делают кнопки `ai:prog:replace`/`ai:prog:copy` на
+    экране конфликта имени (см. handlers/ai_trainer.ai_program_replace_conflict/
+    ai_program_copy_conflict) — здесь, а не второй копией той логики, потому
+    что снимать её в общий ai_program_actions незачем: обе кнопки и так зовут
+    ai_program_actions.save_into_existing_program/save_as_new_program, разница
+    только в том, что подставить им на входе (существующая программа под этим
+    именем или новое свободное имя), и это решение — целиком HTTP-специфичный
+    разбор одного поля `on_conflict`, а не общая с ботом часть.
+    """
+    if on_conflict == "replace":
+        existing = await db.find_program_by_name(user_id, draft["name"])
+        if existing is None:
+            # Программу с этим именем успели удалить между конфликтом и этим
+            # запросом — заменять уже нечего, добавляем как новую (см. тот же
+            # случай в ai_program_replace_conflict).
+            return await ai_program_actions.save_as_new_program(user_id, draft)
+        return await ai_program_actions.save_into_existing_program(user_id, draft, existing)
+
+    # on_conflict == "copy": сохраняем под ближайшим свободным именем
+    # (db.unique_program_name), а не под занятым.
+    alt_name = await db.unique_program_name(user_id, draft["name"], suffix="2")
+    renamed = dict(draft)
+    renamed["name"] = alt_name
+    return await ai_program_actions.save_as_new_program(user_id, renamed)
+
+
 async def save_program(request: Request) -> JSONResponse:
     """Забрать предложенный черновик программы — HTTP-аналог кнопки «Забрать»/
     «Добавить себе» в боте (см. handlers/ai_trainer.ai_program_save). Сама
@@ -706,10 +736,19 @@ async def save_program(request: Request) -> JSONResponse:
     пользователя (db.get_ai_program_draft скопирован по telegram_id из
     токена) — черновик другого пользователя тем самым не виден и не
     сохраняем в принципе, а не только по сверке id.
+
+    Необязательный `on_conflict` ("replace" или "copy") — HTTP-аналог тапа по
+    кнопке экрана конфликта имени (см. `_resolve_conflict`): без него, как и
+    раньше, совпадение имени просто отдаёт 409 `name_conflict`, а «отклонить»
+    — это не звать ручку снова, отдельного маршрута под кнопку «Отмена» не
+    заводим.
     """
     user_id = await common.authed_user_id(request)
     body = await common.json_body(request)
     draft_id = common.require(body, "draft_id", str)
+    on_conflict = common.optional_str(body, "on_conflict")
+    if on_conflict is not None and on_conflict not in ("replace", "copy"):
+        raise ApiError(400, "bad_request", "on_conflict must be 'replace' or 'copy'")
 
     draft = await db.get_ai_program_draft(user_id)
     if draft is None or draft.get("id") != draft_id:
@@ -720,7 +759,10 @@ async def save_program(request: Request) -> JSONResponse:
     # найдёт черновика и получит честный 404 вместо повторного сохранения.
     await db.clear_ai_program_draft(user_id)
     try:
-        result = await ai_program_actions.finalize_program_save(user_id, draft)
+        if on_conflict is not None:
+            result = await _resolve_conflict(user_id, draft, on_conflict)
+        else:
+            result = await ai_program_actions.finalize_program_save(user_id, draft)
     except Exception as exc:
         logger.exception("AI program save failed for user %s", user_id)
         # Как и в боте: черновик возвращается, чтобы можно было попробовать
@@ -740,6 +782,73 @@ async def save_program(request: Request) -> JSONResponse:
         "day_count": result["day_count"],
         "replacing": result["replacing"],
     })
+
+
+async def train_from_draft(request: Request) -> JSONResponse:
+    """«▶️ Начать тренировку» по несохранённому черновику — HTTP-аналог
+    `ai:prog:train` в боте (см. handlers/ai_trainer.ai_program_train):
+    тренировка стартует прямо по одному дню плана, без сохранения программы.
+
+    Активную тренировку не трогаем, а до-планируем — ровно как бот: если она
+    уже есть (например, была начата с нуля или по другой программе), в неё
+    форкаются и добираются только те упражнения плана, которых там ещё нет
+    (см. `done_ids`). Значит и поведение при уже открытой тренировке то же,
+    что у обычного `POST /workouts/active`: она не мешает и не заменяется,
+    используется как есть.
+
+    Черновик должен быть из ровно одного дня (`can_train_now` в его JSON) —
+    у многодневного плана «начать сейчас» неоднозначно (какой из дней?), и
+    бот эту кнопку под таким черновиком не показывает вовсе.
+    """
+    user_id = await common.authed_user_id(request)
+    body = await common.json_body(request)
+    draft_id = common.require(body, "draft_id", str)
+
+    draft = await db.get_ai_program_draft(user_id)
+    if draft is None or draft.get("id") != draft_id:
+        raise ApiError(404, "draft_not_found", "program draft is gone or belongs to a stale answer")
+    if len(draft["days"]) != 1:
+        raise ApiError(400, "bad_request", "draft must have exactly one day to train from it directly")
+
+    day = draft["days"][0]
+    workout_id, created = await db.get_or_create_active_workout(user_id)
+    done_ids = set() if created else set(await db.list_exercise_ids_for_workout(workout_id))
+
+    planned = []
+    for item in day["items"]:
+        ex_id = await db.get_or_create_user_exercise_by_name(user_id, item["name"])
+        if ex_id is None or ex_id in done_ids:
+            continue
+        done_ids.add(ex_id)
+        planned.append({"exercise_id": ex_id, "display_name": item["name"], "target": item.get("target")})
+
+    if not planned:
+        # Как и в боте: черновик остаётся — по нему ещё можно «Добавить
+        # себе», ничего не израсходовано.
+        user = await db.get_user(user_id)
+        lang = user["lang"] if user is not None else "ru"
+        with i18n.use_lang(lang):
+            message = i18n.t("ai.screen.program_train.all_done")
+        raise ApiError(409, "all_done", message)
+
+    # Черновик израсходован: он больше не «предложение, которое ждёт
+    # решения» — по нему уже начали заниматься (см. тот же комментарий в
+    # ai_program_train).
+    await db.clear_ai_program_draft(user_id)
+
+    workout = await db.get_workout(workout_id)
+    return JSONResponse(
+        {
+            "workout": {
+                "id": workout["id"],
+                "status": workout["status"],
+                "started_at": workout["started_at"],
+                "routine_id": workout["routine_id"],
+            },
+            "plan": {"name": day["name"], "items": planned},
+        },
+        status_code=201 if created else 200,
+    )
 
 
 async def transcribe_voice(request: Request) -> JSONResponse:
@@ -1088,6 +1197,7 @@ routes = [
     Route("/ai/video", ask_video, methods=["POST"]),
     Route("/ai/questions/answer", answer_setup_question, methods=["POST"]),
     Route("/ai/program/save", save_program, methods=["POST"]),
+    Route("/ai/program/train", train_from_draft, methods=["POST"]),
     Route("/ai/pending", get_pending_state, methods=["GET"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
