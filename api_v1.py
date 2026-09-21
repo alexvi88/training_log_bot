@@ -672,6 +672,14 @@ async def start_backfill_workout(request: Request) -> JSONResponse:
     открытые формы за разные дни человек различить не сможет, а брошенная
     останется в базе навсегда (у неё нет ни таймера, ни экрана, который о ней
     напомнит). Хочется другой день — сначала это, кнопкой «Отменить».
+
+    Проверка и вставка — одним вызовом db.get_or_create_backfill_workout под
+    общим _write_lock, а не get_backfill_workout + create_workout по
+    отдельности: иначе два параллельных запроса (бот и приложение, или
+    двойной тап) оба видели «занесения нет» и заводили по своему — второй
+    навсегда зависал призраком, невидимым для get_backfill_workout
+    (ORDER BY id LIMIT 1 всегда возвращает первый). Тот же инцидент уже был
+    закрыт для активной тренировки в db.get_or_create_active_workout.
     """
     user_id = await _authed_user_id(request)
     body = await _json_body(request)
@@ -680,15 +688,11 @@ async def start_backfill_workout(request: Request) -> JSONResponse:
     # Сегодня — по часовому поясу пользователя, а не по UTC сервера.
     await common.reject_future_date(date, user_id)
 
-    existing = await db.get_backfill_workout(user_id)
-    if existing is not None:
-        return JSONResponse(await _workout_detail_json(existing), status_code=200)
-
-    workout_id = await db.create_workout(
-        user_id, started_at=f"{date.isoformat()}{BACKFILL_HOUR}", status="backfill"
+    workout_id, created = await db.get_or_create_backfill_workout(
+        user_id, f"{date.isoformat()}{BACKFILL_HOUR}"
     )
     workout = await db.get_workout(workout_id)
-    return JSONResponse(await _workout_detail_json(workout), status_code=201)
+    return JSONResponse(await _workout_detail_json(workout), status_code=201 if created else 200)
 
 
 async def discard_backfill_workout(request: Request) -> JSONResponse:
