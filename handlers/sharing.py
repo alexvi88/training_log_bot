@@ -699,14 +699,42 @@ async def import_exercise(user_id: int, payload: dict[str, Any]) -> tuple[int, b
     return ex_id, False
 
 
+# Кто прямо сейчас пишет визитку получателю в базу — тот же приём, что у
+# handlers.csv_import._saving. Между «➕ Добавить себе» и снятием кнопки
+# (`edit_reply_markup`, в конце обработчика) лежит бюджетная проверка
+# (`db.routine_budget`) и сама запись программы — обе не атомарны с проверкой:
+# два клика подряд (или второй, второй визиткой той же программы) видят один
+# и тот же бюджет ДО того, как первый успел что-то закоммитить, оба проходят
+# проверку и вместе заводят у получателя больше программ, чем разрешает
+# MAX_ROUTINES_PER_USER — переполнение бюджета, а не отказ второму.
+_importing: set[int] = set()
+
+
+def _try_claim_importing(user_id: int) -> bool:
+    if user_id in _importing:
+        return False
+    _importing.add(user_id)
+    return True
+
+
 @router.callback_query(F.data.startswith("share:add:"))
 async def share_add(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if not _try_claim_importing(user_id):
+        await callback.answer(i18n.t("share.already_importing"))
+        return
+    try:
+        await _do_share_add(callback, user_id)
+    finally:
+        _importing.discard(user_id)
+
+
+async def _do_share_add(callback: CallbackQuery, user_id: int) -> None:
     token = callback.data.split(":", 2)[2]
     row = await db.get_shared_item(token)
     if row is None:
         await callback.answer(i18n.t("share.link_expired"), show_alert=True)
         return
-    user_id = callback.from_user.id
     if row["owner_id"] == user_id:
         # open_shared прячет кнопку «Добавить» для владельца, но эта визитка
         # живёт в пересланном сообщении — кнопка может вернуться к владельцу

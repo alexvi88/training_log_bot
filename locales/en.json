@@ -1215,6 +1215,7 @@
   "share.add_exercise_button": "➕ Add the exercise for yourself",
   "share.add_program_button": "➕ Add the program for yourself",
   "share.added": "Added 👌",
+  "share.already_importing": "Already adding it, hang on a moment",
   "share.and_n_more_days": "\n…and {n, plural, one{# more day} other{# more days}}",
   "share.card_ready": "Card's ready — forward it 📤",
   "share.card_ready_partial": "Card's ready, but only {days} out of {total} made it",

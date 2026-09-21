@@ -16,10 +16,12 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 
 import db
 import formatting
+import timeutil
 
 CSV_HEADER = ["started_at", "exercise", "round_index", "weight", "reps", "rpe"]
 
@@ -32,14 +34,28 @@ async def build_csv(user_id: int) -> bytes:
     Стандартный `csv.writer` сам берёт значение в кавычки, если в нём есть
     запятая, кавычка или перевод строки (QUOTE_MINIMAL) — второй реализации
     экранирования тут заводить незачем.
+
+    `started_at` в базе — UTC, а импорт (`handlers/csv_import.py:_parse_row_date`)
+    читает из этой же колонки календарную дату напрямую, без поправки на
+    часовой пояс. Без пересчёта в местное время тренировка, начатая под
+    вечер на положительном сдвиге (или под утро на отрицательном), пересекала
+    полночь UTC: экспорт-и-обратный-импорт не был обратимым — тот же файл при
+    повторной загрузке уезжал на соседний день и не распознавался как дубль
+    (`_duplicate_dates` сравнивает по дате), удваивая тренировку вместо
+    пропуска. Сдвигаем на tz_offset здесь же, единственном месте, которое
+    читают и бот, и REST (см. докстринг модуля).
     """
+    user = await db.get_user(user_id)
     rows = await db.export_rows_for_user(user_id)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(CSV_HEADER)
     for r in rows:
+        local_started_at = timeutil.to_user_local(
+            dt.datetime.fromisoformat(r["started_at"]), user
+        )
         writer.writerow([
-            r["started_at"], r["exercise"], r["round_index"], r["weight"], r["reps"],
+            local_started_at.isoformat(), r["exercise"], r["round_index"], r["weight"], r["reps"],
             "" if r["rpe"] is None else formatting.format_weight(r["rpe"]),
         ])
     return buf.getvalue().encode("utf-8-sig")
