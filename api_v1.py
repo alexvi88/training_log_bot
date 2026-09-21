@@ -522,6 +522,60 @@ async def _owned_exercise(exercise_id: int, user_id: int):
     return exercise
 
 
+# Тот же потолок, что у кнопок «⚡ {название}» в живом трекере
+# (keyboards.py:504-507): экран отводит под партнёров по суперсету не больше
+# двух кнопок, третья туда физически не влезает.
+_SUPERSET_PARTNER_LIMIT = 2
+
+
+async def superset_partners(request: Request) -> JSONResponse:
+    """Кандидаты на «⚡ партнёр по суперсету» для экрана выбора упражнения —
+    те же db-вызов и те же исключения, что строит бот
+    (`handlers/workout.py`, ветка `if open_ids:` в `_picker_screen_groups`),
+    просто без aiogram-клавиатуры вокруг.
+
+    Кандидатов считает `db.list_superset_partners` — переиспользуем её же,
+    а не переписываем отбор по окнам подходов здесь: другой код,
+    выбирающий тот же список другим SQL, разошёлся бы с ботом первым же
+    изменением одной из копий.
+
+    Исключения — ровно две, как у бота:
+    - `open_ids` (query, через запятую) — вкладки, открытые в трекере прямо
+      сейчас на клиенте. Это клиентское состояние (какие упражнения открыты
+      табами), а не то, что можно вычислить по базе: свежеоткрытая без
+      единого подхода вкладка на сервере может ещё не завести блок.
+    - `db.list_opened_exercise_ids_for_workout(workout_id)` — всё, что в этой
+      тренировке уже открывали, включая закрытые до этого момента вкладки
+      без подходов. Без этого исключения кнопка предложила бы то, что
+      человек только что закрыл.
+    """
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+
+    workout_param = request.query_params.get("workout_id")
+    if not workout_param:
+        raise ApiError(400, "bad_request", "workout_id is required")
+    try:
+        workout_id = int(workout_param)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", "workout_id must be int") from exc
+    await _owned_workout(workout_id, user_id)
+
+    open_param = request.query_params.get("open_ids", "")
+    try:
+        open_ids = tuple(int(x) for x in open_param.split(",") if x)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", "open_ids must be a comma-separated list of ints") from exc
+
+    already_opened = await db.list_opened_exercise_ids_for_workout(workout_id)
+    exclude_ids = tuple(set(open_ids) | set(already_opened))
+    partners = await db.list_superset_partners(
+        user_id, exercise_id, limit=_SUPERSET_PARTNER_LIMIT, exclude_ids=exclude_ids
+    )
+    return JSONResponse({"partners": [{"id": p["id"], "name": p["display_name"]} for p in partners]})
+
+
 async def _find_block_for_exercise(workout_id: int, exercise_id: int) -> Optional[int]:
     for block in await db.list_blocks_for_workout(workout_id):
         for be in await db.get_block_exercises(block["id"]):
@@ -1358,6 +1412,7 @@ routes = [
     Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/unarchive", unarchive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),
+    Route("/exercises/{exercise_id:int}/superset-partners", superset_partners, methods=["GET"]),
     Route("/workouts/active", active_workout, methods=["GET"]),
     Route("/workouts/active", start_workout, methods=["POST"]),
     Route("/workouts/active", discard_active_workout, methods=["DELETE"]),
