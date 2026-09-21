@@ -218,12 +218,14 @@ async def upload_exercise_photo(request: Request) -> JSONResponse:
     body = await common.json_body(request)
     data_url = common.require(body, "image_data_url", str)
     raw, _mime, ext = common.decode_data_url(
-        data_url, api_v1_ai.IMAGE_EXTENSION_BY_MIME, field="image_data_url"
-    )
-    if len(raw) > MAX_IMAGE_BYTES:
-        raise ApiError(
+        data_url,
+        api_v1_ai.IMAGE_EXTENSION_BY_MIME,
+        field="image_data_url",
+        max_bytes=MAX_IMAGE_BYTES,
+        too_big_error=(
             400, "photo_too_big", i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024))
-        )
+        ),
+    )
 
     name = exercise_photos.save(exercise_id, raw, ext)
     await db.set_exercise_photo(exercise_id, None, name)

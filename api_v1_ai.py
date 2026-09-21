@@ -545,9 +545,13 @@ def _validate_image_data_url(data_url: str, *, too_big_message: str) -> tuple[by
     экрана чата (см. докстринг chat_attachments.py). Строка самой data: URL
     уходит ai_trainer.ask() отдельно, как и раньше — этот разбор только
     измеряет честные байты после base64, а не поверить длине JSON-поля."""
-    raw, _mime, ext = common.decode_data_url(data_url, IMAGE_EXTENSION_BY_MIME, field="image_data_url")
-    if len(raw) > MAX_IMAGE_BYTES:
-        raise ApiError(400, "photo_too_big", too_big_message)
+    raw, _mime, ext = common.decode_data_url(
+        data_url,
+        IMAGE_EXTENSION_BY_MIME,
+        field="image_data_url",
+        max_bytes=MAX_IMAGE_BYTES,
+        too_big_error=(400, "photo_too_big", too_big_message),
+    )
     return raw, ext
 
 
@@ -902,9 +906,13 @@ def _decode_video_data_url(data_url: str, *, too_big_message: str) -> tuple[byte
     выше и у голоса (api_v1_voice), см. common.decode_data_url. В отличие от
     фото, video_analysis.analyze() хочет сырые байты и mime отдельно (не
     целую data: URL), поэтому раскодированное и возвращаем."""
-    raw, mime, _ext = common.decode_data_url(data_url, VIDEO_EXTENSION_BY_MIME, field="video_data_url")
-    if len(raw) > config.MAX_VIDEO_BYTES:
-        raise ApiError(400, "video_too_heavy", too_big_message)
+    raw, mime, _ext = common.decode_data_url(
+        data_url,
+        VIDEO_EXTENSION_BY_MIME,
+        field="video_data_url",
+        max_bytes=config.MAX_VIDEO_BYTES,
+        too_big_error=(400, "video_too_heavy", too_big_message),
+    )
     return raw, mime
 
 

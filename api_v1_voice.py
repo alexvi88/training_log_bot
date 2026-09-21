@@ -80,10 +80,16 @@ AUDIO_EXTENSION_BY_MIME = {
 }
 
 
-def _decode_audio_data_url(data_url: str) -> tuple[bytes, str]:
+def _decode_audio_data_url(data_url: str, *, too_big_message: str) -> tuple[bytes, str]:
     # Разбор data: URL общий для всех вложений `/v1` — см. common.decode_data_url
     # (голос был первым и единственным до фото/видео вопроса тренеру, api_v1_ai.py).
-    raw, _mime, ext = common.decode_data_url(data_url, AUDIO_EXTENSION_BY_MIME, field="audio_data_url")
+    raw, _mime, ext = common.decode_data_url(
+        data_url,
+        AUDIO_EXTENSION_BY_MIME,
+        field="audio_data_url",
+        max_bytes=MAX_VOICE_BYTES,
+        too_big_error=(400, "voice_too_big", too_big_message),
+    )
     return raw, ext
 
 
@@ -117,9 +123,7 @@ async def transcribe(
             raise ApiError(400, "voice_too_long", too_long_message)
 
     data_url = common.require(body, "audio_data_url", str)
-    raw, ext = _decode_audio_data_url(data_url)
-    if len(raw) > MAX_VOICE_BYTES:
-        raise ApiError(400, "voice_too_big", too_big_message)
+    raw, ext = _decode_audio_data_url(data_url, too_big_message=too_big_message)
 
     buf = io.BytesIO(raw)
     buf.name = f"voice.{ext}"
