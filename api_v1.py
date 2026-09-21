@@ -1038,7 +1038,11 @@ async def _finish_rewards_json(
             ],
             "rank_promotion": (
                 None if promotion is None
-                else {"name": _plain(promotion.name), "level": promotion.level}
+                else {
+                    "name": _plain(promotion.name),
+                    "level": promotion.level,
+                    "emoji": promotion.emoji,
+                }
             ),
             "milestone": milestone,
         }
@@ -1205,7 +1209,14 @@ async def _history_extras_by_exercise(workout, user) -> dict[int, dict[str, Any]
     Считается только для законченной тренировки: `previous_before` берёт
     прошлую сессию упражнения строго ДО этой (handlers.workout._finished_summary
     делает так же), а для ещё идущей тренировки сравнивать не с чем.
+
+    `e1rm_text` — готовая строка «↳ e1RM …» (formatting.format_block_e1rm), тем
+    же способом и по тем же правилам, что record_text: собирается сервером
+    целиком (формула e1RM и порог зависят от настроек аккаунта), молчит без
+    доп. цифр и, в отличие от record_text, только у завершённой тренировки —
+    как в карточке бота, где эта строка есть лишь в итоговом тексте.
     """
+    finished = workout["status"] == "finished"
     with i18n.use_lang(user["lang"]):
         blocks = await view_builder.build_block_views(
             workout["id"],
@@ -1226,6 +1237,9 @@ async def _history_extras_by_exercise(workout, user) -> dict[int, dict[str, Any]
             extras[block.exercise_id] = {
                 "record_text": formatting.format_block_record(block, user["unit"], show_extra),
                 "previous_sets_text": previous_sets_text,
+                "e1rm_text": (
+                    formatting.format_block_e1rm(block, user["unit"], show_extra) if finished else None
+                ),
             }
         return extras
 
@@ -1280,6 +1294,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
                     "has_record": record_text is not None,
                     "note": exercise_note,
                     "previous_sets_text": extras.get("previous_sets_text"),
+                    "e1rm_text": extras.get("e1rm_text"),
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})

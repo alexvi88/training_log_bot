@@ -671,8 +671,34 @@ def _block_record_text(
     return None
 
 
-def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
+def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = True) -> str | None:
+    """Строка e1RM блока — «↳ e1RM {вес}{ед} ({Δ} vs {дата})», как в карточке
+    завершения. Молчит без доп. цифр (формула/порог зависят от настроек
+    аккаунта — считать их на клиенте нельзя) и для подходов в собственном весе
+    тела, где e1RM не считается вовсе.
+
+    `prev_holds_the_record` — эхо той же проверки в `_render_single_block`:
+    если именно этот прирост e1RM только что поставил рекорд, сравнение с
+    прошлой тренировкой уже сказано строкой рекорда, и здесь его не дублируют.
+    """
+    if not show_extra or not block.sets or block.is_bodyweight:
+        return None
+    prev_holds_the_record = (
+        block.record_e1rm_delta is not None
+        and block.prev_sets is not None
+        and block.prev_started_at is not None
+        and abs((block.top_e1rm - block.prev_top_e1rm) - block.record_e1rm_delta) < 0.05
+    )
     u = unit_label(unit)
+    vs_prev = ""
+    if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
+        when = format_date_short(block.prev_started_at)
+        delta = block.top_e1rm - block.prev_top_e1rm
+        vs_prev = f" ({format_delta(delta, unit)} vs {when})"
+    return f"↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}"
+
+
+def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
     label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name))}]"
     lines = [f"<b>{label}</b>"]
     if block.note:
@@ -695,25 +721,15 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
     # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
     # «на 5.7 выше прошлого» это одно и то же число дважды. Строка e1RM в этом
     # случае остаётся голой — сравнение уже сказано строкой рекорда.
-    prev_holds_the_record = (
-        block.record_e1rm_delta is not None
-        and block.prev_sets is not None
-        and block.prev_started_at is not None
-        and abs((block.top_e1rm - block.prev_top_e1rm) - block.record_e1rm_delta) < 0.05
-    )
     # Порядок строк: подходы → рекорд → e1RM → прошлая. Рекорд стоит сразу под
     # подходами, которыми он и поставлен, — это главное, что человек в блоке
     # ищет, и оно не должно ждать своей очереди за расчётным максимумом.
     record = format_block_record(block, unit, show_extra)
     if record:
         lines.append(f"  {record}")
-    if show_extra and block.sets and not block.is_bodyweight:
-        vs_prev = ""
-        if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
-            when = format_date_short(block.prev_started_at)
-            delta = block.top_e1rm - block.prev_top_e1rm
-            vs_prev = f" ({format_delta(delta, unit)} vs {when})"
-        lines.append(f"  ↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}")
+    e1rm_line = format_block_e1rm(block, unit, show_extra)
+    if e1rm_line:
+        lines.append(f"  {e1rm_line}")
     if block.prev_sets:
         formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
         prev_str = ", ".join(formatted_prev)
