@@ -8029,6 +8029,32 @@ async def delete_exercise_if_unused(exercise_id: int, user_id: int) -> bool:
     return True
 
 
+# Смена единиц измерения приезжает с двух самостоятельных поверхностей —
+# из бота (handlers/settings.py) и из iOS-приложения (api_v1_account.py), у
+# каждой свой обработчик, но конвертируют они одну и ту же историю одного и
+# того же аккаунта. У каждой поверхности был СВОЙ набор `_converting` в
+# памяти процесса — он гасит двойной тап внутри своей же поверхности, но не
+# видит вторую: атлет, переключивший единицы в боте и почти одновременно в
+# приложении (то же нажатие продублировалось оффлайн-очередью, или просто
+# оба экрана были открыты), запускал rescale дважды — каждый читал старую
+# единицу до того, как другой успевал записать новую, и вес удваивался по
+# коэффициенту. Общий набор здесь — один на процесс и на оба входа.
+_unit_converting: set[int] = set()
+
+
+def try_claim_unit_conversion(telegram_id: int) -> bool:
+    """Atomically check-and-reserve `_unit_converting` for this user — no
+    `await` between the membership check and the `.add()`."""
+    if telegram_id in _unit_converting:
+        return False
+    _unit_converting.add(telegram_id)
+    return True
+
+
+def release_unit_conversion(telegram_id: int) -> None:
+    _unit_converting.discard(telegram_id)
+
+
 async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
     """Multiply every stored bodyweight by `factor` — used when a user switches units."""
     async with _write_lock:
