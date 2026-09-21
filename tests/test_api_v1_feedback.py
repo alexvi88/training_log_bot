@@ -415,3 +415,48 @@ async def test_factcheck_respects_daily_question_limit(fresh_db, client_factory,
     resp = await client.post("/factcheck", json={"text": "ещё один пост"})
     assert resp.status_code == 429
     assert resp.json()["error"] == "question_limit_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_factchecks_pay_the_model_only_once(fresh_db, client_factory, monkeypatch):
+    """Два одновременных POST /factcheck одного человека (переслал несколько
+    постов подряд) — без busy-замка оба читают ЕЩЁ не увеличенный счётчик,
+    оба проходят ai_limits.check и оба уходят в модель (см. докстринг
+    handlers.factcheck._try_claim_busy про тот же инцидент). Настоящая гонка:
+    обе корутины реально стартуют и обе доходят до fact_check_post
+    одновременно, если бы не busy-замок."""
+    import asyncio
+
+    import api_v1_feedback
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    calls = 0
+    release = asyncio.Event()
+
+    async def slow_fact_check(user_id, post_text, image_data_url=None):
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return "Разбор: похоже на правду."
+
+    monkeypatch.setattr(ai_trainer, "fact_check_post", slow_fact_check)
+    client = await _linked_client(fresh_db, client_factory)
+
+    async def fire():
+        return await client.post("/factcheck", json={"text": "какой-то пост из канала про креатин"})
+
+    first_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    second_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    release.set()
+    first_resp, second_resp = await asyncio.gather(first_task, second_task)
+
+    statuses = sorted([first_resp.status_code, second_resp.status_code])
+    assert statuses == [200, 429]
+    busy_resp = first_resp if first_resp.status_code == 429 else second_resp
+    assert busy_resp.json()["error"] == "busy"
+    assert calls == 1
+    assert await fresh_db.get_ai_question_count_today(111) == 1
+    assert 111 not in api_v1_feedback._busy
