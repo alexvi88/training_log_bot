@@ -5208,7 +5208,22 @@ async def link_telegram_to_app_account(
 # ---------- device tokens для APNs (см. push_tokens выше) ----------
 
 async def register_push_token(user_id: int, platform: str, device_token: str) -> None:
+    """Привязать `device_token` к `user_id`.
+
+    Один физический токен — максимум один живой владелец. Логаут и вход
+    другим Apple ID на том же телефоне не меняют APNs-токен устройства
+    (меняется он только при переустановке), так что без явной зачистки
+    старая строка с тем же device_token оставалась бы висеть на прежнем
+    аккаунте — и оба человека получали бы пуши на один физический телефон,
+    включая того, кто уже вышел. Поэтому сначала гасим ЧУЖИЕ строки с этим
+    же токеном (свою — трогать незачем, её обновит ON CONFLICT ниже), потом
+    апсертим на нового владельца.
+    """
     async with _write_lock:
+        await conn().execute(
+            "DELETE FROM push_tokens WHERE platform = ? AND device_token = ? AND user_id != ?",
+            (platform, device_token, user_id),
+        )
         await conn().execute(
             "INSERT INTO push_tokens (user_id, platform, device_token, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?) "
@@ -5225,6 +5240,26 @@ async def unregister_push_token(user_id: int, platform: str) -> bool:
     async with _write_lock:
         cur = await conn().execute(
             "DELETE FROM push_tokens WHERE user_id = ? AND platform = ?", (user_id, platform)
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def unregister_push_token_if_current(user_id: int, platform: str, device_token: str) -> bool:
+    """Удалить токен, только если он всё ещё тот самый `device_token`.
+
+    Используется apns.py при разборе 410 Unregistered/400 BadDeviceToken:
+    APNs отвечает про токен, который был в конверте ОТПРАВЛЕННОГО пуша, а
+    между чтением токена из БД и ответом Apple пользователь мог успеть
+    зарегистрировать новый (переустановка/повторный вход, гонка с этим же
+    тиком рассылки). Безусловный DELETE по (user_id, platform), как у
+    unregister_push_token, стёр бы в этом случае свежий, живой токен —
+    ровно потому, что тот совпадает по (user_id, platform), но не по
+    значению. Условие по device_token делает удаление точечным."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM push_tokens WHERE user_id = ? AND platform = ? AND device_token = ?",
+            (user_id, platform, device_token),
         )
         await conn().commit()
         return cur.rowcount > 0

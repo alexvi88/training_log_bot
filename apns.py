@@ -21,8 +21,9 @@ APNs реально заработает в этом окружении.
 400 BadDeviceToken значат, что токен мёртв навсегда (переустановка, логаут,
 удаление приложения) — раз получив такой ответ, слать на этот токен снова
 бессмысленно и вредно (это раздражает провайдерское соединение Apple), so
-токен удаляется из db.push_tokens тем же db.unregister_push_token, каким
-пользуется logout в приложении. Любая другая ошибка — залогировать (без
+токен удаляется из db.push_tokens через db.unregister_push_token_if_current
+— и только если это всё ещё тот самый токен, а не свежий, успевший
+зарегистрироваться, пока запрос был в полёте. Любая другая ошибка — залогировать (без
 секретов: ни .p8, ни JWT, ни сам device token в лог не идут) и вернуть
 False, не поднимая исключение — этот путь никогда не должен уронить
 engagement.py.
@@ -178,7 +179,11 @@ async def send_alert(
         return True
 
     if response.status_code in _DEAD_TOKEN_STATUSES and _reason(response) in _DEAD_TOKEN_REASONS:
-        await db.unregister_push_token(user_id, "ios")
+        # Только если это всё ещё ТОТ ЖЕ токен: пользователь мог успеть
+        # зарегистрировать новый, пока этот запрос был в полёте (см.
+        # db.unregister_push_token_if_current), и мёртвый ответ про старый
+        # токен не должен стирать свежий, живой.
+        await db.unregister_push_token_if_current(user_id, "ios", device_token)
         logger.info(
             "APNs: токен пользователя %s мёртв (%s %s) — удалил из push_tokens",
             user_id, response.status_code, _reason(response),

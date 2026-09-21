@@ -228,3 +228,26 @@ async def test_no_secrets_in_the_payload_or_headers_beyond_the_bearer_token(monk
     call = fake.calls[0]
     assert "supersecret" not in str(call)
     assert call["headers"]["authorization"] == "bearer signed.jwt.token"
+
+
+async def test_dead_token_cleanup_does_not_delete_a_newer_token(monkeypatch, fresh_db, user_id):
+    """send_alert(user_id, device_token, ...) reports the STALE token it was
+    called with as dead. If the user re-registered a fresh token in the
+    meantime (reinstall/relogin racing the in-flight send), the 410 cleanup
+    must only remove the row if it still matches that stale token — not wipe
+    out whatever is currently registered, which could by now be a different,
+    perfectly live token."""
+    await fresh_db.register_push_token(user_id, "ios", "old-token")
+    # Races ahead of the 410 response: the device re-registered with a new token.
+    await fresh_db.register_push_token(user_id, "ios", "new-token")
+    _patch_client(monkeypatch, FakeResponse(410, reason="Unregistered"))
+
+    ok = await apns.send_alert(user_id, "old-token", "Title", "Body")
+
+    assert ok is False
+    cur = await fresh_db.conn().execute(
+        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = 'ios'", (user_id,)
+    )
+    row = await cur.fetchone()
+    assert row is not None, "the current, live token must not be deleted"
+    assert row["device_token"] == "new-token"
