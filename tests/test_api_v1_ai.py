@@ -1667,6 +1667,8 @@ async def test_ask_returns_undo_button_and_it_really_undoes(fresh_db, client_fac
     actions = ask.json()["actions"]
     assert len(actions) == 1
     assert actions[0]["label"] == "↩️ Отменить"
+    # По типу приложение ставит рядом «⚖️ Дневник веса», как бот.
+    assert actions[0]["kind"] == "bodyweight"
     assert len(await fresh_db.list_bodyweight_logs(111)) == 1
 
     undo = await client.post("/ai/undo", json={"key": actions[0]["key"]})
@@ -1718,6 +1720,8 @@ async def test_several_undos_of_one_turn_fold_into_one_button(fresh_db, client_f
 
     actions = (await client.post("/ai/ask", json={"question": "запиши три взвешивания"})).json()["actions"]
     assert len(actions) == 1
+    # Сложенный откат из одних взвешиваний — всё ещё «вес», а не «batch».
+    assert actions[0]["kind"] == "bodyweight"
     assert len(await fresh_db.list_bodyweight_logs(111)) == 3
 
     assert (await client.post("/ai/undo", json={"key": actions[0]["key"]})).status_code == 200
@@ -1736,7 +1740,7 @@ async def test_pending_restores_undo_button_after_reload(fresh_db, client_factor
 
     pending = await client.get("/ai/pending")
     assert pending.status_code == 200
-    assert pending.json()["actions"] == [{"key": key, "label": "↩️ Отменить"}]
+    assert pending.json()["actions"] == [{"key": key, "label": "↩️ Отменить", "kind": "bodyweight"}]
 
     assert (await client.post("/ai/undo", json={"key": key})).status_code == 200
     assert (await client.get("/ai/pending")).json()["actions"] == []
