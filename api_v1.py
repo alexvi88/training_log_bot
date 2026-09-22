@@ -61,6 +61,7 @@ import history_search_data
 import i18n
 import mcp_oauth
 import parser
+import timeutil
 import view_builder
 import voice_parse
 from workout_edit_data import on_workout_edited
@@ -259,11 +260,29 @@ async def unregister_push_token(request: Request) -> JSONResponse:
 # ---------- каталог ----------
 
 async def list_muscle_groups(request: Request) -> JSONResponse:
+    """Группы мышц пользователя, самые используемые первыми.
+
+    `days_ago` — сколько дней прошло с последней законченной тренировки, где
+    эта группа была (по местному дню, как у тренера в
+    ai_trainer `_muscle_recovery`: тот же db.last_session_by_group), `null` —
+    ни разу. Приложение рисует им плитки групп на экране старта тренировки
+    («Спина — 6 дней»), чтобы выбор, что качать, начинался с того, что давно
+    не делал, а не с поиска по каталогу.
+    """
     user_id = await _authed_user_id(request)
     groups = await db.list_muscle_groups(user_id, order_by_usage=True)
+    last = await db.last_session_by_group(user_id)
+    today = timeutil.user_today(await db.get_user(user_id))
+
+    def days_ago(group_id: int) -> Optional[int]:
+        entry = last.get(group_id)
+        if entry is None:
+            return None
+        return max((today - dt.date.fromisoformat(entry[0])).days, 0)
+
     return JSONResponse(
         [
-            {"id": g["id"], "name": g["name"], "emoji": g["emoji"]}
+            {"id": g["id"], "name": g["name"], "emoji": g["emoji"], "days_ago": days_ago(g["id"])}
             for g in groups
         ]
     )

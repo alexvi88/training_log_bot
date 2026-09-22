@@ -600,6 +600,28 @@ async def test_create_muscle_group(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_muscle_groups_report_days_since_last_finished_workout(fresh_db, client_factory):
+    """Плитки групп на экране старта: сколько дней с прошлой тренировки
+    группы. Незаконченная тренировка не считается, нетронутая группа — null."""
+    client = await _linked_client(fresh_db, client_factory)
+    groups = (await client.get("/muscle-groups")).json()
+    assert all(g["days_ago"] is None for g in groups)
+
+    group_id = groups[0]["id"]
+    exercise_id = (await client.post("/exercises", json={"name": "Жим", "group_id": group_id})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5})
+    in_progress = {g["id"]: g for g in (await client.get("/muscle-groups")).json()}
+    assert in_progress[group_id]["days_ago"] is None
+
+    await client.post(f"/workouts/{workout_id}/finish", json={})
+    finished = {g["id"]: g for g in (await client.get("/muscle-groups")).json()}
+    assert finished[group_id]["days_ago"] == 0
+    other = next(g for g in finished.values() if g["id"] != group_id)
+    assert other["days_ago"] is None
+
+
+@pytest.mark.asyncio
 async def test_exercise_progress_lists_sets_from_finished_workouts_only(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
