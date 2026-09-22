@@ -17,6 +17,7 @@ import ai_limits
 import ai_trainer
 import api_v1
 import config
+import db
 import running_texts
 import video_analysis
 
@@ -958,7 +959,7 @@ async def test_pending_empty_when_nothing_hangs(fresh_db, client_factory, monkey
 
     resp = await client.get("/ai/pending")
     assert resp.status_code == 200
-    assert resp.json() == {"program": None, "questions": None}
+    assert resp.json() == {"program": None, "questions": None, "actions": []}
 
 
 @pytest.mark.asyncio
@@ -1025,7 +1026,7 @@ async def test_pending_is_private_per_user(fresh_db, client_factory, monkeypatch
     assert resp_a.json()["program"] is not None
 
     resp_b = await client_b.get("/ai/pending")
-    assert resp_b.json() == {"program": None, "questions": None}
+    assert resp_b.json() == {"program": None, "questions": None, "actions": []}
 
 
 # ---------- фото к вопросу (POST /ai/ask, image_data_url) ----------
@@ -1617,3 +1618,158 @@ async def test_thinking_interval_matches_the_bot(fresh_db, client_factory):
     resp = await client.get("/ai/thinking")
     assert resp.status_code == 200
     assert resp.json()["interval_seconds"] == ai_trainer_handlers.RUNNING_INTERVAL
+
+
+# ---------- откат сделанного тренером (POST /ai/undo) ----------
+
+
+def _fake_ask_logging_bodyweight(*weights: float):
+    """fake ai_trainer.ask, ведущий себя как инструмент log_bodyweight: пишет
+    вес в базу и отдаёт описание отката через on_action — ровно тем же
+    словарём `{"label", "undo"}`, что и настоящий инструмент (ai_trainer.py,
+    `{"kind": "bodyweight", "id": log_id}`)."""
+
+    async def fake_ask(user_id, question, history, on_action=None, on_wire=None, **kwargs):
+        for weight in weights:
+            log_id = await db.add_bodyweight_log(user_id, weight)
+            if on_action is not None:
+                await on_action({"label": "↩️ Отменить", "undo": {"kind": "bodyweight", "id": log_id}})
+        answer = f"Записал: {weights[0]:g}кг на сегодня. Если мимо — отменишь кнопкой ниже."
+        if on_wire is not None:
+            await on_wire(
+                history
+                + [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+            )
+        return answer
+
+    return fake_ask
+
+
+@pytest.mark.asyncio
+async def test_undo_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.post("/ai/undo", json={"key": "whatever"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ask_returns_undo_button_and_it_really_undoes(fresh_db, client_factory, monkeypatch):
+    """Та самая жалоба: тренер пишет «отменишь кнопкой ниже», а кнопки нет.
+    Описание отката инструмент отдавал и раньше — `collect_action` его собирал
+    и выбрасывал, потому что в ответе ручки для него не было места."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8))
+    client = await _linked_client(fresh_db, client_factory)
+
+    ask = await client.post("/ai/ask", json={"question": "86.8 запиши вес за сегодня"})
+    assert ask.status_code == 200, ask.text
+    actions = ask.json()["actions"]
+    assert len(actions) == 1
+    assert actions[0]["label"] == "↩️ Отменить"
+    assert len(await fresh_db.list_bodyweight_logs(111)) == 1
+
+    undo = await client.post("/ai/undo", json={"key": actions[0]["key"]})
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["message"]
+    assert await fresh_db.list_bodyweight_logs(111) == []
+
+
+@pytest.mark.asyncio
+async def test_undo_key_burns_after_first_use(fresh_db, client_factory, monkeypatch):
+    """Двойной тап не должен снести ещё и вес, записанный ПОСЛЕ отката — то
+    же, что у бота: ключ забирается до применения и навсегда."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8))
+    client = await _linked_client(fresh_db, client_factory)
+
+    key = (await client.post("/ai/ask", json={"question": "вес"})).json()["actions"][0]["key"]
+    assert (await client.post("/ai/undo", json={"key": key})).status_code == 200
+
+    await fresh_db.add_bodyweight_log(111, 87.2)
+    again = await client.post("/ai/undo", json={"key": key})
+    assert again.status_code == 404
+    assert again.json()["error"] == "undo_gone"
+    assert len(await fresh_db.list_bodyweight_logs(111)) == 1
+
+
+@pytest.mark.asyncio
+async def test_undo_is_private_per_user(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8))
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    key = (await client_a.post("/ai/ask", json={"question": "вес"})).json()["actions"][0]["key"]
+
+    stolen = await client_b.post("/ai/undo", json={"key": key})
+    assert stolen.status_code == 404
+    assert len(await fresh_db.list_bodyweight_logs(111)) == 1
+
+
+@pytest.mark.asyncio
+async def test_several_undos_of_one_turn_fold_into_one_button(fresh_db, client_factory, monkeypatch):
+    """«Удали всё из дневника» — это десятки вызовов с десятками откатов.
+    Складываем их в одну кнопку, как `_fold_undo_actions` в боте, и тап
+    возвращает всё, а не первую попавшуюся запись."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8, 87.0, 87.4))
+    client = await _linked_client(fresh_db, client_factory)
+
+    actions = (await client.post("/ai/ask", json={"question": "запиши три взвешивания"})).json()["actions"]
+    assert len(actions) == 1
+    assert len(await fresh_db.list_bodyweight_logs(111)) == 3
+
+    assert (await client.post("/ai/undo", json={"key": actions[0]["key"]})).status_code == 200
+    assert await fresh_db.list_bodyweight_logs(111) == []
+
+
+@pytest.mark.asyncio
+async def test_pending_restores_undo_button_after_reload(fresh_db, client_factory, monkeypatch):
+    """Ушёл с экрана и вернулся — кнопка должна остаться на месте, как
+    черновик программы и вопрос опросника."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8))
+    client = await _linked_client(fresh_db, client_factory)
+
+    key = (await client.post("/ai/ask", json={"question": "вес"})).json()["actions"][0]["key"]
+
+    pending = await client.get("/ai/pending")
+    assert pending.status_code == 200
+    assert pending.json()["actions"] == [{"key": key, "label": "↩️ Отменить"}]
+
+    assert (await client.post("/ai/undo", json={"key": key})).status_code == 200
+    assert (await client.get("/ai/pending")).json()["actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_new_conversation_drops_undo_buttons(fresh_db, client_factory, monkeypatch):
+    """«Новый разговор» уносит ходы с экрана — вместе с ними должны уйти и
+    ключи отката: кнопки, которой это можно было бы осознанно нажать, больше
+    нет (в боте state.clear() уносит ai_undo ровно так же)."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8))
+    client = await _linked_client(fresh_db, client_factory)
+
+    key = (await client.post("/ai/ask", json={"question": "вес"})).json()["actions"][0]["key"]
+    assert (await client.delete("/ai/history")).status_code == 200
+
+    gone = await client.post("/ai/undo", json={"key": key})
+    assert gone.status_code == 404
+    assert len(await fresh_db.list_bodyweight_logs(111)) == 1
+
+
+@pytest.mark.asyncio
+async def test_undo_reports_failure_when_row_already_gone(fresh_db, client_factory, monkeypatch):
+    """Запись убрали руками (или из другого клиента) — честный отказ, а не
+    молчаливое «готово»: вернуть уже нечего."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_logging_bodyweight(86.8))
+    client = await _linked_client(fresh_db, client_factory)
+
+    key = (await client.post("/ai/ask", json={"question": "вес"})).json()["actions"][0]["key"]
+    log_id = (await fresh_db.list_bodyweight_logs(111))[0]["id"]
+    await fresh_db.delete_bodyweight_log(log_id, 111)
+
+    resp = await client.post("/ai/undo", json={"key": key})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "undo_failed"

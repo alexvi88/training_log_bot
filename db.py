@@ -388,6 +388,28 @@ CREATE TABLE IF NOT EXISTS ai_setup_states (
     created_at TEXT NOT NULL
 );
 
+-- Откаты того, что тренер уже сделал («↩️ Отменить» под ответом, см.
+-- ai_undo.py) — HTTP-аналог того, что бот держит в FSM (ai_undo/ai_undo_seq).
+-- В FSM описание отката не влезало бы в callback_data (64 байта), здесь оно
+-- просто лежит рядом с коротким ключом, который уезжает клиенту.
+--
+-- turn_id — ход (ai_conversation_turns.id), под ответом которого висит кнопка:
+-- по нему GET /ai/pending восстанавливает кнопки после ухода с экрана, ровно
+-- как черновик программы и вопрос опросника. Строка живёт до тапа, до
+-- вытеснения более новыми (MAX_AI_UNDO_ACTIONS) или до «нового разговора»
+-- (clear_ai_conversation_history зовётся вместе с clear_ai_undo_actions).
+CREATE TABLE IF NOT EXISTS ai_undo_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    turn_id INTEGER,
+    key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (telegram_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_undo_actions_user ON ai_undo_actions (telegram_id, id);
+
 CREATE TABLE IF NOT EXISTS bodyweight_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -7815,8 +7837,9 @@ async def add_ai_conversation_turn(
     answer: str,
     wire_messages: list[dict[str, Any]],
     image_path: Optional[str] = None,
-) -> None:
-    """Записать ход и тут же подрезать историю пользователя до
+) -> int:
+    """Записать ход (вернув его id — к нему привязываются кнопки отката, см.
+    ai_undo_actions.turn_id) и тут же подрезать историю пользователя до
     MAX_AI_CONVERSATION_TURNS — подрезаем ПРИ ЗАПИСИ, а не при чтении, чтобы
     таблица не росла между вопросами одного и того же человека бесконечно.
 
@@ -7827,7 +7850,7 @@ async def add_ai_conversation_turn(
     import chat_attachments
 
     async with _write_lock:
-        await conn().execute(
+        cur = await conn().execute(
             "INSERT INTO ai_conversation_turns "
             "(telegram_id, question, answer, wire_json, image_path, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -7836,6 +7859,7 @@ async def add_ai_conversation_turn(
                 json.dumps(wire_messages, ensure_ascii=False), image_path, now_iso(),
             ),
         )
+        turn_id = cur.lastrowid
         cur = await conn().execute(
             "SELECT image_path FROM ai_conversation_turns WHERE telegram_id = ? AND id NOT IN ("
             "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? "
@@ -7852,6 +7876,7 @@ async def add_ai_conversation_turn(
         await conn().commit()
     for name in evicted:
         chat_attachments.delete(name)
+    return turn_id
 
 
 async def clear_ai_conversation_history(telegram_id: int) -> None:
@@ -7945,6 +7970,94 @@ async def get_ai_setup_state(telegram_id: int) -> Optional[dict[str, Any]]:
 async def clear_ai_setup_state(telegram_id: int) -> None:
     async with _write_lock:
         await conn().execute("DELETE FROM ai_setup_states WHERE telegram_id = ?", (telegram_id,))
+        await conn().commit()
+
+
+# Сколько откатов держим живыми одновременно на человека. Та же мысль и то же
+# число, что у _UNDO_SLOTS в handlers/ai_trainer.py: кнопки под старыми
+# ответами остаются тапабельными сколько угодно долго, но хранить описания
+# вечно незачем.
+MAX_AI_UNDO_ACTIONS = 8
+
+
+async def add_ai_undo_actions(
+    telegram_id: int, turn_id: Optional[int], items: list[tuple[str, dict[str, Any]]]
+) -> list[dict[str, str]]:
+    """Положить описания откатов этого хода и вернуть то, что уедет клиенту:
+    `[{"key": ..., "label": ...}]`.
+
+    Ключ случайный, а не порядковый: в отличие от FSM бота (где он «u7» из-за
+    стрингификации ключей словаря в JSON, см. `_register_actions`), здесь он
+    живёт в собственной колонке, и единственное требование к нему — не
+    угадываться и не повторяться. Владельца всё равно проверяет
+    take_ai_undo_action по telegram_id, так что ключ — не секрет, а имя.
+    """
+    if not items:
+        return []
+    created = now_iso()
+    out: list[dict[str, str]] = []
+    async with _write_lock:
+        for label, payload in items:
+            key = secrets.token_hex(4)
+            await conn().execute(
+                "INSERT INTO ai_undo_actions "
+                "(telegram_id, turn_id, key, label, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (telegram_id, turn_id, key, label, json.dumps(payload, ensure_ascii=False), created),
+            )
+            out.append({"key": key, "label": label})
+        # Подрезаем при записи, как и ходы разговора (add_ai_conversation_turn):
+        # иначе таблица растёт на каждый пишущий вызов тренера и не убывает
+        # никогда, хотя старые кнопки давно уехали за край экрана.
+        await conn().execute(
+            "DELETE FROM ai_undo_actions WHERE telegram_id = ? AND id NOT IN ("
+            "SELECT id FROM ai_undo_actions WHERE telegram_id = ? ORDER BY id DESC LIMIT ?)",
+            (telegram_id, telegram_id, MAX_AI_UNDO_ACTIONS),
+        )
+        await conn().commit()
+    return out
+
+
+async def get_ai_undo_actions(telegram_id: int, turn_id: int) -> list[dict[str, str]]:
+    """Живые кнопки отката под одним ходом — для GET /ai/pending."""
+    cur = await conn().execute(
+        "SELECT key, label FROM ai_undo_actions WHERE telegram_id = ? AND turn_id = ? ORDER BY id",
+        (telegram_id, turn_id),
+    )
+    return [{"key": row["key"], "label": row["label"]} for row in await cur.fetchall()]
+
+
+async def take_ai_undo_action(telegram_id: int, key: str) -> Optional[dict[str, Any]]:
+    """Забрать описание отката НАВСЕГДА и вернуть его — или None, если ключа
+    уже нет.
+
+    Забираем до применения и одной транзакцией под общим `_write_lock`, тем же
+    приёмом, что и бот (см. ai_undo в handlers/ai_trainer.py): второй тап по
+    той же кнопке (или два клиента разом) не должен откатить дважды и снести
+    заодно запись, которую человек успел сделать после.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT payload_json FROM ai_undo_actions WHERE telegram_id = ? AND key = ?",
+            (telegram_id, key),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        await conn().execute(
+            "DELETE FROM ai_undo_actions WHERE telegram_id = ? AND key = ?", (telegram_id, key)
+        )
+        await conn().commit()
+    try:
+        return json.loads(row["payload_json"])
+    except (TypeError, ValueError):
+        logger.exception("corrupt ai_undo_actions.payload_json for user %s", telegram_id)
+        return None
+
+
+async def clear_ai_undo_actions(telegram_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM ai_undo_actions WHERE telegram_id = ?", (telegram_id,))
         await conn().commit()
 
 

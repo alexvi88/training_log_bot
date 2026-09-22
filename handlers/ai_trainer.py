@@ -34,6 +34,7 @@ import running_texts
 import timeutil
 import ui
 import video_analysis
+from ai_undo import apply as _apply_undo
 from fsm import AITrainerFlow
 
 router = Router(name="ai_trainer")
@@ -1224,116 +1225,11 @@ async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict
     return out
 
 
-async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
-    """Вернуть как было. Возвращает текст для пользователя либо None, если не вышло.
-
-    Владельца проверяем на каждом шаге заново: между записью и тапом по кнопке
-    проходит сколько угодно времени, а id приезжает из FSM, куда его положил
-    прошлый ход — но сама строка в базе к этому моменту могла и смениться.
-    """
-    kind = undo.get("kind")
-
-    if kind == "batch":
-        # В обратном порядке: ход мог сначала создать упражнение, а потом
-        # записать в него подход — снимать надо с конца, иначе откат упрётся
-        # в то, что ещё на нём висит.
-        items = list(undo.get("items") or [])
-        done = 0
-        for item in reversed(items):
-            if await _apply_undo(user_id, item) is not None:
-                done += 1
-        if done == 0:
-            return None
-        if done < len(items):
-            # Часть уже не откатывалась — молчать об этом нельзя: человек
-            # решит, что вернулось всё.
-            return i18n.t("ai.screen.undo.batch_partial", done=done, total=len(items))
-        return i18n.t("ai.screen.undo.batch_all", done=done)
-
-    if kind == "bodyweight":
-        if await db.delete_bodyweight_log(int(undo["id"]), user_id):
-            return i18n.t("ai.screen.undo.bodyweight")
-        return None
-
-    if kind == "food":
-        entry = await db.get_food_entry(int(undo["id"]))
-        if entry is None or entry["telegram_id"] != user_id:
-            return None
-        await db.delete_food_entry(entry["id"])
-        return i18n.t("ai.screen.undo.food")
-
-    if kind == "food_restore":
-        # Откат delete_food_entry: не «отменить запись», а «отменить удаление» —
-        # воссоздаём строку с теми же полями, что были у стёртой.
-        await db.add_food_entry(
-            user_id, undo["eaten_on"], undo["description"],
-            details=undo.get("details"), calories=undo.get("calories"),
-            protein=undo.get("protein"), fat=undo.get("fat"), carbs=undo.get("carbs"),
-            photo_file_id=undo.get("photo_file_id"), source=undo.get("source") or "text",
-        )
-        return i18n.t("ai.screen.undo.food_restore", description=undo["description"])
-
-    if kind == "bodyweight_restore":
-        await db.add_bodyweight_log(user_id, undo["weight"], logged_at=undo.get("logged_at"))
-        return i18n.t("ai.screen.undo.bodyweight_restore", weight=f"{undo['weight']:g}")
-
-    if kind == "exercise_new":
-        if await db.delete_exercise_if_unused(int(undo["id"]), user_id):
-            name = undo.get("name") or i18n.t("ai.screen.undo.generic_exercise")
-            return i18n.t("ai.screen.undo.exercise_removed", name=name)
-        # По нему уже успели что-то записать — сносить нельзя, чужие данные
-        # уедут вместе с ним. Честнее сказать, чем сделать вид, что откатили.
-        return None
-
-    if kind == "exercise_name":
-        exercise = await db.get_exercise(int(undo["id"]))
-        if exercise is None or exercise["user_id"] != user_id:
-            return None
-        if not await db.update_exercise_name(exercise["id"], undo["name"]):
-            return None
-        return i18n.t("ai.screen.undo.name_restored", name=undo["name"])
-
-    if kind == "exercise_group":
-        exercise = await db.get_exercise(int(undo["id"]))
-        if exercise is None or exercise["user_id"] != user_id:
-            return None
-        await db.update_exercise_group(exercise["id"], int(undo["group_id"]))
-        if undo.get("name"):
-            return i18n.t("ai.screen.undo.group_named", name=undo["name"])
-        return i18n.t("ai.screen.undo.group_generic")
-
-    if kind == "program_name":
-        program = await db.get_program(int(undo["id"]))
-        if program is None or program["user_id"] != user_id:
-            return None
-        if not await db.rename_program_by_id(program["id"], undo["name"]):
-            return None
-        return i18n.t("ai.screen.undo.name_restored", name=undo["name"])
-
-    if kind == "routine_name":
-        routine = await db.get_routine(int(undo["id"]))
-        if routine is None or routine["user_id"] != user_id:
-            return None
-        await db.rename_routine(routine["id"], undo["name"])
-        return i18n.t("ai.screen.undo.name_restored", name=undo["name"])
-
-    if kind == "program_new":
-        program = await db.get_program(int(undo["id"]))
-        if program is None or program["user_id"] != user_id:
-            return None
-        await db.delete_program_by_id(program["id"])
-        return i18n.t("ai.screen.undo.program_copy_removed", name=(undo.get("name") or program["name"]))
-
-    if kind == "profile":
-        before = undo.get("before") or {}
-        fields = {k: v for k, v in before.items() if k in ai_trainer.PROFILE_FIELDS}
-        if not fields:
-            return None
-        await db.update_user(user_id, **fields)
-        names = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in fields)
-        return i18n.t("ai.screen.undo.profile_restored", names=names)
-
-    return None
+# Сам откат живёт в ai_undo.py (`_apply_undo` здесь — импортированное имя из
+# шапки модуля): его делает и эта кнопка в Telegram, и ручка POST /ai/undo для
+# приложения (api_v1_ai.py). Имя функции-обработчика ниже — `ai_undo`, поэтому
+# модуль импортируется именно по имени функции, а не целиком: иначе обработчик
+# затёр бы модуль собой.
 
 
 @router.callback_query(F.data.startswith("ai:undo:"))
