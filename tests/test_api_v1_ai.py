@@ -9,6 +9,7 @@
 """
 
 import base64
+import datetime as dt
 
 import httpx
 import pytest
@@ -1773,3 +1774,140 @@ async def test_undo_reports_failure_when_row_already_gone(fresh_db, client_facto
     resp = await client.post("/ai/undo", json={"key": key})
     assert resp.status_code == 409
     assert resp.json()["error"] == "undo_failed"
+
+
+# ---------- архив прошлых разговоров (GET /ai/conversations) ----------
+
+
+@pytest.mark.asyncio
+async def test_conversations_requires_auth(client_factory):
+    client = client_factory()
+    assert (await client.get("/ai/conversations")).status_code == 401
+    assert (await client.get("/ai/conversations/1")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_new_conversation_archives_instead_of_erasing(fresh_db, client_factory, monkeypatch):
+    """«Новый разговор» раньше стирал ходы насовсем — перечитать «а что я тогда
+    спрашивал» было негде. Теперь экран чата пуст так же, как и был, но сам
+    разговор лежит архивом."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "как мой прогресс"})
+    await client.post("/ai/ask", json={"question": "а белок"})
+    assert (await client.delete("/ai/history")).status_code == 200
+
+    assert (await client.get("/ai/history")).json()["messages"] == []
+
+    listing = await client.get("/ai/conversations")
+    assert listing.status_code == 200
+    body = listing.json()
+    assert body["current"] == 2
+    assert len(body["conversations"]) == 1
+    archived = body["conversations"][0]
+    assert archived["id"] == 1
+    assert archived["turns"] == 2
+    # Заголовок — первый вопрос разговора: своего имени у разговора нет.
+    assert archived["title"] == "как мой прогресс"
+
+    messages = (await client.get(f"/ai/conversations/{archived['id']}")).json()["messages"]
+    assert [m["text"] for m in messages] == [
+        "как мой прогресс", "ответ на: как мой прогресс",
+        "а белок", "ответ на: а белок",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_conversation_still_starts_the_model_from_scratch(
+    fresh_db, client_factory, monkeypatch
+):
+    """Главное, ради чего «новый разговор» вообще есть: испорченный контекст не
+    должен доехать до модели. Архив — это про экран, а не про промпт."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    seen: list[list] = []
+
+    async def fake_ask(user_id, question, history, on_wire=None, **kwargs):
+        seen.append(history)
+        answer = f"ответ на: {question}"
+        if on_wire is not None:
+            await on_wire(
+                history
+                + [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+            )
+        return answer
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "первый"})
+    await client.delete("/ai/history")
+    await client.post("/ai/ask", json={"question": "после сброса"})
+
+    assert seen[0] == []
+    assert seen[1] == [], "в новый разговор утёк контекст старого"
+
+
+@pytest.mark.asyncio
+async def test_archive_survives_a_long_new_conversation(fresh_db, client_factory, monkeypatch):
+    """Подрезка до MAX_AI_CONVERSATION_TURNS считает ходы ВНУТРИ разговора:
+    иначе длинный новый разговор молча выел бы архив прошлого."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    # Ходов тут больше, чем вопросов в дневной квоте: про подрезку истории, а
+    # не про лимит — его проверяют свои тесты выше.
+    monkeypatch.setattr(config, "AI_QUESTION_DAILY_LIMIT", 100)
+    ai_limits.reset_cache()
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "старый разговор"})
+    await client.delete("/ai/history")
+    for i in range(db.MAX_AI_CONVERSATION_TURNS + 2):
+        await client.post("/ai/ask", json={"question": f"вопрос {i}"})
+
+    archived = (await client.get("/ai/conversations/1")).json()["messages"]
+    assert [m["text"] for m in archived] == ["старый разговор", "ответ на: старый разговор"]
+    # А сам текущий разговор подрезан, как и был.
+    assert len((await client.get("/ai/history")).json()["messages"]) == 2 * db.MAX_AI_CONVERSATION_TURNS
+
+
+@pytest.mark.asyncio
+async def test_archive_is_private_per_user(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    await client_a.post("/ai/ask", json={"question": "мой личный вопрос"})
+    await client_a.delete("/ai/history")
+
+    assert (await client_b.get("/ai/conversations")).json()["conversations"] == []
+    assert (await client_b.get("/ai/conversations/1")).json()["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_retention_drops_old_archive_but_never_the_current_talk(
+    fresh_db, client_factory, monkeypatch
+):
+    """Архив растёт на каждый новый разговор, поэтому чистится ночным джобом.
+    Текущий разговор он не трогает, даже если тот давно без движения: он
+    открыт на экране."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "давний разговор"})
+    await client.delete("/ai/history")
+    await client.post("/ai/ask", json={"question": "тоже давний, но текущий"})
+
+    long_ago = (dt.date.today() - dt.timedelta(days=400)).isoformat() + "T10:00:00"
+    await fresh_db.conn().execute(
+        "UPDATE ai_conversation_turns SET created_at = ?", (long_ago,)
+    )
+    await fresh_db.conn().commit()
+
+    removed = await fresh_db.prune_old_ai_conversations(180)
+    assert removed == 1
+    assert (await client.get("/ai/conversations/1")).json()["messages"] == []
+    assert len((await client.get("/ai/history")).json()["messages"]) == 2
