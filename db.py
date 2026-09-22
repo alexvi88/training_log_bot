@@ -2359,6 +2359,39 @@ async def list_recent_exercises(
     return await cur.fetchall()
 
 
+# Суперсет в этом продукте — не сущность в базе, а поведение: блоки всегда
+# заводятся типом "single" (ни один вызов create_block не передаёт другого), а
+# «суперсет» — это когда подходы двух упражнений внутри одной тренировки идут
+# вперемешку. Поэтому и подсказка «с чем ты это чередуешь» (list_superset_
+# partners), и флаг «были суперсеты» в статистике/ачивке superset1
+# (achievement_extremes) считаются ОДНИМ И ТЕМ ЖЕ способом — по пересечению
+# окон [первый подход; последний подход] двух разных упражнений внутри одной
+# тренировки. Разъедься эти два критерия — и два экрана начали бы
+# противоречить друг другу на одних и тех же данных: «партнёры есть», а
+# «суперсетов не было».
+#
+# Пересечение строгое (`<`/`>`), а минимальной длины у него нет. Один подход,
+# воткнутый между двумя подходами другого упражнения, — это уже чередование.
+# А вот окна, которые лишь касаются, — нет: так выглядят два упражнения,
+# сделанные подряд, когда последний подход одного и первый другого попали в
+# одну секунду, и так же выглядит импорт из CSV (handlers/csv_import.py пишет
+# подходы пачкой, упражнение за упражнением, и все окна стыкуются почти в одной
+# точке). Последовательная запись строго пересечься не может в принципе, поэтому
+# ни то, ни другое суперсетом не считается.
+_SET_RANGES_SQL = (
+    "SELECT wb.workout_id AS workout_id, s.exercise_id AS exercise_id, "
+    "       MIN(s.created_at) AS min_at, MAX(s.created_at) AS max_at "
+    "FROM sets s JOIN workout_blocks wb ON wb.id = s.block_id "
+    "JOIN workouts w ON w.id = wb.workout_id "
+    "{where}"
+    "GROUP BY wb.workout_id, s.exercise_id"
+)
+_RANGES_OVERLAP_SQL = (
+    "r2.workout_id = r1.workout_id AND r2.exercise_id != r1.exercise_id "
+    "AND r2.min_at < r1.max_at AND r2.max_at > r1.min_at"
+)
+
+
 async def list_superset_partners(
     user_id: int, exercise_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
 ) -> list[aiosqlite.Row]:
@@ -2368,18 +2401,17 @@ async def list_superset_partners(
     same session. Supersets aren't tracked as their own relationship, so this
     is inferred from each exercise's earliest/latest set timestamp per
     workout overlapping. Ranked by how many distinct workouts they overlapped in.
+
+    Same overlap criterion as the `has_superset` flag in achievement_extremes,
+    shared through _SET_RANGES_SQL/_RANGES_OVERLAP_SQL — see the comment there.
+    Unlike that flag, this one looks at unfinished workouts too: the whole point
+    is to suggest a partner *during* the workout being logged right now.
     """
     sql = (
-        "WITH ranges AS ("
-        "  SELECT wb.workout_id AS workout_id, s.exercise_id AS exercise_id, "
-        "         MIN(s.created_at) AS min_at, MAX(s.created_at) AS max_at "
-        "  FROM sets s JOIN workout_blocks wb ON wb.id = s.block_id "
-        "  GROUP BY wb.workout_id, s.exercise_id"
-        ") "
+        "WITH ranges AS (" + _SET_RANGES_SQL.format(where="") + ") "
         "SELECT e.*, COUNT(DISTINCT r2.workout_id) AS pair_count "
         "FROM ranges r1 "
-        "JOIN ranges r2 ON r2.workout_id = r1.workout_id AND r2.exercise_id != r1.exercise_id "
-        "  AND r2.min_at <= r1.max_at AND r2.max_at >= r1.min_at "
+        "JOIN ranges r2 ON " + _RANGES_OVERLAP_SQL + " "
         "JOIN exercises e ON e.id = r2.exercise_id "
         "WHERE r1.exercise_id = ? AND e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
         f"AND {_VISIBLE_EXERCISE_FILTER} "
@@ -3833,10 +3865,17 @@ async def achievement_extremes(
         (user_id,),
     )
     per_set = dict(await cur.fetchone())
+    # Раньше здесь стояло `b.type != 'single'`, и флаг был недостижим: блок с
+    # другим типом не создаёт ни один путь в коде, так что человек мог
+    # отработать сотню суперсетов и увидеть «нет». Считаем так же, как их
+    # выводит list_superset_partners, — по пересечению окон подходов (см.
+    # комментарий у _SET_RANGES_SQL), только по завершённым тренировкам, как и
+    # все остальные экстремумы здесь.
     cur = await conn().execute(
-        "SELECT EXISTS("
-        "  SELECT 1 FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
-        "  WHERE w.user_id = ? AND w.status = 'finished' AND b.type != 'single'"
+        "WITH ranges AS ("
+        + _SET_RANGES_SQL.format(where="WHERE w.user_id = ? AND w.status = 'finished' ")
+        + ") SELECT EXISTS("
+        "  SELECT 1 FROM ranges r1 JOIN ranges r2 ON " + _RANGES_OVERLAP_SQL +
         ") AS has_superset",
         (user_id,),
     )
