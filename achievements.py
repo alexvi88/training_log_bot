@@ -94,17 +94,42 @@ _TONNAGE_TIERS = [
     (10_000, "ton10"), (50_000, "ton50"), (100_000, "ton100"),
     (500_000, "ton500"), (1_000_000, "ton1000"),
 ]
+# Одиночные пороги — тоже списком (порог, код), чтобы и earned_codes, и
+# nearest_progress читали порог из одного места: иначе "25 подходов" на
+# экране прогресса и "25 подходов" в выдаче значка разъедутся при первой
+# правке одного из двух.
+_GROUPS_TIERS = [(6, "groups6")]
+_SESSION_SETS_TIERS = [(25, "vol25")]
+_SESSION_TONNAGE_TIERS = [(5_000, "session5t")]
+_SESSION_EXERCISES_TIERS = [(8, "combine8")]
+_BW_REPS_TIERS = [(25, "bw25")]
+_EARLY_TIERS = [(10, "early10")]
+_BODYWEIGHT_LOG_TIERS = [(30, "bwlog30")]
 
 # Семейство → (порог, код) для каждого числового значка, у которого есть
 # осмысленное "текущее значение / порог" (см. BadgeProgress ниже). Значки вне
-# этих четырёх семейств — булевы или "разовые" (суперсет когда-то случился,
-# тренировка началась до 7 утра) — у них нет расстояния до цели, поэтому в
-# «Ближайшие» они не участвуют.
+# этих семейств — булевы или "разовые" (суперсет когда-то случился,
+# тренировка началась до 7 утра, 31 декабря) — у них нет расстояния до цели,
+# поэтому в «Ближайшие» они не участвуют.
+#
+# food7 («Неделя учёта») сюда сознательно не входит, хотя число у него есть
+# (food_diary_best_run): этот же список отдаёт /v1/achievements/nearest
+# iOS-приложению, где дневника еды нет, — там карточка «3 из 7 дней» звала бы
+# к экрану, которого не существует. Семейства не различаются по клиенту, так
+# что держим один набор для обоих.
 _TIERS_BY_FAMILY: dict[str, list[tuple[float, str]]] = {
     "workouts": _WORKOUT_TIERS,
     "weeks": _STREAK_TIERS,
     "weight": _WEIGHT_TIERS,
     "tonnage": _TONNAGE_TIERS,
+    "variety": _VARIETY_TIERS,
+    "groups": _GROUPS_TIERS,
+    "session_sets": _SESSION_SETS_TIERS,
+    "session_tonnage": _SESSION_TONNAGE_TIERS,
+    "session_exercises": _SESSION_EXERCISES_TIERS,
+    "bw_reps": _BW_REPS_TIERS,
+    "early": _EARLY_TIERS,
+    "bodyweight_logs": _BODYWEIGHT_LOG_TIERS,
 }
 
 # code → семейство, нужно formatting.py: там живёт русское/английское
@@ -137,6 +162,22 @@ def _current_value(ctx: "AchievementContext", family: str) -> float:
         return ctx.max_weight_kg
     if family == "tonnage":
         return ctx.lifetime_tonnage_kg
+    if family == "variety":
+        return ctx.distinct_exercises
+    if family == "groups":
+        return ctx.distinct_groups
+    if family == "session_sets":
+        return ctx.max_session_sets
+    if family == "session_tonnage":
+        return ctx.max_session_tonnage_kg
+    if family == "session_exercises":
+        return ctx.max_session_exercises
+    if family == "bw_reps":
+        return ctx.max_bodyweight_reps
+    if family == "early":
+        return ctx.early_workouts
+    if family == "bodyweight_logs":
+        return ctx.bodyweight_logs
     raise ValueError(f"unknown badge-progress family: {family!r}")  # pragma: no cover
 
 
@@ -239,31 +280,22 @@ def earned_codes(ctx: AchievementContext) -> set[str]:
     for kg, code in _TONNAGE_TIERS:
         if ctx.lifetime_tonnage_kg >= kg:
             codes.add(code)
-    for n, code in _VARIETY_TIERS:
-        if ctx.distinct_exercises >= n:
-            codes.add(code)
-    if ctx.distinct_groups >= 6:
-        codes.add("groups6")
-    if ctx.max_session_sets >= 25:
-        codes.add("vol25")
-    if ctx.max_session_tonnage_kg >= 5_000:
-        codes.add("session5t")
-    if ctx.max_session_exercises >= 8:
-        codes.add("combine8")
+    for family in (
+        "variety", "groups", "session_sets", "session_tonnage",
+        "session_exercises", "bw_reps", "early", "bodyweight_logs",
+    ):
+        current = _current_value(ctx, family)
+        for n, code in _TIERS_BY_FAMILY[family]:
+            if current >= n:
+                codes.add(code)
     if ctx.has_superset:
         codes.add("superset1")
-    if ctx.max_bodyweight_reps >= 25:
-        codes.add("bw25")
-    if ctx.early_workouts >= 10:
-        codes.add("early10")
     if ctx.has_weekend_pair:
         codes.add("weekend_double")
     if ctx.all_weekdays_covered:
         codes.add("all_weekdays")
     if ctx.has_dec31:
         codes.add("dec31")
-    if ctx.bodyweight_logs >= 30:
-        codes.add("bwlog30")
     if ctx.food_diary_best_run >= 7:
         codes.add("food7")
     if ctx.workout_start_hour is not None:

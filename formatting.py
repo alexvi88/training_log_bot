@@ -1990,7 +1990,9 @@ def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgePro
     label = f"{a.emoji} <b>{escape(a.title)}</b>"
     if family == "weight":
         return f"{label} — {i18n.t('achievements.nearest_weight', w=_remaining_in_unit(bp.remaining, unit))}"
-    if family == "tonnage":
+    if family in ("tonnage", "session_tonnage"):
+        # «Пятитонник» (рекорд тоннажа за одну тренировку) — та же ось в кг,
+        # что и пожизненный тоннаж, и та же фраза «осталось N т».
         # Тот же порог округления, что у format_rank_gap: меньше центнера
         # остатка — "0.0 т" читалось бы как "уже всё", поэтому договариваем
         # килограммами; выше — тоннами с одним знаком после запятой.
@@ -1998,10 +2000,14 @@ def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgePro
             tons = f"{round(bp.remaining / 1000, 1):g}"
             return f"{label} — {i18n.t('achievements.nearest_tons', tons=tons)}"
         return f"{label} — {i18n.t('achievements.nearest_tons_weight', w=_remaining_in_unit(bp.remaining, unit))}"
-    if family == "weeks":
-        return f"{label} — {i18n.t('achievements.nearest_of', current=int(bp.current), target=int(bp.target))}"
-    # "workouts"
-    return f"{label} — {i18n.t('achievements.nearest_count', n=int(bp.remaining))}"
+    if family == "workouts":
+        return f"{label} — {i18n.t('achievements.nearest_count', n=int(bp.remaining))}"
+    # Все остальные счётные семейства (недельная серия, разные упражнения,
+    # группы мышц, рекорды подходов/упражнений/повторов за раз, ранние
+    # тренировки, записи веса) — «X из Y»: существительное у каждого своё и
+    # уже стоит в названии/описании значка, а фраза без существительного не
+    # требует отдельной плюральной ветки на каждое семейство.
+    return f"{label} — {i18n.t('achievements.nearest_of', current=int(bp.current), target=int(bp.target))}"
 
 
 def build_achievements_screen(
