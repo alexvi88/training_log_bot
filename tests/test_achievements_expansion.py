@@ -75,12 +75,12 @@ async def test_food_run_counts_consecutive_days_only():
 # ---------- интеграция с БД и resync ----------
 
 
-async def _workout(db, user_id, *, sets, started="2026-07-01T10:00:00", block_type="single",
+async def _workout(db, user_id, *, sets, started="2026-07-01T10:00:00",
                    group="Спина", exercise="Тяга"):
     gid = await db.create_muscle_group(user_id, group)
     ex_id = await db.create_exercise(user_id, exercise, gid)
     workout_id = await db.create_workout(user_id, started_at=started)
-    block_id = await db.create_block(workout_id, block_type)
+    block_id = await db.create_block(workout_id, "single")
     await db.add_block_exercise(block_id, ex_id, 0)
     for weight, reps, *rpe in sets:
         await db.append_set(block_id, ex_id, 0, weight, reps, rpe[0] if rpe else None)
@@ -88,13 +88,99 @@ async def _workout(db, user_id, *, sets, started="2026-07-01T10:00:00", block_ty
     return workout_id
 
 
-async def test_superset_and_volume_awarded_from_real_history(fresh_db, user_id):
+async def _log_set_at(db, block_id, exercise_id, when: dt.datetime):
+    """Подход с заданным временем: append_set ставит его сам (now_iso), а
+    суперсет — это именно про расположение подходов во времени."""
+    await db.conn().execute(
+        "INSERT INTO sets (block_id, exercise_id, round_index, order_in_round, weight, reps, created_at) "
+        "VALUES (?, ?, 0, 0, 100, 5, ?)",
+        (block_id, exercise_id, when.isoformat()),
+    )
+    await db.conn().commit()
+
+
+async def _two_exercises(db, user_id):
+    gid = await db.create_muscle_group(user_id, "Спина")
+    return (
+        await db.create_exercise(user_id, "Тяга", gid),
+        await db.create_exercise(user_id, "Подъём на бицепс", gid),
+    )
+
+
+async def _interleaved_workout(db, user_id, a_id, b_id, *, start, finish=True):
+    """Настоящий суперсет: подходы двух упражнений идут вперемешку."""
+    workout_id = await db.create_workout(user_id, started_at=start.isoformat())
+    block_a = await db.create_block(workout_id, "single")
+    block_b = await db.create_block(workout_id, "single")
+    await _log_set_at(db, block_a, a_id, start)
+    await _log_set_at(db, block_b, b_id, start + dt.timedelta(seconds=30))
+    await _log_set_at(db, block_a, a_id, start + dt.timedelta(seconds=60))
+    await _log_set_at(db, block_b, b_id, start + dt.timedelta(seconds=90))
+    if finish:
+        await db.finish_workout(workout_id, finished_at=(start + dt.timedelta(minutes=5)).isoformat())
+    return workout_id
+
+
+async def test_superset_flag_comes_from_interleaved_sets_not_block_type(fresh_db, user_id):
+    """«Были суперсеты» и «Двустаночник» считались по `workout_blocks.type !=
+    'single'`, а блок с таким типом не создаёт ни один путь в коде — все вызовы
+    db.create_block передают "single". Значит, человек мог отработать сотню
+    суперсетов и увидеть «нет», а ачивка была недостижима в принципе.
+
+    Суперсет здесь — то же поведение, по которому его выводит подсказка
+    партнёров (db.list_superset_partners): подходы двух упражнений внутри одной
+    тренировки идут вперемешку.
+    """
     db = fresh_db
-    await _workout(db, user_id, sets=[(100.0, 5, 10.0)] * 25, block_type="superset")
+    a_id, b_id = await _two_exercises(db, user_id)
+    await _interleaved_workout(db, user_id, a_id, b_id, start=dt.datetime(2026, 7, 1, 10, 0))
+
+    assert (await db.achievement_extremes(user_id))["has_superset"]
+
+    added, _removed = await achievement_sync.resync(user_id)
+    assert "superset1" in set(added)
+
+
+async def test_exercises_done_one_after_another_are_not_a_superset(fresh_db, user_id):
+    """Два упражнения подряд, от первого подхода до последнего, — не суперсет,
+    хотя тренировка у них общая. Иначе флаг был бы у всех, кто вообще сделал
+    два упражнения за раз."""
+    db = fresh_db
+    a_id, b_id = await _two_exercises(db, user_id)
+    start = dt.datetime(2026, 7, 1, 10, 0)
+    workout_id = await db.create_workout(user_id, started_at=start.isoformat())
+    block_a = await db.create_block(workout_id, "single")
+    await _log_set_at(db, block_a, a_id, start)
+    await _log_set_at(db, block_a, a_id, start + dt.timedelta(seconds=30))
+    block_b = await db.create_block(workout_id, "single")
+    await _log_set_at(db, block_b, b_id, start + dt.timedelta(minutes=5))
+    await _log_set_at(db, block_b, b_id, start + dt.timedelta(minutes=5, seconds=30))
+    await db.finish_workout(workout_id, finished_at=(start + dt.timedelta(minutes=10)).isoformat())
+
+    assert not (await db.achievement_extremes(user_id))["has_superset"]
+    assert "superset1" not in await achievement_sync._earned_now(user_id)
+
+
+async def test_superset_in_an_unfinished_workout_does_not_count_yet(fresh_db, user_id):
+    """Остальные экстремумы здесь считаются только по завершённым тренировкам —
+    флаг обязан вести себя так же, иначе значок выдаётся посреди ещё не
+    закрытой тренировки, которую человек может и бросить."""
+    db = fresh_db
+    a_id, b_id = await _two_exercises(db, user_id)
+    await _interleaved_workout(
+        db, user_id, a_id, b_id, start=dt.datetime(2026, 7, 1, 10, 0), finish=False
+    )
+
+    assert not (await db.achievement_extremes(user_id))["has_superset"]
+
+
+async def test_volume_badges_awarded_from_real_history(fresh_db, user_id):
+    db = fresh_db
+    await _workout(db, user_id, sets=[(100.0, 5, 10.0)] * 25)
 
     added, _removed = await achievement_sync.resync(user_id)
 
-    assert {"superset1", "vol25", "session5t"} <= set(added)
+    assert {"vol25", "session5t"} <= set(added)
 
 
 async def test_deleting_the_record_workout_revokes_the_session_badges(fresh_db, user_id):
