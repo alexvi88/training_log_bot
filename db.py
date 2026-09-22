@@ -8187,7 +8187,7 @@ async def add_ai_undo_actions(
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (telegram_id, turn_id, key, label, json.dumps(payload, ensure_ascii=False), created),
             )
-            out.append({"key": key, "label": label})
+            out.append({"key": key, "label": label, "kind": _ai_undo_kind(payload)})
         # Подрезаем при записи, как и ходы разговора (add_ai_conversation_turn):
         # иначе таблица растёт на каждый пишущий вызов тренера и не убывает
         # никогда, хотя старые кнопки давно уехали за край экрана.
@@ -8203,10 +8203,31 @@ async def add_ai_undo_actions(
 async def get_ai_undo_actions(telegram_id: int, turn_id: int) -> list[dict[str, str]]:
     """Живые кнопки отката под одним ходом — для GET /ai/pending."""
     cur = await conn().execute(
-        "SELECT key, label FROM ai_undo_actions WHERE telegram_id = ? AND turn_id = ? ORDER BY id",
+        "SELECT key, label, payload_json FROM ai_undo_actions WHERE telegram_id = ? AND turn_id = ? ORDER BY id",
         (telegram_id, turn_id),
     )
-    return [{"key": row["key"], "label": row["label"]} for row in await cur.fetchall()]
+    return [
+        {"key": row["key"], "label": row["label"], "kind": _ai_undo_kind(json.loads(row["payload_json"]))}
+        for row in await cur.fetchall()
+    ]
+
+
+def _ai_undo_kind(payload: dict[str, Any]) -> str:
+    """Что именно откатывает кнопка (`bodyweight`, `food`, …, `batch`) — отдаётся
+    клиенту рядом с подписью. Подпись у всех одна («↩️ Отменить»), а
+    приложению надо знать, запись ли это веса: бот под ней ставит ещё и
+    «⚖️ Дневник веса» (ai_trainer._execute_tool), и без типа повторить это
+    нечем. Сам payload наружу не уходит — в нём id строк.
+
+    Сложенный откат (`batch`, см. api_v1_ai._store_undo_actions) из
+    однотипных записей — «запиши три взвешивания» — отдаёт тип этих записей,
+    а не `batch`: для клиента это всё ещё записи веса."""
+    kind = str(payload.get("kind") or "")
+    if kind == "batch":
+        kinds = {_ai_undo_kind(item) for item in payload.get("items") or []}
+        if len(kinds) == 1:
+            return kinds.pop()
+    return kind
 
 
 async def take_ai_undo_action(telegram_id: int, key: str) -> Optional[dict[str, Any]]:
