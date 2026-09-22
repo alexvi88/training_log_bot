@@ -149,6 +149,36 @@ async def test_nearest_reports_progress_toward_unearned_badge(fresh_db, client_f
 
 
 @pytest.mark.asyncio
+async def test_nearest_includes_variety50_with_distinct_exercises(fresh_db, client_factory, monkeypatch):
+    """«Мастер на все руки» — счётный значок вне старых четырёх семейств:
+    приложение рисует полосу прогресса только по тому, что вернул /nearest."""
+    import achievement_sync
+    import achievements
+
+    client = await _linked_client(fresh_db, client_factory)
+
+    async def fake_ctx(user_id):
+        return achievements.AchievementContext(
+            total_workouts=0,
+            lifetime_tonnage_kg=0.0,
+            best_week_streak=0,
+            max_weight_kg=0.0,
+            distinct_exercises=37,
+        )
+
+    monkeypatch.setattr(achievement_sync, "aggregate_context", fake_ctx)
+
+    resp = await client.get("/achievements/nearest?limit=20")
+    assert resp.status_code == 200
+    by_code = {item["code"]: item for item in resp.json()}
+    # variety20 уже пройден по цифре — в списке только следующий порог.
+    assert "variety20" not in by_code
+    assert by_code["variety50"]["current"] == 37
+    assert by_code["variety50"]["target"] == 50
+    assert by_code["variety50"]["remaining"] == 13
+
+
+@pytest.mark.asyncio
 async def test_stats_requires_auth(fresh_db, client_factory):
     client = client_factory()
     resp = await client.get("/achievements/stats")
