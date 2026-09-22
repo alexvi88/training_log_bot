@@ -7,8 +7,9 @@
   ai_limits/db, ни одного обращения к модели.
 - `POST /ai/ask` — один вопрос → текст ответа плюс всё, чем в боте под ним
   становится клавиатура (см. `_turn_response`): предложенный черновик
-  программы (`program`), опросник перед сборкой (`questions`) и упомянутые в
-  ответе свои упражнения/программы (`mentions`). Плюс память: перед вызовом
+  программы (`program`), опросник перед сборкой (`questions`), кнопки отката
+  того, что тренер записал этим ходом (`actions`, см. `POST /ai/undo`), и
+  упомянутые в ответе свои упражнения/программы (`mentions`). Плюс память: перед вызовом
   модели читаем последний сохранённый wire-снимок разговора
   (`db.get_ai_conversation_wire_history`) и передаём его в `ask(..., history=...)`,
   а после успешного ответа сохраняем новый снимок (`db.add_ai_conversation_turn`,
@@ -38,6 +39,13 @@
   `on_conflict` ("replace"/"copy") — HTTP-аналог экрана конфликта имени
   (`ai:prog:replace`/`ai:prog:copy` в боте, см. `_resolve_conflict`); «отклонить»
   — это просто не звать ручку повторно, отдельного маршрута под неё не завели.
+- `POST /ai/undo` — «↩️ Отменить» то, что тренер сделал сам: вес, запись еды,
+  созданное или переименованное упражнение, копию программы, правку профиля.
+  В теле — `key` из `actions[]` ответа `/ai/ask` (или `/ai/pending`), сам
+  откат применяет общий с ботом `ai_undo.apply`. Ручка появилась потому, что
+  тренер про эту кнопку ПИШЕТ в тексте ответа («Если мимо — отменишь кнопкой
+  ниже», `_UNDO_NOTE` в ai_trainer.py) независимо от того, кто спросил: в
+  Telegram кнопка была, а в приложении обещание было пустым.
 - `POST /ai/program/train` — «▶️ Начать тренировку» по несохранённому
   черновику из одного дня (`ai:prog:train` в боте, см. `train_from_draft`):
   тренировка стартует прямо из плана, без создания программы.
@@ -52,8 +60,9 @@
   Сырой wire-формат остаётся только в БД, для самой модели.
 - `GET /ai/pending` — незавершённое состояние разговора: черновик программы
   (`program`, тем же JSON, что и в ответе `/ai/ask` — с `draft_id`, чтобы
-  «Забрать себе» было чем вызвать) и/или текущий неотвеченный вопрос
-  опросника (`questions`, тем же JSON, что и там же). Оба уже лежат в БД
+  «Забрать себе» было чем вызвать), текущий неотвеченный вопрос опросника
+  (`questions`, тем же JSON, что и там же) и живые кнопки отката под
+  последним ходом (`actions`, чтобы «Отменить» пережило уход с экрана). Оба уже лежат в БД
   (`ai_program_drafts`/`ai_setup_states`) ради `/ai/program/save` и
   `/ai/questions/answer` — этой ручки не хватало только чтобы клиент мог их
   ПРОЧИТАТЬ, а не только записать ответ на них. Отдельная ручка, а не поле в
@@ -148,6 +157,7 @@ import ai_limits
 import ai_program_actions
 import ai_setup_flow
 import ai_trainer
+import ai_undo
 import api_v1_common as common
 import api_v1_voice
 import busy_lock
@@ -354,7 +364,9 @@ async def _run_turn(
 
     wire_messages = wire_cell.get("messages")
     if wire_messages is not None:
-        await db.add_ai_conversation_turn(user_id, question, answer, wire_messages, image_path=saved_image_path)
+        turn_id = await db.add_ai_conversation_turn(
+            user_id, question, answer, wire_messages, image_path=saved_image_path
+        )
     else:
         # on_wire не сработал (не должно случаться — ask() зовёт его перед
         # каждым успешным возвратом текста, см. ai_trainer.py), но история
@@ -365,9 +377,52 @@ async def _run_turn(
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
         ]
-        await db.add_ai_conversation_turn(user_id, question, answer, fallback_wire, image_path=saved_image_path)
+        turn_id = await db.add_ai_conversation_turn(
+            user_id, question, answer, fallback_wire, image_path=saved_image_path
+        )
 
-    return {"answer": answer, "draft": dict(draft_cell) if draft_cell else None, "questions": questions_cell}
+    return {
+        "answer": answer,
+        "draft": dict(draft_cell) if draft_cell else None,
+        "questions": questions_cell,
+        "actions": await _store_undo_actions(user_id, turn_id, actions),
+    }
+
+
+async def _store_undo_actions(
+    user_id: int, turn_id: int, actions: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """Сохранить откаты этого хода и вернуть то, что уедет клиенту кнопками.
+
+    Инструменты тренера, которые пишут в базу, отдают описание отката вместе с
+    подписью кнопки (см. ai_undo.py), и модель в тексте ответа на эту кнопку
+    прямо ссылается («Если мимо — отменишь кнопкой ниже»). До этой ручки
+    `collect_action` их собирал и выбрасывал: в Telegram кнопка была, в
+    приложении текст про неё был, а кнопки не было.
+
+    Берём только откаты (`undo`). Остальные действия тренера — письмо
+    разработчику (`feedback`) и предложение архивировать пачку упражнений
+    (`archive_ids`) — это не откат уже сделанного, а предложение сделать
+    что-то новое, и каждому нужна своя ручка со своим подтверждением; пока их
+    нет, молча пропускаем, а не отдаём кнопку, которую нечем нажать.
+
+    Несколько откатов за ход складываются в один, ровно как в боте
+    (`_fold_undo_actions`): просьба «удали всё из дневника еды» — это два
+    десятка вызовов с двумя десятками откатов, и двадцать кнопок под одним
+    ответом никому не помогают. Порядок применения — обратный, им занимается
+    `ai_undo.apply` для `kind="batch"`.
+    """
+    undos = [a for a in actions if a.get("undo") is not None]
+    if not undos:
+        return []
+    if len(undos) > 1:
+        user = await db.get_user(user_id)
+        with i18n.use_lang(user["lang"] if user is not None else "ru"):
+            label = i18n.t("ai.screen.actions_folded_label", n=len(undos))
+        items = [(label, {"kind": "batch", "items": [a["undo"] for a in undos]})]
+    else:
+        items = [(undos[0]["label"], undos[0]["undo"])]
+    return await db.add_ai_undo_actions(user_id, turn_id, items)
 
 
 def _program_json(draft_id: str, draft: dict[str, Any]) -> dict[str, Any]:
@@ -532,6 +587,10 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
         "answer": turn["answer"],
         "program": program_json,
         "questions": questions_json,
+        # Кнопки отката того, что тренер сделал этим ходом (см.
+        # `_store_undo_actions` и `POST /ai/undo`). Пустой список — обычное
+        # дело: большинство ответов ничего не пишет и откатывать нечего.
+        "actions": turn.get("actions") or [],
         "mentions": mentions,
         "limits": await _limits_json(user_id),
     }
@@ -1053,6 +1112,40 @@ async def ask_video(request: Request) -> JSONResponse:
         _busy.discard(user_id)
 
 
+async def undo_action(request: Request) -> JSONResponse:
+    """«↩️ Отменить» под ответом тренера — HTTP-аналог кнопки `ai:undo:` в боте.
+
+    `key` — из `actions[].key` ответа `/ai/ask` (или `/ai/pending` после
+    возвращения на экран). Само описание отката клиенту не отдаётся вовсе: в
+    нём лежат id чужих строк и прежние значения полей, а клиенту для кнопки
+    достаточно ключа и подписи.
+
+    Описание забирается из базы НАВСЕГДА до применения
+    (`db.take_ai_undo_action`), тем же приёмом и по той же причине, что в боте:
+    двойной тап не должен откатить дважды и снести заодно запись, которую
+    человек успел сделать после. Поэтому 409 `undo_failed` — это «ключ был,
+    но вернуть как было уже не вышло» (по упражнению успели записать подход,
+    строку удалили руками), и повторять запрос бессмысленно: кнопка честно
+    гаснет и в этом случае тоже.
+    """
+    user_id = await common.authed_user_id(request)
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+    body = await common.json_body(request)
+    key = str(body.get("key") or "").strip()
+    if not key:
+        raise ApiError(400, "bad_request", "key is required")
+
+    payload = await db.take_ai_undo_action(user_id, key)
+    with i18n.use_lang(lang):
+        if payload is None:
+            raise ApiError(404, "undo_gone", i18n.t("ai.screen.undo.already_gone"))
+        message = await ai_undo.apply(user_id, payload)
+        if message is None:
+            raise ApiError(409, "undo_failed", i18n.t("ai.screen.undo.failed"))
+    return JSONResponse({"message": message})
+
+
 async def get_pending_state(request: Request) -> JSONResponse:
     """Незавершённое состояние разговора — то, что должно висеть карточкой под
     последней репликой тренера, но само по себе не текст и потому не попадает
@@ -1072,6 +1165,14 @@ async def get_pending_state(request: Request) -> JSONResponse:
 
     draft = await db.get_ai_program_draft(user_id)
     setup_state = await db.get_ai_setup_state(user_id)
+    # Кнопки отката — те, что висят под ПОСЛЕДНИМ ходом: подпись у них уже
+    # локализованная (её сделал сам инструмент тренера в момент записи), и
+    # перевода на лету они не требуют, в отличие от черновика и опросника.
+    # Откаты более старых ходов живы в базе (до вытеснения, см.
+    # db.MAX_AI_UNDO_ACTIONS) и ими можно воспользоваться, но нарисовать их
+    # клиенту не под чем: истории с id ходов у него нет.
+    last_turn = await db.get_ai_conversation_history(user_id, limit=1)
+    actions = await db.get_ai_undo_actions(user_id, last_turn[0]["id"]) if last_turn else []
 
     with i18n.use_lang(lang):
         program_json = _program_json(draft["id"], draft) if draft else None
@@ -1084,7 +1185,7 @@ async def get_pending_state(request: Request) -> JSONResponse:
             else None
         )
 
-    return JSONResponse({"program": program_json, "questions": questions_json})
+    return JSONResponse({"program": program_json, "questions": questions_json, "actions": actions})
 
 
 async def get_history(request: Request) -> JSONResponse:
@@ -1159,6 +1260,10 @@ async def delete_history(request: Request) -> JSONResponse:
     await db.clear_ai_conversation_history(user_id)
     await db.clear_ai_program_draft(user_id)
     await db.clear_ai_setup_state(user_id)
+    # И кнопки отката: ходов, под которыми они висели, на экране больше нет, а
+    # тихо живущий ключ к «удалить вес» — это отмена, которую уже нечем
+    # осознанно вызвать (в боте state.clear() уносит ai_undo ровно так же).
+    await db.clear_ai_undo_actions(user_id)
     return JSONResponse({"cleared": True})
 
 
@@ -1206,6 +1311,7 @@ routes = [
     Route("/ai/questions/answer", answer_setup_question, methods=["POST"]),
     Route("/ai/program/save", save_program, methods=["POST"]),
     Route("/ai/program/train", train_from_draft, methods=["POST"]),
+    Route("/ai/undo", undo_action, methods=["POST"]),
     Route("/ai/pending", get_pending_state, methods=["GET"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
