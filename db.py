@@ -381,8 +381,11 @@ CREATE TABLE IF NOT EXISTS ai_conversation_turns (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_user ON ai_conversation_turns (telegram_id, id);
-CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_conv
-    ON ai_conversation_turns (telegram_id, conversation_id, id);
+-- Индекс по (telegram_id, conversation_id, id) заводится НЕ здесь, а в
+-- _migrate_schema, после ALTER TABLE, который добавляет conversation_id живой
+-- базе. Здесь он ронял старт: CREATE TABLE IF NOT EXISTS у существующей
+-- таблицы — no-op, колонки в ней ещё нет, а executescript идёт ДО миграций и
+-- падает на индексе целиком (sqlite3.OperationalError: no such column).
 
 -- Черновик программы, предложенный тренером через /ai/ask (см. api_v1_ai.py),
 -- и активный опросник перед его сборкой — HTTP-аналог того, что бот держит в
@@ -1246,10 +1249,13 @@ async def _migrate_schema() -> None:
             "ALTER TABLE ai_conversation_turns "
             "ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 1"
         )
-        await _conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_conv "
-            "ON ai_conversation_turns (telegram_id, conversation_id, id)"
-        )
+    # Индекс — здесь, а не в SCHEMA, и безусловно (не внутри `if` выше): у
+    # новой базы колонка приходит из CREATE TABLE, у живой — из ALTER строкой
+    # выше, и в обоих случаях индекс создаётся уже ПОСЛЕ неё.
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_conv "
+        "ON ai_conversation_turns (telegram_id, conversation_id, id)"
+    )
     if "image_path" not in conversation_cols:
         # Заполнять нечем: ходы, записанные до этой колонки, шли без
         # вложения вообще (фото/видео уезжали в модель и терялись, см.
