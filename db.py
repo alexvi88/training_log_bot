@@ -98,7 +98,14 @@ CREATE TABLE IF NOT EXISTS users (
     -- рассылки, admin_tasks), нужно это проверять. 1 — обычный путь и
     -- дефолт для всех, кто пришёл через бота: там telegram_id всегда
     -- настоящий с первой же строки.
-    telegram_linked INTEGER NOT NULL DEFAULT 1
+    telegram_linked INTEGER NOT NULL DEFAULT 1,
+    -- Номер ТЕКУЩЕГО разговора с тренером в приложении (см. ai_conversation_turns
+    -- и api_v1_ai.py). «Новый разговор» не стирает ходы, а увеличивает этот
+    -- номер: старый разговор остаётся лежать архивом, который можно
+    -- перечитать, но нельзя продолжить. Указатель нужен именно колонкой, а не
+    -- MAX(conversation_id) по ходам: сразу после «нового разговора» строк у
+    -- него ещё нет вовсе, а номер уже занят.
+    ai_conversation_id INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -362,6 +369,11 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegr
 CREATE TABLE IF NOT EXISTS ai_conversation_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
+    -- Какому разговору принадлежит ход (users.ai_conversation_id — номер
+    -- текущего). Всё, что читается «для модели» и «для экрана чата»,
+    -- фильтруется по текущему номеру; прошлые номера — архив только на
+    -- чтение (GET /ai/conversations).
+    conversation_id INTEGER NOT NULL DEFAULT 1,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     wire_json TEXT NOT NULL,
@@ -369,6 +381,8 @@ CREATE TABLE IF NOT EXISTS ai_conversation_turns (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_user ON ai_conversation_turns (telegram_id, id);
+CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_conv
+    ON ai_conversation_turns (telegram_id, conversation_id, id);
 
 -- Черновик программы, предложенный тренером через /ai/ask (см. api_v1_ai.py),
 -- и активный опросник перед его сборкой — HTTP-аналог того, что бот держит в
@@ -1055,6 +1069,12 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
         )
+    if "ai_conversation_id" not in user_cols:
+        # 1 — тот же номер, который получили все уже накопленные ходы: до этой
+        # колонки разговор был ровно один, и он же текущий.
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN ai_conversation_id INTEGER NOT NULL DEFAULT 1"
+        )
     if "tz_offset" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" in user_cols:
@@ -1219,6 +1239,17 @@ async def _migrate_schema() -> None:
         )
 
     conversation_cols = await _column_names("ai_conversation_turns")
+    if "conversation_id" not in conversation_cols:
+        # Всё, что накоплено до архива, — это один разговор, он же текущий у
+        # всех (users.ai_conversation_id тоже приходит с дефолтом 1).
+        await _conn.execute(
+            "ALTER TABLE ai_conversation_turns "
+            "ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 1"
+        )
+        await _conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_conv "
+            "ON ai_conversation_turns (telegram_id, conversation_id, id)"
+        )
     if "image_path" not in conversation_cols:
         # Заполнять нечем: ходы, записанные до этой колонки, шли без
         # вложения вообще (фото/видео уезжали в модель и терялись, см.
@@ -7788,11 +7819,12 @@ async def get_ai_conversation_wire_history(telegram_id: int) -> list[dict[str, A
     """wire-формат для ai_trainer.ask(..., history=...): всё, что реально
     уехало модели на последнем ходу этого пользователя (уже обрезано по
     символам внутри ai_trainer — см. wire_json в SCHEMA). Пусто у нового
-    разговора или после clear_ai_conversation_history."""
+    разговора: он и начинается с того, что номер разговора сменился, а ходов
+    под новым номером ещё нет — именно этим «начать заново» и работает."""
     cur = await conn().execute(
-        "SELECT wire_json FROM ai_conversation_turns WHERE telegram_id = ? "
-        "ORDER BY id DESC LIMIT 1",
-        (telegram_id,),
+        "SELECT wire_json FROM ai_conversation_turns "
+        "WHERE telegram_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT 1",
+        (telegram_id, await current_ai_conversation_id(telegram_id)),
     )
     row = await cur.fetchone()
     if row is None:
@@ -7814,8 +7846,8 @@ async def get_ai_conversation_history(
     в HTTP tool-calls клиенту нечего показывать, и это лишний трафик."""
     cur = await conn().execute(
         "SELECT id, question, answer, image_path, created_at FROM ai_conversation_turns "
-        "WHERE telegram_id = ? ORDER BY id DESC LIMIT ?",
-        (telegram_id, limit),
+        "WHERE telegram_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT ?",
+        (telegram_id, await current_ai_conversation_id(telegram_id), limit),
     )
     rows = await cur.fetchall()
     return list(reversed(rows))
@@ -7839,9 +7871,13 @@ async def add_ai_conversation_turn(
     image_path: Optional[str] = None,
 ) -> int:
     """Записать ход (вернув его id — к нему привязываются кнопки отката, см.
-    ai_undo_actions.turn_id) и тут же подрезать историю пользователя до
+    ai_undo_actions.turn_id) и тут же подрезать ТЕКУЩИЙ разговор до
     MAX_AI_CONVERSATION_TURNS — подрезаем ПРИ ЗАПИСИ, а не при чтении, чтобы
     таблица не росла между вопросами одного и того же человека бесконечно.
+
+    Подрезка именно внутри разговора, а не по всем ходам человека: иначе
+    двадцать первый вопрос в новом разговоре начал бы выедать архив прошлого,
+    хотя тот и существует ровно затем, чтобы его можно было перечитать.
 
     Файлы вложений вытесненных ходов удаляются с диска тем же вызовом —
     иначе за MAX_AI_CONVERSATION_TURNS ходов накопление файлов в
@@ -7849,29 +7885,32 @@ async def add_ai_conversation_turn(
     них давно вычищены."""
     import chat_attachments
 
+    conversation_id = await current_ai_conversation_id(telegram_id)
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO ai_conversation_turns "
-            "(telegram_id, question, answer, wire_json, image_path, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(telegram_id, conversation_id, question, answer, wire_json, image_path, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                telegram_id, question, answer,
+                telegram_id, conversation_id, question, answer,
                 json.dumps(wire_messages, ensure_ascii=False), image_path, now_iso(),
             ),
         )
         turn_id = cur.lastrowid
         cur = await conn().execute(
-            "SELECT image_path FROM ai_conversation_turns WHERE telegram_id = ? AND id NOT IN ("
-            "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? "
+            "SELECT image_path FROM ai_conversation_turns "
+            "WHERE telegram_id = ? AND conversation_id = ? AND id NOT IN ("
+            "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? AND conversation_id = ? "
             "ORDER BY id DESC LIMIT ?) AND image_path IS NOT NULL",
-            (telegram_id, telegram_id, MAX_AI_CONVERSATION_TURNS),
+            (telegram_id, conversation_id, telegram_id, conversation_id, MAX_AI_CONVERSATION_TURNS),
         )
         evicted = [row["image_path"] for row in await cur.fetchall()]
         await conn().execute(
-            "DELETE FROM ai_conversation_turns WHERE telegram_id = ? AND id NOT IN ("
-            "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? "
+            "DELETE FROM ai_conversation_turns "
+            "WHERE telegram_id = ? AND conversation_id = ? AND id NOT IN ("
+            "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? AND conversation_id = ? "
             "ORDER BY id DESC LIMIT ?)",
-            (telegram_id, telegram_id, MAX_AI_CONVERSATION_TURNS),
+            (telegram_id, conversation_id, telegram_id, conversation_id, MAX_AI_CONVERSATION_TURNS),
         )
         await conn().commit()
     for name in evicted:
@@ -7879,27 +7918,125 @@ async def add_ai_conversation_turn(
     return turn_id
 
 
-async def clear_ai_conversation_history(telegram_id: int) -> None:
-    """«Начать разговор заново» — DELETE /ai/history. Без этого испорченный
-    контекст (модель зацепилась не за то) нечем починить, кроме как ждать,
-    пока он сам не вытеснится новыми ходами. Вложения удаляемых ходов
-    сносятся с диска тем же вызовом — та же причина, что и в
-    add_ai_conversation_turn."""
-    import chat_attachments
+async def current_ai_conversation_id(telegram_id: int) -> int:
+    """Номер разговора, который идёт прямо сейчас. 1 — и для нового человека, и
+    для того, кто «начать заново» ни разу не нажимал."""
+    cur = await conn().execute(
+        "SELECT ai_conversation_id FROM users WHERE telegram_id = ?", (telegram_id,)
+    )
+    row = await cur.fetchone()
+    return int(row["ai_conversation_id"]) if row is not None else 1
 
+
+async def start_new_ai_conversation(telegram_id: int) -> int:
+    """«Начать разговор заново» — DELETE /ai/history. Возвращает номер нового
+    разговора.
+
+    Ходы прошлого разговора НЕ удаляются: с этого места они становятся архивом
+    на чтение (GET /ai/conversations), который человек может перечитать, но не
+    продолжить. Для самого разговора ничего не меняется: следующий вопрос
+    уходит модели без истории, потому что под новым номером ходов ещё нет —
+    ровно тот же результат, что раньше давало удаление.
+
+    Заодно обнуляем wire_json уехавшего разговора: это самая тяжёлая колонка в
+    таблице (весь диалог в wire-формате, с tool-calls), а нужна она ровно для
+    одного — подать контекст модели на следующий ход. У архива такого хода не
+    будет никогда, «только чтение» и означает, что возобновить его нельзя.
+    Видимая часть (вопрос, ответ, вложение, время) остаётся нетронутой.
+    """
     async with _write_lock:
         cur = await conn().execute(
-            "SELECT image_path FROM ai_conversation_turns "
-            "WHERE telegram_id = ? AND image_path IS NOT NULL",
-            (telegram_id,),
+            "SELECT ai_conversation_id FROM users WHERE telegram_id = ?", (telegram_id,)
         )
-        attachments = [row["image_path"] for row in await cur.fetchall()]
+        row = await cur.fetchone()
+        previous = int(row["ai_conversation_id"]) if row is not None else 1
+        new_id = previous + 1
         await conn().execute(
-            "DELETE FROM ai_conversation_turns WHERE telegram_id = ?", (telegram_id,)
+            "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?",
+            (new_id, telegram_id),
+        )
+        await conn().execute(
+            "UPDATE ai_conversation_turns SET wire_json = '[]' "
+            "WHERE telegram_id = ? AND conversation_id = ?",
+            (telegram_id, previous),
+        )
+        await conn().commit()
+    return new_id
+
+
+async def list_ai_conversations(
+    telegram_id: int, limit: int = 30, before_id: Optional[int] = None
+) -> list[aiosqlite.Row]:
+    """Список разговоров от свежего к старому — для экрана «история диалогов».
+
+    Заголовок собирать не из чего, кроме первого вопроса разговора: своего
+    имени у разговора нет, а просить модель придумать его — платный вызов на
+    каждый список. `before_id` — номер разговора, ДО которого продолжать
+    список (пагинация «показать ещё»).
+    """
+    sql = (
+        "SELECT conversation_id, COUNT(*) AS turns, "
+        "MIN(created_at) AS started_at, MAX(created_at) AS last_at, "
+        "(SELECT question FROM ai_conversation_turns inner_t "
+        " WHERE inner_t.telegram_id = t.telegram_id "
+        "   AND inner_t.conversation_id = t.conversation_id "
+        " ORDER BY inner_t.id LIMIT 1) AS first_question "
+        "FROM ai_conversation_turns t WHERE telegram_id = ?"
+    )
+    params: list[Any] = [telegram_id]
+    if before_id is not None:
+        sql += " AND conversation_id < ?"
+        params.append(before_id)
+    sql += " GROUP BY conversation_id ORDER BY conversation_id DESC LIMIT ?"
+    params.append(limit)
+    cur = await conn().execute(sql, tuple(params))
+    return list(await cur.fetchall())
+
+
+async def get_ai_conversation(
+    telegram_id: int, conversation_id: int, limit: int = MAX_AI_CONVERSATION_TURNS
+) -> list[aiosqlite.Row]:
+    """Ходы одного разговора (в том числе архивного) — та же форма, что у
+    get_ai_conversation_history, и тот же порядок: от старого к новому."""
+    cur = await conn().execute(
+        "SELECT id, question, answer, image_path, created_at FROM ai_conversation_turns "
+        "WHERE telegram_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT ?",
+        (telegram_id, conversation_id, limit),
+    )
+    return list(reversed(await cur.fetchall()))
+
+
+async def prune_old_ai_conversations(retention_days: int) -> int:
+    """Снести архивные разговоры старше retention_days (см.
+    config.AI_CONVERSATION_RETENTION_DAYS) вместе с их вложениями.
+
+    Текущий разговор не трогаем никогда, даже если последний вопрос в нём был
+    год назад: он открыт на экране, и вычищать из-под человека то, что он
+    видит, — не ретеншн, а потеря данных.
+    """
+    import chat_attachments
+
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT t.id, t.image_path FROM ai_conversation_turns t "
+            "JOIN users u ON u.telegram_id = t.telegram_id "
+            "WHERE date(t.created_at) < ? AND t.conversation_id <> u.ai_conversation_id",
+            (cutoff,),
+        )
+        rows = list(await cur.fetchall())
+        if not rows:
+            return 0
+        ids = [row["id"] for row in rows]
+        attachments = [row["image_path"] for row in rows if row["image_path"]]
+        await conn().execute(
+            f"DELETE FROM ai_conversation_turns WHERE id IN ({','.join('?' * len(ids))})",
+            tuple(ids),
         )
         await conn().commit()
     for name in attachments:
         chat_attachments.delete(name)
+    return len(ids)
 
 
 # ---------- AI trainer: HTTP-аналог ai_program_draft/ai_setup из FSM ----------

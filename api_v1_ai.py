@@ -54,10 +54,19 @@
   (`ai:qa:`) или «⏭ Пропустить» (`ai:qskip`) в боте. Отдаёт следующий вопрос
   или, когда опросник закончился, реальный ответ модели с составом программы
   — как и `_finish_setup` в боте.
-- `GET /ai/history` — история для отрисовки чата: только видимая часть
-  (роль, текст, время), без wire-формата с tool-calls — клиенту нечего с
-  ними делать, а тащить внутренности модели в JSON лишним трафиком незачем.
-  Сырой wire-формат остаётся только в БД, для самой модели.
+- `GET /ai/history` — история ТЕКУЩЕГО разговора для отрисовки чата: только
+  видимая часть (роль, текст, время), без wire-формата с tool-calls — клиенту
+  нечего с ними делать, а тащить внутренности модели в JSON лишним трафиком
+  незачем. Сырой wire-формат остаётся только в БД, для самой модели.
+- `DELETE /ai/history` — «начать новый разговор». Ходы больше не стираются:
+  разговор уезжает в архив на чтение, а новый начинается пустым (см.
+  db.start_new_ai_conversation).
+- `GET /ai/conversations` и `GET /ai/conversations/{id}` — список прошлых
+  разговоров (заголовок = первый вопрос, даты, число ходов) и один разговор
+  целиком, той же формой, что `GET /ai/history`. Только чтение: продолжить
+  архивный разговор нельзя, `POST /ai/ask` всегда пишет в текущий. Архив
+  живёт config.AI_CONVERSATION_RETENTION_DAYS (чистит ночной джоб
+  admin_tasks._run_retention_cleanup), текущий разговор чистка не трогает.
 - `GET /ai/pending` — незавершённое состояние разговора: черновик программы
   (`program`, тем же JSON, что и в ответе `/ai/ask` — с `draft_id`, чтобы
   «Забрать себе» было чем вызвать), текущий неотвеченный вопрос опросника
@@ -1210,6 +1219,23 @@ async def get_history(request: Request) -> JSONResponse:
         minimum=1, maximum=db.MAX_AI_CONVERSATION_TURNS,
     )
     turns = await db.get_ai_conversation_history(user_id, limit=limit)
+    return JSONResponse({"messages": _history_messages(turns)})
+
+
+# Сколько символов первого вопроса уходит в заголовок разговора (см.
+# `_conversation_json`). Длиннее — это уже не заголовок списка, а сам вопрос.
+CONVERSATION_TITLE_CHARS = 80
+
+
+def _history_messages(turns: list[Any]) -> list[dict[str, Any]]:
+    """Ходы (вопрос+ответ) — в плоскую ленту реплик. Общее для живого чата
+    (`GET /ai/history`) и архивного разговора (`GET /ai/conversations/{id}`):
+    рисует их клиент одним и тем же кодом, значит и форма обязана быть одна.
+
+    `image_url` у архивной реплики тот же `/ai/history/{turn_id}/image`:
+    владение проверяется по id хода (см. get_history_image), а не по тому, в
+    каком разговоре он лежит, так что вложения архива отдаются как были.
+    """
     messages: list[dict[str, Any]] = []
     for row in turns:
         user_message: dict[str, Any] = {
@@ -1219,7 +1245,7 @@ async def get_history(request: Request) -> JSONResponse:
             user_message["image_url"] = f"/ai/history/{row['id']}/image"
         messages.append(user_message)
         messages.append({"role": "assistant", "text": row["answer"], "created_at": row["created_at"]})
-    return JSONResponse({"messages": messages})
+    return messages
 
 
 async def get_history_image(request: Request) -> Any:
@@ -1255,9 +1281,16 @@ async def delete_history(request: Request) -> JSONResponse:
     зацепилась не за то в старом ходу) нечем починить. Заодно сбрасывает
     черновик программы и активный опросник — они разговору не переживают
     (тот же приём, что и в боте, где state.clear() после «в меню» убирает и
-    ai_history, и ai_program_draft/ai_setup разом)."""
+    ai_history, и ai_program_draft/ai_setup разом).
+
+    DELETE, но ходы больше не стираются: разговор уезжает в архив на чтение
+    (см. db.start_new_ai_conversation и GET /ai/conversations). Для клиента
+    контракт прежний — `{"cleared": true}`, и следующий `GET /ai/history`
+    пуст, — а глагол остался DELETE, чтобы не ломать уже выпущенные версии
+    приложения ради переименования.
+    """
     user_id = await common.authed_user_id(request)
-    await db.clear_ai_conversation_history(user_id)
+    await db.start_new_ai_conversation(user_id)
     await db.clear_ai_program_draft(user_id)
     await db.clear_ai_setup_state(user_id)
     # И кнопки отката: ходов, под которыми они висели, на экране больше нет, а
@@ -1265,6 +1298,57 @@ async def delete_history(request: Request) -> JSONResponse:
     # осознанно вызвать (в боте state.clear() уносит ai_undo ровно так же).
     await db.clear_ai_undo_actions(user_id)
     return JSONResponse({"cleared": True})
+
+
+def _conversation_json(row: Any) -> dict[str, Any]:
+    """Одна строка списка разговоров. `title` — первый вопрос человека,
+    обрезанный: своего имени у разговора нет, а просить модель придумать его —
+    платный вызов на каждое открытие списка."""
+    title = (row["first_question"] or "").strip().replace("\n", " ")
+    if len(title) > CONVERSATION_TITLE_CHARS:
+        title = title[: CONVERSATION_TITLE_CHARS - 1].rstrip() + "…"
+    return {
+        "id": row["conversation_id"],
+        "title": title,
+        "turns": row["turns"],
+        "started_at": row["started_at"],
+        "last_at": row["last_at"],
+    }
+
+
+async def list_conversations(request: Request) -> JSONResponse:
+    """Прошлые разговоры с тренером — то, что раньше стиралось насовсем.
+
+    `current` — номер разговора, который открыт в чате прямо сейчас: он тоже
+    есть в списке (он же самый свежий), и клиенту нужно знать, какую строку не
+    открывать архивом, а показывать как текущую.
+    """
+    user_id = await common.authed_user_id(request)
+    limit = common.query_int(request, "limit", 30, minimum=1, maximum=100)
+    before_id = common.query_int(request, "before_id", 0, minimum=0)
+    rows = await db.list_ai_conversations(
+        user_id, limit=limit, before_id=before_id or None
+    )
+    return JSONResponse({
+        "conversations": [_conversation_json(row) for row in rows],
+        "current": await db.current_ai_conversation_id(user_id),
+    })
+
+
+async def get_conversation(request: Request) -> JSONResponse:
+    """Один разговор целиком — та же форма, что у `GET /ai/history`, чтобы
+    клиент рисовал архив тем же кодом, что и живой чат.
+
+    Только чтение: продолжить архивный разговор нельзя (`POST /ai/ask` всегда
+    пишет в текущий), и wire-снимок у него уже обнулён — см.
+    db.start_new_ai_conversation. Пустой ответ вместо 404 у несуществующего
+    или чужого номера — тот же приём, что и везде в `/v1`: чужой номер ничем
+    не отличается от номера, под которым ничего нет.
+    """
+    user_id = await common.authed_user_id(request)
+    conversation_id = int(request.path_params["conversation_id"])
+    turns = await db.get_ai_conversation(user_id, conversation_id)
+    return JSONResponse({"messages": _history_messages(turns)})
 
 
 async def get_thinking(request: Request) -> JSONResponse:
@@ -1313,6 +1397,8 @@ routes = [
     Route("/ai/program/train", train_from_draft, methods=["POST"]),
     Route("/ai/undo", undo_action, methods=["POST"]),
     Route("/ai/pending", get_pending_state, methods=["GET"]),
+    Route("/ai/conversations", list_conversations, methods=["GET"]),
+    Route("/ai/conversations/{conversation_id:int}", get_conversation, methods=["GET"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
     Route("/ai/history/{turn_id:int}/image", get_history_image, methods=["GET"]),
