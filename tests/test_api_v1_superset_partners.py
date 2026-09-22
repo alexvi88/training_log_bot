@@ -54,9 +54,14 @@ async def _open_only(workout_id: int, exercise_id: int) -> None:
     await db.add_block_exercise(block_id, exercise_id, 0)
 
 
-async def _finished_workout_pair(user_id: int, day: int, a: int, b: int, gap_minutes: float = 0.0) -> None:
-    """Законченная тренировка, где `a` и `b` перекрывались по времени
-    подходов — ровно то, что `db.list_superset_partners` считает суперсетом."""
+async def _finished_workout_pair(user_id: int, day: int, a: int, b: int) -> None:
+    """Законченная тренировка, где подходы `a` и `b` шли вперемешку (A, B, A) —
+    ровно то, что `db.list_superset_partners` считает суперсетом.
+
+    Раньше здесь было по одному подходу на упражнение в одну и ту же секунду:
+    окна лишь касались, а не пересекались. Строгое пересечение (см. комментарий у
+    `db._RANGES_OVERLAP_SQL`) такое не засчитывает — и правильно, так выглядит
+    импорт из CSV, а не чередование."""
     workout_id = await db.create_finished_workout(
         user_id, started_at=f"2026-03-{day:02d}T10:00:00", finished_at=f"2026-03-{day:02d}T11:00:00"
     )
@@ -64,16 +69,12 @@ async def _finished_workout_pair(user_id: int, day: int, a: int, b: int, gap_min
     await db.add_block_exercise(block_a, a, 0)
     block_b = await db.create_block(workout_id, "single")
     await db.add_block_exercise(block_b, b, 0)
-    await db.conn().execute(
-        "INSERT INTO sets (block_id, exercise_id, round_index, order_in_round, weight, reps, created_at) "
-        "VALUES (?, ?, 1, 0, 50.0, 8, ?)",
-        (block_a, a, f"2026-03-{day:02d}T10:00:00"),
-    )
-    await db.conn().execute(
-        "INSERT INTO sets (block_id, exercise_id, round_index, order_in_round, weight, reps, created_at) "
-        "VALUES (?, ?, 1, 0, 50.0, 8, ?)",
-        (block_b, b, f"2026-03-{day:02d}T10:0{gap_minutes:.0f}:00"),
-    )
+    for block_id, exercise_id, minute in ((block_a, a, 0), (block_b, b, 1), (block_a, a, 2)):
+        await db.conn().execute(
+            "INSERT INTO sets (block_id, exercise_id, round_index, order_in_round, weight, reps, created_at) "
+            "VALUES (?, ?, 1, 0, 50.0, 8, ?)",
+            (block_id, exercise_id, f"2026-03-{day:02d}T10:0{minute}:00"),
+        )
     await db.conn().commit()
 
 

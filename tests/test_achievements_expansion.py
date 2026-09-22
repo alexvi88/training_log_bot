@@ -161,6 +161,27 @@ async def test_exercises_done_one_after_another_are_not_a_superset(fresh_db, use
     assert "superset1" not in await achievement_sync._earned_now(user_id)
 
 
+async def test_imported_workout_with_touching_windows_is_not_a_superset(fresh_db, user_id):
+    """Импорт из CSV (handlers/csv_import.py) пишет подходы пачкой, упражнение
+    за упражнением, и created_at у всех почти одинаковый: окна двух упражнений
+    не расходятся, а стыкуются в одной секунде. При нестрогом пересечении это
+    засчитывалось бы суперсетом у каждого, кто импортировал историю."""
+    db = fresh_db
+    a_id, b_id = await _two_exercises(db, user_id)
+    moment = dt.datetime(2026, 7, 1, 10, 0)
+    workout_id = await db.create_workout(user_id, started_at=moment.isoformat())
+    block_a = await db.create_block(workout_id, "single")
+    await _log_set_at(db, block_a, a_id, moment)
+    await _log_set_at(db, block_a, a_id, moment)
+    block_b = await db.create_block(workout_id, "single")
+    await _log_set_at(db, block_b, b_id, moment)
+    await _log_set_at(db, block_b, b_id, moment)
+    await db.finish_workout(workout_id, finished_at=moment.isoformat())
+
+    assert not (await db.achievement_extremes(user_id))["has_superset"]
+    assert "superset1" not in await achievement_sync._earned_now(user_id)
+
+
 async def test_superset_in_an_unfinished_workout_does_not_count_yet(fresh_db, user_id):
     """Остальные экстремумы здесь считаются только по завершённым тренировкам —
     флаг обязан вести себя так же, иначе значок выдаётся посреди ещё не
