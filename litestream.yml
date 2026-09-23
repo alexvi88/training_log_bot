@@ -1,0 +1,12 @@
+# Непрерывная репликация SQLite в Tigris (S3 внутри Fly) — см. docs/DEPLOY_FLY.md.
+# Переменные BUCKET_NAME, AWS_* выставляет `fly storage create` секретами
+# приложения; без BUCKET_NAME start.sh Litestream не запускает вовсе.
+dbs:
+  - path: /data/training_log.db
+    replicas:
+      - type: s3
+        bucket: ${BUCKET_NAME}
+        path: training_log.db
+        endpoint: ${AWS_ENDPOINT_URL_S3}
+        region: auto
+        force-path-style: true
