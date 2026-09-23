@@ -616,7 +616,8 @@ def localized_program_day_name(key: str, day_index: int, lang: str) -> str:
     Written onto the user's own `routines.name` row the moment the program is
     instantiated (`db.create_routine_from_program`), same as an exercise's
     display name: a snapshot in whatever language was active at creation
-    time, never retranslated afterwards.
+    time. Retranslated only when the account's language changes and the name
+    is still untouched (`db.relocalize_catalog_copies`).
     """
     program = PROGRAM_BY_KEY.get(key)
     if program is None or not (0 <= day_index < len(program["days"])):
@@ -657,8 +658,9 @@ async def instantiate_program(user_id: int, key: str, name: str) -> int:
 
     Имена дней и описание пишутся В БАЗУ на языке, который активен сейчас
     (i18n.get_lang() — ContextVar, выставленный вызывающей стороной), — это
-    снимок, как и у названия сфорканного упражнения, и потом он не
-    перепереводится: дальше это данные пользователя, он их сам переименовывает.
+    снимок, как и у названия сфорканного упражнения: дальше это данные
+    пользователя, он их сам переименовывает. Перевод — только при смене языка
+    аккаунта и только нетронутого (db.relocalize_catalog_copies).
     Состав дней передаётся КАНОНИЧЕСКИМИ именами шаблонов, а не переведёнными:
     db.create_routine_from_program по ним ищет упражнение и форкает шаблон, и
     английское имя он бы не нашёл.

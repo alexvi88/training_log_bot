@@ -655,17 +655,15 @@ async def test_resolve_exercise_name_recognizes_an_existing_fork_as_own(fresh_db
 
 
 async def test_ai_program_composition_shows_the_same_name_as_the_regular_picker(fresh_db, user_id):
-    """Не баг (QA-репорт про 'программу от тренера'): упражнение, форкнутое до
-    переключения языка на английский, навсегда хранит `display_name` на языке
-    форка — тем же правилом, каким `handlers/routines.py._day_composition_blocks`
-    и `handlers/workout.py` рисуют пикер и историю: они тоже читают
-    `exercises.display_name` как есть, не пересчитывая его под текущий язык
-    (см. TONE_OF_VOICE.md/CLAUDE.md — уже существующие данные не переписываются
-    при смене языка). `resolve_exercise_name`, который кормит имена и в превью
-    AI-программы, и в реально сохранённую (list_routine_exercises джойнит тот же
-    `e.display_name`), отдаёт для уже форкнутого упражнения ровно ту же строку —
-    значит АI-программа не расходится с остальным интерфейсом, а следует тому же
-    правилу."""
+    """Упражнение, форкнутое до переключения языка на английский, при смене
+    языка переименовывается в каталожное имя нового языка
+    (db.relocalize_catalog_copies — раньше оно навсегда оставалось на языке
+    форка, и аккаунты из приложения, заведённые русскими, жили с английским
+    интерфейсом и русским списком). `resolve_exercise_name`, который кормит
+    имена и в превью AI-программы, и в реально сохранённую (list_routine_exercises
+    джойнит тот же `e.display_name`), по-прежнему находит его и по старому,
+    русскому имени (идентичность — original_name) и отдаёт ту же строку, что
+    остальной интерфейс."""
     db = fresh_db
     template = next(
         t for t in await db.list_all_exercise_templates() if t["name"] == "Жим штанги лёжа"
@@ -675,6 +673,9 @@ async def test_ai_program_composition_shows_the_same_name_as_the_regular_picker(
     assert forked["display_name"] == "Жим штанги лёжа"  # forked while still ru
 
     await db.set_user_lang(user_id, "en")
+    renamed = await db.get_exercise(forked_id)
+    assert renamed["display_name"] == "Barbell Bench Press"
+    assert renamed["original_name"] == "Жим штанги лёжа"
 
     # То же имя, которым тренер называет упражнение в предложенной программе.
     kind, ai_program_name = await db.resolve_exercise_name(user_id, "Жим штанги лёжа")
@@ -686,8 +687,7 @@ async def test_ai_program_composition_shows_the_same_name_as_the_regular_picker(
         user_id, "Push", [("Жим штанги лёжа", "3x8")]
     )
     saved = await db.list_routine_exercises(routine_id)
-    assert saved[0]["display_name"] == forked["display_name"]
+    assert saved[0]["exercise_id"] == forked_id
 
-    # Оба экрана согласны: у форкнутого до смены языка упражнения имя не
-    # меняется задним числом — ни в превью тренера, ни в сохранённой программе.
-    assert ai_program_name == forked["display_name"] == saved[0]["display_name"]
+    # Оба экрана согласны и оба — на новом языке.
+    assert ai_program_name == renamed["display_name"] == saved[0]["display_name"]
