@@ -1257,7 +1257,9 @@ async def update_note(request: Request) -> JSONResponse:
     return JSONResponse(await _workout_detail_json(workout))
 
 
-async def _history_extras_by_exercise(workout, user) -> dict[int, dict[str, Any]]:
+async def _history_extras_by_exercise(
+    workout, user, rows: Optional["view_builder.WorkoutRows"] = None
+) -> dict[int, dict[str, Any]]:
     """Готовая строка рекорда 🔥 и подходы прошлой сессии на упражнение — тем
     же путём, что карточка бота: view_builder.build_block_views(mark_records=True)
     с previous_before уже считает и то, и другое за один проход, и
@@ -1294,6 +1296,8 @@ async def _history_extras_by_exercise(workout, user) -> dict[int, dict[str, Any]
             user["e1rm_formula"],
             previous_before=workout["started_at"],
             mark_records=True,
+            rows=rows,
+            workout=workout,
         )
         show_extra = bool(user["show_extra_stats"])
         extras: dict[int, dict[str, Any]] = {}
@@ -1333,17 +1337,23 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     gold_formula ниже.
     """
     data = _workout_json(workout)
-    extras_by_exercise = await _history_extras_by_exercise(workout, user) if user is not None else {}
+    # Строки тренировки — один раз на весь ответ и пачкой по таблице (см.
+    # view_builder.WorkoutRows): и build_block_views внутри extras, и цикл
+    # ниже читают их отсюда, а не по запросу на блок/упражнение.
+    rows = await view_builder.load_workout_rows(workout["id"])
+    extras_by_exercise = (
+        await _history_extras_by_exercise(workout, user, rows) if user is not None else {}
+    )
     lang_user = user or await db.get_user(workout["user_id"])
     group_tag_cache: dict[int, str] = {}
 
-    async def group_tag_for(exercise_id: int) -> Optional[str]:
-        exercise = await db.get_exercise(exercise_id)
+    def group_tag_for(exercise_id: int) -> Optional[str]:
+        exercise = rows.exercises.get(exercise_id)
         group_id = exercise["primary_group_id"] if exercise else None
         if group_id is None:
             return None
         if group_id not in group_tag_cache:
-            group = await db.get_muscle_group(group_id)
+            group = rows.groups.get(group_id)
             if group is None:
                 return None
             with i18n.use_lang(lang_user["lang"]):
@@ -1358,22 +1368,28 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     gold_formula = None
     if workout["status"] != "finished":
         gold_formula = lang_user["e1rm_formula"]
+    best_before: dict[int, float] = {}
+    if gold_formula is not None:
+        with_sets = {
+            s["exercise_id"] for sets in rows.sets_by_block.values() for s in sets
+        }
+        best_before = await db.max_e1rm_before_workout_by_exercise(
+            workout["user_id"], with_sets, workout["id"], gold_formula
+        )
     blocks_json = []
-    for block in await db.list_blocks_for_workout(workout["id"]):
+    for block in rows.blocks:
         exercises_json = []
-        for be in await db.get_block_exercises(block["id"]):
-            sets = await db.list_sets_for_block(block["id"])
+        sets = rows.sets_by_block.get(block["id"], [])
+        for be in rows.exercises_by_block.get(block["id"], []):
             own_sets = [s for s in sets if s["exercise_id"] == be["exercise_id"]]
             extras = extras_by_exercise.get(be["exercise_id"], {})
             record_text = extras.get("record_text")
             # Заметка к упражнению в ЭТОЙ тренировке (live:note бота) — новое
             # поле, не ломает старых клиентов: они его просто не читают.
-            exercise_note = await db.get_workout_exercise_note(workout["id"], be["exercise_id"])
+            exercise_note = rows.notes.get(be["exercise_id"])
             gold_index = None
             if gold_formula is not None and own_sets:
-                previous_best = await db.max_e1rm_before_workout(
-                    workout["user_id"], be["exercise_id"], workout["id"], gold_formula
-                )
+                previous_best = best_before.get(be["exercise_id"], 0)
                 gold_index = view_builder.best_gold_index(
                     [(db.load_of(s), s["reps"], s["rpe"]) for s in own_sets],
                     previous_best, gold_formula,
@@ -1391,7 +1407,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
                     "note": exercise_note,
                     "previous_sets_text": extras.get("previous_sets_text"),
                     "e1rm_text": extras.get("e1rm_text"),
-                    "group_tag": await group_tag_for(be["exercise_id"]),
+                    "group_tag": group_tag_for(be["exercise_id"]),
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})
