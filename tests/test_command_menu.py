@@ -78,10 +78,9 @@ async def test_default_scope_advertises_the_user_facing_sections(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_available_adds_mcp_and_game_to_default_scope(monkeypatch):
-    """/game раздаёт страница того же HTTP-сервера, что и MCP (см.
-    handlers/game.game_url), так что обе команды в «/»-меню зависят от одного
-    и того же условия."""
+async def test_mcp_available_adds_public_url_commands_to_default_scope(monkeypatch):
+    """/mcp, /ios и /link_app живут на одном публичном адресе, так что все они
+    в «/»-меню зависят от одного и того же условия."""
     monkeypatch.setattr(config, "ADMIN_ID", None)
     monkeypatch.setattr(config, "MCP_ENABLED", True)
     monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://example.com")
@@ -94,7 +93,7 @@ async def test_mcp_available_adds_mcp_and_game_to_default_scope(monkeypatch):
     )
     commands = default_call.args[0]
     assert [c.command for c in commands] == [
-        "start", "help", "ai_trainer", "food_diary", "feedback", "mcp", "game", "ios", "link_app",
+        "start", "help", "ai_trainer", "food_diary", "feedback", "mcp", "ios", "link_app",
     ]
 
 
@@ -171,7 +170,7 @@ async def test_every_slash_command_is_in_the_quick_menu(monkeypatch):
     забытая команда краснеет здесь, а не обнаруживается через полгода.
     """
     monkeypatch.setattr(config, "ADMIN_ID", 12345)
-    # Условные команды (/mcp, /game, /community) висят на адресах, которых в
+    # Условные команды (/mcp, /ios, /community) висят на адресах, которых в
     # тестовом окружении нет, — включаем, иначе проверять было бы нечего.
     monkeypatch.setattr(config, "mcp_available", lambda: True)
     monkeypatch.setattr(config, "community_available", lambda: True)

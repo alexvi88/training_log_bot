@@ -105,7 +105,7 @@ def discover_modules() -> list[str]:
 #
 # main.py, ai_limits.py, handlers/settings.py, handlers/fallback.py,
 # handlers/persistent_menu.py, handlers/feedback.py, handlers/donate.py,
-# handlers/community.py, handlers/game.py, handlers/backfill.py,
+# handlers/community.py, handlers/backfill.py,
 # handlers/mcp_access.py — оставшиеся мелкие хендлеры и последний рубеж
 # (main.on_unhandled_error). Заодно закрыт долг из TONE_OF_VOICE.md: экран
 # /mcp (handlers/mcp_access.py) был английским независимо от языка бота и
@@ -241,7 +241,6 @@ LOCALIZED: list[str] = [
     "handlers/feedback.py",
     "handlers/donate.py",
     "handlers/community.py",
-    "handlers/game.py",
     "handlers/backfill.py",
     "handlers/mcp_access.py",
     "handlers/ios_link.py",
@@ -626,7 +625,6 @@ TODO: list[str] = [
     "exercise_descriptions.py",
     "exercise_media.py",
     "formatting.py",
-    "game_server.py",
     "mcp_oauth.py",
     "parser.py",
     "progress_ui.py",

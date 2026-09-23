@@ -44,7 +44,6 @@ from handlers import (
     fallback,
     feedback,
     food_diary,
-    game,
     history,
     ios_link,
     mcp_access,
@@ -314,9 +313,6 @@ def setup_routers(dp: Dispatcher) -> None:
     # the user is parked in some flow's catch-all message handler.
     dp.include_router(mcp_access.router)
     dp.include_router(ios_link.router)
-    # Same reason: /game — одна команда без состояний, и она должна долетать
-    # из любого сценария.
-    dp.include_router(game.router)
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
@@ -364,12 +360,9 @@ def _public_commands(lang: str) -> list[BotCommand]:
         BotCommand(command="feedback", description=i18n.t_in(lang, "bot.commands.feedback")),
     ]
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
-    # работающую функцию, а без публичного адреса обещать нечего. /game
-    # раздаёт страница того же сервера (см. handlers/game.game_url), так что
-    # условие общее.
+    # работающую функцию, а без публичного адреса обещать нечего.
     if config.mcp_available():
         commands.append(BotCommand(command="mcp", description=i18n.t_in(lang, "bot.commands.mcp")))
-        commands.append(BotCommand(command="game", description=i18n.t_in(lang, "bot.commands.game")))
         # /ios живёт на том же публичном адресе, что и /mcp (api_v1.py
         # монтируется рядом с MCP на одном порту) — без него звать некуда.
         commands.append(BotCommand(command="ios", description=i18n.t_in(lang, "bot.commands.ios")))

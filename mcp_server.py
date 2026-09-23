@@ -51,7 +51,6 @@ import api_v1
 import body_limit
 import config
 import db
-import game_server
 import i18n
 import mcp_oauth
 
@@ -238,9 +237,6 @@ def build_server() -> MCPServer:
         auth=mcp_oauth.auth_settings(MCP_PATH),
     )
     mcp_oauth.register_routes(mcp)
-    # Мини-игра живёт на том же сервере: свои роуты без MCP-токена, подлинность
-    # пользователя доказывает initData Telegram WebApp (см. game_server).
-    game_server.register_routes(mcp)
 
     @mcp.tool()
     async def get_training_overview() -> str:
