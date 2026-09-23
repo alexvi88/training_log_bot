@@ -9,6 +9,14 @@ primary_region = "fra"
 [build]
   dockerfile = "Dockerfile"
 
+# Несекретные настройки — здесь, в репозитории. Ключи и токены — только
+# через `fly secrets` / вкладку Secrets (TG_TOKEN, *_API_KEY, APNS_KEY_P8,
+# APNS_KEY_ID, ADMIN_ID).
+[env]
+  APNS_ENV = "production"
+  APNS_TEAM_ID = "H93ZYM2S8U"
+  MCP_PUBLIC_URL = "https://training-log-bot.fly.dev"
+
 [deploy]
   # С volume второй машины рядом не поднять: старая гасится, новая
   # стартует (10–30 с простоя). Telegram копит апдейты, приложение —
