@@ -11,7 +11,7 @@
 brew install flyctl          # или: curl -L https://fly.io/install.sh | sh
 fly auth login
 fly apps create training-log-bot          # имя должно совпасть с app в fly.toml
-fly volumes create data --region waw --size 3 -a training-log-bot
+fly volumes create data --region fra --size 3 -a training-log-bot
 ```
 
 ## 2. Секреты

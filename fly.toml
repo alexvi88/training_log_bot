@@ -1,10 +1,10 @@
-# Fly.io: один постоянный инстанс в Варшаве с volume под /data.
+# Fly.io: один постоянный инстанс во Франкфурте с volume под /data.
 # Почему ровно один и без автостопа — см. комментарий в amvera.yaml:
 # SQLite, поллинг Telegram и in-memory замки держатся на одном процессе.
 # Порядок переезда — docs/DEPLOY_FLY.md.
 
 app = "training-log-bot"
-primary_region = "waw"
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
