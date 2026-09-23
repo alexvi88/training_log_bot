@@ -35,24 +35,26 @@ fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"
 
 ## 3. База
 
-Нужны файлы из `/data` Amvera: `training_log.db`, `fsm_storage.json`,
-папка `media/`. Если Amvera недоступна — последний ежедневный бэкап базы
-бот присылает админу в Telegram (`admin_tasks.py`).
-
-Сначала **остановить бота на Amvera** (иначе после копирования он допишет
-в старую базу). Затем первый деплой и заливка:
-
-```sh
-fly deploy                                   # поднимет пустую базу
-fly ssh sftp shell -a training-log-bot       # put training_log.db /data/training_log.db
-                                             # put fsm_storage.json /data/fsm_storage.json
-fly machine restart -a training-log-bot
-fly logs -a training-log-bot                 # ждём "SQLite journal_mode=wal, synchronous=normal"
-```
-
-Медиа (`/data/media`) — тем же sftp, или архивом:
-`tar czf media.tgz media` → `put media.tgz /data/` → `fly ssh console`
-→ `cd /data && tar xzf media.tgz && rm media.tgz`.
+1. **Остановить бота на Amvera** (кнопка паузы вверху справа) — иначе после
+   копирования он допишет в старую базу, и два бота подерутся за Telegram.
+2. Amvera → Репозиторий → Data → «Скачать данные». Распаковать, из папки с
+   `training_log.db` собрать архив (без `backups/` — он не нужен):
+   `tar czf ~/data.tgz training_log.db training_log.db-wal training_log.db-shm fsm_storage.json media`
+   (каких-то `-wal`/`-shm` может не быть — тогда просто без них).
+3. Первый деплой **с придержанным ботом** — контейнер поднимется, но бот
+   не стартует (start.sh):
+   ```sh
+   fly secrets set BOT_HOLD=1 -a training-log-bot --stage
+   fly deploy
+   ```
+4. Залить и распаковать:
+   ```sh
+   fly ssh sftp shell -a training-log-bot     # put /Users/<ты>/data.tgz /data/data.tgz, затем exit
+   fly ssh console -a training-log-bot -C "sh -c 'cd /data && tar xzf data.tgz && rm data.tgz && ls -la'"
+   ```
+5. Отпустить бота: `fly secrets unset BOT_HOLD -a training-log-bot` —
+   машина перезапустится уже с ботом. `fly logs -a training-log-bot` —
+   ждём `SQLite journal_mode=wal, synchronous=normal`.
 
 ## 4. Проверка
 

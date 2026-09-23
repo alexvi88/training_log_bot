@@ -20,4 +20,5 @@ COPY . .
 
 # /data — volume Fly (fly.toml [mounts]): база, FSM, медиа, бэкапы. Пути
 # по умолчанию в config.py уже смотрят туда, как на Amvera.
-CMD ["python", "main.py"]
+RUN chmod +x start.sh
+CMD ["./start.sh"]
