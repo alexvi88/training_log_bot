@@ -4011,6 +4011,27 @@ async def max_e1rm_before_workout(
     return (await cur.fetchone())["mx"]
 
 
+async def max_e1rm_before_workout_by_exercise(
+    user_id: int, exercise_ids, workout_id: int, formula: str = "epley"
+) -> dict[int, float]:
+    """max_e1rm_before_workout для нескольких упражнений одним GROUP BY.
+    Упражнения без истории в словарь не попадают — вызывающий берёт 0, как
+    COALESCE у одиночной версии."""
+    ids = sorted(set(exercise_ids))
+    if not ids:
+        return {}
+    cur = await conn().execute(
+        f"SELECT s.exercise_id, MAX({_e1rm_sql(formula)}) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.id != ? "
+        f"AND s.exercise_id IN ({_placeholders(ids)}) AND s.reps > 0 "
+        "GROUP BY s.exercise_id",
+        (user_id, workout_id, *ids),
+    )
+    return {r["exercise_id"]: r["mx"] for r in await cur.fetchall() if r["mx"] is not None}
+
+
 async def achievement_extremes(
     user_id: int, *, tz_offset: Optional[int] = None
 ) -> dict[str, Any]:
@@ -4999,6 +5020,121 @@ async def list_sets_for_exercise(exercise_id: int, exclude_workout_id: Optional[
         params.append(exclude_workout_id)
     sql += " ORDER BY w.started_at, s.id"
     cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+def _placeholders(values) -> str:
+    return ",".join("?" * len(values))
+
+
+async def list_block_exercises_for_workout(workout_id: int) -> list[aiosqlite.Row]:
+    """get_block_exercises для всех блоков тренировки разом — тот же `be.*,
+    e.display_name`, в порядке блока и order_in_block. Карточка и JSON
+    тренировки раньше ходили за этим по запросу на блок (и дважды за ответ)."""
+    cur = await conn().execute(
+        "SELECT be.*, e.display_name FROM block_exercises be "
+        "JOIN exercises e ON e.id = be.exercise_id "
+        "JOIN workout_blocks b ON b.id = be.block_id "
+        "WHERE b.workout_id = ? ORDER BY be.block_id, be.order_in_block, be.id",
+        (workout_id,),
+    )
+    return await cur.fetchall()
+
+
+async def list_sets_for_workout(workout_id: int) -> list[aiosqlite.Row]:
+    """list_sets_for_block для всех блоков тренировки разом: `s.*`, внутри
+    блока — тем же порядком (round_index, order_in_round, id)."""
+    cur = await conn().execute(
+        "SELECT s.* FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+        "WHERE b.workout_id = ? ORDER BY s.block_id, s.round_index, s.order_in_round, s.id",
+        (workout_id,),
+    )
+    return await cur.fetchall()
+
+
+async def get_workout_exercise_notes(workout_id: int) -> dict[int, str]:
+    """{exercise_id: note} всей тренировки — get_workout_exercise_note одним запросом."""
+    cur = await conn().execute(
+        "SELECT exercise_id, note FROM exercise_notes WHERE workout_id = ?", (workout_id,)
+    )
+    return {r["exercise_id"]: r["note"] for r in await cur.fetchall()}
+
+
+async def get_exercises_by_ids(exercise_ids) -> dict[int, aiosqlite.Row]:
+    """get_exercise пачкой: {id: строка} — пропавших id в словаре просто нет."""
+    ids = sorted(set(exercise_ids))
+    if not ids:
+        return {}
+    cur = await conn().execute(
+        f"SELECT * FROM exercises WHERE id IN ({_placeholders(ids)})", ids
+    )
+    return {r["id"]: r for r in await cur.fetchall()}
+
+
+async def get_muscle_groups_by_ids(group_ids) -> dict[int, aiosqlite.Row]:
+    """get_muscle_group пачкой: {id: строка} — пропавших id в словаре просто нет."""
+    ids = sorted({g for g in group_ids if g is not None})
+    if not ids:
+        return {}
+    cur = await conn().execute(
+        f"SELECT * FROM muscle_groups WHERE id IN ({_placeholders(ids)})", ids
+    )
+    return {r["id"]: r for r in await cur.fetchall()}
+
+
+async def list_prior_sets_for_exercises(
+    exercise_ids, exclude_workout_id: int, before: str, last_session_only: bool = False
+) -> list[aiosqlite.Row]:
+    """list_sets_for_exercise для нескольких упражнений разом, уже обрезанный
+    `started_at < before` в SQL (раньше — вся история и фильтр в Python).
+    Строки те же (`s.*, workout_id, started_at`), внутри упражнения — тем же
+    порядком (started_at, s.id).
+
+    last_session_only: оставить только подходы с самым поздним started_at до
+    `before` — всё, что нужно «прошлой» без строки рекорда. Если на этот
+    момент пришлись две тренировки, отдаются обе: какая из них «последняя»,
+    решает тот же group_sets_by_session, что и на полной выборке.
+    """
+    ids = sorted(set(exercise_ids))
+    if not ids:
+        return []
+    prior = (
+        "SELECT s.*, w.id AS workout_id, w.started_at FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        f"WHERE s.exercise_id IN ({_placeholders(ids)}) AND w.status = 'finished' "
+        "AND w.id != ? AND w.started_at < ?"
+    )
+    params: list[Any] = [*ids, exclude_workout_id, before]
+    if last_session_only:
+        sql = (
+            f"WITH prior AS ({prior}) SELECT p.* FROM prior p "
+            "WHERE p.started_at = (SELECT MAX(q.started_at) FROM prior q "
+            "WHERE q.exercise_id = p.exercise_id) "
+            "ORDER BY p.exercise_id, p.started_at, p.id"
+        )
+    else:
+        sql = prior + " ORDER BY s.exercise_id, w.started_at, s.id"
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def list_finished_workout_set_spans(user_id: int) -> list[aiosqlite.Row]:
+    """id/started_at/finished_at каждой законченной тренировки и её
+    (first_at, last_at) — get_workout_set_span(before=finished_at) всем
+    тренировкам разом, для самой долгой тренировки в зале славы. first_at
+    NULL — подходов (до finished_at) нет."""
+    cur = await conn().execute(
+        "SELECT w.id, w.started_at, w.finished_at, "
+        "       MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at "
+        "FROM workouts w "
+        "LEFT JOIN workout_blocks b ON b.workout_id = w.id "
+        "LEFT JOIN sets s ON s.block_id = b.id "
+        "  AND (w.finished_at IS NULL OR s.created_at <= w.finished_at) "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "GROUP BY w.id ORDER BY w.started_at",
+        (user_id,),
+    )
     return await cur.fetchall()
 
 
