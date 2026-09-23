@@ -1,13 +1,13 @@
-# Деплой на Fly.io. Пока переезд не закончен — только вручную (Actions →
-# Fly deploy → Run workflow): одновременно с Amvera бот работать не может,
-# оба процесса забирали бы апдейты Telegram (409 Conflict). После переезда
-# и выключения Amvera — раскомментировать push, см. docs/DEPLOY_FLY.md.
+# Деплой на Fly.io на каждый мерж в main (и вручную: Actions → Fly deploy →
+# Run workflow). Бот переехал с Amvera, проект там заморожен — второго
+# процесса, который забирал бы апдейты Telegram, больше нет. Нужен секрет
+# репозитория FLY_API_TOKEN (`fly tokens create deploy -a training-log-bot`).
 name: Fly deploy
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
   group: fly-deploy
