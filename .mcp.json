@@ -2,7 +2,7 @@
   "mcpServers": {
     "training-log": {
       "type": "http",
-      "url": "${TRAINING_LOG_MCP_URL:-https://training-log-bot-vialex8.waw0.amvera.tech/mcp}",
+      "url": "${TRAINING_LOG_MCP_URL:-https://training-log-bot.fly.dev/mcp}",
       "headers": {
         "Authorization": "Bearer ${TRAINING_LOG_MCP_TOKEN}"
       }
