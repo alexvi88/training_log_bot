@@ -1,0 +1,24 @@
+# Деплой на Fly.io. Пока переезд не закончен — только вручную (Actions →
+# Fly deploy → Run workflow): одновременно с Amvera бот работать не может,
+# оба процесса забирали бы апдейты Telegram (409 Conflict). После переезда
+# и выключения Amvera — раскомментировать push, см. docs/DEPLOY_FLY.md.
+name: Fly deploy
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
