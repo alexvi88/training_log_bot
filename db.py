@@ -552,7 +552,10 @@ CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (r
 -- Not created here for the same reason idx_block_exercises_unique isn't (see
 -- above): _migrate_schema creates it after _dedupe_exercise_links runs.
 
--- Результаты забегов мини-игр (см. game_server.py): каждая завершённая
+-- Результаты забегов мини-игр. Самих игр в боте больше нет (выпилены вместе
+-- с game_server.py и /game), ни код, ни API таблицу не читают и не пишут;
+-- схема оставлена, чтобы не заводить миграцию с DROP TABLE ради пустого
+-- места и не терять накопленные забеги. Была: каждая завершённая
 -- попытка одной строкой. game различает «Кач-Раннер» (рекорд — MAX(distance))
 -- и «Кач-Отряд» (рекорд — MAX(score)); squad — только у отряда, максимальный
 -- размер отряда за забег. game/squad добавлены миграцией в _migrate_schema —
@@ -1297,6 +1300,8 @@ async def _migrate_schema() -> None:
         # докстринг chat_attachments.py) — им и остаться NULL.
         await _conn.execute("ALTER TABLE ai_conversation_turns ADD COLUMN image_path TEXT")
 
+    # Игр больше нет, но таблица game_results в схеме осталась (см. SCHEMA) —
+    # старые БД доводим до той же формы, что и новые.
     game_cols = await _column_names("game_results")
     if "game" not in game_cols:
         # Старые строки писала только «Кач-Раннер» — им и остаться раннером.
@@ -9156,46 +9161,6 @@ async def list_recent_pushes(limit: int = 20, offset: int = 0) -> list[aiosqlite
         (limit, offset),
     )
     return await cur.fetchall()
-
-
-# ---------- мини-игры («Кач-Раннер», «Кач-Отряд») ----------
-
-
-async def save_game_result(
-    telegram_id: int,
-    distance: int,
-    score: int,
-    fighter: str,
-    game: str = "runner",
-    squad: int = 0,
-) -> None:
-    async with _write_lock:
-        await conn().execute(
-            "INSERT INTO game_results (telegram_id, game, distance, score, squad, fighter, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (telegram_id, game, distance, score, squad, fighter, now_iso()),
-        )
-        await conn().commit()
-
-
-async def get_game_best_distance(telegram_id: int) -> int:
-    """Рекорд «Кач-Раннера» — максимум метров среди забегов этой игры."""
-    cur = await conn().execute(
-        "SELECT MAX(distance) FROM game_results WHERE telegram_id = ? AND game = 'runner'",
-        (telegram_id,),
-    )
-    (best,) = await cur.fetchone()
-    return best or 0
-
-
-async def get_squad_best_score(telegram_id: int) -> int:
-    """Рекорд «Кач-Отряда» — максимум очков (не метров: отряд считает иначе)."""
-    cur = await conn().execute(
-        "SELECT MAX(score) FROM game_results WHERE telegram_id = ? AND game = 'squad'",
-        (telegram_id,),
-    )
-    (best,) = await cur.fetchone()
-    return best or 0
 
 
 # ---------- донат «Поддержать проект» ----------

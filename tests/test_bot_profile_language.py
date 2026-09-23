@@ -103,7 +103,6 @@ def test_english_description_has_no_please():
         "bot.commands.food_diary",
         "bot.commands.feedback",
         "bot.commands.mcp",
-        "bot.commands.game",
         "bot.commands.community",
     ],
 )
