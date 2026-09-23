@@ -19,6 +19,13 @@ def _offset_hours(user: Any) -> int:
         return 0
 
 
+def offset_hours(user: Any) -> int:
+    """Смещение пользователя в часах — то же, по которому считается user_today.
+    Для агрегатов db, принимающих tz_offset: у кого строка уже на руках, тот
+    передаёт его и не заставляет каждый агрегат перечитывать users заново."""
+    return _offset_hours(user)
+
+
 def user_now(user: Any) -> dt.datetime:
     """Current wall-clock time in the user's timezone, as a naive datetime."""
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) + dt.timedelta(hours=_offset_hours(user))

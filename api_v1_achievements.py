@@ -41,7 +41,7 @@ import achievement_sync
 import achievements
 import db
 import i18n
-from api_v1_common import ApiError, authed_user_id, query_int
+from api_v1_common import authed_user, query_int
 
 
 def _achievement_json(a: "achievements.Achievement", earned_at: str | None) -> dict[str, Any]:
@@ -59,10 +59,7 @@ async def list_achievements(request: Request) -> JSONResponse:
     """Весь каталог для текущего пользователя: заработанные вперемешку с ещё
     нет, в порядке CATALOG (том же порядке, что и на экране бота) — сортировку
     "сначала заработанные" оставляем клиенту, у него для этого есть `earned`."""
-    user_id = await authed_user_id(request)
-    user = await db.get_user(user_id)
-    if user is None:
-        raise ApiError(404, "not_found", "user not found")
+    user_id, user = await authed_user(request)
     earned_at = await db.list_achievement_dates(user_id)
     with i18n.use_lang(user["lang"]):
         payload = [_achievement_json(a, earned_at.get(a.code)) for a in achievements.CATALOG]
@@ -79,10 +76,7 @@ async def nearest_achievements(request: Request) -> JSONResponse:
     транспорт; из title/description и голых чисел клиент строит свою фразу
     средствами iOS-локализации.
     """
-    user_id = await authed_user_id(request)
-    user = await db.get_user(user_id)
-    if user is None:
-        raise ApiError(404, "not_found", "user not found")
+    user_id, user = await authed_user(request)
     limit = query_int(request, "limit", 3, minimum=1, maximum=20)
     earned = await db.list_achievement_codes(user_id)
     ctx = await achievement_sync.aggregate_context(user_id)
@@ -109,10 +103,7 @@ async def achievement_stats(request: Request) -> JSONResponse:
     числа для профиля/статистики, не привязанные к конкретному коду 1:1 (одно
     число может быть порогом сразу нескольких значков одной линейки — см.
     achievements._TIERS_BY_FAMILY)."""
-    user_id = await authed_user_id(request)
-    user = await db.get_user(user_id)
-    if user is None:
-        raise ApiError(404, "not_found", "user not found")
+    user_id, user = await authed_user(request)
     extremes = await db.achievement_extremes(user_id, tz_offset=int(user["tz_offset"]))
     return JSONResponse(
         {

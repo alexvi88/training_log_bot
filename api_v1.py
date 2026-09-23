@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -62,6 +63,7 @@ import i18n
 import mcp_oauth
 import parser
 import seed_data
+import server_timing
 import timeutil
 import view_builder
 import voice_parse
@@ -253,10 +255,7 @@ async def request_telegram_link_code(request: Request) -> JSONResponse:
 
 
 async def me(request: Request) -> JSONResponse:
-    user_id = await _authed_user_id(request)
-    user = await db.get_user(user_id)
-    if user is None:
-        raise ApiError(404, "not_found", "user not found")
+    user_id, user = await common.authed_user(request)
     return JSONResponse(
         {
             "user_id": user_id,
@@ -1587,7 +1586,22 @@ def build_app() -> Starlette:
         # дописать в новый, забывают на первом же. Список маршрутов передаём
         # внутрь, чтобы middleware знала ШАБЛОН пути, а не только сам путь с
         # id (см. api_v1_activity).
-        middleware=[Middleware(api_v1_activity.LogApiActions, routes=routes)],
+        middleware=[
+            # Снаружи всего — чтобы в замер вошли и сжатие, и лог действий.
+            Middleware(server_timing.ServerTimingMiddleware, routes=routes),
+            # JSON истории, прогресса, каталога упражнений — десятки килобайт
+            # одинаковых ключей, и по мобильной сети сжатый ответ приходит
+            # заметно быстрее. Меньше килобайта не жмём: заголовки дороже
+            # выигрыша. Уже сжатое (фото, видео, аудио) и частичные ответы
+            # (Range, 206) GZipMiddleware сам пропускает как есть.
+            #
+            # Внутри LogApiActions, а не снаружи: BaseHTTPMiddleware отдаёт
+            # тело кусками с more_body=True, и GZip снаружи принимал бы любой
+            # ответ, даже `{"status": "ok"}`, за поток и жал бы его целиком,
+            # без Content-Length. Здесь он видит ответ обработчика как есть.
+            Middleware(api_v1_activity.LogApiActions, routes=routes),
+            Middleware(GZipMiddleware, minimum_size=1024, compresslevel=6),
+        ],
         exception_handlers={
             ApiError: _api_error_handler,
             Exception: _unhandled_error_handler,

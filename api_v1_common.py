@@ -154,11 +154,28 @@ async def authed_user_id(request: Request) -> int:
     if user_id is None:
         raise ApiError(401, "unauthorized", "invalid or revoked token")
     request.state.user_id = user_id
-    request.state.lang = await _set_request_lang(user_id)
+    user = await db.get_user(user_id)
+    # Строка пользователя — на весь запрос: язык берётся из неё здесь же, а
+    # обработчикам, которым она нужна сразу после входа, незачем читать её из
+    # базы второй раз (см. authed_user). Изменил пользователя по ходу
+    # обработчика — перечитай сам: это снимок на момент входа.
+    request.state.user = user
+    request.state.lang = _set_request_lang(user)
     return user_id
 
 
-async def _set_request_lang(user_id: int) -> str:
+async def authed_user(request: Request) -> tuple[int, Any]:
+    """То же, что authed_user_id, плюс строка `users` — уже прочитанная при
+    входе, без второго похода в базу. 404, если строки нет (токен пережил
+    пользователя — так бывает только посреди сноса аккаунта)."""
+    user_id = await authed_user_id(request)
+    user = request.state.user
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    return user_id, user
+
+
+def _set_request_lang(user: Any) -> str:
     """Язык ответа на весь этот запрос — из users.lang.
 
     У бота язык выставляет middleware на каждый апдейт (main.py); у /v1 такого
@@ -175,7 +192,6 @@ async def _set_request_lang(user_id: int) -> str:
     соседний запрос, ни наружу. Явные `with i18n.use_lang(...)` в модулях
     остаются: они не мешают и держат язык там, где функцию зовут не из запроса.
     """
-    user = await db.get_user(user_id)
     lang = user["lang"] if user is not None and user["lang"] in i18n.SUPPORTED else i18n.DEFAULT_LANG
     i18n.set_lang(lang)
     return lang

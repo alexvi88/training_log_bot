@@ -41,7 +41,7 @@ import i18n
 import keyboards
 import progress_data
 import progression_data
-from api_v1_common import ApiError, authed_user_id, query_int
+from api_v1_common import ApiError, authed_user, authed_user_id, query_int
 
 # Потолок `limit`. Бот под кнопкой «все» шлёт 9999 (keyboards.progress_chart_keyboard),
 # так что потолок обязан быть выше — иначе «все» молча превратилось бы в «часть».
@@ -152,10 +152,7 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
     формуле этого атлета (users.e1rm_formula) и в его единицах (веса лежат в
     базе уже в них, см. db.scale_user_set_weights), подписи — на его языке.
     """
-    user_id = await authed_user_id(request)
-    user = await db.get_user(user_id)
-    if user is None:
-        raise ApiError(404, "not_found", "user not found")
+    user_id, user = await authed_user(request)
     exercise_id = int(request.path_params["exercise_id"])
     await _owned_exercise(exercise_id, user_id)
 
