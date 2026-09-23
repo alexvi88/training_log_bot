@@ -612,18 +612,6 @@ async def _screen_donate(db, user_id: int) -> str:
         config.DONATIONS_ENABLED = donations_enabled
 
 
-async def _screen_game_intro(db, user_id: int) -> str:
-    """/game без подключённого MCP (handlers.game.cmd_game) — единственное
-    состояние экрана, которое не зависит от публичного адреса."""
-    from handlers import game
-
-    message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
-    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
-    await game.cmd_game(message)
-    return message.answer.await_args.args[0]
-
-
 async def _screen_backfill_prompt(db, user_id: int) -> str:
     """«📅 На какую дату занести тренировку?» (handlers.backfill.backfill_start)."""
     from handlers import backfill
@@ -793,7 +781,6 @@ SCREENS: list[tuple[str, object]] = [
     ("mcp_access_disabled", _screen_mcp_access_disabled),
     ("community_intro", _screen_community_intro),
     ("donate_screen", _screen_donate),
-    ("game_intro", _screen_game_intro),
     ("backfill_prompt", _screen_backfill_prompt),
     ("fallback_generic", _screen_fallback_generic),
     ("fallback_ask_trainer", _screen_fallback_ask_trainer),
