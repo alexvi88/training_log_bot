@@ -66,7 +66,7 @@ fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"
 ## 5. После переезда
 
 - Amvera выключить совсем (не просто остановить деплой).
-- Автодеплой: в `.github/workflows/fly-deploy.yml` раскомментировать `push`
+- Автодеплой включён (`.github/workflows/fly-deploy.yml`, push в main);
   и добавить секрет репозитория `FLY_API_TOKEN` (`fly tokens create deploy`).
 - Свой домен: `fly certs add api.<домен>` + CNAME на `training-log-bot.fly.dev`,
   затем `MCP_PUBLIC_URL` и адрес в приложении — на домен.
