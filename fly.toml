@@ -16,6 +16,8 @@ primary_region = "fra"
   APNS_ENV = "production"
   APNS_TEAM_ID = "H93ZYM2S8U"
   MCP_PUBLIC_URL = "https://training-log-bot.fly.dev"
+  COMMUNITY_CHAT_URL = "https://t.me/training_log_athletes"
+  TEST_USER_ID = "8789172252"
 
 [deploy]
   # С volume второй машины рядом не поднять: старая гасится, новая
