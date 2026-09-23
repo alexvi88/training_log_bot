@@ -78,3 +78,27 @@ fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"
 снова, и два процесса одновременно забирали апдейты Telegram. Перед
 переездом — отвязать репозиторий в Amvera (или удалить приложение), а не
 только заморозить.
+
+## Непрерывный бэкап базы (Litestream + Tigris)
+
+Включается одной командой — она создаёт бакет Tigris и сама ставит
+приложению секреты `BUCKET_NAME`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION` (машина
+перезапустится):
+
+```sh
+fly storage create -a training-log-bot
+```
+
+С этого момента `start.sh` запускает бота под `litestream replicate`: изменения
+базы уходят в бакет через ~1 с. В логах — `litestream ... replicating to`.
+
+Восстановление: если `/data/training_log.db` нет (новый volume), start.sh сам
+делает `litestream restore` перед стартом. Вручную, на любой момент времени:
+
+```sh
+fly ssh console -a training-log-bot
+litestream restore -o /data/restored.db -timestamp 2026-09-24T10:00:00Z /data/training_log.db
+```
+
+Ежедневный бэкап админу в Telegram (`admin_tasks.py`) остаётся как был.
