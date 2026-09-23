@@ -57,6 +57,8 @@ RU_ALLOWED_LATIN = {
     "TRX",      # петли TRX — название снаряда
     "Push", "Pull", "Legs", "PPL",  # названия дней сплита — так их зовут и по-русски
     "Upper", "Lower",
+    "vs",       # «(↓3кг vs 23.09)» у e1RM — так бот пишет и в русской карточке
+                # тренировки (formatting.e1rm_line); в зале это обычное слово
 }
 
 # Идентичность каталога: русское имя шаблона, по которому ключуются картинки и
@@ -383,6 +385,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/exercises/{forked_id}/superset-partners?workout_id={wid}", expect=200)
     await w.call("GET", f"/exercises/next-suggestions?last_finished_id={forked_id}", expect=200)
     await w.call("POST", f"/workouts/{wid}/finish", json={}, expect=200)
+    # На день раньше второй тренировки ниже: сравнение «(Δ vs дата)» в её итогах
+    # появляется, только если прошлая начата строго раньше. Обе заводятся в одну
+    # секунду, и без явной даты тест проходил эту ветку через раз.
+    await w.call("PATCH", f"/workouts/{wid}/date", json={"date": "2026-01-05"}, expect=200)
     await w.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": forked_id, "weight": 100, "reps": 5},
                  expect=409)
     await w.call("GET", "/workouts", expect=200)
