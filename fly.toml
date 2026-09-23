@@ -1,0 +1,41 @@
+# Fly.io: один постоянный инстанс в Варшаве с volume под /data.
+# Почему ровно один и без автостопа — см. комментарий в amvera.yaml:
+# SQLite, поллинг Telegram и in-memory замки держатся на одном процессе.
+# Порядок переезда — docs/DEPLOY_FLY.md.
+
+app = "training-log-bot"
+primary_region = "waw"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # С volume второй машины рядом не поднять: старая гасится, новая
+  # стартует (10–30 с простоя). Telegram копит апдейты, приложение —
+  # подходы в офлайн-очереди.
+  strategy = "immediate"
+
+[[mounts]]
+  source = "data"
+  destination = "/data"
+  snapshot_retention = 5
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  # Поллинг Telegram — не HTTP-трафик: засыпание машины без запросов
+  # выключило бы бота. Держим всегда включённой.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/v1/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
