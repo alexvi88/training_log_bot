@@ -61,6 +61,7 @@ import history_search_data
 import i18n
 import mcp_oauth
 import parser
+import seed_data
 import timeutil
 import view_builder
 import voice_parse
@@ -121,6 +122,7 @@ async def auth_link(request: Request) -> JSONResponse:
     перебрал бы весь диапазон за секунды, пока код ещё не истёк.
     """
     body = await _json_body(request)
+    _set_pre_auth_lang(body, request)
     code = str(_require(body, "code", str)).strip()
     client_ip = request.client.host if request.client else None
     status, user_id = await db.consume_link_code(
@@ -150,6 +152,31 @@ async def _issue_token_response(user_id: int) -> JSONResponse:
     )
 
 
+def _signup_language_code(body: dict[str, Any], request: Request) -> str:
+    """Язык НОВОГО app-only аккаунта (только для заведения, существующему
+    пользователю язык никогда не переписываем — его он мог выбрать сам).
+
+    У бота язык приезжает с каждым апдейтом (`language_code` телеграма), у
+    приложения такого сигнала нет, и до этой функции каждый аккаунт из
+    приложения заводился русским — атлет с английским телефоном получал
+    русские тексты со всех экранов. Порядок: поле `lang` в теле (клиент шлёт
+    язык устройства — "en", "ru", "en-US"), иначе заголовок `Accept-Language`
+    (URLSession ставит его сам по языкам устройства), иначе дефолт. Сырой код
+    отдаётся в `i18n.normalize` уже внутри db.create_app_only_user.
+    """
+    raw = body.get("lang")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return i18n.lang_from_accept_language(request.headers.get("accept-language"))
+
+
+def _set_pre_auth_lang(body: dict[str, Any], request: Request) -> None:
+    """Язык ошибок входа («код не подошёл»): пользователя ещё нет, users.lang
+    взять неоткуда, поэтому тот же сигнал, что и у заведения аккаунта —
+    `lang` из тела или `Accept-Language` (см. api_v1_common.request_lang)."""
+    request.state.lang = i18n.normalize(_signup_language_code(body, request))
+
+
 async def auth_apple(request: Request) -> JSONResponse:
     """Sign In with Apple.
 
@@ -165,8 +192,12 @@ async def auth_apple(request: Request) -> JSONResponse:
         заводим НОВЫЙ аккаунт без Telegram (см. db.create_app_only_user) и
         сразу выдаём токен. Telegram к нему можно привязать позже — см.
         request_telegram_link_code ниже и handlers/ios_link.cmd_link_app.
+
+    Необязательное поле `lang` (строка: "en", "ru", "en-US") — язык устройства
+    для НОВОГО аккаунта; без него — `Accept-Language` (см. _signup_language_code).
     """
     body = await _json_body(request)
+    _set_pre_auth_lang(body, request)
     identity_token = str(_require(body, "identity_token", str))
     try:
         identity = apple_signin.verify_identity_token(identity_token)
@@ -190,7 +221,9 @@ async def auth_apple(request: Request) -> JSONResponse:
                 raise ApiError(400, "invalid_code", "code is invalid or expired")
             user_id = code_user_id
         else:
-            new_user = await db.create_app_only_user()
+            new_user = await db.create_app_only_user(
+                language_code=_signup_language_code(body, request)
+            )
             user_id = new_user["telegram_id"]
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
 
@@ -282,10 +315,18 @@ async def list_muscle_groups(request: Request) -> JSONResponse:
 
     return JSONResponse(
         [
-            {"id": g["id"], "name": g["name"], "emoji": g["emoji"], "days_ago": days_ago(g["id"])}
+            {"id": g["id"], "name": _group_name(g), "emoji": g["emoji"], "days_ago": days_ago(g["id"])}
             for g in groups
         ]
     )
+
+
+def _group_name(group) -> str:
+    """Имя группы на языке атлета. Встроенные группы глобальные и в базе
+    навсегда русские (см. seed_data.localized_muscle_group_name) — сырое
+    `name` отдавало англоязычному «Грудь»; своя группа проходит как есть.
+    Язык — из контекста запроса (api_v1_common.authed_user_id)."""
+    return seed_data.localized_muscle_group_name(group["name"], i18n.get_lang())
 
 
 async def create_muscle_group(request: Request) -> JSONResponse:
@@ -295,13 +336,24 @@ async def create_muscle_group(request: Request) -> JSONResponse:
     body = await _json_body(request)
     name = str(_require(body, "name", str)).strip()
     if not name:
-        raise ApiError(400, "bad_request", "name must not be empty")
+        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
     emoji = body.get("emoji")
     if emoji is not None and not isinstance(emoji, str):
         raise ApiError(400, "bad_request", "emoji must be a string")
+    # Имя встроенной группы на любом языке («Chest», «Грудь») — это та самая
+    # встроенная группа, а не новая: клиент показывает локализованные имена и
+    # может прислать их обратно. Без сверки у англоязычного заводилась бы
+    # своя «Chest» рядом со встроенной, и упражнения расползались бы по двум.
+    canonical = seed_data.canonical_muscle_group_name(name)
+    if canonical is not None:
+        for existing in await db.list_muscle_groups(user_id):
+            if existing["user_id"] is None and existing["name"] == canonical:
+                return JSONResponse(
+                    {"id": existing["id"], "name": _group_name(existing), "emoji": existing["emoji"]}
+                )
     group_id = await db.create_muscle_group(user_id, name, emoji)
     group = await db.get_muscle_group(group_id)
-    return JSONResponse({"id": group["id"], "name": group["name"], "emoji": group["emoji"]}, status_code=201)
+    return JSONResponse({"id": group["id"], "name": _group_name(group), "emoji": group["emoji"]}, status_code=201)
 
 
 async def list_exercises(request: Request) -> JSONResponse:
@@ -334,7 +386,7 @@ async def create_exercise(request: Request) -> JSONResponse:
     body = await _json_body(request)
     name = str(_require(body, "name", str)).strip()
     if not name:
-        raise ApiError(400, "bad_request", "name must not be empty")
+        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
     group_id = body.get("group_id")
     if group_id is not None:
         if not isinstance(group_id, int):
@@ -362,7 +414,7 @@ async def update_exercise(request: Request) -> JSONResponse:
     if "name" in body:
         name = str(_require(body, "name", str)).strip()
         if not name:
-            raise ApiError(400, "bad_request", "name must not be empty")
+            raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
         # Клэш по display_name — та же ловушка, что update_exercise_name
         # разбирает в docstring: переименование в уже занятое имя должно
         # остаться отдельным ответом, а не молча слиться с чужой историей.
@@ -796,7 +848,7 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
     exercise_id = _require(body, "exercise_id", int)
     text = str(_require(body, "text", str)).strip()
     if not text:
-        raise ApiError(400, "bad_request", "text must not be empty")
+        raise ApiError(400, "bad_request", "text must not be empty", key="api.error.text_empty")
     idempotency_key = common.optional_str(body, "idempotency_key")
     await _owned_exercise(exercise_id, user_id)
 
@@ -807,7 +859,7 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
         except parser.ParseError as exc:
             # Машинный код всё равно есть — клиенту иногда надо отличить
             # «не разобрал» от «сервер лёг», — но показывать он должен message.
-            raise ApiError(400, "unparsed_input", exc.message) from exc
+            raise ApiError(400, "unparsed_input", "set line not parsed", human=exc.message) from exc
 
     created = await _store_parsed_sets(
         workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key
@@ -896,7 +948,7 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
             except parser.ParseError:
                 parsed = None
         if not parsed:
-            raise ApiError(400, "unparsed_input", i18n.t("ai.screen.voice_empty"))
+            raise ApiError(400, "unparsed_input", "empty transcript", key="ai.screen.voice_empty")
 
     created = await _store_parsed_sets(
         workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key
@@ -1392,7 +1444,7 @@ async def search_workouts(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     query = request.query_params.get("exercise", "").strip()
     if not query:
-        raise ApiError(400, "bad_request", "exercise must not be empty")
+        raise ApiError(400, "bad_request", "exercise must not be empty", key="api.error.name_empty")
     limit = common.query_int(request, "limit", 20, minimum=1, maximum=100)
     offset = common.query_int(request, "offset", 0, minimum=0)
     page = await history_search_data.search(user_id, query, limit=limit, offset=offset)

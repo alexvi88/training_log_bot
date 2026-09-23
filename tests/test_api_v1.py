@@ -1235,7 +1235,7 @@ async def test_set_with_non_numeric_weight_is_a_400_not_a_500(fresh_db, client_f
     )
     assert resp.status_code == 400, resp.text
     assert resp.json()["error"] == "bad_request"
-    assert "weight" in resp.json()["message"]
+    assert "weight" in resp.json()["detail"]
 
     # тот же кортеж используется весом тела — и там тоже 400, а не 500
     resp = await client.post("/bodyweight", json={"weight": "80"})

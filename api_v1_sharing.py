@@ -73,7 +73,8 @@ def _routine_payload_json(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": payload["name"],
         "exercises": [
-            {"name": ex["name"], "target": ex.get("target")} for ex in payload["exercises"]
+            {"name": sharing.shown_exercise_name(ex["name"]), "target": sharing.shown_target(ex.get("target"))}
+            for ex in payload["exercises"]
         ],
     }
 
@@ -90,7 +91,8 @@ def _program_payload_json(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "name": day["name"],
                 "exercises": [
-                    {"name": ex["name"], "target": ex.get("target")} for ex in day["exercises"]
+                    {"name": sharing.shown_exercise_name(ex["name"]), "target": sharing.shown_target(ex.get("target"))}
+                    for ex in day["exercises"]
                 ],
             }
             for day in payload["days"]
@@ -102,8 +104,10 @@ def _program_payload_json(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _exercise_payload_json(payload: dict[str, Any]) -> dict[str, Any]:
     return {
-        "name": payload["name"],
-        "group": payload.get("group"),
+        "name": sharing.shown_exercise_name(payload["name"]),
+        # Язык получателя — из контекста запроса (api_v1_common.authed_user_id):
+        # в снапшоте лежит сырое имя встроенной группы, а оно всегда русское.
+        "group": sharing.shown_group_name(payload.get("group")),
         "description": payload.get("description"),
         "has_photo": bool(payload.get("photo_file_id")),
     }
@@ -229,7 +233,7 @@ async def _do_import_share(request: Request, user_id: int) -> JSONResponse:
     incoming = sharing.incoming_days_count(row["kind"], payload)
     over_budget = await db.routine_budget(user_id, incoming)
     if over_budget:
-        raise ApiError(403, "routine_limit_reached", over_budget)
+        raise ApiError(403, "routine_limit_reached", "routine budget exceeded", human=over_budget)
 
     if row["kind"] == "program":
         owner = await db.get_user(row["owner_id"])

@@ -113,14 +113,14 @@ async def transcribe(
     тексте и вернёт None).
     """
     if not ai_trainer.is_voice_configured():
-        raise ApiError(503, "not_configured", not_configured_message)
+        raise ApiError(503, "not_configured", "voice is not configured", human=not_configured_message)
 
     duration = body.get("duration_seconds")
     if duration is not None:
         if not isinstance(duration, (int, float)) or isinstance(duration, bool):
             raise ApiError(400, "bad_request", "duration_seconds must be a number")
         if duration > MAX_VOICE_SECONDS:
-            raise ApiError(400, "voice_too_long", too_long_message)
+            raise ApiError(400, "voice_too_long", "voice note is too long", human=too_long_message)
 
     data_url = common.require(body, "audio_data_url", str)
     raw, ext = _decode_audio_data_url(data_url, too_big_message=too_big_message)
@@ -130,5 +130,7 @@ async def transcribe(
     try:
         transcript: Optional[str] = await ai_trainer.transcribe_voice(buf, user_id)
     except Exception as exc:
-        raise ApiError(502, "voice_transcribe_failed", transcribe_failed_message) from exc
+        raise ApiError(
+            502, "voice_transcribe_failed", "transcription failed", human=transcribe_failed_message
+        ) from exc
     return transcript or ""

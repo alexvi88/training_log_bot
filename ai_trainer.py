@@ -1168,7 +1168,7 @@ async def fact_check_post(
     )
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
-    return text or "Не разобрал — попробуй переслать ещё раз."
+    return text or i18n.t("ai.factcheck.empty")
 
 
 async def comment_on_workout(user_id: int, workout_id: int) -> str:
@@ -1186,10 +1186,14 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     оборачиваем весь запрос в i18n.use_lang(...) — независимо от того, кто позвал.
     """
     workout = await db.get_workout(workout_id)
-    if workout is None or workout["user_id"] != user_id:
-        return "Тренировка не найдена."
     user = await db.get_user(user_id)
-    with i18n.use_lang(user["lang"]):
+    lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
+    if workout is None or workout["user_id"] != user_id:
+        # Язык — явно из users.lang, как и у основного пути ниже: этот ответ
+        # пишется и из фонового таска без апдейта (бот после финиша, REST —
+        # api_v1._write_ai_comment), где контекст сам не выставлен.
+        return i18n.t_in(lang, "ai.comment.workout_not_found")
+    with i18n.use_lang(lang):
         started_at = dt.datetime.fromisoformat(workout["started_at"])
         # mark_records: та же карточка, что видит человек, — включая строки рекордов.
         # Без них модель хвалила «хороший вес» там, где стоял личный рекорд.

@@ -30,6 +30,7 @@ import acquisition
 import config
 import db
 import i18n
+import seed_data
 from formatting import MESSAGE_LIMIT, telegram_length
 from state_scaffold import clear_state_keep_ai
 
@@ -162,6 +163,37 @@ def _omitted_reason(payload: dict[str, Any]) -> str:
     return i18n.t("share.reason_overflow")
 
 
+def shown_group_name(name: Optional[str]) -> Optional[str]:
+    """Группа из снапшота — на языке того, кто смотрит.
+
+    В снапшот ложится сырое `muscle_groups.name`, а у встроенных групп оно
+    навсегда русское (группы глобальные, см. seed_data.localized_muscle_group_name).
+    Получатель с английским языком читал «Грудь»; своя группа владельца
+    проходит как есть — это его текст.
+    """
+    if not name:
+        return name
+    return seed_data.localized_muscle_group_name(name, i18n.get_lang())
+
+
+def shown_exercise_name(name: str) -> str:
+    """Упражнение из снапшота — на языке того, кто смотрит, если это имя из
+    каталога (на любом языке: визитку мог собрать и русский, и английский
+    владелец). Своё имя владельца проходит как есть."""
+    canonical = name if name in _CATALOG_NAMES else seed_data.canonical_exercise_name(name)
+    if canonical is None:
+        return name
+    return seed_data.localized_exercise_name(canonical, i18n.get_lang())
+
+
+def shown_target(target: Optional[str]) -> Optional[str]:
+    """Схема подходов из снапшота на языке смотрящего («3×30–60 сек» → «sec»)."""
+    return seed_data.localized_target(target, i18n.get_lang())
+
+
+_CATALOG_NAMES = frozenset(n for _g, n in seed_data.EXERCISE_TEMPLATES)
+
+
 def _routine_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET) -> list[str]:
     """Как _program_preview_lines ниже, но для одного дня/шаблона: список
     режется по бюджету символов, а не только по MAX_SHARED_EXERCISES снапшота."""
@@ -170,8 +202,8 @@ def _routine_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET
     exercises = payload["exercises"]
     shown = 0
     for i, ex in enumerate(exercises, start=1):
-        suffix = f" — {escape(ex['target'])}" if ex.get("target") else ""
-        candidate = f"{i}. {escape(ex['name'])}{suffix}"
+        suffix = f" — {escape(shown_target(ex['target']))}" if ex.get("target") else ""
+        candidate = f"{i}. {escape(shown_exercise_name(ex['name']))}{suffix}"
         if shown > 0 and telegram_length("\n".join(lines + [candidate])) > budget:
             break
         lines.append(candidate)
@@ -199,8 +231,8 @@ def _program_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET
         exercises = day["exercises"]
         shown_ex = 0
         for ex in exercises:
-            suffix = f" — {escape(ex['target'])}" if ex.get("target") else ""
-            candidate = f"• {escape(ex['name'])}{suffix}"
+            suffix = f" — {escape(shown_target(ex['target']))}" if ex.get("target") else ""
+            candidate = f"• {escape(shown_exercise_name(ex['name']))}{suffix}"
             trial = lines + day_lines + [candidate]
             if shown_ex > 0 and telegram_length("\n".join(trial)) > budget:
                 break
@@ -421,7 +453,7 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
 
     lines = [f"🏋️ <b>{escape(payload['name'])}</b>"]
     if payload["group"]:
-        lines.append(i18n.t("share.group_label", group=escape(payload["group"])))
+        lines.append(i18n.t("share.group_label", group=escape(shown_group_name(payload["group"]))))
     if description:
         lines.append("")
         lines.append(escape(description))
@@ -545,9 +577,12 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
         head = i18n.t("share.received_routine_head", from_=from_whom, n=n)
         text = head + "\n".join(_routine_preview_lines(payload))
     else:
-        text = i18n.t("share.received_exercise_head", from_=from_whom) + f"🏋️ <b>{escape(payload['name'])}</b>"
+        text = (
+            i18n.t("share.received_exercise_head", from_=from_whom)
+            + f"🏋️ <b>{escape(shown_exercise_name(payload['name']))}</b>"
+        )
         if payload.get("group"):
-            text += f"\n{i18n.t('share.group_label', group=escape(payload['group']))}"
+            text += f"\n{i18n.t('share.group_label', group=escape(shown_group_name(payload['group'])))}"
         if payload.get("description"):
             text += f"\n\n{escape(payload['description'])}"
 
@@ -578,8 +613,13 @@ async def _fallback_group_id(user_id: int) -> Optional[int]:
 
 async def _resolve_group_id(user_id: int, group_name: Optional[str]) -> Optional[int]:
     if group_name:
+        # Встроенную группу узнаём и по показанному имени («Chest»): снапшот
+        # старого или чужого клиента мог нести уже переведённое.
+        canonical = seed_data.canonical_muscle_group_name(group_name)
         for g in await db.list_muscle_groups(user_id):
-            if g["name"].strip().lower() == group_name.strip().lower():
+            if g["name"].strip().lower() == group_name.strip().lower() or (
+                canonical is not None and g["user_id"] is None and g["name"] == canonical
+            ):
                 return g["id"]
     return await _fallback_group_id(user_id)
 

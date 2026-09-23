@@ -36,8 +36,13 @@ from seed_data import (
     BODYWEIGHT_TEMPLATES,
     EXERCISE_TEMPLATES,
     MUSCLE_GROUP_PRESETS,
+    PROGRAM_BY_KEY,
     canonical_exercise_name,
     localized_exercise_name,
+    localized_program_day_name,
+    localized_program_description,
+    localized_program_name,
+    localized_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -1875,12 +1880,160 @@ async def set_user_lang(telegram_id: int, lang: str) -> None:
     """
     if lang not in ("ru", "en"):
         lang = "ru"
+    user = await get_user(telegram_id)
     async with _write_lock:
         await conn().execute(
             "UPDATE users SET lang = ? WHERE telegram_id = ?",
             (lang, telegram_id),
         )
         await conn().commit()
+    # Здесь, а не у вызывающих: язык меняют пять мест (настройки бота и REST,
+    # две догадки по первому контакту, выбор языка на онбординге), и любое,
+    # забывшее позвать перевод копий, оставило бы атлета с английским
+    # интерфейсом и русскими названиями упражнений из каталога.
+    if user is not None and user["lang"] != lang:
+        await relocalize_catalog_copies(telegram_id, lang)
+
+
+# Все языки, на которых каталожный текст мог лечь в базу. Не i18n.SUPPORTED —
+# тот же довод, что и у set_user_lang выше (db — слой хранения), и тот же тест
+# держит дубль от расхождения.
+_CATALOG_LANGS = ("ru", "en")
+
+
+def _catalog_spellings(render, *args) -> set[str]:
+    """Как один и тот же каталожный текст выглядит на любом из языков —
+    `render(*args, lang)` для каждого. Совпадение с любым из них значит «это
+    всё ещё наш снимок из каталога, человек его не трогал»."""
+    return {v for v in (render(*args, lang) for lang in _CATALOG_LANGS) if v}
+
+
+def _catalog_program_description(key: str, lang: str) -> Optional[str]:
+    return clean_program_description(localized_program_description(key, lang))
+
+
+async def relocalize_catalog_copies(user_id: int, lang: str) -> dict[str, int]:
+    """Перевести на `lang` то, что человек скопировал себе из каталога и не
+    переименовал: упражнения, каталожные программы, их дни, описание и схемы.
+
+    Копия из каталога — снимок на языке, который был у аккаунта в момент
+    копирования (fork_exercise_from_template, seed_data.instantiate_program).
+    Пока язык сам по себе не менялся, это было правильно; но все аккаунты из
+    приложения до поры заводились русскими (api_v1.auth_apple не передавал
+    язык), и атлет, переключивший язык на английский, оставался с «Жимом
+    штанги лёжа» в своём списке — экраны английские, данные русские.
+
+    Трогаем только нетронутое: текст должен совпадать с каталожным на
+    каком-нибудь из языков (сверка идёт по идентичности — `original_name` у
+    упражнения, `source_ref` у программы, — а не по угадыванию имени). Своё
+    имя, данное человеком, остаётся как было. Занятое имя (у атлета уже есть
+    своё «Bench Press») — тоже пропуск, а не слияние: две истории в одну
+    молча не сливаем, ровно как update_exercise_name и rename_program_by_id.
+
+    `original_name` не меняется никогда — по нему ключуются картинки,
+    описания техники и сверка с каталогом (см. модульную докстрингу seed_data).
+    Возвращает счётчики переименований — для лога и тестов.
+    """
+    counts = {"exercises": 0, "programs": 0, "days": 0, "descriptions": 0, "targets": 0}
+    templates = {name for _group, name in EXERCISE_TEMPLATES}
+
+    cur = await conn().execute(
+        "SELECT id, name, original_name FROM exercises WHERE user_id = ? AND is_template = 0",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        canonical = row["original_name"]
+        if canonical not in templates:
+            continue
+        wanted = localized_exercise_name(canonical, lang)
+        current = (row["name"] or "").strip()
+        if current == wanted:
+            continue
+        if current not in _catalog_spellings(localized_exercise_name, canonical):
+            continue
+        if await update_exercise_name(row["id"], wanted):
+            counts["exercises"] += 1
+
+    cur = await conn().execute(
+        "SELECT id, name, source_ref, description FROM programs "
+        "WHERE user_id = ? AND source = 'catalog'",
+        (user_id,),
+    )
+    for program in await cur.fetchall():
+        key = program["source_ref"]
+        catalog = PROGRAM_BY_KEY.get(key or "")
+        if catalog is None:
+            continue
+        wanted = localized_program_name(key, lang)
+        if (
+            program["name"] != wanted
+            and program["name"] in _catalog_spellings(localized_program_name, key)
+            and await rename_program_by_id(program["id"], wanted)
+        ):
+            counts["programs"] += 1
+
+        wanted_description = _catalog_program_description(key, lang)
+        if program["description"] != wanted_description and program["description"] in _catalog_spellings(
+            _catalog_program_description, key
+        ):
+            await set_program_description(program["id"], wanted_description)
+            counts["descriptions"] += 1
+
+        # День опознаём по имени, а не по day_order: порядок дней человек
+        # вправе переставить, а имя дня из каталога на любом языке однозначно
+        # указывает на свой индекс в program["days"].
+        for day in await list_program_days_by_id(program["id"]):
+            day_index = next(
+                (
+                    i for i in range(len(catalog["days"]))
+                    if day["name"] in _catalog_spellings(localized_program_day_name, key, i)
+                ),
+                None,
+            )
+            if day_index is None:
+                continue
+            wanted_day = localized_program_day_name(key, day_index, lang)
+            if day["name"] != wanted_day:
+                await rename_routine(day["id"], wanted_day)
+                counts["days"] += 1
+            counts["targets"] += await _relocalize_catalog_targets(
+                day["id"], catalog["days"][day_index][1], lang
+            )
+
+    if any(counts.values()):
+        logger.info("relocalize_catalog_copies: user %s -> %s: %s", user_id, lang, counts)
+    return counts
+
+
+async def _relocalize_catalog_targets(
+    routine_id: int, catalog_exercises: list[tuple[str, str]], lang: str
+) -> int:
+    """Схемы подходов дня из каталога («3×30–60 сек») — на `lang`. Только
+    у тех упражнений, чья схема всё ещё совпадает с каталожной: свою схему,
+    выставленную человеком, не трогаем."""
+    catalog_targets = dict(catalog_exercises)
+    cur = await conn().execute(
+        "SELECT re.id, re.target, e.original_name FROM routine_exercises re "
+        "JOIN exercises e ON e.id = re.exercise_id WHERE re.routine_id = ?",
+        (routine_id,),
+    )
+    changed = 0
+    for row in await cur.fetchall():
+        target = catalog_targets.get(row["original_name"])
+        if not target:
+            continue
+        wanted = localized_target(target, lang)
+        if row["target"] == wanted:
+            continue
+        if row["target"] not in _catalog_spellings(localized_target, target):
+            continue
+        async with _write_lock:
+            await conn().execute(
+                "UPDATE routine_exercises SET target = ? WHERE id = ?", (wanted, row["id"])
+            )
+            await conn().commit()
+        changed += 1
+    return changed
 
 
 async def set_kcal_goal(telegram_id: int, goal: Optional[int]) -> None:

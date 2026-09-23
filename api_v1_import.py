@@ -74,7 +74,7 @@ _ERR_LINE_RE = re.compile(r"^Line (\d+): (.*)$", re.DOTALL)
 def _csv_text(body: dict[str, Any]) -> str:
     text = common.require(body, "csv", str)
     if not text.strip():
-        raise ApiError(400, "bad_request", "csv must not be empty")
+        raise ApiError(400, "bad_request", "csv must not be empty", key="import.file_empty")
     if len(text.encode("utf-8")) > MAX_CSV_BYTES:
         raise ApiError(413, "csv_too_large", f"csv must be at most {MAX_CSV_BYTES} bytes")
     return text
@@ -86,16 +86,21 @@ def _parse_workouts(text: str, today: dt.date | None) -> list[dict]:
     ушла клиенту не русской строкой. `today` — тот же смысл, что в боте
     (timeutil.user_today): дата "в будущем" сравнивается с местным днём
     пользователя, а не с UTC сервера."""
+    # Язык человека (выставлен authed_user_id на весь запрос) — для поля
+    # `message`, которое покажет приложение; машинное `detail` по-прежнему
+    # собирается в английской локали (см. докстринг модуля).
+    user_lang = i18n.get_lang()
     with i18n.use_lang("en"):
         headers, data_rows, has_header = _read_table(text)
         if not headers:
-            raise ApiError(400, "bad_request", "csv file is empty")
+            raise ApiError(400, "bad_request", "csv file is empty", key="import.file_empty")
         if not data_rows:
-            raise ApiError(400, "bad_request", "csv file has no data rows")
+            raise ApiError(400, "bad_request", "csv file has no data rows", key="import.no_data_rows")
         if len(headers) < len(REQUIRED_FIELDS):
             raise ApiError(
                 400, "too_few_columns",
                 f"found only {len(headers)} column(s), need at least date/exercise/weight/reps",
+                key="import.too_few_columns", n=len(headers),
             )
         mapping = _auto_detect(headers)
         missing = [f for f in REQUIRED_FIELDS if f not in mapping]
@@ -115,12 +120,32 @@ def _parse_workouts(text: str, today: dt.date | None) -> list[dict]:
             )
         except ParseError as e:
             match = _ERR_LINE_RE.match(e.message)
-            if match:
-                raise ApiError(400, "invalid_csv", match.group(2)) from e
-            raise ApiError(400, "invalid_csv", e.message) from e
+            detail = match.group(2) if match else e.message
+            raise ApiError(
+                400, "invalid_csv", detail,
+                human=_localized_parse_error(data_rows, mapping, headers, has_header, today, user_lang),
+            ) from e
         if not workouts:
-            raise ApiError(400, "no_sets_found", "no row with a set was found")
+            raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
         return workouts
+
+
+def _localized_parse_error(data_rows, mapping, headers, has_header, today, lang: str) -> str | None:
+    """Та же ошибка разбора, но на языке человека: разбор уже упал в
+    английской локали ради машинного `detail`, и повторить его под `lang` —
+    единственный способ получить «Строка 3: отрицательный вес» без второй
+    реализации сообщений. Повтор идёт только на уже упавшем файле."""
+    with i18n.use_lang(lang):
+        try:
+            _build_workout_groups(
+                data_rows, mapping,
+                first_line=2 if has_header else 1,
+                today=today,
+                weight_factor=_weight_factor(headers, mapping),
+            )
+        except ParseError as e:
+            return i18n.t("import.file_error", message=e.message)
+    return None
 
 
 def _date_range(workouts: list[dict]) -> dict[str, str] | None:

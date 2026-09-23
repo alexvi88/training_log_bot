@@ -150,10 +150,12 @@ async def test_import_rejects_malformed_csv_with_line_number_in_english(fresh_db
     assert resp.status_code == 400
     body = resp.json()
     assert body["error"] == "invalid_csv"
-    # Машинная причина — по-английски (см. locales/en.json), а не русская
-    # строка, и с номером строки внутри сообщения.
-    assert "negative weight" in body["message"]
-    assert "Строка" not in body["message"]
+    # Машинная причина (`detail`) — по-английски (см. locales/en.json), а не
+    # русская строка; человеческое `message` — на языке атлета (здесь ru) и с
+    # номером строки, тем же текстом, что увидел бы в боте.
+    assert "negative weight" in body["detail"]
+    assert "Строка" not in body["detail"]
+    assert "Строка 3" in body["message"]
 
     resp2 = await client.post("/import/csv/preview", json={"csv": bad_csv})
     assert resp2.status_code == 400

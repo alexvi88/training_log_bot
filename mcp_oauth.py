@@ -422,39 +422,10 @@ def _lang_from_accept_language(header: str) -> str:
     Единственный доступный сигнал: telegram_id на этом шаге ещё не известен
     (человек вводит код из бота прямо на этой странице), поэтому взять язык
     из БД, как во всём остальном продукте, нельзя (см. модульный докстринг).
-
-    Разбираем по RFC 7231 — теги через запятую, у каждого необязательный
-    `;q=0.x` (веса не обязаны идти по убыванию, сортировать нельзя — нужно
-    честно сравнивать), сам тег вида `en-US`/`ru-RU`: регион отрезаем —
-    `i18n.normalize` ждёт голый код языка и сам решает, к какому языку
-    продукта он относится (СНГ-сфера — в русский, всё остальное — в
-    английский).
+    Сам разбор заголовка живёт в `i18n.lang_from_accept_language` — им же
+    пользуется регистрация app-only аккаунта (`api_v1.auth_apple`).
     """
-    # Заголовка может не быть вовсе: его не шлют curl без флагов, часть
-    # OAuth-клиентов и наши же тесты. Это не край, а обычный случай — молча
-    # уходим на дефолтный язык, а не роняем регистрацию из-за отсутствия
-    # необязательного заголовка.
-    if not header:
-        return i18n.DEFAULT_LANG
-    best_tag, best_q = "", -1.0
-    for part in header.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        tag, _, param = part.partition(";")
-        tag = tag.strip()
-        if not tag or tag == "*":
-            continue
-        q = 1.0
-        param = param.strip()
-        if param.startswith("q="):
-            try:
-                q = float(param[2:])
-            except ValueError:
-                q = 1.0
-        if q > best_q:
-            best_q, best_tag = q, tag
-    return i18n.normalize(best_tag)
+    return i18n.lang_from_accept_language(header)
 
 
 # ---------- страница согласия ----------

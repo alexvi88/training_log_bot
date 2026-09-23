@@ -98,7 +98,10 @@ async def list_exercise_templates(request: Request) -> JSONResponse:
     group_id_param = request.query_params.get("group_id")
     with i18n.use_lang(lang):
         if query:
-            limit = _query_int(request, "limit", 8, minimum=1, maximum=50)
+            # Потолок 200 — тот же, что у пикера бота (handlers/workout.py,
+            # поиск шаблонов под «🔎 Поиск»): приложение показывает весь
+            # список совпадений, а не первые полсотни.
+            limit = _query_int(request, "limit", 8, minimum=1, maximum=200)
             templates = await db.search_exercise_templates(user_id, query, limit=limit)
         elif group_id_param:
             try:

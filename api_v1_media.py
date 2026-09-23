@@ -118,7 +118,10 @@ async def get_exercise_description(request: Request) -> JSONResponse:
     exercise_id = int(request.path_params["exercise_id"])
     exercise = await _owned_exercise(exercise_id, user_id)
 
-    lang = request.query_params.get("lang")
+    # ?lang= — явная просьба клиента; без неё — язык атлета (users.lang), а не
+    # дефолт ContextVar: раньше без параметра англоязычный получал русскую
+    # технику.
+    lang = request.query_params.get("lang") or i18n.get_lang()
     text = exercise_descriptions.effective_description(exercise, lang)
     if not text:
         raise ApiError(404, "not_found", "no description for this exercise")

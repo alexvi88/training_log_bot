@@ -80,9 +80,12 @@ def _clean_name(raw: str) -> str:
     (config.MAX_PROGRAM_NAME_LENGTH — общий, отдельного под routine нет)."""
     name = raw.strip()
     if not name:
-        raise ApiError(400, "bad_request", "name must not be empty")
+        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
     if len(name) > config.MAX_PROGRAM_NAME_LENGTH:
-        raise ApiError(400, "name_too_long", f"name must be at most {config.MAX_PROGRAM_NAME_LENGTH} chars")
+        raise ApiError(
+            400, "name_too_long", f"name must be at most {config.MAX_PROGRAM_NAME_LENGTH} chars",
+            key="api.error.name_too_long", max=config.MAX_PROGRAM_NAME_LENGTH,
+        )
     return name
 
 
@@ -92,7 +95,7 @@ async def _check_routine_budget(user_id: int, adding: int) -> None:
     больше дней, чем разрешает бот."""
     over_budget = await db.routine_budget(user_id, adding)
     if over_budget:
-        raise ApiError(403, "routine_limit_reached", over_budget)
+        raise ApiError(403, "routine_limit_reached", "routine budget exceeded", human=over_budget)
 
 
 async def _owned_workout(workout_id: int, user_id: int):
