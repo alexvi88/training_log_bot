@@ -45,7 +45,8 @@ def test_decode_data_url_rejects_oversized_payload_before_decoding(monkeypatch):
         )
     assert exc_info.value.status_code == 400
     assert exc_info.value.code == "photo_too_big"
-    assert exc_info.value.message == "too big"
+    # Третий элемент too_big_error — уже локализованный текст для человека.
+    assert exc_info.value.human == "too big"
     assert called is False
 
 

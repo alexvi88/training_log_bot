@@ -171,9 +171,12 @@ async def submit_feedback(request: Request) -> JSONResponse:
     body = await common.json_body(request)
     text = str(common.require(body, "text", str)).strip()
     if not text:
-        raise ApiError(400, "bad_request", "text must not be empty")
+        raise ApiError(400, "bad_request", "text must not be empty", key="api.error.text_empty")
     if len(text) > MAX_FEEDBACK_LENGTH:
-        raise ApiError(400, "bad_request", f"text must be at most {MAX_FEEDBACK_LENGTH} characters")
+        raise ApiError(
+            400, "bad_request", f"text must be at most {MAX_FEEDBACK_LENGTH} characters",
+            key="api.error.text_too_long", max=MAX_FEEDBACK_LENGTH,
+        )
 
     image_data_url = common.optional_str(body, "image_data_url")
     photo: Optional[bytes] = None
@@ -220,7 +223,10 @@ async def submit_factcheck(request: Request) -> JSONResponse:
     if not text and not image_data_url:
         raise ApiError(400, "bad_request", "text or image_data_url required")
     if len(text) > MAX_FACTCHECK_TEXT_LENGTH:
-        raise ApiError(400, "bad_request", f"text must be at most {MAX_FACTCHECK_TEXT_LENGTH} characters")
+        raise ApiError(
+            400, "bad_request", f"text must be at most {MAX_FACTCHECK_TEXT_LENGTH} characters",
+            key="api.error.text_too_long", max=MAX_FACTCHECK_TEXT_LENGTH,
+        )
 
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else "ru"
@@ -229,17 +235,21 @@ async def submit_factcheck(request: Request) -> JSONResponse:
     # почему без неё два параллельных запроса оба уходят в модель.
     if not busy_lock.try_claim(_busy, user_id):
         with i18n.use_lang(lang):
-            raise ApiError(429, "busy", i18n.t("ai.screen.busy"))
+            raise ApiError(429, "busy", "another request is in flight", key="ai.screen.busy")
     try:
         block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
         if block is not None:
-            raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
+            raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
 
         try:
-            verdict = await asyncio.wait_for(
-                ai_trainer.fact_check_post(user_id, text, image_data_url),
-                timeout=config.AI_TOTAL_ANSWER_SECONDS,
-            )
+            # Под use_lang: языковой хвост системного промпта
+            # (ai_trainer._with_language_tail) берётся из контекста, и без
+            # него англоязычный атлет получал вердикт по-русски.
+            with i18n.use_lang(lang):
+                verdict = await asyncio.wait_for(
+                    ai_trainer.fact_check_post(user_id, text, image_data_url),
+                    timeout=config.AI_TOTAL_ANSWER_SECONDS,
+                )
         except asyncio.TimeoutError as exc:
             raise ApiError(504, "timeout", "fact-check did not answer in time") from exc
         except Exception as exc:

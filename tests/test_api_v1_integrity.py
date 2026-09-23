@@ -245,7 +245,7 @@ async def test_patch_workout_date_rejects_future(fresh_db, client_factory):
 
     resp = await client.patch(f"/workouts/{workout_id}/date", json={"date": tomorrow.isoformat()})
     assert resp.status_code == 400, resp.text
-    assert resp.json()["message"] == "date is in the future"
+    assert resp.json()["detail"] == "date is in the future"
 
     today = await client.patch(
         f"/workouts/{workout_id}/date", json={"date": today_date.isoformat()}
@@ -262,7 +262,7 @@ async def test_add_food_entry_rejects_future_date(fresh_db, client_factory):
         "/food", json={"name": "Овсянка", "kcal": 300, "eaten_on": tomorrow.isoformat()}
     )
     assert resp.status_code == 400, resp.text
-    assert resp.json()["message"] == "eaten_on is in the future"
+    assert resp.json()["detail"] == "eaten_on is in the future"
 
     ok = await client.post(
         "/food", json={"name": "Овсянка", "kcal": 300, "eaten_on": dt.date.today().isoformat()}

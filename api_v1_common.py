@@ -20,6 +20,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 import db
+import exercise_descriptions
+import i18n
 import parser
 import timeutil
 
@@ -27,19 +29,110 @@ logger = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
-    def __init__(self, status_code: int, code: str, message: str):
+    """Ошибка `/v1`: машинный `code`, машинная `message` и человеческий текст.
+
+    `message` — английская строка для разработчика (уходит в ответ полем
+    `detail` и в лог), а не для экрана: приложение показывает поле `message`
+    ответа как есть, и раньше там стояло «daily question limit reached» — и
+    русскому атлету, и английскому. Человеческий текст теперь собирается в
+    `api_error_handler` на языке запроса, в порядке:
+
+      * `human` — уже готовая локализованная строка (её собрали на месте, под
+        use_lang: «фото слишком большое», текст лимита из db.routine_budget);
+      * `key` (+ `params`) — ключ каталога, когда у ошибки свой текст
+        («вес не может быть отрицательным» — не то же самое, что общий 400);
+      * `api.error.<code>` — общий текст на код;
+      * `api.error.default` — если кода в каталоге нет.
+
+    Каждый `code`, который поднимается без `human`/`key`, обязан иметь свой
+    `api.error.<code>` в обоих каталогах — это держит
+    tests/test_api_v1_language_invariant.py, а не память.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        human: str | None = None,
+        key: str | None = None,
+        **params: Any,
+    ):
+        super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.human = human
+        self.key = key
+        self.params = params
+
+
+def request_lang(request: Request) -> str:
+    """Язык человека, которому уйдёт ответ: из users.lang, если запрос уже
+    прошёл authed_user_id (он кладёт язык в request.state), иначе — из
+    `Accept-Language` (вход, привязка: пользователя ещё нет)."""
+    lang = getattr(request.state, "lang", None)
+    if lang in i18n.SUPPORTED:
+        return lang
+    return i18n.lang_from_accept_language(request.headers.get("accept-language"))
+
+
+# Код ошибки → уже существующий текст бота, когда у бота на этот случай
+# свой текст есть (продукт говорит одним голосом, и приложение показывает
+# ровно то, что бот). Остальные коды — `api.error.<code>`.
+ERROR_KEY_BY_CODE: dict[str, str] = {
+    "invalid_code": "oauth.error_bad_code",
+    "question_limit_exceeded": "limit.question",
+    "video_limit_exceeded": "limit.video.generic",
+    "food_limit_exceeded": "limit.food.generic",
+    "busy": "ai.screen.busy",
+    "save_failed": "ai.screen.save_failed_new",
+    "draft_not_found": "ai.screen.program_gone",
+    "unparsed_input": "input.examples_hint",
+    "import_in_progress": "import.already_uploading",
+    "no_sets_found": "import.no_sets_found",
+    "routine_limit_reached": "api.error.routine_limit",
+    "routine_budget_exceeded": "api.error.routine_limit",
+    "name_conflict": "api.error.name_taken",
+}
+
+
+def error_key_for_code(code: str) -> str | None:
+    """Ключ каталога для кода ошибки, или None, если своего текста у кода нет."""
+    key = ERROR_KEY_BY_CODE.get(code) or f"api.error.{code}"
+    return key if key in i18n.catalog_keys() else None
+
+
+def human_error_message(exc: ApiError, lang: str) -> str:
+    if exc.human:
+        return exc.human
+    if exc.key:
+        return i18n.t_in(lang, exc.key, **exc.params)
+    return i18n.t_in(lang, error_key_for_code(exc.code) or "api.error.default")
 
 
 async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-    return JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status_code)
+    return JSONResponse(
+        {
+            "error": exc.code,
+            "message": human_error_message(exc, request_lang(request)),
+            "detail": exc.message,
+        },
+        status_code=exc.status_code,
+    )
 
 
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("api_v1: unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse({"error": "internal_error", "message": "internal error"}, status_code=500)
+    return JSONResponse(
+        {
+            "error": "internal_error",
+            "message": i18n.t_in(request_lang(request), "api.error.internal_error"),
+            "detail": "internal error",
+        },
+        status_code=500,
+    )
 
 
 async def authed_user_id(request: Request) -> int:
@@ -61,7 +154,31 @@ async def authed_user_id(request: Request) -> int:
     if user_id is None:
         raise ApiError(401, "unauthorized", "invalid or revoked token")
     request.state.user_id = user_id
+    request.state.lang = await _set_request_lang(user_id)
     return user_id
+
+
+async def _set_request_lang(user_id: int) -> str:
+    """Язык ответа на весь этот запрос — из users.lang.
+
+    У бота язык выставляет middleware на каждый апдейт (main.py); у /v1 такого
+    слоя не было, и любой обработчик, забывший свой `with i18n.use_lang(...)`,
+    отвечал англоязычному атлету по-русски — дефолт ContextVar. Так протекали
+    ответы тренера (языковой хвост промпта), описания техники, ошибки
+    «фото слишком большое». Раз «кто это» выясняется только здесь, язык
+    выставляется здесь же, и новому обработчику забыть его уже нечем.
+
+    Обычный `set_lang`, а не `use_lang`: сбросить значение некому, и не нужно —
+    обработчик Starlette идёт в своей задаче (BaseHTTPMiddleware
+    api_v1_activity запускает приложение отдельной задачей, uvicorn — задачей
+    на запрос), а задача живёт в копии контекста, так что язык не утекает ни в
+    соседний запрос, ни наружу. Явные `with i18n.use_lang(...)` в модулях
+    остаются: они не мешают и держат язык там, где функцию зовут не из запроса.
+    """
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None and user["lang"] in i18n.SUPPORTED else i18n.DEFAULT_LANG
+    i18n.set_lang(lang)
+    return lang
 
 
 async def json_body(request: Request) -> dict[str, Any]:
@@ -182,14 +299,21 @@ def decode_data_url(
         padding = 2 if payload.endswith("==") else 1 if payload.endswith("=") else 0
         estimated_bytes = (len(payload) * 3) // 4 - padding
         if estimated_bytes > max_bytes:
-            raise ApiError(*too_big_error)
+            raise _too_big(too_big_error)
     try:
         raw = base64.b64decode(payload, validate=True)
     except Exception as exc:
         raise ApiError(400, "bad_request", f"invalid base64 payload in {field}") from exc
     if max_bytes is not None and too_big_error is not None and len(raw) > max_bytes:
-        raise ApiError(*too_big_error)
+        raise _too_big(too_big_error)
     return raw, mime, ext
+
+
+def _too_big(error: tuple[int, str, str]) -> ApiError:
+    """`too_big_error` несёт уже локализованный текст (его собирают под
+    use_lang у вызывающих) — он и есть человеческое сообщение."""
+    status, code, text = error
+    return ApiError(status, code, f"{code}: payload too large", human=text)
 
 
 def exercise_json(row) -> dict[str, Any]:
@@ -206,6 +330,11 @@ def exercise_json(row) -> dict[str, Any]:
         "attachment": row["attachment"],
         "bodyweight_load": row["bodyweight_load"],
         "description": row["description"],
+        # Есть ли что показать на карточке — своё описание или встроенное из
+        # каталога. Та же проверка, что ставит «📝 » у кнопки упражнения в
+        # боте (handlers/exercises._exercise_list_label): сам текст отдаёт
+        # GET /exercises/{id}/description, а список рисует только значок.
+        "has_description": bool(exercise_descriptions.effective_description(row)),
         "is_archived": bool(row["is_archived"]),
     }
 
@@ -253,7 +382,7 @@ async def reject_future_date(date: dt.date, user_id: int, field: str = "date") -
     """
     user = await db.get_user(user_id)
     if date > timeutil.user_today(user):
-        raise ApiError(400, "bad_request", f"{field} is in the future")
+        raise ApiError(400, "bad_request", f"{field} is in the future", key="input.date_in_future")
 
 
 # ---------- числа подхода ----------
@@ -270,17 +399,23 @@ def set_weight(value: Any, field: str = "weight") -> float:
     weight = float(value)
     # 0 — это не «пусто», а честный вес собственного тела (подтягивания).
     if weight < 0:
-        raise ApiError(400, "bad_request", f"{field} must not be negative")
+        raise ApiError(400, "bad_request", f"{field} must not be negative", key="api.error.weight_negative")
     if weight > parser.MAX_WEIGHT:
-        raise ApiError(400, "bad_request", f"{field} must be at most {parser.MAX_WEIGHT:.0f}")
+        raise ApiError(
+            400, "bad_request", f"{field} must be at most {parser.MAX_WEIGHT:.0f}",
+            key="input.weight_too_big", max=f"{parser.MAX_WEIGHT:.0f}",
+        )
     return weight
 
 
 def set_reps(value: Any, field: str = "reps") -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ApiError(400, "bad_request", f"{field} must be a positive int")
+        raise ApiError(400, "bad_request", f"{field} must be a positive int", key="input.reps_zero")
     if value > parser.MAX_REPS:
-        raise ApiError(400, "bad_request", f"{field} must be at most {parser.MAX_REPS}")
+        raise ApiError(
+            400, "bad_request", f"{field} must be at most {parser.MAX_REPS}",
+            key="input.reps_too_many", max=parser.MAX_REPS,
+        )
     return value
 
 
@@ -293,5 +428,5 @@ def set_rpe(value: Any, field: str = "rpe") -> Optional[float]:
     # Та же шкала, что у parser._parse_rpe: RPE — это 0…10, «99» означает
     # опечатку, а не невероятное усилие.
     if not (0 < rpe <= 10):
-        raise ApiError(400, "bad_request", f"{field} must be between 0 and 10")
+        raise ApiError(400, "bad_request", f"{field} must be between 0 and 10", key="input.rpe_range")
     return rpe

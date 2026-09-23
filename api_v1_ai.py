@@ -323,7 +323,7 @@ async def _run_turn(
     """
     block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
     if block is not None:
-        raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
+        raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
 
     draft_cell: dict[str, Any] = {}
     actions: list[dict[str, Any]] = []
@@ -351,16 +351,25 @@ async def _run_turn(
     if video_context is not None:
         ask_kwargs["video_context"] = video_context
 
+    # Язык хода — из users.lang, а не из ContextVar по умолчанию: у HTTP-запроса
+    # нет middleware бота, и без use_lang ai_trainer._with_language_tail дописал
+    # бы в системный промпт «Отвечай ТОЛЬКО по-русски» атлету с английским
+    # телефоном, а подписи кнопок отката (ai_undo, i18n.t внутри инструментов)
+    # ушли бы по-русски. wait_for заводит задачу уже внутри with, а задача
+    # копирует контекст в момент создания — язык доезжает до всех инструментов.
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
     try:
-        answer = await asyncio.wait_for(
-            ai_trainer.ask(
-                user_id, question, history=history,
-                on_program=collect_program, on_action=collect_action,
-                on_questions=collect_questions, on_wire=collect_wire,
-                **ask_kwargs,
-            ),
-            timeout=config.AI_TOTAL_ANSWER_SECONDS,
-        )
+        with i18n.use_lang(lang):
+            answer = await asyncio.wait_for(
+                ai_trainer.ask(
+                    user_id, question, history=history,
+                    on_program=collect_program, on_action=collect_action,
+                    on_questions=collect_questions, on_wire=collect_wire,
+                    **ask_kwargs,
+                ),
+                timeout=config.AI_TOTAL_ANSWER_SECONDS,
+            )
     except asyncio.TimeoutError as exc:
         raise ApiError(504, "timeout", "ai trainer did not answer in time") from exc
     except Exception as exc:
@@ -640,7 +649,7 @@ def _claim_turn_or_429(user_id: int, lang: str) -> None:
     (см. busy_lock.py)."""
     if not busy_lock.try_claim(_busy, user_id):
         with i18n.use_lang(lang):
-            raise ApiError(429, "busy", i18n.t("ai.screen.busy"))
+            raise ApiError(429, "busy", "another request is in flight", key="ai.screen.busy")
 
 
 async def ask_question(request: Request) -> JSONResponse:
@@ -689,11 +698,14 @@ async def ask_question(request: Request) -> JSONResponse:
         question = common.optional_str(body, "question") or ""
         if not question:
             if image_data_url is None:
-                raise ApiError(400, "bad_request", "question must not be empty")
+                raise ApiError(400, "bad_request", "question must not be empty", key="api.error.text_empty")
             # Фото без подписи — ровно как ai_photo_question в боте.
             question = i18n.t("ai.screen.default_photo_question")
     if len(question) > MAX_QUESTION_LENGTH:
-        raise ApiError(400, "bad_request", f"question must be at most {MAX_QUESTION_LENGTH} characters")
+        raise ApiError(
+            400, "bad_request", f"question must be at most {MAX_QUESTION_LENGTH} characters",
+            key="api.error.text_too_long", max=MAX_QUESTION_LENGTH,
+        )
 
     _claim_turn_or_429(user_id, lang)
     try:
@@ -844,7 +856,7 @@ async def save_program(request: Request) -> JSONResponse:
 
     if result.get("error") == "budget":
         await db.set_ai_program_draft(user_id, draft_id, draft)
-        raise ApiError(409, "routine_budget_exceeded", result["message"])
+        raise ApiError(409, "routine_budget_exceeded", "routine budget exceeded", human=result["message"])
     if result.get("error") == "name_conflict":
         await db.set_ai_program_draft(user_id, draft_id, draft)
         raise ApiError(409, "name_conflict", f"program name already exists: {result['name']}")
@@ -901,7 +913,7 @@ async def train_from_draft(request: Request) -> JSONResponse:
         lang = user["lang"] if user is not None else "ru"
         with i18n.use_lang(lang):
             message = i18n.t("ai.screen.program_train.all_done")
-        raise ApiError(409, "all_done", message)
+        raise ApiError(409, "all_done", "every day of the draft is already trained", human=message)
 
     # Черновик израсходован: он больше не «предложение, которое ждёт
     # решения» — по нему уже начали заниматься (см. тот же комментарий в
@@ -963,7 +975,7 @@ async def transcribe_voice(request: Request) -> JSONResponse:
                 transcribe_failed_message=i18n.t("ai.screen.voice_transcribe_failed"),
             )
             if not transcript:
-                raise ApiError(422, "voice_empty", i18n.t("ai.screen.voice_empty"))
+                raise ApiError(422, "voice_empty", "empty transcript", key="ai.screen.voice_empty")
         return JSONResponse({"question": transcript})
     finally:
         _busy.discard(user_id)
@@ -1035,7 +1047,7 @@ async def ask_video(request: Request) -> JSONResponse:
 
     if not config.video_analysis_available():
         with i18n.use_lang(lang):
-            raise ApiError(503, "not_configured", i18n.t("ai.screen.video_not_available_text"))
+            raise ApiError(503, "not_configured", "video analysis is not configured", key="ai.screen.video_not_available_text")
     if not ai_trainer.is_configured():
         raise ApiError(503, "not_configured", "ai trainer is not configured")
 
@@ -1048,8 +1060,8 @@ async def ask_video(request: Request) -> JSONResponse:
                 raise ApiError(400, "bad_request", "duration_seconds must be a number")
             if duration > config.MAX_VIDEO_SECONDS:
                 raise ApiError(
-                    400, "video_too_long",
-                    i18n.t("ai.screen.video_too_long", seconds=config.MAX_VIDEO_SECONDS),
+                    400, "video_too_long", "video is too long",
+                    key="ai.screen.video_too_long", seconds=config.MAX_VIDEO_SECONDS,
                 )
 
         data_url = common.require(body, "video_data_url", str)
@@ -1070,10 +1082,10 @@ async def ask_video(request: Request) -> JSONResponse:
     try:
         block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
         if block is not None:
-            raise ApiError(429, "video_limit_exceeded", "daily video analysis limit reached")
+            raise ApiError(429, "video_limit_exceeded", "daily video analysis limit reached", human=block.user_text)
         block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
         if block is not None:
-            raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
+            raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
 
         exercise_hint = await _resolve_video_exercise_hint(user_id, body)
         caption = common.optional_str(body, "caption") or ""
@@ -1081,7 +1093,7 @@ async def ask_video(request: Request) -> JSONResponse:
         analysis = await video_analysis.analyze(raw, user_id, mime_type=mime, exercise_hint=exercise_hint)
         if analysis is None:
             with i18n.use_lang(lang):
-                raise ApiError(502, "video_analysis_failed", i18n.t("ai.screen.video_analysis_failed"))
+                raise ApiError(502, "video_analysis_failed", "video analysis failed", key="ai.screen.video_analysis_failed")
 
         # Квота видео тратится за состоявшийся разбор — как и в боте
         # (db.increment_ai_video_count сразу после успешного analyze, до
@@ -1101,11 +1113,15 @@ async def ask_video(request: Request) -> JSONResponse:
                 i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else ""
             )
             question = asked or i18n.t("ai.screen.default_video_question")
+            # Под тем же use_lang: оценки уверенности/серьёзности в блоке
+            # переводятся через i18n (video_analysis._localized_enum), и вне
+            # with они уезжали бы модели по-русски даже англоязычному атлету.
+            video_context = video_analysis.to_context_block(analysis)
 
         history = await db.get_ai_conversation_wire_history(user_id)
         turn = await _run_turn(
             user_id, question, history,
-            video_context=video_analysis.to_context_block(analysis),
+            video_context=video_context,
             saved_image_path=saved_image_path,
         )
         return JSONResponse(await _turn_response(user_id, turn, goal=question))
@@ -1148,10 +1164,10 @@ async def undo_action(request: Request) -> JSONResponse:
     payload = await db.take_ai_undo_action(user_id, key)
     with i18n.use_lang(lang):
         if payload is None:
-            raise ApiError(404, "undo_gone", i18n.t("ai.screen.undo.already_gone"))
+            raise ApiError(404, "undo_gone", "undo is gone", key="ai.screen.undo.already_gone")
         message = await ai_undo.apply(user_id, payload)
         if message is None:
-            raise ApiError(409, "undo_failed", i18n.t("ai.screen.undo.failed"))
+            raise ApiError(409, "undo_failed", "undo failed", key="ai.screen.undo.failed")
     return JSONResponse({"message": message})
 
 

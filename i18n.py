@@ -57,6 +57,47 @@ def normalize(code: str | None) -> str:
     return "ru" if base in _CYRILLIC_SPHERE else "en"
 
 
+def lang_from_accept_language(header: str | None) -> str:
+    """Язык продукта из HTTP-заголовка `Accept-Language`.
+
+    Для запросов, где язык из users.lang ещё взять неоткуда: страница
+    согласия MCP (mcp_oauth — telegram_id там ещё не известен) и регистрация
+    нового app-only аккаунта (api_v1.auth_apple — пользователя ещё нет).
+
+    Разбираем по RFC 7231 — теги через запятую, у каждого необязательный
+    `;q=0.x` (веса не обязаны идти по убыванию, сортировать нельзя — нужно
+    честно сравнивать), сам тег вида `en-US`/`ru-RU`: регион отрезаем —
+    `normalize` ждёт голый код языка и сам решает, к какому языку
+    продукта он относится (СНГ-сфера — в русский, всё остальное — в
+    английский).
+    """
+    # Заголовка может не быть вовсе: его не шлют curl без флагов, часть
+    # OAuth-клиентов и наши же тесты. Это не край, а обычный случай — молча
+    # уходим на дефолтный язык, а не роняем регистрацию из-за отсутствия
+    # необязательного заголовка.
+    if not header:
+        return DEFAULT_LANG
+    best_tag, best_q = "", -1.0
+    for part in header.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        tag, _, param = part.partition(";")
+        tag = tag.strip()
+        if not tag or tag == "*":
+            continue
+        q = 1.0
+        param = param.strip()
+        if param.startswith("q="):
+            try:
+                q = float(param[2:])
+            except ValueError:
+                q = 1.0
+        if q > best_q:
+            best_q, best_tag = q, tag
+    return normalize(best_tag)
+
+
 current_lang: contextvars.ContextVar[str] = contextvars.ContextVar("current_lang", default=DEFAULT_LANG)
 
 
@@ -97,6 +138,12 @@ def _load_catalog(lang: str) -> dict[str, str]:
         except FileNotFoundError:
             _catalogs[lang] = {}
     return _catalogs[lang]
+
+
+def catalog_keys() -> frozenset[str]:
+    """Ключи основного каталога — чтобы спросить «есть ли такой текст», не
+    роняя WARNING о пропавшем ключе (его пишет _resolve)."""
+    return frozenset(_load_catalog(DEFAULT_LANG))
 
 
 def _resolve(lang: str, key: str) -> tuple[str, str | None]:

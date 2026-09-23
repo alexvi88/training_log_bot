@@ -102,7 +102,7 @@ async def add_entry(request: Request) -> JSONResponse:
     body = await common.json_body(request)
     description = str(common.require(body, "name", str)).strip()
     if not description:
-        raise ApiError(400, "bad_request", "name must not be empty")
+        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
     calories = body.get("kcal")
     if calories is not None and not isinstance(calories, (int, float)):
         raise ApiError(400, "bad_request", "kcal must be a number")
@@ -211,7 +211,7 @@ async def parse_food(request: Request) -> JSONResponse:
     # отказ, что видит атлет в боте при двойном тапе (`ai.screen.busy`).
     if not busy_lock.try_claim(_busy, user_id):
         with i18n.use_lang(lang):
-            raise ApiError(429, "busy", i18n.t("ai.screen.busy"))
+            raise ApiError(429, "busy", "another request is in flight", key="ai.screen.busy")
     try:
         # preview-режим (свои аккаунты без "Понятно" за сегодня) в боте
         # пропускает шаг вместе с предупреждением — у API нет экрана, куда это
@@ -220,19 +220,23 @@ async def parse_food(request: Request) -> JSONResponse:
         # равно выполнить».
         block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
         if block is not None:
-            raise ApiError(429, "food_limit_exceeded", "daily food analysis limit reached")
+            raise ApiError(429, "food_limit_exceeded", "daily food analysis limit reached", human=block.user_text)
 
         with_macros = bool(user["food_macros_enabled"]) if user else True
         try:
-            estimate = await ai_trainer.analyze_food(
-                user_id,
-                text=text,
-                image_data_url=image_data_url,
-                previous=previous,
-                correction=correction,
-                with_macros=with_macros,
-                source="ios",
-            )
+            # Под use_lang: названия блюд модель пишет на языке из хвоста
+            # системного промпта (ai_trainer._with_language_tail), а он берётся
+            # из контекста — без with англоязычный атлет получал «Гречка».
+            with i18n.use_lang(lang):
+                estimate = await ai_trainer.analyze_food(
+                    user_id,
+                    text=text,
+                    image_data_url=image_data_url,
+                    previous=previous,
+                    correction=correction,
+                    with_macros=with_macros,
+                    source="ios",
+                )
         except Exception as exc:
             raise ApiError(502, "analysis_failed", "food analysis failed") from exc
 
@@ -268,6 +272,7 @@ async def set_goal(request: Request) -> JSONResponse:
                 400,
                 "out_of_range",
                 f"goal must be between {config.KCAL_GOAL_MIN} and {config.KCAL_GOAL_MAX}",
+                key="food.goal_out_of_range", max=config.KCAL_GOAL_MAX,
             )
     await db.set_kcal_goal(user_id, goal)
     return JSONResponse({"kcal_goal": goal})
