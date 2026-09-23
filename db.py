@@ -911,6 +911,34 @@ async def _enable_wal_with_fallback() -> None:
             await asyncio.sleep(0.2 * (attempt + 1))
 
 
+async def _tune_connection() -> str:
+    """PRAGMA производительности поверх выбранного журнала; возвращает режим
+    журнала, который реально действует (он же пишется в лог на старте).
+
+    synchronous=NORMAL — только в WAL: там он не рискует целостностью базы
+    (транзакция либо целиком в WAL, либо её нет), а лишь может потерять
+    последние закоммиченные транзакции при отключении питания — не при падении
+    процесса. Зато commit перестаёт делать fsync на каждую запись. На откате в
+    rollback-журнал (см. _enable_wal_with_fallback) NORMAL уже может испортить
+    базу при сбое, поэтому там остаётся FULL — дефолт SQLite.
+
+    temp_store=MEMORY и cache_size=-20000 (≈20 МБ страниц в памяти вместо
+    дефолтных ≈2 МБ) — сортировки и агрегаты экранов не ходят во временные
+    файлы на примонтированный том.
+    """
+    cur = await _conn.execute("PRAGMA journal_mode")
+    row = await cur.fetchone()
+    mode = str(row[0]).lower() if row else "unknown"
+    if mode == "wal":
+        await _conn.execute("PRAGMA synchronous=NORMAL")
+    else:
+        await _conn.execute("PRAGMA synchronous=FULL")
+    await _conn.execute("PRAGMA temp_store=MEMORY")
+    await _conn.execute("PRAGMA cache_size=-20000")
+    logger.info("SQLite journal_mode=%s, synchronous=%s", mode, "NORMAL" if mode == "wal" else "FULL")
+    return mode
+
+
 async def init_db(db_path: str = config.DB_PATH) -> None:
     global _conn
     parent = os.path.dirname(db_path)
@@ -927,7 +955,9 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _conn.create_function(
         "py_fold", 1, lambda s: search_terms.fold(s) if s is not None else None
     )
+    _forget_api_tokens()
     await _enable_wal_with_fallback()
+    await _tune_connection()
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA)
     await _conn.commit()
@@ -1288,6 +1318,7 @@ async def _migrate_schema() -> None:
 
 async def close_db() -> None:
     global _conn
+    _forget_api_tokens()
     if _conn is not None:
         await _conn.close()
         _conn = None
@@ -2346,6 +2377,9 @@ async def wipe_user_account(telegram_id: int) -> None:
         except Exception:
             await db.rollback()
             raise
+        finally:
+            # Токен /v1 снесён вместе с аккаунтом — и в кэше жить не должен.
+            _forget_api_tokens()
     for name in photo_names:
         exercise_photos.delete(name)
 
@@ -5246,43 +5280,110 @@ async def resolve_mcp_token(token: str) -> Optional[int]:
 # перевыпуск одного не должен гасить другой — иначе получить новый MCP-токен
 # разлогинивало бы телефон, и наоборот.
 
+# Кэш «токен → владелец» для /v1. Каждый запрос приложения начинается с
+# resolve_api_token, и раньше это был SELECT плюс UPDATE last_used_at с commit
+# под _write_lock — то есть КАЖДЫЙ GET вставал в одну очередь со всей записью
+# бота и платил за fsync. Инстанс один (amvera.yaml), так что кэш в памяти
+# процесса видит все отзывы: их точки перечислены в _forget_api_tokens, и
+# каждая, что удаляет строку api_tokens или меняет её владельца, обязана её
+# звать. TTL короткий не ради отзыва (отзыв гасит кэш сразу), а как страховка
+# на случай, если новая такая точка когда-нибудь забудет это сделать.
+API_TOKEN_CACHE_TTL_SECONDS = 60.0
+# last_used_at — «когда телефон последний раз ходил», точность до минут ему не
+# нужна; писать его на каждый запрос значило бы commit на каждый запрос.
+API_TOKEN_TOUCH_INTERVAL = dt.timedelta(minutes=10)
+_api_token_cache: dict[str, tuple[int, float]] = {}
+# Поколение кэша: растёт на каждом сбросе. Запрос, начавший читать базу ДО
+# отзыва, а закончивший ПОСЛЕ, иначе положил бы в только что очищенный кэш уже
+# отозванный токен, и тот прожил бы ещё целый TTL.
+_api_token_generation = 0
+
+
+def _forget_api_tokens() -> None:
+    """Сбросить кэш токенов /v1 целиком. Зовут все, кто удаляет строки
+    api_tokens или переписывает их владельца: issue_api_token (перевыпуск и есть
+    отзыв), revoke_api_token, wipe_user_account (удаление аккаунта),
+    link_telegram_to_app_account (слияние переносит токен на другой id), а
+    также init_db/close_db. Целиком, а не по одному токену: отзыв редок, а
+    промах стоит один SELECT."""
+    global _api_token_generation
+    _api_token_generation += 1
+    _api_token_cache.clear()
+
+
+def _api_token_touch_due(last_used_at: Optional[str]) -> bool:
+    if not last_used_at:
+        return True
+    try:
+        last = dt.datetime.fromisoformat(last_used_at)
+    except ValueError:
+        return True
+    return dt.datetime.now() - last >= API_TOKEN_TOUCH_INTERVAL
+
+
 async def issue_api_token(user_id: int) -> str:
     """Выдать iOS-клиенту новый токен доступа, погасив прежний (см.
     issue_mcp_token — тот же приём: перевыпуск и есть отзыв)."""
     token = secrets.token_urlsafe(32)
     async with _write_lock:
-        await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
-        await conn().execute(
-            "INSERT INTO api_tokens (token, user_id, created_at) VALUES (?, ?, ?)",
-            (token, user_id, now_iso()),
-        )
-        await conn().commit()
+        try:
+            await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+            await conn().execute(
+                "INSERT INTO api_tokens (token, user_id, created_at) VALUES (?, ?, ?)",
+                (token, user_id, now_iso()),
+            )
+            await conn().commit()
+        finally:
+            _forget_api_tokens()
     return token
 
 
 async def revoke_api_token(user_id: int) -> bool:
     """True, если токен был и его удалили."""
     async with _write_lock:
-        cur = await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
-        await conn().commit()
+        try:
+            cur = await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+            await conn().commit()
+        finally:
+            _forget_api_tokens()
         return cur.rowcount > 0
 
 
 async def resolve_api_token(token: str) -> Optional[int]:
-    """Токен → telegram_id владельца, или None. Обновляет отметку последнего
-    использования, как resolve_mcp_token."""
+    """Токен → telegram_id владельца, или None.
+
+    Сначала кэш в памяти (см. _api_token_cache): на попадании база не
+    трогается вовсе. На промахе — SELECT, и отметка последнего использования
+    пишется, только если она старше API_TOKEN_TOUCH_INTERVAL: иначе commit не
+    нужен, и запрос не встаёт в очередь _write_lock. Неизвестный токен не
+    кэшируется — только что выданный должен заработать с первого запроса.
+    """
     if not token:
         return None
-    cur = await conn().execute("SELECT user_id FROM api_tokens WHERE token = ?", (token,))
+    now = time.monotonic()
+    hit = _api_token_cache.get(token)
+    if hit is not None:
+        user_id, expires = hit
+        if now < expires:
+            return user_id
+        _api_token_cache.pop(token, None)
+    generation = _api_token_generation
+    cur = await conn().execute(
+        "SELECT user_id, last_used_at FROM api_tokens WHERE token = ?", (token,)
+    )
     row = await cur.fetchone()
     if row is None:
         return None
-    async with _write_lock:
-        await conn().execute(
-            "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
-        )
-        await conn().commit()
-    return row["user_id"]
+    user_id = row["user_id"]
+    if _api_token_touch_due(row["last_used_at"]):
+        async with _write_lock:
+            await conn().execute(
+                "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
+            )
+            await conn().commit()
+    if generation == _api_token_generation:
+        _api_token_cache[token] = (user_id, now + API_TOKEN_CACHE_TTL_SECONDS)
+    return user_id
 
 
 # ---------- сторонние identity-провайдеры (Sign In with Apple) ----------
@@ -5454,6 +5555,10 @@ async def link_telegram_to_app_account(
         except Exception:
             await db.rollback()
             raise
+        finally:
+            # Токены app-аккаунта переехали на telegram_id, а приёмника —
+            # погашены: закэшированный «токен → прежний id» стал неправдой.
+            _forget_api_tokens()
 
 
 # ---------- device tokens для APNs (см. push_tokens выше) ----------

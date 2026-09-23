@@ -24,9 +24,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import dashboard_data
-import db
 import i18n
-from api_v1_common import ApiError, authed_user_id
+from api_v1_common import authed_user
 
 
 def _tile_json(tile: tuple) -> dict[str, Any]:
@@ -75,12 +74,9 @@ async def get_dashboard(request: Request) -> JSONResponse:
     «9 недель подряд»), и собирать его второй раз средствами iOS значило бы
     держать два источника истины — см. те же доводы в api_v1_achievements.
     """
-    user_id = await authed_user_id(request)
-    user = await db.get_user(user_id)
-    if user is None:
-        raise ApiError(404, "not_found", "user not found")
+    user_id, user = await authed_user(request)
     with i18n.use_lang(user["lang"]):
-        data = await dashboard_data.collect(user_id)
+        data = await dashboard_data.collect(user_id, user)
         if data is None:
             return JSONResponse(None)
         return JSONResponse(_dashboard_json(data))
