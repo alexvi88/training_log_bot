@@ -1752,7 +1752,8 @@ def menu_lift_tiles(
 
     `growth` — тройки (имя, e1RM до окна, e1RM внутри окна) от
     db.exercise_e1rm_growth. Упражнения без роста (нет базы до окна, или
-    результат внутри окна её не превысил) в сводку не попадают: плитка «рост
+    результат внутри окна её не превысил хотя бы на 1% после округления) в
+    сводку не попадают: плитка «рост
     0%» ничего не сообщает и просто занимает место, которое мог бы занять
     настоящий прогресс по другому движению.
 
@@ -1763,17 +1764,21 @@ def menu_lift_tiles(
     буквально занята линией. Полное название важнее аккуратной колонки.
     """
     u = unit_label(unit)
+    # Рост меряется тем же округлённым процентом, что стоит на плитке:
+    # «window > before» пропускал прибавку в доли килограмма (227,4 против
+    # 227), и она выходила плиткой «+0%» — ровно той, которой здесь быть не
+    # должно.
     rows = [
-        (name, before, window)
+        (name, before, window, round((window - before) / before * 100))
         for name, before, window in growth
-        if before > 0 and window > before
+        if before > 0
     ]
+    rows = [r for r in rows if r[3] >= 1]
     rows.sort(key=lambda r: (r[2] - r[1]) / r[1], reverse=True)
     tiles: list[tuple[str, str, str]] = []
-    for name, before, window in rows[:_LIFT_TILE_COUNT]:
-        pct = (window - before) / before * 100
+    for name, before, window, pct in rows[:_LIFT_TILE_COUNT]:
         abs_str = f"{window:.0f}{u} vs {before:.0f}{u}"
-        tiles.append((name.upper(), f"+{pct:.0f}%", abs_str))
+        tiles.append((name.upper(), f"+{pct}%", abs_str))
     return tiles
 
 
