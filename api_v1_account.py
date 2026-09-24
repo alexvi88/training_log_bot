@@ -302,13 +302,19 @@ async def _owned_workout(workout_id: int, user_id: int):
 
 
 def _set_json(row) -> dict[str, Any]:
+    # Та же форма, что api_v1._set_json: iOS разбирает оба ответа одной моделью
+    # `SetLog`, где `round_index` и `created_at` обязательны. Без них правка и
+    # добавление подхода в закрытую тренировку сохранялись, а приложение
+    # показывало ошибку разбора — и повторное «Сохранить» клало подход дважды.
     return {
         "id": row["id"],
         "exercise_id": row["exercise_id"],
+        "round_index": row["round_index"],
         "weight": row["weight"],
         "reps": row["reps"],
         "rpe": row["rpe"],
         "load_weight": row["load_weight"] if row["load_weight"] is not None else row["weight"],
+        "created_at": row["created_at"],
     }
 
 
