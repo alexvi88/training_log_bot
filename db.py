@@ -110,7 +110,14 @@ CREATE TABLE IF NOT EXISTS users (
     -- перечитать, но нельзя продолжить. Указатель нужен именно колонкой, а не
     -- MAX(conversation_id) по ходам: сразу после «нового разговора» строк у
     -- него ещё нет вовсе, а номер уже занят.
-    ai_conversation_id INTEGER NOT NULL DEFAULT 1
+    ai_conversation_id INTEGER NOT NULL DEFAULT 1,
+    -- Когда человек в приложении разрешил передавать свои данные стороннему AI
+    -- (App Store Review Guideline 5.1.2(i): раскрыть, что уходит модели, и
+    -- спросить до передачи). NULL — не разрешал или отозвал в настройках.
+    -- Бот в Telegram эту колонку не читает: там согласия никто не спрашивал,
+    -- и ставить его задним числом всем, кто пришёл через бота, было бы
+    -- неправдой. Пишет только PATCH /v1/settings (`ai_consent`).
+    ai_consent_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1199,6 +1206,10 @@ async def _migrate_schema() -> None:
         # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
         # просто не показывается, а не подставляет угаданное число.
         await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
+    if "ai_consent_at" not in user_cols:
+        # NULL всем существующим: согласие в приложении ещё никто не давал —
+        # лист появляется в нём впервые с этой колонкой.
+        await _conn.execute("ALTER TABLE users ADD COLUMN ai_consent_at TEXT")
     if "telegram_linked" not in user_cols:
         # Дефолт 1 — верный ответ и для новой колонки на старой базе: каждая
         # существующая строка заведена настоящим /start, синтетических
