@@ -306,3 +306,34 @@ async def test_add_then_remove_leaves_no_empty_block(fresh_db, client_factory):
     for block in blocks:
         sets = await db.list_sets_for_block(block["id"])
         assert len(sets) > 0
+
+
+# ---------- Форма ответа = SetLog в iOS ----------
+
+# Ключи, без которых iOS (`SetLog` в Models.swift) не разбирает подход. Правка и
+# добавление подхода в закрытую тренировку отвечали без `round_index` и
+# `created_at`: сервер всё сохранял, а приложение показывало ошибку разбора, и
+# повторное «Сохранить» клало подход второй раз.
+_SET_LOG_KEYS = {"id", "exercise_id", "round_index", "weight", "reps", "rpe", "load_weight", "created_at"}
+
+
+@pytest.mark.asyncio
+async def test_add_and_update_set_answer_full_set_shape(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = await _exercise(111)
+    workout_id = await _finished_workout_with_set(111, exercise_id)
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/exercises/{exercise_id}/sets", json={"weight": 60, "reps": 5}
+    )
+    assert resp.status_code == 201, resp.text
+    added = resp.json()
+    assert added.keys() >= _SET_LOG_KEYS
+
+    resp = await client.patch(f"/workouts/{workout_id}/sets/{added['id']}", json={"reps": 6})
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated.keys() >= _SET_LOG_KEYS
+    assert updated["reps"] == 6
+    assert updated["created_at"] == added["created_at"]
+    assert updated["round_index"] == added["round_index"]
