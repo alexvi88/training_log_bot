@@ -1221,7 +1221,7 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
         await ui.safe_edit(callback, i18n.t("workout.empty_deleted"))
         await callback.answer()
         return
-    await db.finish_workout(workout_id, finished_at=workout["started_at"])
+    await db.finish_workout(workout_id, finished_at=db.backdated_finished_at(workout))
     # This path bypasses _finalize_workout, so nothing else would evaluate
     # badges for it: the workout counts toward streaks, tonnage and weight clubs
     # the moment it's finished, but the grid wouldn't catch up until some later
