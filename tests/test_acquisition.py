@@ -42,6 +42,21 @@ def test_referral_payload_carries_author():
     assert attribution.referrer_id == 777
 
 
+def test_referral_from_app_only_account_keeps_negative_author():
+    """Аккаунт из приложения без Telegram живёт под синтетическим
+    отрицательным id — его приглашение не должно терять автора."""
+    attribution = acquisition.parse_start_payload("ref_-5")
+    assert attribution.source == acquisition.SOURCE_REFERRAL
+    assert attribution.referrer_id == -5
+
+
+def test_referral_with_malformed_number_has_no_author():
+    for payload in ("ref_-", "ref_--5", "ref_5-", "ref_²", "ref_+5"):
+        attribution = acquisition.parse_start_payload(payload)
+        assert attribution.source == acquisition.SOURCE_REFERRAL
+        assert attribution.referrer_id is None, payload
+
+
 def test_referral_without_valid_id_keeps_source():
     """Ссылку могли поправить руками — приглашение остаётся приглашением,
     просто без автора, а не превращается в неразобранный мусор."""

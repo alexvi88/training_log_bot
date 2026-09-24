@@ -27,6 +27,9 @@ SOURCE_LEGACY = "legacy"
 
 REFERRAL_PREFIX = "ref_"
 CHANNEL_PREFIX = "src_"
+# id автора в `ref_<id>`: только ASCII-цифры, с необязательным минусом —
+# см. parse_start_payload.
+_REFERRER_ID = re.compile(r"-?[0-9]+")
 
 # Telegram и сам пропускает в start-параметре только A-Za-z0-9_- и 64 символа,
 # но слаг приезжает из ссылки, которую руками собирал человек, — режем сами.
@@ -60,7 +63,12 @@ def parse_start_payload(payload: Optional[str]) -> Attribution:
         rest = raw[len(REFERRAL_PREFIX):]
         # Не цифры в id — либо опечатка в пересланной ссылке, либо чья-то
         # самодеятельность: приглашение остаётся приглашением, но без автора.
-        return Attribution(SOURCE_REFERRAL, int(rest) if rest.isdigit() else None)
+        # Минус впереди законен: у аккаунта из приложения без Telegram
+        # (db.create_app_only_user) id синтетический и отрицательный, и его
+        # ссылка из приложения (InviteView) — `ref_-5`. `isdigit()` минус не
+        # пропускал, и такие приглашения теряли автора; к тому же он
+        # пропускал не-ASCII цифры вроде «²», на которых `int()` падал.
+        return Attribution(SOURCE_REFERRAL, int(rest) if _REFERRER_ID.fullmatch(rest) else None)
     if raw.startswith(CHANNEL_PREFIX):
         slug = _slug(raw[len(CHANNEL_PREFIX):])
         return Attribution(f"{CHANNEL_PREFIX}{slug}" if slug else SOURCE_UNKNOWN)
