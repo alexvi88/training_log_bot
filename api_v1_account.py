@@ -78,6 +78,12 @@ def _settings_json(user) -> dict[str, Any]:
         "tz_set_by_user": bool(user["tz_set_by_user"]),
         "e1rm_formula": user["e1rm_formula"],
         **{field: bool(user[field]) for field in _BOOL_FIELDS},
+        # Согласие на передачу данных стороннему AI (App Store 5.1.2(i)) —
+        # не тумблер из _BOOL_FIELDS: в базе это метка времени, а не 0/1,
+        # чтобы было видно, КОГДА человек разрешил. PATCH принимает bool
+        # `ai_consent`, отдаём и то и другое.
+        "ai_consent": bool(user["ai_consent_at"]),
+        "ai_consent_at": user["ai_consent_at"],
     }
 
 
@@ -254,6 +260,12 @@ async def update_settings(request: Request) -> JSONResponse:
                 raise ApiError(400, "bad_request", f"{field} must be bool")
             bool_updates[field] = 1 if value else 0
 
+    new_consent: Optional[bool] = None
+    if "ai_consent" in body:
+        new_consent = body["ai_consent"]
+        if not isinstance(new_consent, bool):
+            raise ApiError(400, "bad_request", "ai_consent must be bool")
+
     # Всё провалидировано — теперь можно писать. Единицы — отдельным путём
     # (рескейл + ресинк), остальное — одним update_user.
     if new_unit is not None and new_unit != user["unit"]:
@@ -274,6 +286,12 @@ async def update_settings(request: Request) -> JSONResponse:
         plain_updates["tz_offset"] = device_tz
     if new_formula is not None:
         plain_updates["e1rm_formula"] = new_formula
+    if new_consent is True and not user["ai_consent_at"]:
+        # Повторное «Согласен» метку не двигает: важен первый момент, с
+        # которого данные начали уходить модели, а не последний тап.
+        plain_updates["ai_consent_at"] = db.now_iso()
+    elif new_consent is False:
+        plain_updates["ai_consent_at"] = None
     if plain_updates:
         await db.update_user(user_id, **plain_updates)
     if new_tz is not None and new_tz != user["tz_offset"]:

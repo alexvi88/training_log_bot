@@ -111,3 +111,17 @@ async def test_dashboard_speaks_the_users_language(fresh_db, client_factory):
     for tile in body["tiles"]:
         assert not CYRILLIC.search(tile["label"]), tile["label"]
         assert not CYRILLIC.search(tile["sub"] or ""), tile["sub"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_app_dashboard_has_no_tonnage_tile(fresh_db, client_factory, lang):
+    """Плитку тоннажа владелец убрал: на вкладке «Тренировка» рядом и так объём
+    по группам за неделю."""
+    client = await _linked_client(fresh_db, client_factory, lang=lang)
+    await _train(111)
+
+    body = (await client.get("/dashboard")).json()
+    labels = [tile["label"].lower() for tile in body["tiles"]]
+    assert body["tiles"]
+    assert not any("тонн" in label or "tonnage" in label for label in labels), labels

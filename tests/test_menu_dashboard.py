@@ -241,35 +241,25 @@ def test_without_a_streak_the_headline_talks_about_the_month():
         "1 тренировка за 30 дней"
 
 
-def test_tonnage_switches_to_kilograms_when_there_are_no_tonnes():
-    """«0,4 т» читается хуже, чем «400 кг»."""
-    assert formatting.menu_tiles(_dashboard(), 24_500, 3)[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т")
-    assert formatting.menu_tiles(_dashboard(), 400, 3)[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "400 кг")
+def test_there_is_no_tonnage_tile():
+    """Плитку тоннажа владелец убрал и из приложения, и с картинки бота."""
+    tiles = formatting.menu_tiles(_dashboard(), 24_500, 3)
+    assert not any("ТОННАЖ" in t[0] for t in tiles)
 
 
-def test_the_tonnage_tile_counts_tonnes_in_kilograms():
-    """Тонна — тонна: у человека в фунтах плитка обязана показывать то же число,
-    что зал славы и недельная сводка.
-
-    Тоннаж лежит в единицах пользователя, а плитка делила его на 1000 как есть —
-    24 500 фунтов превращались в «24.5 т» вместо 11.1 тонны, и плитка врала
-    больше чем вдвое относительно остальных экранов.
-    """
-    tile = formatting.menu_tiles(_dashboard(), 24_500, 3, "lb")[1]
-
-    assert tile == ("ТОННАЖ ЗА 7 ДНЕЙ", "11.1 т")
+def test_format_tonnage_counts_tonnes_in_kilograms():
+    """Тонна — тонна: тоннаж лежит в единицах пользователя, и 24 500 фунтов —
+    это 11.1 тонны, а не «24.5 т» (так же в зале славы и недельной сводке)."""
     assert formatting.format_tonnage(24_500, "lb").startswith("11.1")
-    # Ниже тонны конвертировать нечего — это его число в его единицах.
-    assert formatting.menu_tiles(_dashboard(), 900, 3, "lb")[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "900 lb")
 
 
 def test_the_records_tile_gives_its_place_away_when_there_are_none():
     with_records = formatting.menu_tiles(_dashboard(this_week=2), 5000, 2)
     without = formatting.menu_tiles(_dashboard(this_week=2), 5000, 0)
 
-    assert with_records[2] == ("РЕКОРДОВ ЗА 7 ДНЕЙ", "2")
-    assert without[2] == ("ТРЕНИРОВОК ЗА НЕДЕЛЮ", "2")
-    assert len(with_records) == len(without) == 3
+    assert with_records[1] == ("РЕКОРДОВ ЗА 7 ДНЕЙ", "2")
+    assert without[1] == ("ТРЕНИРОВОК ЗА НЕДЕЛЮ", "2")
+    assert len(with_records) == len(without) == 2
 
 
 def test_the_week_tile_is_skipped_when_it_would_repeat_the_month():
@@ -277,7 +267,7 @@ def test_the_week_tile_is_skipped_when_it_would_repeat_the_month():
     с «ЗА 30 ДНЕЙ 1» это одно число, поставленное дважды."""
     tiles = formatting.menu_tiles(_dashboard(this_week=1, last_30_days=1), 300, 0)
 
-    assert [label for label, _ in tiles] == ["ТРЕНИРОВОК ЗА 30 ДНЕЙ", "ТОННАЖ ЗА 7 ДНЕЙ"]
+    assert [label for label, _ in tiles] == ["ТРЕНИРОВОК ЗА 30 ДНЕЙ"]
 
 
 def test_growth_tiles_carry_percent_and_absolute_values():
@@ -623,4 +613,4 @@ def test_the_total_merges_into_the_30_day_tile():
 
     assert with_total[0] == ("ТРЕНИРОВОК", "148", "14 за 30 дней")
     assert with_total[1:] == without[1:]
-    assert len(with_total) == len(without) == 3
+    assert len(with_total) == len(without) == 2

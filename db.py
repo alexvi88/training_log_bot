@@ -110,7 +110,14 @@ CREATE TABLE IF NOT EXISTS users (
     -- перечитать, но нельзя продолжить. Указатель нужен именно колонкой, а не
     -- MAX(conversation_id) по ходам: сразу после «нового разговора» строк у
     -- него ещё нет вовсе, а номер уже занят.
-    ai_conversation_id INTEGER NOT NULL DEFAULT 1
+    ai_conversation_id INTEGER NOT NULL DEFAULT 1,
+    -- Когда человек в приложении разрешил передавать свои данные стороннему AI
+    -- (App Store Review Guideline 5.1.2(i): раскрыть, что уходит модели, и
+    -- спросить до передачи). NULL — не разрешал или отозвал в настройках.
+    -- Бот в Telegram эту колонку не читает: там согласия никто не спрашивал,
+    -- и ставить его задним числом всем, кто пришёл через бота, было бы
+    -- неправдой. Пишет только PATCH /v1/settings (`ai_consent`).
+    ai_consent_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -701,6 +708,13 @@ CREATE TABLE IF NOT EXISTS auth_identities (
     provider_user_id TEXT NOT NULL,   -- Apple: стабильный "sub" из identity token
     email TEXT,                       -- Apple отдаёт email только при первом входе
     created_at TEXT NOT NULL,
+    -- Токены Apple из обмена кода авторизации (apple_signin.exchange_
+    -- authorization_code) — нужны ровно для одного: отозвать их при удалении
+    -- аккаунта (требование Apple, TN3194). NULL — обмена не было (сервер без
+    -- APPLE_SIWA_*, старая сборка приложения без кода, сбой Apple).
+    refresh_token TEXT,
+    access_token TEXT,
+    tokens_updated_at TEXT,
     UNIQUE(provider, provider_user_id)
 );
 
@@ -1199,6 +1213,10 @@ async def _migrate_schema() -> None:
         # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
         # просто не показывается, а не подставляет угаданное число.
         await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
+    if "ai_consent_at" not in user_cols:
+        # NULL всем существующим: согласие в приложении ещё никто не давал —
+        # лист появляется в нём впервые с этой колонкой.
+        await _conn.execute("ALTER TABLE users ADD COLUMN ai_consent_at TEXT")
     if "telegram_linked" not in user_cols:
         # Дефолт 1 — верный ответ и для новой колонки на старой базе: каждая
         # существующая строка заведена настоящим /start, синтетических
@@ -1299,6 +1317,15 @@ async def _migrate_schema() -> None:
         # вложения вообще (фото/видео уезжали в модель и терялись, см.
         # докстринг chat_attachments.py) — им и остаться NULL.
         await _conn.execute("ALTER TABLE ai_conversation_turns ADD COLUMN image_path TEXT")
+
+    identity_cols = await _column_names("auth_identities")
+    if "refresh_token" not in identity_cols:
+        # Токены Apple для отзыва при удалении аккаунта (см. схему выше). У
+        # старых привязок их нет и взять неоткуда — появятся на следующем
+        # входе через Apple из сборки, которая шлёт код авторизации.
+        await _conn.execute("ALTER TABLE auth_identities ADD COLUMN refresh_token TEXT")
+        await _conn.execute("ALTER TABLE auth_identities ADD COLUMN access_token TEXT")
+        await _conn.execute("ALTER TABLE auth_identities ADD COLUMN tokens_updated_at TEXT")
 
     # Игр больше нет, но таблица game_results в схеме осталась (см. SCHEMA) —
     # старые БД доводим до той же формы, что и новые.
@@ -2378,6 +2405,16 @@ async def wipe_user_account(telegram_id: int) -> None:
         (telegram_id,),
     )
     photo_names = [row[0] for row in await cur.fetchall()]
+    # То же для вложений чата с тренером в приложении (chat_attachments.py):
+    # файл лежит на диске, в базе — только его имя, и после сноса строк
+    # ai_conversation_turns ночная чистка архива (prune_old_ai_conversations)
+    # его уже не найдёт — фото осталось бы на диске навсегда.
+    cur = await conn().execute(
+        "SELECT image_path FROM ai_conversation_turns "
+        "WHERE telegram_id = ? AND image_path IS NOT NULL",
+        (telegram_id,),
+    )
+    attachment_names = [row[0] for row in await cur.fetchall()]
     async with _write_lock:
         db = conn()
         try:
@@ -2394,6 +2431,11 @@ async def wipe_user_account(telegram_id: int) -> None:
             _forget_api_tokens()
     for name in photo_names:
         exercise_photos.delete(name)
+    if attachment_names:
+        import chat_attachments
+
+        for name in attachment_names:
+            chat_attachments.delete(name)
 
 
 # ---------- muscle groups ----------
@@ -5683,6 +5725,38 @@ async def resolve_auth_identity(provider: str, provider_user_id: str) -> Optiona
     )
     row = await cur.fetchone()
     return row["user_id"] if row else None
+
+
+async def set_auth_identity_tokens(
+    provider: str,
+    provider_user_id: str,
+    refresh_token: Optional[str],
+    access_token: Optional[str],
+) -> None:
+    """Запомнить токены провайдера у уже привязанной личности (Apple: ответ
+    /auth/token на код авторизации). Пишется только свежая пара целиком:
+    новый вход выдаёт новый refresh_token, и отзывать при удалении надо его,
+    а не тот, что остался от прошлого входа."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE auth_identities SET refresh_token = ?, access_token = ?, "
+            "tokens_updated_at = ? WHERE provider = ? AND provider_user_id = ?",
+            (refresh_token, access_token, now_iso(), provider, provider_user_id),
+        )
+        await conn().commit()
+
+
+async def auth_identity_tokens_for_user(user_id: int, provider: str) -> list[dict]:
+    """Токены провайдера у всех личностей этого аккаунта — только строки, где
+    есть хоть один токен. Список, а не одна строка: к одному аккаунту могли
+    привязать больше одного Apple ID (пересвязка кодом бота)."""
+    cur = await conn().execute(
+        "SELECT provider_user_id, refresh_token, access_token FROM auth_identities "
+        "WHERE user_id = ? AND provider = ? "
+        "AND (refresh_token IS NOT NULL OR access_token IS NOT NULL)",
+        (user_id, provider),
+    )
+    return [dict(row) for row in await cur.fetchall()]
 
 
 # ---------- связка app-only аккаунта с реальным Telegram (слияние) ----------

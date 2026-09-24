@@ -52,6 +52,7 @@ import body_limit
 import config
 import db
 import i18n
+import legal_pages
 import mcp_oauth
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,8 @@ def build_server() -> MCPServer:
         auth=mcp_oauth.auth_settings(MCP_PATH),
     )
     mcp_oauth.register_routes(mcp)
+    # /privacy и /terms — публичные страницы для App Store (см. legal_pages.py).
+    legal_pages.register_routes(mcp)
 
     @mcp.tool()
     async def get_training_overview() -> str:

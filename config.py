@@ -199,6 +199,16 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
+# Согласие на передачу данных стороннему AI в приложении (App Store 5.1.2(i),
+# колонка users.ai_consent_at, см. api_v1_ai._require_ai_consent). Выключено по
+# умолчанию, потому что уже выпущенные сборки (1.0 (3)/(4)) о согласии не знают:
+# включи сейчас — и тренер у них молча превратится в 403, а обновить приложение
+# человек может и не успеть. Сборки, которые лист показывают, сами говорят об
+# этом заголовком AI_CONSENT_CLIENT_HEADER — для них проверка работает всегда,
+# независимо от флага. Включать, когда старых сборок в сторе не останется.
+AI_CONSENT_REQUIRED = os.getenv("AI_CONSENT_REQUIRED", "false").lower() == "true"
+AI_CONSENT_CLIENT_HEADER = "X-AI-Consent-Flow"
+
 # Hard ceiling on a single model call. The OpenAI SDK defaults to 600s, which
 # is not a timeout so much as an abandonment: a hung request leaves the user
 # watching "🤔 думаю…" for ten minutes, and the placeholder animation keeps
@@ -825,6 +835,31 @@ APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "com.trainingdiary.ios")
 # вписывают в App Store Connect → App Review Information.
 REVIEW_DEMO_USERNAME = os.getenv("REVIEW_DEMO_USERNAME", "")
 REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
+
+
+# --- Sign in with Apple: отзыв токенов при удалении аккаунта ---------------
+#
+# Apple требует (TN3194, «Revoke tokens»): приложение с Sign in with Apple и
+# удалением аккаунта при удалении отзывает токены пользователя через
+# https://appleid.apple.com/auth/revoke. Для этого на входе код авторизации
+# меняется на refresh_token (apple_signin.exchange_authorization_code), а
+# при сносе этот refresh_token отзывается (apple_signin.revoke_user_tokens).
+# Оба вызова подписывают client_secret — ES256 JWT ключом .p8 из Apple
+# Developer, у которого включён Sign in with Apple.
+#
+# Включается одной переменной — APPLE_SIWA_KEY_ID (id ключа, "kid"). Пустая —
+# сервер к Apple не ходит вовсе, вход и удаление работают как раньше.
+# Ключ может быть отдельным (тогда его .p8 целиком — в APPLE_SIWA_PRIVATE_KEY)
+# или тем же, что у APNs, если на нём включён и Sign in with Apple: тогда
+# APPLE_SIWA_KEY_ID = APNS_KEY_ID, APPLE_SIWA_PRIVATE_KEY не задаётся, и
+# берётся APNS_KEY_P8. Team ID у аккаунта разработчика один на оба —
+# APPLE_SIWA_TEAM_ID нужен, только если почему-то отличается от APNS_TEAM_ID.
+# client_id — bundle id приложения, APPLE_BUNDLE_ID выше: код авторизации
+# выпущен для него. Значения — только через `fly secrets set`
+# (docs/DEPLOY_FLY.md), не в репозиторий.
+APPLE_SIWA_KEY_ID = os.getenv("APPLE_SIWA_KEY_ID", "").strip()
+APPLE_SIWA_PRIVATE_KEY = os.getenv("APPLE_SIWA_PRIVATE_KEY", "")
+APPLE_SIWA_TEAM_ID = os.getenv("APPLE_SIWA_TEAM_ID", "").strip()
 
 
 def review_demo_available() -> bool:

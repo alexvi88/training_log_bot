@@ -212,6 +212,36 @@ ApiError = common.ApiError
 # из-за активности в другом.
 _busy: set[int] = set()
 
+async def _require_ai_consent(request: Request, user_id: int) -> None:
+    """403 `ai_consent_required`, если человек не разрешил передавать данные
+    стороннему AI (App Store 5.1.2(i), users.ai_consent_at).
+
+    Зовут только ручки, которые реально отдают что-то модели: вопрос (текст и
+    фото, xAI), ответ на опросник (последний ответ — ход xAI), голос (OpenAI,
+    расшифровка) и видео (Novita, потом xAI). «Забрать»/«Начать тренировку» по
+    черновику, откат, история и лимиты ничего наружу не шлют — закрывать их
+    незачем, а человек, отозвавший согласие, должен иметь возможность забрать
+    уже предложенную программу.
+
+    Проверка работает, только если клиент прислал `X-AI-Consent-Flow: 1` (то
+    есть сам показывает лист) или включён config.AI_CONSENT_REQUIRED. Выпущенные
+    сборки 1.0 (3)/(4) листа не знают, и 403 превратил бы им тренера в
+    непонятную ошибку — см. комментарий у флага. Главная проверка — в
+    приложении, до отправки; эта ловит расхождение (согласие отозвано, а экран
+    ещё помнит старое) и сборку, в которой какую-то точку отправки забыли.
+    Бот в Telegram сюда не ходит вовсе.
+    """
+    if not (
+        config.AI_CONSENT_REQUIRED
+        or request.headers.get(config.AI_CONSENT_CLIENT_HEADER) == "1"
+    ):
+        return
+    user = await db.get_user(user_id)
+    if user is not None and user["ai_consent_at"]:
+        return
+    raise ApiError(403, "ai_consent_required", "consent to share data with the AI provider is required")
+
+
 # Вопрос через HTTP не режется телеграмным лимитом сообщения (4096 символов,
 # см. handlers/ai_trainer.py DRAFT_TEXT_LIMIT) — клиент может прислать что
 # угодно. Свой потолок нужен ради того же, ради чего он нужен боту: без него
@@ -667,6 +697,7 @@ async def ask_question(request: Request) -> JSONResponse:
     вопрос, что и у бота.
     """
     user_id = await common.authed_user_id(request)
+    await _require_ai_consent(request, user_id)
     if not ai_trainer.is_configured():
         raise ApiError(503, "not_configured", "ai trainer is not configured")
 
@@ -752,6 +783,7 @@ async def answer_setup_question(request: Request) -> JSONResponse:
     должна записать ответ не туда, см. keyboards.ai_setup_question_keyboard).
     """
     user_id = await common.authed_user_id(request)
+    await _require_ai_consent(request, user_id)
     body = await common.json_body(request)
     question_index = common.require(body, "question_index", int)
     answer_text = common.optional_str(body, "answer")
@@ -976,6 +1008,7 @@ async def transcribe_voice(request: Request) -> JSONResponse:
     одного человека иначе оба уходят в Whisper одновременно.
     """
     user_id = await common.authed_user_id(request)
+    await _require_ai_consent(request, user_id)
     user = await db.get_user(user_id)
     lang = user["lang"] if user else "ru"
     body = await common.json_body(request)
@@ -1060,6 +1093,7 @@ async def ask_video(request: Request) -> JSONResponse:
     `_run_turn`/`_limits_json` для вопросов, см. докстринг модуля).
     """
     user_id = await common.authed_user_id(request)
+    await _require_ai_consent(request, user_id)
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else "ru"
 
