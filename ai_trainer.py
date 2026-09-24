@@ -4441,7 +4441,9 @@ async def _log_bodyweight(
             return {"error": "будущим днём взвеситься нельзя"}, None
         if date == today:
             date = None
-    log_id = await db.add_bodyweight_log(user_id, weight, timeutil.logged_at_for_date(date))
+    log_id = await db.add_bodyweight_log(
+        user_id, weight, timeutil.logged_at_for_date(date, timeutil.offset_hours(user))
+    )
     return (
         {
             "ok": True,

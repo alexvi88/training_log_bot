@@ -32,11 +32,54 @@ import json
 import logging
 from typing import Any
 
+import db
+import i18n
+
 logger = logging.getLogger(__name__)
 
-_TOO_LARGE_BODY = json.dumps(
-    {"error": "payload_too_large", "message": "request body too large"}
-).encode("utf-8")
+_TOO_LARGE_KEY = "api.error.payload_too_large"
+_TOO_LARGE_DETAIL = "request body too large"
+
+
+def _too_large_body(lang: str) -> bytes:
+    """Та же форма, что у остальных ошибок /v1 (api_v1_common.api_error_handler):
+    `message` — человеческий текст на языке атлета (его приложение показывает
+    как есть), машинный английский — в `detail`. Раньше в `message` лежал
+    голый английский «request body too large», и русскоязычный видел его
+    прямо на экране."""
+    return json.dumps(
+        {
+            "error": "payload_too_large",
+            "message": i18n.t_in(lang, _TOO_LARGE_KEY),
+            "detail": _TOO_LARGE_DETAIL,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _header(scope: dict[str, Any], name: bytes) -> str | None:
+    for key, value in scope.get("headers") or ():
+        if key.lower() == name:
+            return value.decode("latin-1")
+    return None
+
+
+async def _request_lang(scope: dict[str, Any]) -> str:
+    """Язык ответа до всякого обработчика: из users.lang владельца токена, как
+    у api_v1_common.authed_user_id, иначе — из Accept-Language (вход, /mcp).
+
+    Любой сбой разбора токена — не повод не ответить 413: тогда просто
+    заголовок языка."""
+    auth = _header(scope, b"authorization") or ""
+    if auth.lower().startswith("bearer "):
+        try:
+            user_id = await db.resolve_api_token(auth[len("bearer "):].strip())
+            user = await db.get_user(user_id) if user_id is not None else None
+            if user is not None and user["lang"] in i18n.SUPPORTED:
+                return user["lang"]
+        except Exception:
+            logger.debug("body limit: could not resolve token language", exc_info=True)
+    return i18n.lang_from_accept_language(_header(scope, b"accept-language"))
 
 
 class MaxBodySizeMiddleware:
@@ -60,7 +103,7 @@ class MaxBodySizeMiddleware:
         # проверку ниже — она идёт в любом случае.
         content_length = _content_length(scope)
         if content_length is not None and content_length > self._max_bytes:
-            await _reject(send)
+            await _reject(scope, send)
             return
 
         buffered: list[dict[str, Any]] = []
@@ -75,7 +118,7 @@ class MaxBodySizeMiddleware:
             total += len(message.get("body") or b"")
             buffered.append(message)
             if total > self._max_bytes:
-                await _reject(send)
+                await _reject(scope, send)
                 return
             if not message.get("more_body", False):
                 break
@@ -106,15 +149,16 @@ def _content_length(scope: dict[str, Any]) -> int | None:
     return None
 
 
-async def _reject(send) -> None:
+async def _reject(scope: dict[str, Any], send) -> None:
+    body = _too_large_body(await _request_lang(scope))
     await send(
         {
             "type": "http.response.start",
             "status": 413,
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"content-length", str(len(_TOO_LARGE_BODY)).encode()),
+                (b"content-length", str(len(body)).encode()),
             ],
         }
     )
-    await send({"type": "http.response.body", "body": _TOO_LARGE_BODY})
+    await send({"type": "http.response.body", "body": body})

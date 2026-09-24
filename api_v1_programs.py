@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from starlette.requests import Request
@@ -400,10 +401,35 @@ async def add_routine_exercise(request: Request) -> JSONResponse:
     target = _optional_str(body, "target")
     if target is not None:
         target = formatting.normalize_routine_target(target)
-    await db.append_routine_exercise(routine_id, exercise_id, target)
+    # Упражнение уже в этом дне — отдаём существующий пункт (200), а не 500:
+    # вставка упиралась в уникальный индекс idx_routine_exercises_unique и
+    # падала internal_error. Не 409 — копирование дня в приложении
+    # (AddProgramDayView) добавляет упражнения по одному в цикле, и ошибка на
+    # повторе (ретрай после оборванного ответа, дубль в исходном дне) обрывала
+    # бы копию на середине. Бот в том же случае тоже ничего не добавляет, а
+    # показывает день как есть (handlers.routines._rtadd_finish).
+    existing = await _routine_entry_for(routine_id, exercise_id)
+    if existing is not None:
+        return JSONResponse(_routine_exercise_json(existing), status_code=200)
+    try:
+        await db.append_routine_exercise(routine_id, exercise_id, target)
+    except sqlite3.IntegrityError:
+        # Параллельный запрос успел вставить то же самое между проверкой и
+        # вставкой — итог тот же, что и у проверки выше.
+        existing = await _routine_entry_for(routine_id, exercise_id)
+        if existing is None:
+            raise
+        return JSONResponse(_routine_exercise_json(existing), status_code=200)
     exercises = await db.list_routine_exercises(routine_id)
     # Только что добавленное — последнее по order_index, ровно как отдаёт append.
     return JSONResponse(_routine_exercise_json(exercises[-1]), status_code=201)
+
+
+async def _routine_entry_for(routine_id: int, exercise_id: int):
+    for entry in await db.list_routine_exercises(routine_id):
+        if entry["exercise_id"] == exercise_id:
+            return entry
+    return None
 
 
 async def update_routine_exercise(request: Request) -> JSONResponse:

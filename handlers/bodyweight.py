@@ -286,10 +286,12 @@ async def bw_edit_weight_entered(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-def _logged_at_for(date: dt.date | None) -> str | None:
+def _logged_at_for(date: dt.date | None, user) -> str | None:
     """Метка времени для взвешивания задним числом — общая с AI-тренером,
-    который тоже умеет писать вес прошедшим днём (см. timeutil)."""
-    return timeutil.logged_at_for_date(date)
+    который тоже умеет писать вес прошедшим днём (см. timeutil). Пояс нужен,
+    чтобы приложение, переводящее метку в пояс телефона, показало тот же день,
+    что и бот (timeutil.backdated_moment)."""
+    return timeutil.logged_at_for_date(date, timeutil.offset_hours(user))
 
 
 @router.message(StateFilter(BodyweightFlow.viewing), F.text)
@@ -321,7 +323,7 @@ async def bw_weight_entered(message: Message, state: FSMContext):
             reply_markup=keyboards.bodyweight_confirm_keyboard(),
         )
         return
-    await db.add_bodyweight_log(message.from_user.id, weight, _logged_at_for(date))
+    await db.add_bodyweight_log(message.from_user.id, weight, _logged_at_for(date, user))
     # The typed number itself is cleaned up so it doesn't clutter the chat;
     # the screen underneath is edited in place rather than deleted (see _render).
     with suppress(TelegramBadRequest):
@@ -352,7 +354,9 @@ async def bw_weight_confirm_yes(callback: CallbackQuery, state: FSMContext):
             return
         raw_date = data.get("bw_pending_date")
         date = dt.date.fromisoformat(raw_date) if raw_date else None
-        await db.add_bodyweight_log(user_id, weight, _logged_at_for(date))
+        await db.add_bodyweight_log(
+            user_id, weight, _logged_at_for(date, await db.get_user(user_id) if date else None)
+        )
         await state.update_data(bw_pending_weight=None, bw_pending_date=None)
         confirm_message = callback.message
         with suppress(TelegramBadRequest):

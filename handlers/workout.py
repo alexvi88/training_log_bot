@@ -3621,7 +3621,9 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     started_at = dt.datetime.fromisoformat(workout["started_at"])
 
     is_backfill = bool(data.get("is_backfill"))
-    finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
+    # Конец занесения — тот же момент, что и его начало (timeutil.backdated_moment):
+    # голый полдень UTC у UTC+13/+14 уезжал на соседние сутки от started_at.
+    finished_at = workout["started_at"] if is_backfill else None
     await db.delete_empty_blocks(workout_id)
     # The status guard above is several awaits back by now — wide enough for a
     # second tap to have slipped past it. finish_workout only marks a workout

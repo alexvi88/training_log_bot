@@ -684,17 +684,19 @@ async def ask_question(request: Request) -> JSONResponse:
     # повод не отвечать: картинка в истории чата — удобство сверху, а не
     # то, ради чего вопрос вообще задают. Молча остаёмся без неё, как и при
     # неудачной вытяжке кадра из видео (chat_attachments.save_video_frame).
+    #
+    # Но только после ВСЕХ проверок тела: раньше фото ложилось на диск до
+    # проверки длины вопроса, и 400 «слишком длинно» оставлял файл, о котором
+    # никто не знает по имени (сносит его только except ниже, до которого 400
+    # не доходил).
     saved_image_path: Optional[str] = None
     with i18n.use_lang(lang):
+        raw_image: Optional[tuple[bytes, str]] = None
         if image_data_url is not None:
-            raw, ext = _validate_image_data_url(
+            raw_image = _validate_image_data_url(
                 image_data_url,
                 too_big_message=i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024)),
             )
-            try:
-                saved_image_path = chat_attachments.save_photo(user_id, raw, ext)
-            except Exception:
-                logger.exception("chat photo save failed for user %s", user_id)
         question = common.optional_str(body, "question") or ""
         if not question:
             if image_data_url is None:
@@ -707,8 +709,15 @@ async def ask_question(request: Request) -> JSONResponse:
             key="api.error.text_too_long", max=MAX_QUESTION_LENGTH,
         )
 
+    # Бронь — тоже до сохранения: 429 busy из _claim_turn_or_429 стоит вне
+    # try ниже и файл за собой не убрал бы.
     _claim_turn_or_429(user_id, lang)
     try:
+        if raw_image is not None:
+            try:
+                saved_image_path = chat_attachments.save_photo(user_id, *raw_image)
+            except Exception:
+                logger.exception("chat photo save failed for user %s", user_id)
         # Последний сохранённый wire-снимок разговора этого пользователя — то
         # же самое, что бот держит в ai_history в FSM, только персистентно
         # (см. db.ai_conversation_turns и докстринг модуля). Пусто у нового
@@ -773,11 +782,20 @@ async def answer_setup_question(request: Request) -> JSONResponse:
     lang = user["lang"] if user is not None else "ru"
     with i18n.use_lang(lang):
         text = ai_setup_flow.setup_answers_text(state)
-    await db.clear_ai_setup_state(user_id)
+    # Опросник снимается только после состоявшегося хода, а не до брони и
+    # вызова модели: раньше clear стоял первым, и на 429 (busy/лимит), таймауте
+    # или сбое модели ответы пропадали целиком — повтор того же ответа получал
+    # 409 setup_stale, и человеку оставалось проходить опросник заново. Пока
+    # хода нет, в базе лежит состояние ДО этого ответа (его мы не записывали),
+    # так что повтор с тем же question_index честно проходит проверку выше.
     _claim_turn_or_429(user_id, lang)
     try:
         history = await db.get_ai_conversation_wire_history(user_id)
         turn = await _run_turn(user_id, text, history)
+        # До _turn_response, а не после: он сам решает, заводить ли новый
+        # опросник, и смотрит на «предыдущий» (_next_setup_step) — законченный
+        # там лежать не должен, как и прежде.
+        await db.clear_ai_setup_state(user_id)
         return JSONResponse(await _turn_response(user_id, turn, goal=state.get("goal") or text))
     finally:
         _busy.discard(user_id)

@@ -200,6 +200,9 @@ async def auth_apple(request: Request) -> JSONResponse:
 
     Необязательное поле `lang` (строка: "en", "ru", "en-US") — язык устройства
     для НОВОГО аккаунта; без него — `Accept-Language` (см. _signup_language_code).
+    Необязательное `tz_offset_minutes` (int, офсет телефона от UTC в минутах) —
+    пояс того же НОВОГО аккаунта (см. common.device_tz_offset_hours); кривое
+    значение молча игнорируется, вход из-за него не срывается.
     """
     body = await _json_body(request)
     _set_pre_auth_lang(body, request)
@@ -227,7 +230,12 @@ async def auth_apple(request: Request) -> JSONResponse:
             user_id = code_user_id
         else:
             new_user = await db.create_app_only_user(
-                language_code=_signup_language_code(body, request)
+                language_code=_signup_language_code(body, request),
+                # Пояс телефона вместо config.DEFAULT_TZ_OFFSET (+3): без него
+                # каждый новый аккаунт из приложения жил по Москве, и «сегодня»,
+                # серии и время пушей считались не по его часам. Поле
+                # необязательное — старые сборки его не шлют.
+                tz_offset=common.device_tz_offset_hours(body.get("tz_offset_minutes")),
             )
             user_id = new_user["telegram_id"]
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
@@ -746,15 +754,6 @@ async def discard_active_workout(request: Request) -> JSONResponse:
     return JSONResponse({"discarded": True})
 
 
-BACKFILL_HOUR = "T12:00:00"
-"""Полдень — то же время, что ставит бот (handlers.backfill._date_chosen).
-
-Не полночь: тренировка, записанная на 00:00, у пользователя с отрицательным
-офсетом попадает по местному времени во вчера, и день в истории разъезжается
-с тем, который человек выбрал в календаре. Полдень таких сдвигов не даёт ни
-при одном обитаемом офсете (UTC-11 … UTC+14)."""
-
-
 async def backfill_workout(request: Request) -> JSONResponse:
     """Открытая тренировка, заносимая задним числом, или `null`.
 
@@ -793,8 +792,13 @@ async def start_backfill_workout(request: Request) -> JSONResponse:
     # Сегодня — по часовому поясу пользователя, а не по UTC сервера.
     await common.reject_future_date(date, user_id)
 
+    # Момент — timeutil.backdated_moment, общий с ботом (handlers.backfill).
+    # Раньше тут стоял голый полдень UTC с обещанием «не даёт сдвигов ни при
+    # одном обитаемом офсете» — неправда: метка в UTC, местный день считается
+    # прибавлением офсета (db._local_day), и у UTC+13/+14 12:00 UTC — это уже
+    # следующие сутки.
     workout_id, created = await db.get_or_create_backfill_workout(
-        user_id, f"{date.isoformat()}{BACKFILL_HOUR}"
+        user_id, timeutil.backdated_moment(date, await db.user_tz_offset(user_id))
     )
     workout = await db.get_workout(workout_id)
     return JSONResponse(await _workout_detail_json(workout), status_code=201 if created else 200)
@@ -1090,7 +1094,7 @@ def _plain(text: Optional[str]) -> Optional[str]:
 
 
 async def _finish_rewards_json(
-    workout, user, new_codes: list[str], was_backfill: bool
+    workout, user, new_codes: list[str], was_backfill: bool, announce_rank: bool = True
 ) -> dict[str, Any]:
     """Итоги только что завершённой тренировки — то же, что бот собирает на
     карточке завершения (handlers.workout._finalize_workout).
@@ -1122,7 +1126,11 @@ async def _finish_rewards_json(
             total_finished = await db.count_workouts(workout["user_id"])
             if analytics.is_workout_milestone(total_finished):
                 milestone = _plain(formatting.format_milestone_line(total_finished))
-        promotion = await dashboard_data.rank_promotion(workout["user_id"], user)
+        # announce_rank=False — повтор уже законченного (_finish_replay_response):
+        # rank_promotion одноразовый и на повторе объявлять нечего.
+        promotion = (
+            await dashboard_data.rank_promotion(workout["user_id"], user) if announce_rank else None
+        )
         return {
             "sets": sum(len(block.sets) for block in blocks),
             "exercises": len(blocks),
@@ -1168,7 +1176,12 @@ async def finish_workout(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    _require_open(workout)
+    if workout["status"] == "finished":
+        # Повтор после оборванного ответа (сеть в зале рвётся ровно в момент
+        # «Завершить»): тренировка уже закончена этим же атлетом, и 409 на
+        # повтор показывал человеку ошибку вместо итогов того, что он только
+        # что закончил. Отдаём тот же ответ, что и на первый вызов.
+        return await _finish_replay_response(workout, user_id)
     body = await _json_body(request) if await request.body() else {}
     # "note" отсутствует в теле — не значит "очисти её": iOS зовёт finish без
     # note, когда её уже поставили раньше через PATCH /note, и молчаливая
@@ -1190,8 +1203,11 @@ async def finish_workout(request: Request) -> JSONResponse:
         and _require(body, "backdated", bool)
         and workout["status"] == "active"
     )
+    # У занесения задним числом конец — тот же момент, что и начало
+    # (timeutil.backdated_moment): «дата started_at + полдень UTC» у UTC+13/+14
+    # давала конец на других сутках, чем начало.
     if workout["status"] == "backfill":
-        finished_at = f"{started_at.date().isoformat()}{BACKFILL_HOUR}"
+        finished_at = workout["started_at"]
     elif backdated:
         finished_at = db.backdated_finished_at(workout)
     else:
@@ -1206,8 +1222,12 @@ async def finish_workout(request: Request) -> JSONResponse:
         await db.discard_workout(workout_id)
         return JSONResponse({"discarded": True, "reason": "empty"})
     if not await db.finish_workout(workout_id, note=note, finished_at=finished_at):
-        # Тренировку успели закончить с другого клиента, пока шёл этот запрос.
-        raise ApiError(409, "workout_finished", "workout is already finished")
+        # Тренировку успели закончить с другого клиента (или первым из двух
+        # одинаковых запросов), пока шёл этот, — итог для человека тот же.
+        finished = await db.get_workout(workout_id)
+        if finished is None or finished["status"] != "finished":
+            raise ApiError(404, "not_found", "workout not found")
+        return await _finish_replay_response(finished, user_id)
     # Значки присваиваются здесь, а не при чтении экрана достижений: тем же
     # вызовом, что и в боте (handlers.workout), с теми же агрегатами. Без него
     # у человека, который пользуется только приложением, сетка достижений не
@@ -1232,6 +1252,29 @@ async def finish_workout(request: Request) -> JSONResponse:
     payload = await _workout_detail_json(workout, user)
     payload["rewards"] = await _finish_rewards_json(workout, user, new_codes, was_backfill)
     _spawn_ai_comment(user_id, workout_id, user, workout)
+    return JSONResponse(payload)
+
+
+async def _finish_replay_response(workout, user_id: int) -> JSONResponse:
+    """Ответ finish для тренировки, которую уже закончили раньше, — та же форма
+    (тренировка + `rewards`), что у первого вызова, плюс `"replayed": true`.
+
+    Честно повторяется только то, что читается из самой тренировки: подходы,
+    упражнения, тоннаж. Новые значки, повышение звания и милестоун — события
+    момента завершения: значки уже присвоены первым вызовом, повышение
+    `rank_promotion` помечает объявленным одноразово, а «N-я тренировка» к этому
+    времени могла уехать вперёд. Сочинять их заново значило бы утверждать то,
+    чего данные не подтверждают, поэтому они пустые. AI-комментарий повторно не
+    заказывается — его уже заказал первый вызов.
+    """
+    user = await db.get_user(user_id)
+    payload = await _workout_detail_json(workout, user)
+    # was_backfill=True здесь — ровно «милестоун не считать» (см. докстринг
+    # _finish_rewards_json): настоящий статус до финиша уже не восстановить.
+    payload["rewards"] = await _finish_rewards_json(
+        workout, user, [], was_backfill=True, announce_rank=False
+    )
+    payload["replayed"] = True
     return JSONResponse(payload)
 
 
@@ -1544,8 +1587,9 @@ async def list_bodyweight(request: Request) -> JSONResponse:
 async def add_bodyweight(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     body = await _json_body(request)
-    weight = float(_require(body, "weight", (int, float)))
-    logged_at = body.get("logged_at") or db.now_iso()
+    weight = common.bodyweight_value(_require(body, "weight", (int, float)))
+    raw_logged_at = body.get("logged_at")
+    logged_at = common.bodyweight_logged_at(raw_logged_at) if raw_logged_at else db.now_iso()
     log_id = await db.add_bodyweight_log(user_id, weight, logged_at)
     return JSONResponse({"id": log_id, "weight": weight, "logged_at": logged_at}, status_code=201)
 
@@ -1556,7 +1600,7 @@ async def update_bodyweight(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     log_id = int(request.path_params["log_id"])
     body = await _json_body(request)
-    weight = float(_require(body, "weight", (int, float)))
+    weight = common.bodyweight_value(_require(body, "weight", (int, float)))
     updated = await db.update_bodyweight_log(log_id, user_id, weight)
     if not updated:
         raise ApiError(404, "not_found", "bodyweight entry not found")

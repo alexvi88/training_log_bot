@@ -1915,3 +1915,99 @@ async def test_retention_drops_old_archive_but_never_the_current_talk(
     assert removed == 1
     assert (await client.get("/ai/conversations/1")).json()["messages"] == []
     assert len((await client.get("/ai/history")).json()["messages"]) == 2
+
+
+# ---------- опросник не теряется на неудачном финальном ходе ----------
+
+
+@pytest.mark.asyncio
+async def test_last_setup_answer_survives_failed_turn_and_retry_succeeds(
+    fresh_db, client_factory, monkeypatch
+):
+    """Последний ответ опросника снимал состояние ДО вызова модели: на сбое
+    модели (502), таймауте или 429 ответы пропадали, и повтор того же ответа
+    получал 409 setup_stale — опросник приходилось проходить заново."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?"))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, goal="набор массы")
+    await client.post("/ai/ask", json={"question": "Собери программу"})
+
+    async def failing_ask(*args, **kwargs):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(ai_trainer, "ask", failing_ask)
+    failed = await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "3 дня"})
+    assert failed.status_code == 502, failed.text
+    state = await fresh_db.get_ai_setup_state(111)
+    assert state is not None and int(state.get("idx") or 0) == 0
+    # Неудачный ход не дописал ответ — повтор не задвоит его.
+    assert not state.get("answers")
+
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program("Программа после опроса"))
+    retry = await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "3 дня"})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["program"]["name"] == "Программа после опроса"
+    assert await fresh_db.get_ai_setup_state(111) is None
+
+
+@pytest.mark.asyncio
+async def test_last_setup_answer_survives_busy_429(fresh_db, client_factory, monkeypatch):
+    import api_v1_ai
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?"))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, goal="набор массы")
+    await client.post("/ai/ask", json={"question": "Собери программу"})
+
+    api_v1_ai._busy.add(111)
+    try:
+        busy = await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "3 дня"})
+    finally:
+        api_v1_ai._busy.discard(111)
+    assert busy.status_code == 429
+    assert await fresh_db.get_ai_setup_state(111) is not None
+
+
+# ---------- фото не остаётся на диске после отказа 400/429 ----------
+
+
+@pytest.mark.asyncio
+async def test_too_long_question_with_photo_leaves_no_file(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    """Фото ложилось на диск до проверки длины вопроса: 400 оставлял файл, о
+    котором никто не знает по имени."""
+    import api_v1_ai
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post(
+        "/ai/ask",
+        json={
+            "image_data_url": _image_data_url(payload=b"\xff\xd8\xff-bytes"),
+            "question": "x" * (api_v1_ai.MAX_QUESTION_LENGTH + 1),
+        },
+    )
+    assert resp.status_code == 400
+    assert list(chat_media_dir.glob("u111_*")) == []
+
+
+@pytest.mark.asyncio
+async def test_busy_photo_question_leaves_no_file(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    import api_v1_ai
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    api_v1_ai._busy.add(111)
+    try:
+        resp = await client.post(
+            "/ai/ask", json={"image_data_url": _image_data_url(payload=b"\xff\xd8\xff-bytes")}
+        )
+    finally:
+        api_v1_ai._busy.discard(111)
+    assert resp.status_code == 429
+    assert list(chat_media_dir.glob("u111_*")) == []
