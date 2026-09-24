@@ -62,15 +62,25 @@ async def move_workout_to_date(workout_id: int, new_date: dt.date) -> None:
       пересчитываются целиком (resync, а не evaluate_after_finish): перенос
       работает в обе стороны — может и достроить серию, и разорвать уже
       засчитанную, — а начисляющий путь умеет только добавлять.
+
+    new_date — календарный день ПОЛЬЗОВАТЕЛЯ (его выбирают в календаре бота и
+    в приложении по местным часам), а started_at хранится по часам сервера,
+    то есть в UTC. Поэтому день подставляется к МЕСТНОМУ времени старта, и
+    результат переводится обратно в UTC. Склейка даты с UTC-временем
+    напрямую уводила тренировку на соседний день у всех, чья местная полночь
+    не совпадает с UTC: утренняя тренировка в UTC+10 (вечер предыдущих суток
+    по UTC) после переноса на 5-е оказывалась 6-го.
     """
     workout = await db.get_workout(workout_id)
     if workout is None:
         return
+    offset = dt.timedelta(hours=await db.user_tz_offset(workout["user_id"]))
     started = dt.datetime.fromisoformat(workout["started_at"])
     finished = (
         dt.datetime.fromisoformat(workout["finished_at"]) if workout["finished_at"] else None
     )
-    new_started = dt.datetime.combine(new_date, started.time())
+    local_started = started + offset
+    new_started = dt.datetime.combine(new_date, local_started.time()) - offset
     shift = new_started - started
     new_finished = (finished + shift).isoformat(timespec="seconds") if finished else None
     await db.update_workout_date(
