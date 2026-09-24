@@ -1688,8 +1688,8 @@ def menu_headline(dashboard) -> str:
 def menu_tiles(
     dashboard, tonnage: float, records: int, unit: str = "kg", total_workouts: int | None = None,
 ) -> list[tuple]:
-    """Плитки под заголовком: всего/за 30 дней одной плиткой, тоннаж, рекорды
-    или неделя. Плитка — (подпись, число) или (подпись, число, приписка).
+    """Плитки под заголовком: всего/за 30 дней одной плиткой, рекорды или
+    неделя. Плитка — (подпись, число) или (подпись, число, приписка).
 
     «Всего» и «за 30 дней» делят одну плитку («148» и мелко «14 за 30 дней»), а
     не две подряд: «ВСЕГО ТРЕНИРОВОК» и «ТРЕНИРОВОК ЗА 30 ДНЕЙ» рядом — тот же счётчик
@@ -1727,10 +1727,12 @@ def menu_tiles(
         )
     else:
         workouts_tile = (i18n.t("dashboard.tile_workouts", window=days_window_label(30)), str(dashboard.last_30_days))
-    tiles: list[tuple] = [
-        workouts_tile,
-        (i18n.t("dashboard.tile_tonnage", window=days_window_label(VOLUME_WINDOW_DAYS)), weight),
-    ]
+    # Плитки тоннажа больше нет — ни в приложении, ни на картинке бота:
+    # владелец убрал её, рядом и так объём по группам за неделю, а «10.7 т»
+    # человеку ничего не говорит. `tonnage` остаётся в сигнатуре для старых
+    # вызовов.
+    del weight
+    tiles: list[tuple] = [workouts_tile]
     if records > 0:
         tiles.append((
             i18n.t("dashboard.tile_records", window=days_window_label(VOLUME_WINDOW_DAYS)),

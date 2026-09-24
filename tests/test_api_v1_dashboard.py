@@ -116,12 +116,8 @@ async def test_dashboard_speaks_the_users_language(fresh_db, client_factory):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lang", ["ru", "en"])
 async def test_app_dashboard_has_no_tonnage_tile(fresh_db, client_factory, lang):
-    """Плитку тоннажа владелец убрал из приложения: на вкладке «Тренировка» рядом
-    и так объём по группам. Картинка сводки в боте её сохраняет — снимается она
-    только в ответе /v1, а не в общем расчёте dashboard_data.collect."""
-    import dashboard_data
-    import i18n
-
+    """Плитку тоннажа владелец убрал: на вкладке «Тренировка» рядом и так объём
+    по группам за неделю."""
     client = await _linked_client(fresh_db, client_factory, lang=lang)
     await _train(111)
 
@@ -129,8 +125,3 @@ async def test_app_dashboard_has_no_tonnage_tile(fresh_db, client_factory, lang)
     labels = [tile["label"].lower() for tile in body["tiles"]]
     assert body["tiles"]
     assert not any("тонн" in label or "tonnage" in label for label in labels), labels
-
-    user = await fresh_db.get_user(111)
-    with i18n.use_lang(lang):
-        data = await dashboard_data.collect(111, user)
-    assert any("тонн" in t[0].lower() or "tonnage" in t[0].lower() for t in data.tiles)

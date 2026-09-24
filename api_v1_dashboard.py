@@ -24,7 +24,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import dashboard_data
-import formatting
 import i18n
 from api_v1_common import authed_user
 
@@ -38,25 +37,11 @@ def _tile_json(tile: tuple) -> dict[str, Any]:
     return {"label": label, "value": value, "sub": sub}
 
 
-def _tonnage_label() -> str:
-    """Подпись плитки тоннажа — та же строка, что собирает formatting.menu_tiles.
-
-    В приложении этой плитки нет: владелец убрал её с вкладки «Тренировка»,
-    там рядом и так объём по группам за неделю. Картинка сводки в боте её
-    сохраняет — поэтому плитка снимается здесь, в ответе /v1, а не в общем
-    расчёте. Зовётся внутри i18n.use_lang — подпись на языке ответа.
-    """
-    return i18n.t(
-        "dashboard.tile_tonnage",
-        window=formatting.days_window_label(formatting.VOLUME_WINDOW_DAYS),
-    )
-
-
 def _dashboard_json(data: dashboard_data.MenuDashboard) -> dict[str, Any]:
     return {
         "headline": data.headline,
         "rank": {"name": data.rank_name, "level": data.rank_level},
-        "tiles": [_tile_json(t) for t in data.tiles if t[0] != _tonnage_label()],
+        "tiles": [_tile_json(t) for t in data.tiles],
         "volume": {
             "title": data.volume_title,
             "rows": [
