@@ -89,6 +89,7 @@
   "api.error.internal_error": "Something broke on my side — try again in a bit.",
   "api.error.unauthorized": "You got signed out — sign in to the app again.",
   "api.error.invalid_apple_token": "Apple didn't confirm the sign-in — try again.",
+  "api.error.invalid_credentials": "Wrong username or password — check them and try again.",
   "api.error.rate_limited": "Too many attempts in the last few minutes. Wait a bit and try again.",
   "api.error.already_linked": "This account is already linked to Telegram.",
   "api.error.not_configured": "That's not available right now — try again later.",

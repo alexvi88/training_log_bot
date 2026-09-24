@@ -89,6 +89,7 @@
   "api.error.internal_error": "Что-то сломалось на моей стороне — попробуй ещё раз чуть позже.",
   "api.error.unauthorized": "Вход слетел — войди в приложение заново.",
   "api.error.invalid_apple_token": "Apple не подтвердил вход — попробуй войти ещё раз.",
+  "api.error.invalid_credentials": "Логин или пароль не подошли — проверь и попробуй ещё раз.",
   "api.error.rate_limited": "Слишком много попыток за последние минуты. Подожди немного и попробуй снова.",
   "api.error.already_linked": "Этот аккаунт уже привязан к Telegram.",
   "api.error.not_configured": "Сейчас это недоступно — попробуй позже.",

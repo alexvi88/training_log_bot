@@ -27,6 +27,7 @@ import re
 from typing import Any, Optional
 
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -55,6 +56,7 @@ import api_v1_sharing
 import api_v1_templates
 import api_v1_voice
 import apple_signin
+import config
 import dashboard_data
 import db
 import formatting
@@ -62,6 +64,7 @@ import history_search_data
 import i18n
 import mcp_oauth
 import parser
+import review_demo
 import seed_data
 import server_timing
 import timeutil
@@ -229,6 +232,38 @@ async def auth_apple(request: Request) -> JSONResponse:
             user_id = new_user["telegram_id"]
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
 
+    return await _issue_token_response(user_id)
+
+
+async def auth_password(request: Request) -> JSONResponse:
+    """Вход по логину и паролю — только для демо-аккаунта App Review
+    (Guideline 2.1(a): ревьюеру нужен логин и пароль от аккаунта с данными).
+    Вся логика — в review_demo.py.
+
+    Тело: {"username": str, "password": str, "lang"?: str}. Ответ — тот же, что
+    у /auth/apple и /auth/link (_issue_token_response), новый токен на каждый
+    вход. Без обоих секретов REVIEW_DEMO_* маршрут отвечает тем же голым 404,
+    что и несуществующий путь: в проде без явной настройки входа по паролю нет.
+
+    Неудачи считаются по адресу клиента, и после
+    review_demo.FAILURE_LIMIT_PER_IP за окно любой ввод — 429, даже верный:
+    иначе лимит не мешал бы перебору, а только замедлял бы его.
+    """
+    if not config.review_demo_available():
+        raise HTTPException(status_code=404)
+    body = await _json_body(request)
+    _set_pre_auth_lang(body, request)
+    username = str(_require(body, "username", str))
+    password = str(_require(body, "password", str))
+    ip = review_demo.client_ip(request)
+    if review_demo.is_rate_limited(ip):
+        raise ApiError(429, "rate_limited", "too many attempts, try again later")
+    if not review_demo.check_credentials(username, password):
+        review_demo.record_failure(ip)
+        raise ApiError(401, "invalid_credentials", "wrong username or password")
+    raw_lang = body.get("lang")
+    lang = raw_lang.strip() if isinstance(raw_lang, str) and raw_lang.strip() else None
+    user_id = await review_demo.ensure_demo_user(lang)
     return await _issue_token_response(user_id)
 
 
@@ -1529,6 +1564,7 @@ routes = [
     Route("/health", health, methods=["GET"]),
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/auth/apple", auth_apple, methods=["POST"]),
+    Route("/auth/password", auth_password, methods=["POST"]),
     Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/push/register", register_push_token, methods=["POST"]),

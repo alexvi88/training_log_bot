@@ -3574,6 +3574,27 @@ async def shift_workout_set_timestamps(workout_id: int, seconds: float) -> None:
         await conn().commit()
 
 
+async def set_set_timestamps(stamps: list[tuple[int, str]]) -> None:
+    """Проставить подходам заданные метки времени (set_id, created_at) одной
+    транзакцией.
+
+    Нужна заполнению демо-аккаунта для App Review (review_demo.py): add_set
+    ставит метку «сейчас», а тренировка лежит в прошлом — без правки все
+    подходы оказались бы позже finished_at, и длительность на карточке
+    (считается по разбегу меток подходов, см. shift_workout_set_timestamps)
+    вышла бы пустой. Сдвиг целой тренировки тут не подходит: подходы,
+    записанные подряд за миллисекунды, так и остались бы одной точкой.
+    """
+    if not stamps:
+        return
+    async with _write_lock:
+        await conn().executemany(
+            "UPDATE sets SET created_at = ? WHERE id = ?",
+            [(created_at, set_id) for set_id, created_at in stamps],
+        )
+        await conn().commit()
+
+
 async def get_workout(workout_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM workouts WHERE id = ?", (workout_id,))
     return await cur.fetchone()
