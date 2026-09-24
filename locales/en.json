@@ -84,6 +84,7 @@
   "achievements.nearest_tons_weight": "{w} to go",
   "achievements.screen_header": "🏆 <b>ACHIEVEMENTS</b> — {got}/{total}",
   "api.error.default": "Something went wrong — try again.",
+  "api.error.ai_consent_required": "I don't pass your data to the AI without your OK — so I can't answer yet. Tap “I agree” on the coach screen or turn it on in Settings.",
   "api.error.bad_request": "I couldn't read that request — update the app and try again.",
   "api.error.not_found": "Can't find that — the screen's stale. Go back and open it again",
   "api.error.internal_error": "Something broke on my side — try again in a bit.",

@@ -199,6 +199,16 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
+# Согласие на передачу данных стороннему AI в приложении (App Store 5.1.2(i),
+# колонка users.ai_consent_at, см. api_v1_ai._require_ai_consent). Выключено по
+# умолчанию, потому что уже выпущенные сборки (1.0 (3)/(4)) о согласии не знают:
+# включи сейчас — и тренер у них молча превратится в 403, а обновить приложение
+# человек может и не успеть. Сборки, которые лист показывают, сами говорят об
+# этом заголовком AI_CONSENT_CLIENT_HEADER — для них проверка работает всегда,
+# независимо от флага. Включать, когда старых сборок в сторе не останется.
+AI_CONSENT_REQUIRED = os.getenv("AI_CONSENT_REQUIRED", "false").lower() == "true"
+AI_CONSENT_CLIENT_HEADER = "X-AI-Consent-Flow"
+
 # Hard ceiling on a single model call. The OpenAI SDK defaults to 600s, which
 # is not a timeout so much as an abandonment: a hung request leaves the user
 # watching "🤔 думаю…" for ten minutes, and the placeholder animation keeps
