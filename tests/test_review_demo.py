@@ -149,7 +149,7 @@ async def test_seeding_creates_history_records_and_is_idempotent(fresh_db):
     now = dt.datetime.now()
     starts = [dt.datetime.fromisoformat(w["started_at"]) for w in items]
     finishes = [dt.datetime.fromisoformat(w["finished_at"]) for w in items]
-    assert all(s < f < now for s, f in zip(starts, finishes))
+    assert all(s < f < now for s, f in zip(starts, finishes, strict=True))
     assert now - max(starts) < dt.timedelta(days=7)
     assert now - min(starts) < dt.timedelta(days=36)
 
@@ -158,17 +158,17 @@ async def test_seeding_creates_history_records_and_is_idempotent(fresh_db):
         detail = (await client.get(f"/workouts/{w['id']}")).json()
         stamps = []
 
-        def walk(node):
+        def walk(node, out):
             if isinstance(node, dict):
                 if "reps" in node and "created_at" in node:
-                    stamps.append(dt.datetime.fromisoformat(node["created_at"]))
+                    out.append(dt.datetime.fromisoformat(node["created_at"]))
                 for v in node.values():
-                    walk(v)
+                    walk(v, out)
             elif isinstance(node, list):
                 for v in node:
-                    walk(v)
+                    walk(v, out)
 
-        walk(detail)
+        walk(detail, stamps)
         assert stamps, detail
         start = dt.datetime.fromisoformat(w["started_at"])
         finish = dt.datetime.fromisoformat(w["finished_at"])
