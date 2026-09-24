@@ -17,11 +17,16 @@ fi
 # каждое изменение базы уходит в Tigris через секунду, а не раз в сутки.
 # Базы на диске нет (новый/умерший volume) — сначала восстанавливаем её
 # из реплики, если реплика есть. Без BUCKET_NAME — как раньше.
+# Одна строка в лог при каждом старте: иначе по `fly logs` не понять, идёт
+# ли бэкап вообще, — без хранилища Litestream молчит, а бот работает как ни
+# в чём не бывало.
 if [ -n "${BUCKET_NAME:-}" ]; then
+  echo "litestream: бэкап базы включён, реплика в Tigris"
   if [ ! -f /data/training_log.db ]; then
     echo "Базы нет на диске — восстанавливаю из Tigris, если там есть реплика"
     litestream restore -if-replica-exists /data/training_log.db
   fi
   exec litestream replicate -exec "python main.py"
 fi
+echo "litestream: BUCKET_NAME не задан — бэкап базы ВЫКЛЮЧЕН"
 exec python main.py
