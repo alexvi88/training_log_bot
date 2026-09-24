@@ -5752,6 +5752,21 @@ async def register_push_token(user_id: int, platform: str, device_token: str) ->
         await conn().commit()
 
 
+async def get_push_token(user_id: int, platform: str = "ios") -> Optional[str]:
+    """Токен устройства пользователя или None — для админской /testpush."""
+    cur = await conn().execute(
+        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = ?", (user_id, platform)
+    )
+    row = await cur.fetchone()
+    return row["device_token"] if row is not None else None
+
+
+async def count_push_tokens(platform: str = "ios") -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM push_tokens WHERE platform = ?", (platform,))
+    row = await cur.fetchone()
+    return int(row[0]) if row is not None else 0
+
+
 async def unregister_push_token(user_id: int, platform: str) -> bool:
     """True, если токен был и его удалили — вызывается при отвязке аккаунта
     в приложении, чтобы не копить мёртвые токены после логаута."""

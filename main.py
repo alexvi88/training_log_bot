@@ -401,6 +401,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
+                BotCommand(command="testpush", description="Проверочный пуш на iOS (админ)"),
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="growth", description="Воронка по источникам (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),

@@ -22,6 +22,7 @@ import activity_log
 import ai_limits
 import announcements
 import api_v1_activity
+import apns
 import config
 import db
 import formatting
@@ -234,6 +235,48 @@ async def _show_pushes_list(target: Message | CallbackQuery, state: FSMContext, 
         await ui.safe_edit(target, text, reply_markup=kb)
     else:
         await target.answer(text, reply_markup=kb)
+
+
+@router.message(Command("testpush"))
+async def cmd_testpush(message: Message, state: FSMContext):
+    """Проверочный пуш на iOS прямо сейчас: `/testpush` — себе, `/testpush
+    <user_id>` — на телефон этого пользователя. Нужен, чтобы убедиться, что
+    вся цепочка живая — секреты APNs, HTTP/2, токен устройства, — не дожидаясь
+    настоящего повода для пуша. Отвечает, на каком шаге оборвалось."""
+    if not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    parts = (message.text or "").split()
+    target = message.from_user.id
+    if len(parts) > 1:
+        try:
+            target = int(parts[1])
+        except ValueError:
+            await message.answer("Формат: /testpush или /testpush <user_id>")
+            return
+    if not apns.is_configured():
+        await message.answer(
+            "❌ APNs не настроен: нужны APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID и APNS_BUNDLE_ID."
+        )
+        return
+    token = await db.get_push_token(target)
+    if token is None:
+        total = await db.count_push_tokens()
+        await message.answer(
+            f"❌ У пользователя {target} нет iOS-токена. Открой приложение, разреши "
+            f"уведомления и войди — токен придёт сам. iOS-токенов в базе всего: {total}."
+        )
+        return
+    ok = await apns.send_alert(
+        target, token, "Проверка пушей", "ПРИВЕТ АТЛЕТ! Если ты это читаешь — пуши доходят.",
+        category="admin_test",
+    )
+    if ok:
+        await message.answer(f"✅ Apple принял пуш для {target} ({config.APNS_ENV}). Смотри телефон.")
+    else:
+        await message.answer(
+            "❌ Apple пуш не принял. Причина — в логах: fly logs -a training-log-bot | grep -i apns"
+        )
 
 
 @router.message(Command("pushes"))
