@@ -228,6 +228,7 @@
   "btn.connection_code": "🔗 Код для подключения",
   "btn.copy_address": "🌐 Скопировать адрес",
   "btn.copy_code": "🔗 Скопировать код",
+  "btn.copy_code": "📋 Скопировать код",
   "btn.copy_token": "🔑 Скопировать токен",
   "btn.correct_it": "✏️ Поправить",
   "btn.create_all_remaining": "➕ Создать все остальные ({n})",

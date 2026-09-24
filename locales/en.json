@@ -228,6 +228,7 @@
   "btn.connection_code": "🔗 Connection code",
   "btn.copy_address": "🌐 Copy address",
   "btn.copy_code": "🔗 Copy code",
+  "btn.copy_code": "📋 Copy code",
   "btn.copy_token": "🔑 Copy token",
   "btn.correct_it": "✏️ Fix it",
   "btn.create_all_remaining": "➕ Create all the rest ({n})",
