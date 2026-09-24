@@ -296,6 +296,14 @@ def test_a_flat_result_is_not_growth():
     assert formatting.menu_lift_tiles([("Жим", 100.0, 100.0)]) == []
 
 
+def test_growth_that_rounds_to_zero_percent_is_not_a_tile():
+    """Прибавка в доли килограмма больше базы, но на плитке была бы «+0%»."""
+    assert formatting.menu_lift_tiles([("Жим", 227.0, 227.4)]) == []
+    assert formatting.menu_lift_tiles([("Присед", 200.0, 202.0)]) == [
+        ("ПРИСЕД", "+1%", "202кг vs 200кг")
+    ]
+
+
 def test_a_movement_without_a_baseline_is_dropped():
     """До окна упражнения не было вовсе — не с чем сравнивать рост, и «e1RM внутри
     окна вырос с нуля» — не факт, который стоит показывать плиткой."""
