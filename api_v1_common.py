@@ -424,6 +424,82 @@ def set_weight(value: Any, field: str = "weight") -> float:
     return weight
 
 
+# Пояс в users.tz_offset — целые часы, и тот же диапазон, что у пикера бота
+# (keyboards.timezone_picker_keyboard) и PATCH /settings: UTC-11 … UTC+14.
+TZ_OFFSET_MIN, TZ_OFFSET_MAX = -11, 14
+# Настоящие офсеты устройства в минутах: от UTC-12:00 до UTC+14:00.
+_DEVICE_TZ_MINUTES_MIN, _DEVICE_TZ_MINUTES_MAX = -12 * 60, 14 * 60
+
+
+def device_tz_offset_hours(value: Any) -> Optional[int]:
+    """Офсет устройства в минутах (TimeZone.secondsFromGMT / 60 у iOS) → часы
+    для users.tz_offset, или None, если прислано не целое число в разумных
+    границах.
+
+    Модель пояса — целые часы (timeutil, db._local_day), поэтому получасовые
+    пояса округляются до ближайшего часа, половина — вверх: Индия (+5:30) → +6,
+    Непал (+5:45) → +6, Ньюфаундленд (-3:30) → -3. Сутки у такого человека
+    режутся с ошибкой в полчаса, а не в несколько часов, как с чужим дефолтом
+    config.DEFAULT_TZ_OFFSET. Клиент (DeviceTimeZone.swift в приложении)
+    округляет так же, чтобы сравнивать с tz_offset из /settings.
+    """
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    if not _DEVICE_TZ_MINUTES_MIN <= value <= _DEVICE_TZ_MINUTES_MAX:
+        return None
+    hours = (value + 30) // 60
+    return max(TZ_OFFSET_MIN, min(TZ_OFFSET_MAX, hours))
+
+
+def bodyweight_value(value: Any, field: str = "weight") -> float:
+    """Вес тела из тела запроса — та же жёсткая граница, что у ввода веса в боте
+    (parser.parse_bodyweight: больше нуля и меньше _BODYWEIGHT_HARD_MAX) и тот
+    же текст. Без неё POST/PATCH /bodyweight принимали 0, -80 и 10^9, и такая
+    запись навсегда кривила график. Мягкий переспрос «точно 8 кг?» — дело
+    клиента (BodyweightViewModel.implausibilityWarning), здесь только отказ
+    невозможному."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ApiError(400, "bad_request", f"{field} must be a number", key="input.bodyweight_invalid")
+    weight = float(value)
+    # Сравнение «внутри», а не «снаружи»: NaN (json.loads его принимает) не
+    # проходит ни одну из двух половин и тоже отлетает.
+    if not (0 < weight < parser._BODYWEIGHT_HARD_MAX):
+        raise ApiError(
+            400, "bad_request",
+            f"{field} must be greater than 0 and less than {parser._BODYWEIGHT_HARD_MAX:.0f}",
+            key="input.bodyweight_out_of_range",
+        )
+    return weight
+
+
+# Запас на «завтра» у метки взвешивания: клиент шлёт своё местное время, а у
+# UTC+14 оно на 14 часов впереди серверного UTC — старые сборки приложения
+# так и пишут местный полдень выбранного дня.
+_LOGGED_AT_FUTURE_SLACK = dt.timedelta(days=1)
+
+
+def bodyweight_logged_at(value: Any, field: str = "logged_at") -> str:
+    """Метка взвешивания из тела запроса → наивный UTC ISO (как всё в базе).
+
+    Раньше строка ложилась в базу как пришла, любая: «вчера», «abc» — и потом
+    `fromisoformat` у графика в боте падал на ней целым экраном. Метка с
+    поясом (`...Z`, `+03:00`) приводится к UTC; без пояса считается уже UTC —
+    так её и шлёт приложение. Запись из далёкого будущего — тоже опечатка, а
+    не взвешивание."""
+    if not isinstance(value, str):
+        raise ApiError(400, "bad_request", f"{field} must be an ISO 8601 string")
+    try:
+        moment = dt.datetime.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", f"{field} must be an ISO 8601 datetime") from exc
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    if moment > now + _LOGGED_AT_FUTURE_SLACK:
+        raise ApiError(400, "bad_request", f"{field} is in the future")
+    return moment.isoformat(timespec="seconds")
+
+
 def set_reps(value: Any, field: str = "reps") -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ApiError(400, "bad_request", f"{field} must be a positive int", key="input.reps_zero")

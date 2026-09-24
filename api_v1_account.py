@@ -41,7 +41,7 @@ _UNITS = ("kg", "lb")
 _FORMULAS = ("epley", "brzycki")
 # Тот же диапазон, что у keyboards.timezone_picker_keyboard: UTC-11 … UTC+14 —
 # весь обитаемый диапазон офсетов, не более широкий и не более узкий.
-_TZ_MIN, _TZ_MAX = -11, 14
+_TZ_MIN, _TZ_MAX = common.TZ_OFFSET_MIN, common.TZ_OFFSET_MAX
 
 # Булевы тумблеры экрана настроек — имя в JSON совпадает с колонкой в users,
 # так что и сериализация, и валидация PATCH идут одним циклом по этому списку.
@@ -72,6 +72,10 @@ def _settings_json(user) -> dict[str, Any]:
         "unit": user["unit"],
         "lang": user["lang"],
         "tz_offset": user["tz_offset"],
+        # Выбрал ли человек пояс сам (пикер здесь или в боте). Пока нет —
+        # приложение подтягивает пояс телефона (device_tz_offset_minutes в
+        # PATCH), выбранный руками не трогает никогда.
+        "tz_set_by_user": bool(user["tz_set_by_user"]),
         "e1rm_formula": user["e1rm_formula"],
         **{field: bool(user[field]) for field in _BOOL_FIELDS},
     }
@@ -220,6 +224,22 @@ async def update_settings(request: Request) -> JSONResponse:
             raise ApiError(400, "bad_request", f"tz_offset must be between {_TZ_MIN} and {_TZ_MAX}")
         new_tz = raw_tz
 
+    # Пояс телефона, который приложение шлёт само, без участия человека, —
+    # в отличие от tz_offset (пикер): применяется только пока пояс не выбран
+    # руками (users.tz_set_by_user) и отметку «выбран» не ставит. Явный
+    # tz_offset в том же теле важнее. Иначе аккаунт, заведённый с
+    # config.DEFAULT_TZ_OFFSET (+3), так и жил бы по Москве, где бы ни был
+    # телефон.
+    device_tz: Optional[int] = None
+    if "device_tz_offset_minutes" in body:
+        device_tz = common.device_tz_offset_hours(body["device_tz_offset_minutes"])
+        if device_tz is None:
+            raise ApiError(
+                400, "bad_request", "device_tz_offset_minutes must be int between -720 and 840"
+            )
+        if new_tz is not None or user["tz_set_by_user"]:
+            device_tz = None
+
     new_formula: Optional[str] = None
     if "e1rm_formula" in body:
         new_formula = body["e1rm_formula"]
@@ -250,6 +270,8 @@ async def update_settings(request: Request) -> JSONResponse:
     plain_updates: dict[str, Any] = dict(bool_updates)
     if new_tz is not None:
         plain_updates["tz_offset"] = new_tz
+    elif device_tz is not None:
+        plain_updates["tz_offset"] = device_tz
     if new_formula is not None:
         plain_updates["e1rm_formula"] = new_formula
     if plain_updates:
@@ -259,6 +281,10 @@ async def update_settings(request: Request) -> JSONResponse:
         # сдвиг пояса может подвинуть тренировку в соседние сутки и поменять
         # набор стрик-значков, ровно как в handlers.settings.settings_timezone_set.
         await db.mark_tz_set_by_user(user_id)
+        await achievement_sync.resync(user_id)
+    elif device_tz is not None and device_tz != user["tz_offset"]:
+        # Тот же пересчёт значков, что и у ручной смены пояса выше, но без
+        # отметки «выбрал сам».
         await achievement_sync.resync(user_id)
 
     user = await db.get_user(user_id)

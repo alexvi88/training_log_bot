@@ -28,6 +28,7 @@ api_v1_achievements и api_v1_dashboard. Без обёртки языком от
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any, Optional
 
 from starlette.requests import Request
@@ -41,6 +42,7 @@ import i18n
 import keyboards
 import progress_data
 import progression_data
+import timeutil
 from api_v1_common import ApiError, authed_user, authed_user_id, query_int
 
 # Потолок `limit`. Бот под кнопкой «все» шлёт 9999 (keyboards.progress_chart_keyboard),
@@ -58,6 +60,12 @@ async def _owned_exercise(exercise_id: int, user_id: int):
     if exercise is None or exercise["user_id"] != user_id:
         raise ApiError(404, "not_found", "exercise not found")
     return exercise
+
+
+def _local_date(started_at: str, user) -> str:
+    """YYYY-MM-DD того дня, которым тренировка значится у атлета — тот же
+    сдвиг на users.tz_offset, что у истории и календаря (db._local_day)."""
+    return timeutil.to_user_local(dt.datetime.fromisoformat(started_at), user).date().isoformat()
 
 
 def _point_value(value: float, is_bodyweight: bool) -> float | int:
@@ -182,7 +190,10 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
             "unit": None if series.is_bodyweight else formatting.unit_label(user["unit"]),
             "points": [
                 {
-                    "date": s.started_at[:10],
+                    # Местный день атлета, а не UTC-дата строки: приложение
+                    # читает поле календарным днём, и вечерняя тренировка у
+                    # UTC-5 (или утренняя у UTC+10) вставала точкой на соседний.
+                    "date": _local_date(s.started_at, user),
                     "workout_id": s.workout_id,
                     "value": value,
                     "top_set": (

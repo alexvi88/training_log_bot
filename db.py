@@ -1850,7 +1850,9 @@ async def _next_synthetic_telegram_id(db: aiosqlite.Connection) -> int:
     return (current_min - 1) if current_min is not None else SYNTHETIC_TELEGRAM_ID_START
 
 
-async def create_app_only_user(language_code: Optional[str] = None) -> aiosqlite.Row:
+async def create_app_only_user(
+    language_code: Optional[str] = None, tz_offset: Optional[int] = None
+) -> aiosqlite.Row:
     """Завести аккаунт из приложения, без единого сообщения в Telegram — вход
     через Sign in with Apple, когда этот Apple ID ещё никому не известен и
     код бота никто не присылал (см. api_v1.auth_apple).
@@ -1859,6 +1861,11 @@ async def create_app_only_user(language_code: Optional[str] = None) -> aiosqlite
     `_write_lock`: иначе два параллельных запроса на регистрацию успели бы
     прочитать один и тот же MIN(telegram_id) и попытаться завести двух
     пользователей с одинаковым синтетическим id.
+
+    `tz_offset` — пояс телефона (целые часы), если приложение его прислало;
+    без него — config.DEFAULT_TZ_OFFSET, как раньше. tz_set_by_user при этом
+    остаётся 0: пояс не выбран человеком, и приложение вправе поправить его
+    по телефону позже (api_v1_account.update_settings, device_tz_offset_minutes).
     """
     db = conn()
     async with _write_lock:
@@ -1873,7 +1880,7 @@ async def create_app_only_user(language_code: Optional[str] = None) -> aiosqlite
                 now_iso(),
                 config.DEFAULT_UNIT,
                 config.DEFAULT_E1RM_FORMULA,
-                config.DEFAULT_TZ_OFFSET,
+                config.DEFAULT_TZ_OFFSET if tz_offset is None else int(tz_offset),
                 i18n.normalize(language_code),
             ),
         )
@@ -3718,7 +3725,7 @@ async def list_workouts(
 ) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM workouts WHERE user_id = ? AND status = ? "
-        "ORDER BY started_at DESC LIMIT ? OFFSET ?",
+        "ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?",
         (user_id, status, limit, offset),
     )
     return await cur.fetchall()
@@ -3782,7 +3789,7 @@ async def search_workouts_by_exercise(
         "JOIN exercises e ON e.id = be.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
         f"  AND {match} "
-        "ORDER BY w.started_at DESC LIMIT ? OFFSET ?",
+        "ORDER BY w.started_at DESC, w.id DESC LIMIT ? OFFSET ?",
         (user_id, *match_params, limit, offset),
     )
     return await cur.fetchall()

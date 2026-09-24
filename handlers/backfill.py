@@ -105,7 +105,10 @@ async def _date_chosen(event, state: FSMContext, date: dt.date):
     else:
         sent = await event.answer(greeting)
 
-    started_at = f"{date.isoformat()}T12:00:00"
+    # Не голый полдень UTC: у UTC+13/+14 он по местному уже на следующих сутках,
+    # и тренировка вставала в историю не тем днём (см. timeutil.backdated_moment).
+    user = await db.get_user(event.from_user.id)
+    started_at = timeutil.backdated_moment(date, timeutil.offset_hours(user))
     workout_id = await db.create_workout(event.from_user.id, started_at=started_at, status="backfill")
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,

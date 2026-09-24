@@ -73,14 +73,19 @@ async def test_move_workout_date_keeps_duration_and_drops_ai_comment(fresh_db, c
     before = await view_builder.workout_duration_seconds(await fresh_db.get_workout(workout_id))
     assert before == 55 * 60
 
-    new_date = (started - dt.timedelta(days=3)).date()
+    # Дата переноса — календарный день атлета (workout_edit_data.
+    # move_workout_to_date), а не UTC: с UTC-датой тест падал каждый вечер
+    # после 21:00 UTC, когда у дефолтного +3 уже следующие сутки.
+    user = await fresh_db.get_user(111)
+    new_date = (timeutil.to_user_local(started, user) - dt.timedelta(days=3)).date()
     resp = await client.patch(
         f"/workouts/{workout_id}/date", json={"date": new_date.isoformat()}
     )
     assert resp.status_code == 200, resp.text
 
     workout = await fresh_db.get_workout(workout_id)
-    assert dt.datetime.fromisoformat(workout["started_at"]).date() == new_date
+    moved = dt.datetime.fromisoformat(workout["started_at"])
+    assert timeutil.to_user_local(moved, user).date() == new_date
     assert await view_builder.workout_duration_seconds(workout) == before
     assert workout["ai_comment"] is None
 
