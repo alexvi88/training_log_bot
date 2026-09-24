@@ -84,6 +84,14 @@ def _host() -> str:
     )
 
 
+def sign_es256_jwt(claims: dict, private_key_p8: str, key_id: str) -> str:
+    """ES256 JWT, подписанный ключом .p8 из Apple Developer, с "kid" в
+    заголовке — общий для provider-токена APNs и client_secret Sign in with
+    Apple (apple_signin._client_secret): Apple требует одну и ту же форму
+    подписи, различаются только поля в теле."""
+    return jwt.encode(claims, private_key_p8, algorithm="ES256", headers={"kid": key_id})
+
+
 def _provider_token_jwt() -> str:
     """JWT ES256 provider-токена — подписывается заново только когда кэш
     истёк (см. _PROVIDER_TOKEN_TTL_SECONDS), не на каждый вызов."""
@@ -91,11 +99,8 @@ def _provider_token_jwt() -> str:
     now = time.time()
     if _provider_token is not None and now - _provider_token_issued_at < _PROVIDER_TOKEN_TTL_SECONDS:
         return _provider_token
-    _provider_token = jwt.encode(
-        {"iss": config.APNS_TEAM_ID, "iat": int(now)},
-        config.APNS_KEY_P8,
-        algorithm="ES256",
-        headers={"kid": config.APNS_KEY_ID},
+    _provider_token = sign_es256_jwt(
+        {"iss": config.APNS_TEAM_ID, "iat": int(now)}, config.APNS_KEY_P8, config.APNS_KEY_ID
     )
     _provider_token_issued_at = now
     return _provider_token

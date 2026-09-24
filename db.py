@@ -708,6 +708,13 @@ CREATE TABLE IF NOT EXISTS auth_identities (
     provider_user_id TEXT NOT NULL,   -- Apple: стабильный "sub" из identity token
     email TEXT,                       -- Apple отдаёт email только при первом входе
     created_at TEXT NOT NULL,
+    -- Токены Apple из обмена кода авторизации (apple_signin.exchange_
+    -- authorization_code) — нужны ровно для одного: отозвать их при удалении
+    -- аккаунта (требование Apple, TN3194). NULL — обмена не было (сервер без
+    -- APPLE_SIWA_*, старая сборка приложения без кода, сбой Apple).
+    refresh_token TEXT,
+    access_token TEXT,
+    tokens_updated_at TEXT,
     UNIQUE(provider, provider_user_id)
 );
 
@@ -1310,6 +1317,15 @@ async def _migrate_schema() -> None:
         # вложения вообще (фото/видео уезжали в модель и терялись, см.
         # докстринг chat_attachments.py) — им и остаться NULL.
         await _conn.execute("ALTER TABLE ai_conversation_turns ADD COLUMN image_path TEXT")
+
+    identity_cols = await _column_names("auth_identities")
+    if "refresh_token" not in identity_cols:
+        # Токены Apple для отзыва при удалении аккаунта (см. схему выше). У
+        # старых привязок их нет и взять неоткуда — появятся на следующем
+        # входе через Apple из сборки, которая шлёт код авторизации.
+        await _conn.execute("ALTER TABLE auth_identities ADD COLUMN refresh_token TEXT")
+        await _conn.execute("ALTER TABLE auth_identities ADD COLUMN access_token TEXT")
+        await _conn.execute("ALTER TABLE auth_identities ADD COLUMN tokens_updated_at TEXT")
 
     # Игр больше нет, но таблица game_results в схеме осталась (см. SCHEMA) —
     # старые БД доводим до той же формы, что и новые.
@@ -5648,6 +5664,38 @@ async def resolve_auth_identity(provider: str, provider_user_id: str) -> Optiona
     )
     row = await cur.fetchone()
     return row["user_id"] if row else None
+
+
+async def set_auth_identity_tokens(
+    provider: str,
+    provider_user_id: str,
+    refresh_token: Optional[str],
+    access_token: Optional[str],
+) -> None:
+    """Запомнить токены провайдера у уже привязанной личности (Apple: ответ
+    /auth/token на код авторизации). Пишется только свежая пара целиком:
+    новый вход выдаёт новый refresh_token, и отзывать при удалении надо его,
+    а не тот, что остался от прошлого входа."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE auth_identities SET refresh_token = ?, access_token = ?, "
+            "tokens_updated_at = ? WHERE provider = ? AND provider_user_id = ?",
+            (refresh_token, access_token, now_iso(), provider, provider_user_id),
+        )
+        await conn().commit()
+
+
+async def auth_identity_tokens_for_user(user_id: int, provider: str) -> list[dict]:
+    """Токены провайдера у всех личностей этого аккаунта — только строки, где
+    есть хоть один токен. Список, а не одна строка: к одному аккаунту могли
+    привязать больше одного Apple ID (пересвязка кодом бота)."""
+    cur = await conn().execute(
+        "SELECT provider_user_id, refresh_token, access_token FROM auth_identities "
+        "WHERE user_id = ? AND provider = ? "
+        "AND (refresh_token IS NOT NULL OR access_token IS NOT NULL)",
+        (user_id, provider),
+    )
+    return [dict(row) for row in await cur.fetchall()]
 
 
 # ---------- связка app-only аккаунта с реальным Telegram (слияние) ----------
