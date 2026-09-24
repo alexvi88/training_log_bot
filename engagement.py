@@ -113,6 +113,11 @@ class PushDecision:
     # win_back, newbie_nudge) оставляют его пустым — их push.ios.* тексты
     # тоже без параметров.
     ios_params: dict = field(default_factory=dict)
+    # Данные для маршрута по тапу на iOS-баннер (push_ios.ios_route), которых
+    # нет в самой категории: у плато — какое упражнение открыть
+    # (exercise_id/exercise_name). Остальные категории ведут на свой экран
+    # без параметров и оставляют его пустым.
+    ios_route_params: dict = field(default_factory=dict)
 
 
 # Кнопка — последняя строка пуша, и она должна договаривать реплику тренера,
@@ -259,7 +264,9 @@ async def _find_rank_near(
     return rank_near_missing(total_workouts, tonnage_kg, per_week)
 
 
-async def _find_plateau_exercise(telegram_id: int) -> Optional[str]:
+async def _find_plateau_exercise(telegram_id: int) -> Optional[tuple[int, str]]:
+    """(id, имя для показа) первого упражнения на плато, или None. id нужен
+    iOS-баннеру: тап по нему открывает график именно этого упражнения."""
     for ex in await db.list_user_exercises(telegram_id):
         rows = await db.list_sets_for_exercise(ex["id"])
         if len(rows) < PLATEAU_SESSIONS:
@@ -270,7 +277,7 @@ async def _find_plateau_exercise(telegram_id: int) -> Optional[str]:
         ]
         sessions = analytics.group_sets_by_session(set_rows)
         if is_plateau(sessions):
-            return ex["display_name"]
+            return ex["id"], ex["display_name"]
     return None
 
 
@@ -326,10 +333,14 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             )
 
     if today.weekday() == 6:  # Sunday
-        exercise_name = await _find_plateau_exercise(telegram_id)
-        if exercise_name:
+        plateau = await _find_plateau_exercise(telegram_id)
+        if plateau is not None:
+            exercise_id, exercise_name = plateau
             text = await push_texts.pick_text(telegram_id, push_texts.PLATEAU, exercise=exercise_name)
-            return PushDecision(push_texts.PLATEAU, text, ios_params={"exercise": exercise_name})
+            return PushDecision(
+                push_texts.PLATEAU, text, ios_params={"exercise": exercise_name},
+                ios_route_params={"exercise_id": exercise_id, "exercise_name": exercise_name},
+            )
 
         since = (today - dt.timedelta(days=DIGEST_LOOKBACK_DAYS)).isoformat()
         tonnage = await db.tonnage_since(telegram_id, since)
@@ -464,7 +475,10 @@ async def _send_apns_push(telegram_id: int, decision: PushDecision) -> None:
     title, body = await push_ios.ios_alert(
         telegram_id, decision.category, i18n.get_lang(), **decision.ios_params
     )
-    await apns.send_alert(telegram_id, device_token, title, body, category=decision.category)
+    route = push_ios.ios_route(decision.category, **decision.ios_route_params)
+    await apns.send_alert(
+        telegram_id, device_token, title, body, category=decision.category, route=route
+    )
 
 
 async def _deliver(

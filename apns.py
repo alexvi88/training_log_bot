@@ -131,7 +131,13 @@ def _reason(response: httpx.Response) -> str:
 
 
 async def send_alert(
-    user_id: int, device_token: str, title: str, body: str, *, category: Optional[str] = None
+    user_id: int,
+    device_token: str,
+    title: str,
+    body: str,
+    *,
+    category: Optional[str] = None,
+    route: Optional[dict] = None,
 ) -> bool:
     """Отправить один alert-пуш. Никогда не бросает исключение — падение
     APNs не должно ронять вызывающий код (тот же контракт, что у
@@ -147,6 +153,13 @@ async def send_alert(
     предыдущий непрочитанный баннер вместо того, чтобы копить их в Центре
     уведомлений — та же идея, что db.has_push_today на телеграмной стороне
     (один пуш категории видимым слотом), только на уровне отображения.
+
+    `route` — куда приложение ведёт по тапу на баннер (push_ios.ios_route):
+    кладётся ключом `route` рядом с `aps`, вне него — `aps` зарезервирован
+    Apple, а свои ключи верхнего уровня приложение получает в `userInfo`
+    как есть. None — ключа нет вовсе, и приложение по тапу ведёт себя как
+    до маршрутов (просто открывается), так что старые сборки его не
+    замечают.
     """
     if not is_configured():
         return False
@@ -166,7 +179,9 @@ async def send_alert(
         # всякий случай, а не полагаемся на то, что так будет всегда.
         headers["apns-collapse-id"] = category[:64]
 
-    payload = {"aps": {"alert": {"title": title, "body": body}}}
+    payload: dict = {"aps": {"alert": {"title": title, "body": body}}}
+    if route:
+        payload["route"] = route
     url = f"{_host()}/3/device/{device_token}"
 
     try:
