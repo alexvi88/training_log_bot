@@ -1178,11 +1178,24 @@ async def finish_workout(request: Request) -> JSONResponse:
     # с часов сервера: иначе тренировка за прошлый вторник закончилась бы
     # сегодня и растянулась в истории на неделю.
     started_at = dt.datetime.fromisoformat(workout["started_at"])
-    finished_at = (
-        f"{started_at.date().isoformat()}{BACKFILL_HOUR}"
-        if workout["status"] == "backfill"
-        else None
+    # `backdated` — «Завершить задним числом» на предупреждении о зависшей
+    # тренировке, то же, что кнопка бота (handlers.workout.stale_finish_workout)
+    # и по тому же правилу db.backdated_finished_at. Без него приложение
+    # закрывало вчерашнюю тренировку текущим моментом: 20+ часов в истории и
+    # значки за длительность. Поле необязательное — старые сборки его не шлют
+    # и закрывают «сейчас», как и раньше. У занесения задним числом своё
+    # время окончания, и флаг его не трогает.
+    backdated = (
+        body.get("backdated") is not None
+        and _require(body, "backdated", bool)
+        and workout["status"] == "active"
     )
+    if workout["status"] == "backfill":
+        finished_at = f"{started_at.date().isoformat()}{BACKFILL_HOUR}"
+    elif backdated:
+        finished_at = db.backdated_finished_at(workout)
+    else:
+        finished_at = None
     await db.delete_empty_blocks(workout_id)
     # Пустая тренировка не сохраняется — она удаляется, ровно как в боте
     # (handlers.workout, сообщение workout.empty_deleted). Строка «Без
@@ -1203,8 +1216,11 @@ async def finish_workout(request: Request) -> JSONResponse:
     # Длительности у занесения задним числом нет и быть не может — форму
     # заполняют потом, — поэтому `None`: значки «за длинную тренировку»
     # такая запись честно не получает, ровно как в боте.
+    #
+    # У закрытой задним числом — тоже `None`, как у бота: реальный конец
+    # неизвестен, и нулевая длительность соврала бы не меньше суточной.
     duration_seconds = None
-    if workout["status"] == "active" and workout["started_at"]:
+    if workout["status"] == "active" and workout["started_at"] and not backdated:
         finished = dt.datetime.fromisoformat((await db.get_workout(workout_id))["finished_at"])
         duration_seconds = (finished - started_at).total_seconds()
     new_codes = await achievement_sync.evaluate_after_finish(
