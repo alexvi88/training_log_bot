@@ -415,13 +415,17 @@ async def _find_block_for_exercise(workout_id: int, exercise_id: int) -> Optiona
 
 
 def _require_finished(workout) -> None:
-    """Эти три ручки — ровно то, что в боте живёт под «✏️ Правка» уже
+    """Эти ручки — ровно то, что в боте живёт под «✏️ Правка» уже
     завершённой тренировки (handlers.edit_workout). Для активной/заносимой
     задним числом тренировки есть свой путь записи — POST /workouts/{id}/sets
     (api_v1.log_set) — со своей семантикой (например, автосоздание блока без
     подтверждения). Держать их разделёнными, а не одной веткой на все статусы,
     — чтобы не плодить неочевидные условные ветки в двух разных местах ради
-    одного и того же эндпоинта."""
+    одного и того же эндпоинта.
+
+    Удаление упражнения целиком (remove_workout_exercise) под это правило не
+    попадает: своего пути для идущей тренировки у него нет, а меняет оно
+    данные одинаково при любом статусе — разный только хвост."""
     if workout["status"] != "finished":
         raise ApiError(409, "workout_active", "only a finished workout can be edited this way")
 
@@ -480,22 +484,38 @@ async def add_workout_set(request: Request) -> JSONResponse:
 
 
 async def remove_workout_exercise(request: Request) -> JSONResponse:
-    """Убрать упражнение из уже завершённой тренировки целиком, вместе со всеми
-    его подходами — «🗑 Удалить упражнение» → подтверждение на экране правки в
-    боте (handlers.edit_workout.editw_remove_exercise). Подтверждение — дело
-    клиентского UI (это необратимо и может унести не один подход), сам эндпоинт
-    его не переспрашивает."""
+    """Убрать упражнение из тренировки целиком, вместе со всеми его подходами.
+
+    Завершённая тренировка — «🗑 Удалить упражнение» → подтверждение на экране
+    правки в боте (handlers.edit_workout.editw_remove_exercise), с тем же
+    хвостом `on_workout_edited`: пустые блоки, сброс AI-комментария, пересчёт
+    значков.
+
+    Идущая (`active`) и заносимая задним числом (`backfill`) — та же ручка, а не
+    отдельная: данные меняются ровно так же, различается только хвост. Значки и
+    AI-комментарий у незавершённой тренировки ещё не посчитаны (их считает
+    завершение), поэтому хвоста нет вовсе; `delete_empty_blocks` тоже не зовётся
+    — пустой блок идущей тренировки — это упражнение, открытое в боте, а не
+    мусор. Блок самого упражнения снимает `db.remove_exercise_from_workout`,
+    напарника по суперсету не трогает.
+
+    Идемпотентна: упражнения уже нет в этой тренировке (двойной тап, повтор
+    после оборванного ответа, упражнение, чьи подходы так и не доехали до
+    сервера) — 200 с `deleted: false`, а не ошибка. 404 — только чужая или
+    несуществующая тренировка/упражнение. Подтверждение — дело клиентского UI
+    (это необратимо и может унести не один подход), сам эндпоинт его не
+    переспрашивает."""
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     exercise_id = int(request.path_params["exercise_id"])
     workout = await _owned_workout(workout_id, user_id)
-    _require_finished(workout)
-    block_id = await _find_block_for_exercise(workout_id, exercise_id)
-    if block_id is None:
-        raise ApiError(404, "not_found", "exercise not found in this workout")
-    await db.delete_block_and_sets(block_id)
-    await on_workout_edited(workout_id)
-    return JSONResponse({"deleted": True})
+    exercise = await db.get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != user_id:
+        raise ApiError(404, "not_found", "exercise not found")
+    removed = await db.remove_exercise_from_workout(workout_id, exercise_id)
+    if removed and workout["status"] == "finished":
+        await on_workout_edited(workout_id)
+    return JSONResponse({"deleted": bool(removed)})
 
 
 async def delete_workout(request: Request) -> JSONResponse:
