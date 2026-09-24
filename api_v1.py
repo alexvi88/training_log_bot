@@ -203,6 +203,10 @@ async def auth_apple(request: Request) -> JSONResponse:
     Необязательное `tz_offset_minutes` (int, офсет телефона от UTC в минутах) —
     пояс того же НОВОГО аккаунта (см. common.device_tz_offset_hours); кривое
     значение молча игнорируется, вход из-за него не срывается.
+    Необязательное `authorization_code` (строка из
+    `ASAuthorizationAppleIDCredential.authorizationCode`) — сервер меняет его
+    на refresh_token для отзыва при удалении аккаунта (apple_signin); без
+    настроенного APPLE_SIWA_KEY_ID поле игнорируется.
     """
     body = await _json_body(request)
     _set_pre_auth_lang(body, request)
@@ -239,6 +243,15 @@ async def auth_apple(request: Request) -> JSONResponse:
             )
             user_id = new_user["telegram_id"]
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
+
+    # Код авторизации → refresh_token, чтобы при удалении аккаунта отозвать
+    # его у Apple (TN3194). Необязательный: старые сборки его не шлют, а
+    # сбой обмена вход не срывает (exchange_authorization_code не бросает).
+    authorization_code = body.get("authorization_code")
+    if isinstance(authorization_code, str) and authorization_code.strip():
+        await apple_signin.exchange_authorization_code(
+            identity.apple_user_id, authorization_code.strip()
+        )
 
     return await _issue_token_response(user_id)
 

@@ -33,6 +33,45 @@ fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"
 (`config.mcp_available`), а приложению он нужен. Когда будет свой домен —
 поменять на него.
 
+### Отзыв токенов Sign in with Apple при удалении аккаунта
+
+Apple требует (TN3194): приложение с Sign in with Apple и удалением аккаунта
+при удалении отзывает токены Apple. Сервер меняет одноразовый код из
+приложения на refresh_token (`apple_signin.exchange_authorization_code`) и
+отзывает его в `account_deletion.delete_account`. Пока `APPLE_SIWA_KEY_ID`
+не задан, сервер к Apple не ходит вовсе — вход и удаление работают как раньше.
+Сбой Apple не срывает ни вход, ни удаление: только строка в логе.
+
+Нужен ключ .p8 с включённым Sign in with Apple: Apple Developer →
+Certificates, Identifiers & Profiles → Keys. Либо отредактировать ключ APNs
+(Edit → отметить «Sign in with Apple» → Configure → Primary App ID =
+`com.trainingdiary.ios` → Save), либо завести новый ключ с одной этой
+галкой. Key ID — на странице ключа, Team ID — Membership details (тот же,
+что `APNS_TEAM_ID`). Файл .p8 скачивается только один раз, при создании
+ключа; у отредактированного ключа APNs — это тот же уже скачанный файл.
+
+Тот же ключ, что у APNs (самый короткий вариант) — достаточно его id:
+
+```sh
+fly secrets set -a training-log-bot APPLE_SIWA_KEY_ID=<тот же Key ID, что в APNS_KEY_ID>
+```
+
+Отдельный ключ:
+
+```sh
+fly secrets set -a training-log-bot APPLE_SIWA_KEY_ID=... \
+  APPLE_SIWA_PRIVATE_KEY="$(cat AuthKey_YYYY.p8)"
+```
+
+`APPLE_SIWA_TEAM_ID` — только если Team ID отличается от `APNS_TEAM_ID`
+(обычно не нужен). client_id — `APPLE_BUNDLE_ID` (дефолт
+`com.trainingdiary.ios`). Проверка после деплоя: вход через Apple из свежей
+сборки, затем в логе не должно быть `Sign in with Apple: /auth/token ответил`;
+`invalid_client` там означает, что на ключе не включён Sign in with Apple или
+Key ID/Team ID не от этого ключа. Токены есть только у входов из сборок,
+которые шлют `authorization_code`, — у прежних привязок отзывать нечего до
+следующего входа.
+
 ### Демо-аккаунт для App Review
 
 Apple на ревью (Guideline 2.1(a)) требует логин и пароль от аккаунта с

@@ -25,6 +25,7 @@ import logging
 from typing import Any, Optional
 
 import ai_limits
+import apple_signin
 import db
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,13 @@ async def delete_account(user_id: int, storage: Optional[Any] = None) -> dict[st
     транзакцией, упало — значит не снеслось ничего, и вызывающий обязан
     сказать об этом прямо. Проглоченная ошибка выглядела бы для человека ровно
     как успешное удаление.
+
+    Перед сносом — отзыв токенов Sign in with Apple (требование Apple,
+    TN3194): после сноса строк auth_identities токенов уже не найти. Отзыв
+    никогда не бросает и удаление не отменяет — человек просил удалить
+    аккаунт, и недоступный Apple не повод оставить его данные.
     """
+    await apple_signin.revoke_user_tokens(user_id)
     await db.wipe_user_account(user_id)
     await _drop_fsm_state(user_id, storage if storage is not None else _fsm_storage)
     _forget_caches(user_id)
