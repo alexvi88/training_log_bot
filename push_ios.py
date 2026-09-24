@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import random
 import re
+from typing import Optional
 
 import db
 import i18n
@@ -211,3 +212,56 @@ async def ios_alert(telegram_id: int, category: str, lang: str, **params: object
     title = TITLES_BY_LANG[resolved_lang][category]
     body = await _pick_ios_body(telegram_id, category, resolved_lang, **clipped)
     return title, body
+
+
+# Куда приложение ведёт по тапу на баннер (ключ `route` рядом с `aps`, см.
+# apns.send_alert). Значения `screen` — договор с iOS-клиентом
+# (training_log_bot_ios, `PushRoute`): незнакомый экран клиент молча
+# игнорирует и просто открывается, как до маршрутов, поэтому новый экран
+# здесь не ломает старые сборки.
+#
+# - пропуски, серия под угрозой, возвращение, новичок — «пора в зал»:
+#   вкладка «Тренировка», откуда начинают тренировку;
+# - серия-веха и близкое звание — про звания: «Достижения», где лестница;
+# - недельная сводка (и её AI-версия) — сводка недели, которая в
+#   приложении живёт на той же вкладке «Тренировка», но без идущей
+#   тренировки поверх — отдельный экран, чтобы клиент мог отличить;
+# - плато — график прогресса именно того упражнения, про которое пуш
+#   (exercise_id/exercise_name приносит engagement._find_plateau_exercise);
+# - анонс — без маршрута: его текст целиком в Telegram, в приложении ему
+#   нечего открыть специально.
+SCREEN_WORKOUT = "workout"
+SCREEN_DASHBOARD = "dashboard"
+SCREEN_ACHIEVEMENTS = "achievements"
+SCREEN_EXERCISE_PROGRESS = "exercise_progress"
+
+ROUTE_SCREEN_BY_CATEGORY: dict[str, str] = {
+    **{category: SCREEN_WORKOUT for category in push_texts.SKIP_CATEGORY_BY_DAY.values()},
+    push_texts.STREAK_AT_RISK: SCREEN_WORKOUT,
+    push_texts.WIN_BACK: SCREEN_WORKOUT,
+    push_texts.NEWBIE_NUDGE: SCREEN_WORKOUT,
+    push_texts.STREAK_MILESTONE: SCREEN_ACHIEVEMENTS,
+    push_texts.RANK_NEAR: SCREEN_ACHIEVEMENTS,
+    push_texts.WEEKLY_DIGEST: SCREEN_DASHBOARD,
+    push_texts.AI_WEEKLY: SCREEN_DASHBOARD,
+}
+
+
+def ios_route(
+    category: str, *, exercise_id: Optional[int] = None, exercise_name: Optional[str] = None
+) -> Optional[dict]:
+    """Маршрут для `route` в APNs payload, или None — без маршрута.
+
+    Плато без упражнения (не должно случаться: engagement шлёт его только
+    найдя упражнение) — None, а не график неизвестно чего.
+    """
+    if category == push_texts.PLATEAU:
+        if exercise_id is None or not exercise_name:
+            return None
+        return {
+            "screen": SCREEN_EXERCISE_PROGRESS,
+            "exercise_id": int(exercise_id),
+            "exercise_name": exercise_name,
+        }
+    screen = ROUTE_SCREEN_BY_CATEGORY.get(category)
+    return {"screen": screen} if screen else None
