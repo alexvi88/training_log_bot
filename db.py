@@ -2378,6 +2378,16 @@ async def wipe_user_account(telegram_id: int) -> None:
         (telegram_id,),
     )
     photo_names = [row[0] for row in await cur.fetchall()]
+    # То же для вложений чата с тренером в приложении (chat_attachments.py):
+    # файл лежит на диске, в базе — только его имя, и после сноса строк
+    # ai_conversation_turns ночная чистка архива (prune_old_ai_conversations)
+    # его уже не найдёт — фото осталось бы на диске навсегда.
+    cur = await conn().execute(
+        "SELECT image_path FROM ai_conversation_turns "
+        "WHERE telegram_id = ? AND image_path IS NOT NULL",
+        (telegram_id,),
+    )
+    attachment_names = [row[0] for row in await cur.fetchall()]
     async with _write_lock:
         db = conn()
         try:
@@ -2394,6 +2404,11 @@ async def wipe_user_account(telegram_id: int) -> None:
             _forget_api_tokens()
     for name in photo_names:
         exercise_photos.delete(name)
+    if attachment_names:
+        import chat_attachments
+
+        for name in attachment_names:
+            chat_attachments.delete(name)
 
 
 # ---------- muscle groups ----------

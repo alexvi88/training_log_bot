@@ -132,3 +132,18 @@ def test_save_video_frame_garbage_input_returns_none(media_dir):
 
 def test_save_video_frame_empty_bytes_returns_none(media_dir):
     assert chat_attachments.save_video_frame(7, b"") is None
+
+
+@pytest.mark.asyncio
+async def test_account_wipe_removes_chat_attachment_files(fresh_db, media_dir):
+    """«Удалить аккаунт» стирает и фото из чата с тренером: в базе лежит лишь
+    имя файла, и после сноса строк ночная чистка архива его уже не найдёт —
+    политика конфиденциальности обещает, что фото удаляются вместе с аккаунтом."""
+    await fresh_db.get_or_create_user(111, "athlete", language_code="ru")
+    name = chat_attachments.save_photo(111, b"\x89PNG\r\n\x1a\nfake", "png")
+    await fresh_db.add_ai_conversation_turn(111, "Как техника?", "Норм", [], image_path=name)
+    assert (media_dir / name).exists()
+
+    await fresh_db.wipe_user_account(111)
+
+    assert not (media_dir / name).exists()
