@@ -19,7 +19,7 @@ api_v1.py).
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import db
 import i18n
@@ -30,7 +30,20 @@ router = Router(name="ios_link")
 
 def _ios_link_text(code: str) -> str:
     minutes = mcp_oauth.LINK_CODE_TTL_MINUTES
-    return i18n.t("ios_link.screen", code=f"<pre>{code}</pre>", ttl=i18n.t("mcp.code_ttl", n=minutes))
+    # <code>, а не <pre>: блок <pre> на телефоне сужается под шесть цифр, и
+    # его значок «копировать» ложится поверх последней цифры, а сам блок
+    # копироваться не хотел. Строчный <code> копируется тапом, а надёжный
+    # способ — кнопка под сообщением (_copy_code_keyboard).
+    return i18n.t("ios_link.screen", code=f"<code>{code}</code>", ttl=i18n.t("mcp.code_ttl", n=minutes))
+
+
+def _copy_code_keyboard(code: str) -> InlineKeyboardMarkup:
+    """Одна кнопка «Скопировать код» — Bot API copy_text, как у токена MCP."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text=i18n.t("btn.copy_code"), copy_text=CopyTextButton(text=code))
+        ]]
+    )
 
 
 @router.message(Command("ios"))
@@ -39,7 +52,7 @@ async def cmd_ios_link(message: Message):
         message.from_user.id, message.from_user.username, message.from_user.language_code
     )
     code = await mcp_oauth.link_code(message.from_user.id, force_new=True)
-    await message.answer(_ios_link_text(code), parse_mode="HTML")
+    await message.answer(_ios_link_text(code), parse_mode="HTML", reply_markup=_copy_code_keyboard(code))
 
 
 @router.message(Command("link_app"))
