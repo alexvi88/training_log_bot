@@ -33,6 +33,28 @@ fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"
 (`config.mcp_available`), а приложению он нужен. Когда будет свой домен —
 поменять на него.
 
+### Демо-аккаунт для App Review
+
+Apple на ревью (Guideline 2.1(a)) требует логин и пароль от аккаунта с
+данными. Для этого есть `POST /v1/auth/password` (`review_demo.py`): пока
+обе переменные не заданы, маршрут отвечает 404, как будто его нет. Пароль —
+длинный случайный, в репозиторий не кладётся:
+
+```sh
+PW="$(openssl rand -base64 18)"; echo "$PW"   # запиши сразу: fly secrets list значений не показывает
+fly secrets set -a training-log-bot REVIEW_DEMO_USERNAME=appreview REVIEW_DEMO_PASSWORD="$PW"
+```
+
+Эти же логин и пароль вписываются в App Store Connect → App Review
+Information → Sign-In Information. На первом входе сервер заводит app-only
+аккаунт (английский, если клиент не прислал `lang`) и заполняет его историей:
+12 тренировок за последние четыре недели, взвешивания, рекорды и значки.
+Повторные входы попадают в тот же аккаунт и ничего не дописывают. Сменить
+`REVIEW_DEMO_USERNAME` — значит получить новый аккаунт (старый останется в
+базе); удалит аккаунт сам ревьюер — следующий вход заведёт и заполнит новый.
+Выключить вход — `fly secrets unset -a training-log-bot REVIEW_DEMO_USERNAME
+REVIEW_DEMO_PASSWORD`.
+
 ## 3. База
 
 1. **Остановить бота на Amvera** (кнопка паузы вверху справа) — иначе после

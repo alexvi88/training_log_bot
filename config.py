@@ -815,6 +815,22 @@ def mcp_available() -> bool:
 # приложения, прошёл бы верификацию подписи и был принят как свой.
 APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "com.trainingdiary.ios")
 
+# Демо-аккаунт для App Review (POST /v1/auth/password, review_demo.py). Apple
+# на Beta App Review требует логин и пароль от аккаунта с данными (Guideline
+# 2.1(a)): Sign in with Apple ревьюер пройти может, но попадает в пустой
+# аккаунт, а код из Telegram ему взять негде. Обе переменные обязательны —
+# если хоть одна пустая, ручка отвечает 404, как будто её нет вовсе: в проде
+# без явно заданных секретов входа по паролю не существует. Значения — только
+# через `fly secrets set` (docs/DEPLOY_FLY.md), не в репозиторий: их же
+# вписывают в App Store Connect → App Review Information.
+REVIEW_DEMO_USERNAME = os.getenv("REVIEW_DEMO_USERNAME", "")
+REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
+
+
+def review_demo_available() -> bool:
+    """Включён ли вход по паролю для демо-аккаунта App Review."""
+    return bool(REVIEW_DEMO_USERNAME) and bool(REVIEW_DEMO_PASSWORD)
+
 
 # --- Общий чат сообщества --------------------------------------------------
 #

@@ -300,6 +300,15 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await anon_walker.call("GET", "/health", expect=200)
     await anon_walker.call("POST", "/auth/link", json={"code": "nope"}, headers=headers, expect=400)
     await anon_walker.call("POST", "/auth/apple", json={"identity_token": "new", "lang": lang}, expect=200)
+    # Демо-вход App Review: без обоих секретов ручка — 404, поэтому включаем
+    # и проверяем язык ошибки неверного пароля (успешный вход — тот же
+    # _issue_token_response, что у /auth/apple выше).
+    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "appreview")
+    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "correct-horse")
+    await anon_walker.call(
+        "POST", "/auth/password",
+        json={"username": "appreview", "password": "wrong", "lang": lang}, headers=headers, expect=401,
+    )
     await anon_walker.call("GET", "/me", expect=401, headers=headers)
 
     code = await fresh_db.issue_oauth_link_code(111, ttl_seconds=600, digits=8)
