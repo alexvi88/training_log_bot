@@ -1241,7 +1241,7 @@
   "settings.unit.confirm": "Switch units to {unit}? I'll recalculate every weight in your history — converting back and forth loses precision to rounding.",
   "settings.unit.done": "Switched everything to {unit} — recalculated your history and records myself.",
   "settings.unit.switch_to": "Yes, {unit}",
-  "settings.delete.confirm": "Delete your account? I'll wipe everything: workouts, sets, records, food, weight, programs.\n\nIt's one account for the bot and the app — the history goes from both. I can't bring it back, I keep no copy.\n\nWant to keep your history? Pull it out with \"Export CSV\" first.",
+  "settings.delete.confirm": "Delete your account? I'll wipe everything: workouts, sets, records, food, weight, programs.\n\nIt's one account for the bot and the app — the history goes from both. I'll erase everything right away. Database backups are kept for a few more days, then they're gone too.\n\nWant to keep your history? Pull it out with \"Export CSV\" first.",
   "settings.delete.done": "Deleted all of it. You're gone from here.\n\nWant to start over? Hit /start and we'll meet from scratch.",
   "settings.delete.failed": "Didn't delete it — the database refused, everything's still here. Hit it again.",
   "settings.delete.partial": "Didn't delete all of it — some data is still here. Hit it again and I'll get the rest.",
