@@ -55,6 +55,19 @@ async def _finished_workout_with_set(user_id: int, exercise_id: int) -> int:
     return workout_id
 
 
+async def _block_of(workout_id: int, exercise_id: int, weights=(50.0,)) -> int:
+    """Одиночный блок упражнения с подходами — так пишут и бот, и /v1 log_set."""
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, exercise_id, 0)
+    for weight in weights:
+        await db.append_set(block_id, exercise_id, 0, weight, 5, rpe=None)
+    return block_id
+
+
+async def _exercise_ids(workout_id: int) -> set[int]:
+    return {be["exercise_id"] for be in await db.list_block_exercises_for_workout(workout_id)}
+
+
 # ---------- POST .../exercises/{exercise_id}/sets ----------
 
 
@@ -214,7 +227,10 @@ async def test_remove_exercise_deletes_its_sets_and_block(fresh_db, client_facto
 
 
 @pytest.mark.asyncio
-async def test_remove_exercise_not_in_workout_is_404(fresh_db, client_factory):
+async def test_remove_exercise_not_in_workout_is_idempotent(fresh_db, client_factory):
+    """Своё упражнение, которого в этой тренировке нет (уже убрано первым
+    тапом, а ответ оборвался; или его подходы так и не доехали до сервера), —
+    не ошибка: итог тот, что просил клиент. Ничего не тронуто."""
     client = await _linked_client(fresh_db, client_factory)
     user_id = 111
     ex1 = await _exercise(user_id, "Жим лёжа")
@@ -222,6 +238,38 @@ async def test_remove_exercise_not_in_workout_is_404(fresh_db, client_factory):
     workout_id = await _finished_workout_with_set(user_id, ex1)
 
     resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex2}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"deleted": False}
+    assert len(await db.list_blocks_for_workout(workout_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_remove_exercise_twice_is_200_not_error(fresh_db, client_factory):
+    """Двойной тап / повтор после оборванного ответа: второй DELETE — 200."""
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _exercise(111)
+    workout_id, _ = await db.get_or_create_active_workout(111)
+    await _block_of(workout_id, ex1)
+
+    first = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    second = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert first.status_code == 200 and first.json() == {"deleted": True}
+    assert second.status_code == 200 and second.json() == {"deleted": False}
+
+
+@pytest.mark.asyncio
+async def test_remove_foreign_exercise_from_own_workout_is_404(fresh_db, client_factory):
+    """Своя тренировка, но чужой или несуществующий exercise_id — 404."""
+    other_id = 222
+    await fresh_db.get_or_create_user(telegram_id=other_id, username="other")
+    foreign_ex = await _exercise(other_id)
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _exercise(111)
+    workout_id = await _finished_workout_with_set(111, ex1)
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{foreign_ex}")
+    assert resp.status_code == 404
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/999999")
     assert resp.status_code == 404
 
 
@@ -249,18 +297,166 @@ async def test_remove_exercise_requires_auth(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
-async def test_remove_exercise_from_active_workout_is_conflict(fresh_db, client_factory):
+async def test_remove_exercise_from_active_workout(fresh_db, client_factory):
+    """Идущая тренировка — та же ручка, что и законченная: упражнение уходит
+    вместе с подходами, остальное на месте. Раньше тут был 409, и убрать
+    упражнение посреди тренировки приложение не могло."""
     client = await _linked_client(fresh_db, client_factory)
     user_id = 111
-    ex_id = await _exercise(user_id)
+    ex1 = await _exercise(user_id, "Жим лёжа")
+    ex2 = await _exercise(user_id, "Присед")
     workout_id, _ = await db.get_or_create_active_workout(user_id)
-    block_id = await db.create_block(workout_id, "single")
-    await db.add_block_exercise(block_id, ex_id, 0)
-    await db.append_set(block_id, ex_id, 0, 50.0, 5, rpe=None)
+    await _block_of(workout_id, ex1)
+    await _block_of(workout_id, ex2, weights=(100.0, 100.0))
 
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex2}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"deleted": True}
+
+    assert await _exercise_ids(workout_id) == {ex1}
+    sets = await db.list_sets_for_workout(workout_id)
+    assert [s["exercise_id"] for s in sets] == [ex1]
+    assert (await db.get_workout(workout_id))["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_remove_exercise_from_backfill_workout(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _exercise(111)
+    workout_id, _ = await db.get_or_create_backfill_workout(111, "2024-01-01T10:00:00")
+    await _block_of(workout_id, ex1)
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+    assert list(await db.list_blocks_for_workout(workout_id)) == []
+
+
+@pytest.mark.asyncio
+async def test_remove_last_exercise_of_active_workout_leaves_it_empty(fresh_db, client_factory):
+    """Убрали единственное упражнение — тренировка просто пустая и всё ещё
+    идущая; что с ней делать, решает клиент (выход снимет пустую)."""
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _exercise(111)
+    workout_id, _ = await db.get_or_create_active_workout(111)
+    await _block_of(workout_id, ex1)
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+    assert list(await db.list_blocks_for_workout(workout_id)) == []
+    assert (await db.get_workout(workout_id))["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_remove_superset_half_keeps_partner_block(fresh_db, client_factory):
+    """Суперсет живого трекера — два одиночных блока с перемешанными по
+    времени подходами. Убрали одно — блок второго цел со всеми подходами."""
+    client = await _linked_client(fresh_db, client_factory)
+    user_id = 111
+    ex1 = await _exercise(user_id, "Жим лёжа")
+    ex2 = await _exercise(user_id, "Тяга")
+    workout_id, _ = await db.get_or_create_active_workout(user_id)
+    b1 = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(b1, ex1, 0)
+    b2 = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(b2, ex2, 0)
+    for _ in range(2):
+        await db.append_set(b1, ex1, 0, 60.0, 8, rpe=None)
+        await db.append_set(b2, ex2, 0, 50.0, 10, rpe=None)
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+
+    assert [b["id"] for b in await db.list_blocks_for_workout(workout_id)] == [b2]
+    assert len(await db.list_sets_for_block(b2)) == 2
+
+
+@pytest.mark.asyncio
+async def test_remove_one_exercise_of_multi_exercise_block_keeps_partner(fresh_db, client_factory):
+    """Блок с двумя упражнениями (старые данные): раньше ручка сносила блок
+    целиком — вместе с подходами напарника. Теперь напарник остаётся валидным
+    блоком из одного упражнения со своими подходами."""
+    client = await _linked_client(fresh_db, client_factory)
+    user_id = 111
+    ex1 = await _exercise(user_id, "Жим лёжа")
+    ex2 = await _exercise(user_id, "Тяга")
+    workout_id = await db.create_finished_workout(
+        user_id, started_at="2024-01-01T10:00:00", finished_at="2024-01-01T11:00:00"
+    )
+    block = await db.create_block(workout_id, "superset")
+    await db.add_block_exercise(block, ex1, 0)
+    await db.add_block_exercise(block, ex2, 1)
+    await db.append_set(block, ex1, 0, 60.0, 8, rpe=None)
+    await db.append_set(block, ex2, 1, 50.0, 10, rpe=None)
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+
+    assert [b["id"] for b in await db.list_blocks_for_workout(workout_id)] == [block]
+    assert [be["exercise_id"] for be in await db.get_block_exercises(block)] == [ex2]
+    assert [s["exercise_id"] for s in await db.list_sets_for_block(block)] == [ex2]
+
+
+@pytest.mark.asyncio
+async def test_remove_exercise_in_active_workout_keeps_other_empty_block(fresh_db, client_factory):
+    """Пустой блок другого упражнения в идущей тренировке — упражнение,
+    открытое в боте, на котором человек стоит. Чистка пустых блоков — хвост
+    только законченной тренировки."""
+    client = await _linked_client(fresh_db, client_factory)
+    user_id = 111
+    ex1 = await _exercise(user_id, "Жим лёжа")
+    ex2 = await _exercise(user_id, "Присед")
+    workout_id, _ = await db.get_or_create_active_workout(user_id)
+    await _block_of(workout_id, ex1)
+    opened = await _block_of(workout_id, ex2, weights=())
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+    assert [b["id"] for b in await db.list_blocks_for_workout(workout_id)] == [opened]
+
+
+@pytest.mark.asyncio
+async def test_remove_exercise_with_app_written_sets(fresh_db, client_factory):
+    """Подходы из приложения несут idempotency-запись (FK на sets) —
+    удаление снимает и её, а не падает 500 на FOREIGN KEY."""
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _exercise(111)
+    workout_id, _ = await db.get_or_create_active_workout(111)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex1, 0)
+    await db.append_set(block_id, ex1, 0, 50.0, 5, rpe=None, user_id=111, idempotency_key="k-1")
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+    assert list(await db.list_sets_for_workout(workout_id)) == []
+
+
+@pytest.mark.asyncio
+async def test_remove_exercise_drops_its_note_in_this_workout(fresh_db, client_factory):
+    """Заметка к упражнению в этой тренировке уходит с ним: иначе, добавив
+    его обратно, человек увидел бы заметку упражнения, которое убрал."""
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _exercise(111)
+    workout_id, _ = await db.get_or_create_active_workout(111)
+    await _block_of(workout_id, ex1)
+    await db.set_workout_exercise_note(workout_id, ex1, "болит плечо")
+
+    resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex1}")
+    assert resp.status_code == 200, resp.text
+    assert await db.get_workout_exercise_note(workout_id, ex1) is None
+
+
+@pytest.mark.asyncio
+async def test_remove_exercise_from_another_users_active_workout_is_404(fresh_db, client_factory):
+    other_id = 222
+    await fresh_db.get_or_create_user(telegram_id=other_id, username="other")
+    ex_id = await _exercise(other_id)
+    workout_id, _ = await db.get_or_create_active_workout(other_id)
+    await _block_of(workout_id, ex_id)
+
+    client = await _linked_client(fresh_db, client_factory)
     resp = await client.delete(f"/workouts/{workout_id}/exercises/{ex_id}")
-    assert resp.status_code == 409
-    assert resp.json()["error"] == "workout_active"
+    assert resp.status_code == 404
+    assert len(await db.list_sets_for_workout(workout_id)) == 1
 
 
 @pytest.mark.asyncio

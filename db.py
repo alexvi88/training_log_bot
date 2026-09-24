@@ -4999,6 +4999,67 @@ async def delete_block_and_sets(block_id: int) -> None:
             raise
 
 
+async def remove_exercise_from_workout(workout_id: int, exercise_id: int) -> int:
+    """Убрать упражнение из тренировки целиком: все его подходы и его строки
+    `block_exercises` во ВСЕХ блоках тренировки, а сам блок — только если в нём
+    после этого не осталось ни упражнений, ни подходов. Возвращает, сколько
+    строк `block_exercises` снято (0 — упражнения в тренировке уже нет:
+    повтор после оборванного ответа).
+
+    Не delete_block_and_sets по первому найденному блоку, по двум причинам:
+
+    - блок с несколькими упражнениями (старые данные, импорт) —
+      delete_block_and_sets унёс бы вместе с ним и напарника. Здесь напарник
+      остаётся со своими подходами, и блок остаётся валидным блоком из одного
+      упражнения. Живой «суперсет» — вообще два отдельных одиночных блока (см.
+      workout_plan), и блок напарника этот вызов не трогает вовсе;
+    - у упражнения в одной тренировке бывает больше одного блока, и «убрать
+      целиком» должно снести все, а не оставить хвост.
+
+    Одной транзакцией под общим замком — та же причина, что у
+    delete_block_and_sets: частичное удаление не должно доехать до базы
+    следующим чужим commit'ом. Пустые блоки ДРУГИХ упражнений не трогает: в
+    идущей тренировке пустой блок — это упражнение, открытое в боте, на
+    котором человек сейчас стоит.
+    """
+    in_workout = "block_id IN (SELECT id FROM workout_blocks WHERE workout_id = ?)"
+    async with _write_lock:
+        database = conn()
+        try:
+            cur = await database.execute(
+                f"SELECT DISTINCT block_id FROM block_exercises WHERE exercise_id = ? AND {in_workout}",
+                (exercise_id, workout_id),
+            )
+            block_ids = [row["block_id"] for row in await cur.fetchall()]
+            if not block_ids:
+                return 0
+            marks = ",".join("?" * len(block_ids))
+            where = f"exercise_id = ? AND block_id IN ({marks})"
+            params = (exercise_id, *block_ids)
+            await _delete_set_write_attempts(database, where, params)
+            await database.execute(f"DELETE FROM sets WHERE {where}", params)
+            cur = await database.execute(f"DELETE FROM block_exercises WHERE {where}", params)
+            removed = cur.rowcount
+            # Заметка привязана к паре (тренировка, упражнение): без чистки
+            # она всплыла бы у того же упражнения, добавленного в эту
+            # тренировку заново, — хотя его «целиком» убрали.
+            await database.execute(
+                "DELETE FROM exercise_notes WHERE workout_id = ? AND exercise_id = ?",
+                (workout_id, exercise_id),
+            )
+            await database.execute(
+                f"DELETE FROM workout_blocks WHERE id IN ({marks}) "
+                "AND NOT EXISTS (SELECT 1 FROM block_exercises be WHERE be.block_id = workout_blocks.id) "
+                "AND NOT EXISTS (SELECT 1 FROM sets s WHERE s.block_id = workout_blocks.id)",
+                tuple(block_ids),
+            )
+            await database.commit()
+            return removed
+        except Exception:
+            await database.rollback()
+            raise
+
+
 async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM sets WHERE block_id = ? ORDER BY round_index, order_in_round, id",
