@@ -3461,6 +3461,24 @@ async def get_or_create_active_workout(
         )
         row = await cur.fetchone()
         if row is not None:
+            # Брошенная пустая тренировка (открыл и ушёл, подходов ни одного)
+            # подхватывается новым стартом — и раньше тащила за собой старый
+            # started_at: человек начинал сегодня, а таймер, длительность в
+            # итоге и значки «за длинную тренировку» считались от вчерашнего
+            # открытия, и через шесть часов от него же всплывало «висит
+            # тренировка». Пока подходов нет, тренировки по сути ещё не было —
+            # её начало и есть этот старт. С подходами время не трогаем: это
+            # «Продолжить» идущей тренировки, а не новая.
+            cur = await db.execute(
+                "SELECT 1 FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+                "WHERE b.workout_id = ? LIMIT 1",
+                (row["id"],),
+            )
+            if await cur.fetchone() is None:
+                await db.execute(
+                    "UPDATE workouts SET started_at = ? WHERE id = ?", (now_iso(), row["id"])
+                )
+                await db.commit()
             return row["id"], False
         program_id = await _program_id_for_routine(routine_id)
         cur = await db.execute(
@@ -3608,6 +3626,19 @@ async def update_workout_note(workout_id: int, note: Optional[str]) -> None:
             "UPDATE workouts SET note = ? WHERE id = ?", (note or None, workout_id)
         )
         await conn().commit()
+
+
+def backdated_finished_at(workout) -> str:
+    """Время окончания для «Завершить задним числом» у зависшей тренировки —
+    одно правило на бота (handlers.workout.stale_finish_workout) и на
+    POST /v1/workouts/{id}/finish с `backdated`, чтобы они не разъехались.
+
+    Конец ставится на начало: когда человек на самом деле ушёл из зала, мы не
+    знаем, а «сейчас» растянуло бы вчерашнюю тренировку на сутки — и в
+    истории, и в значках за длительность. Длительность такой тренировки
+    поэтому не считается вовсе (оба вызывающих передают `None` в оценку
+    значков)."""
+    return workout["started_at"]
 
 
 async def finish_workout(
