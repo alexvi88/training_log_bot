@@ -140,7 +140,7 @@ async def add_exercise_template(request: Request) -> JSONResponse:
     await _owned_template(template_id)
     exercise_id = await db.fork_exercise_from_template(user_id, template_id)
     row = await db.get_exercise(exercise_id)
-    return JSONResponse(await common.one_exercise_json(user_id, row), status_code=201)
+    return JSONResponse(common.exercise_json(row), status_code=201)
 
 
 routes = [

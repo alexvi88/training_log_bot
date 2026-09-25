@@ -4393,60 +4393,6 @@ async def max_e1rm_before_workout_by_exercise(
     return {r["exercise_id"]: r["mx"] for r in await cur.fetchall() if r["mx"] is not None}
 
 
-async def last_best_set_by_exercise(
-    user_id: int, exercise_ids, formula: str = "epley", *, tz_offset: Optional[int] = None
-) -> dict[int, dict[str, Any]]:
-    """Лучший подход последней законченной тренировки — по каждому упражнению
-    из `exercise_ids` одним запросом: строка «100×8 · вчера» под именем в
-    списке упражнений приложения, где их 150+, и запрос на каждое не годится.
-
-    «Последняя» — как у строки «Прошлый раз» в боте (handlers.workout.
-    _exercise_history): законченная тренировка (status = 'finished' — открытая
-    и недозанесённая задним числом `backfill` не в счёт) с самым поздним
-    started_at, при равном — та, где подход записан позже. «Лучший» — как
-    analytics.SessionStats.top_set, по которому бот и приложение рисуют точку
-    прогресса: максимум e1RM по нагрузке (load_weight) с учётом RPE, а если вся
-    сессия своим весом (нагрузка везде 0) — максимум повторов; при равенстве —
-    первый записанный, как у питоновского max().
-
-    Отдаётся `weight` — то, что человек записал, в единицах аккаунта (как
-    показывает «Прошлый раз»), `date` — местный день тренировки (tz_offset).
-    Упражнения без законченной истории в словарь не попадают."""
-    ids = sorted(set(exercise_ids))
-    if not ids:
-        return {}
-    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
-    cur = await conn().execute(
-        "WITH ws AS ("
-        f"  SELECT s.id AS sid, s.exercise_id AS eid, s.weight, s.reps, {LOAD_WEIGHT_SQL} AS load,"
-        f"         {_e1rm_sql(formula)} AS e1, w.id AS wid, {day} AS day,"
-        "         ROW_NUMBER() OVER ("
-        "             PARTITION BY s.exercise_id ORDER BY w.started_at DESC, s.id DESC"
-        "         ) AS recency"
-        "  FROM sets s"
-        "  JOIN workout_blocks b ON b.id = s.block_id"
-        "  JOIN workouts w ON w.id = b.workout_id"
-        "  WHERE w.user_id = ? AND w.status = 'finished'"
-        f"    AND s.exercise_id IN ({_placeholders(ids)})"
-        "), last_session AS ("
-        "  SELECT ws.*,"
-        "         SUM(CASE WHEN ws.load != 0 THEN 1 ELSE 0 END) OVER (PARTITION BY ws.eid) AS loaded"
-        "  FROM ws JOIN (SELECT eid, wid FROM ws WHERE recency = 1) lw"
-        "    ON lw.eid = ws.eid AND lw.wid = ws.wid"
-        "), ranked AS ("
-        "  SELECT *, ROW_NUMBER() OVER ("
-        "      PARTITION BY eid"
-        "      ORDER BY CASE WHEN loaded = 0 THEN reps ELSE e1 END DESC, sid"
-        "  ) AS rn FROM last_session"
-        ") SELECT eid, weight, reps, day FROM ranked WHERE rn = 1",
-        (user_id, *ids),
-    )
-    return {
-        r["eid"]: {"weight": r["weight"], "reps": r["reps"], "date": r["day"]}
-        for r in await cur.fetchall()
-    }
-
-
 async def achievement_extremes(
     user_id: int, *, tz_offset: Optional[int] = None
 ) -> dict[str, Any]:
