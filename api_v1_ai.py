@@ -327,6 +327,7 @@ async def _run_turn(
     image_data_url: Optional[str] = None,
     video_context: Optional[str] = None,
     saved_image_path: Optional[str] = None,
+    shown_question: Optional[str] = None,
 ) -> dict[str, Any]:
     """Один вызов ai_trainer.ask() с полным набором колбэков — общее ядро для
     /ai/ask, /ai/video и для «опросник закончился, идём собирать программу»
@@ -344,6 +345,12 @@ async def _run_turn(
     с этим ходом, чтобы GET /ai/history мог отдать картинку. Не то же самое,
     что image_data_url: этот параметр только записывается в историю, самой
     модели ничего из него не уходит (для этого image_data_url).
+
+    shown_question — то, что человек видит своей репликой в истории (и в
+    заголовке архивного разговора, он берётся из первой реплики), когда это
+    не тот же текст, что ушёл модели. Модель получает `question`, в wire-
+    снимке тоже он — там контекст модели, а не экран. None — видимая реплика
+    и есть вопрос, как раньше.
 
     Проверка лимита — здесь, а не в вызывающих: это ЕДИНСТВЕННОЕ место, где
     HTTP-слой реально идёт к модели, и `ai_limits.check` обязан стоять перед
@@ -410,10 +417,11 @@ async def _run_turn(
     # — сбой провайдера выше уже вернул бы 502/504 и до сюда не дошёл.
     await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
 
+    visible_question = shown_question or question
     wire_messages = wire_cell.get("messages")
     if wire_messages is not None:
         turn_id = await db.add_ai_conversation_turn(
-            user_id, question, answer, wire_messages, image_path=saved_image_path
+            user_id, visible_question, answer, wire_messages, image_path=saved_image_path
         )
     else:
         # on_wire не сработал (не должно случаться — ask() зовёт его перед
@@ -426,7 +434,7 @@ async def _run_turn(
             {"role": "assistant", "content": answer},
         ]
         turn_id = await db.add_ai_conversation_turn(
-            user_id, question, answer, fallback_wire, image_path=saved_image_path
+            user_id, visible_question, answer, fallback_wire, image_path=saved_image_path
         )
 
     return {
@@ -739,6 +747,19 @@ async def ask_question(request: Request) -> JSONResponse:
             400, "bad_request", f"question must be at most {MAX_QUESTION_LENGTH} characters",
             key="api.error.text_too_long", max=MAX_QUESTION_LENGTH,
         )
+    # Необязательная видимая реплика вместо `question` — для кнопок, которые
+    # сами задают тренеру вопрос за человека: «🗂 Составь мне программу» шлёт
+    # модели длинную инструкцию (ai.screen.build_program_seed), а в чате, как
+    # и в боте (_start_ai_scenario), человек должен видеть вступление
+    # (ai.screen.build_program_intro), а не служебный текст для модели. Модель
+    # всё равно получает `question`; `shown_question` только пишется в историю
+    # и тем самым становится заголовком разговора в архиве.
+    shown_question = common.optional_str(body, "shown_question")
+    if shown_question is not None and len(shown_question) > MAX_QUESTION_LENGTH:
+        raise ApiError(
+            400, "bad_request", f"shown_question must be at most {MAX_QUESTION_LENGTH} characters",
+            key="api.error.text_too_long", max=MAX_QUESTION_LENGTH,
+        )
 
     # Бронь — тоже до сохранения: 429 busy из _claim_turn_or_429 стоит вне
     # try ниже и файл за собой не убрал бы.
@@ -757,6 +778,7 @@ async def ask_question(request: Request) -> JSONResponse:
         turn = await _run_turn(
             user_id, question, history,
             image_data_url=image_data_url, saved_image_path=saved_image_path,
+            shown_question=shown_question,
         )
         return JSONResponse(await _turn_response(user_id, turn, goal=question))
     except Exception:

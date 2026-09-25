@@ -72,7 +72,12 @@ _ERR_LINE_RE = re.compile(r"^Line (\d+): (.*)$", re.DOTALL)
 
 
 def _csv_text(body: dict[str, Any]) -> str:
-    text = common.require(body, "csv", str)
+    # BOM (U+FEFF) в начале — обычное дело у CSV из Excel/Numbers: бот
+    # снимает его декодированием utf-8-sig (handlers.csv_import), а сюда файл
+    # приезжает уже строкой, и клиент мог декодировать его как простой utf-8.
+    # strip() BOM не считает пробелом, и первая колонка заголовка («\ufeffдата»)
+    # не узнавалась — вся строка заголовков принималась за данные.
+    text = common.require(body, "csv", str).lstrip("\ufeff")
     if not text.strip():
         raise ApiError(400, "bad_request", "csv must not be empty", key="import.file_empty")
     if len(text.encode("utf-8")) > MAX_CSV_BYTES:

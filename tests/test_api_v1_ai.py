@@ -2011,3 +2011,81 @@ async def test_busy_photo_question_leaves_no_file(
         api_v1_ai._busy.discard(111)
     assert resp.status_code == 429
     assert list(chat_media_dir.glob("u111_*")) == []
+
+
+# ---------- shown_question: видимая реплика вместо служебного вопроса ----------
+
+
+@pytest.mark.asyncio
+async def test_ask_shown_question_is_what_history_and_title_show(
+    fresh_db, client_factory, monkeypatch
+):
+    """Кнопка «🗂 Составь мне программу» шлёт модели длинную инструкцию
+    (ai.screen.build_program_seed), а в чате раньше видна была она же. Как в
+    боте (_start_ai_scenario), человек видит вступление — shown_question, а
+    модель по-прежнему получает question."""
+    import i18n
+
+    seen: list[str] = []
+    fake = _fake_ask_with_wire()
+
+    async def recording_ask(user_id, question, history, **kwargs):
+        seen.append(question)
+        return await fake(user_id, question, history, **kwargs)
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", recording_ask)
+    client = await _linked_client(fresh_db, client_factory)
+    seed = i18n.t("ai.screen.build_program_seed")
+    intro = i18n.t("ai.screen.build_program_intro")
+
+    resp = await client.post(
+        "/ai/ask", json={"question": seed, "shown_question": f"  {intro}\n "}
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen == [seed]
+
+    messages = (await client.get("/ai/history")).json()["messages"]
+    assert messages[0] == {**messages[0], "role": "user", "text": intro}
+    # Wire-снимок — контекст модели, в нём остаётся настоящий вопрос.
+    wire = await fresh_db.get_ai_conversation_wire_history(111)
+    assert wire[0]["content"] == seed
+
+    assert (await client.delete("/ai/history")).status_code == 200
+    archived = (await client.get("/ai/conversations")).json()["conversations"][0]
+    assert archived["title"].startswith(intro.strip().replace("\n", " ")[:20])
+    assert "ask_setup_questions" not in archived["title"]
+
+
+@pytest.mark.asyncio
+async def test_ask_without_or_blank_shown_question_keeps_question(
+    fresh_db, client_factory, monkeypatch
+):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client = await _linked_client(fresh_db, client_factory)
+
+    assert (await client.post("/ai/ask", json={"question": "как мой прогресс"})).status_code == 200
+    assert (
+        await client.post("/ai/ask", json={"question": "а белок", "shown_question": "   "})
+    ).status_code == 200
+    texts = [m["text"] for m in (await client.get("/ai/history")).json()["messages"] if m["role"] == "user"]
+    assert texts == ["как мой прогресс", "а белок"]
+
+
+@pytest.mark.asyncio
+async def test_ask_rejects_bad_shown_question(fresh_db, client_factory, monkeypatch):
+    import api_v1_ai
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client = await _linked_client(fresh_db, client_factory)
+
+    too_long = await client.post(
+        "/ai/ask",
+        json={"question": "ok", "shown_question": "x" * (api_v1_ai.MAX_QUESTION_LENGTH + 1)},
+    )
+    assert too_long.status_code == 400
+    not_str = await client.post("/ai/ask", json={"question": "ok", "shown_question": 5})
+    assert not_str.status_code == 400
+    assert (await client.get("/ai/history")).json()["messages"] == []

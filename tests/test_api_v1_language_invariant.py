@@ -299,7 +299,14 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     anon_walker = _Walker(anon, lang)
     await anon_walker.call("GET", "/health", expect=200)
     await anon_walker.call("POST", "/auth/link", json={"code": "nope"}, headers=headers, expect=400)
-    await anon_walker.call("POST", "/auth/apple", json={"identity_token": "new", "lang": lang}, expect=200)
+    apple = await anon_walker.call("POST", "/auth/apple", json={"identity_token": "new", "lang": lang}, expect=200)
+    # Выход: без токена — 401 (язык ошибки из Accept-Language), с токеном —
+    # гасит только его.
+    await anon_walker.call("POST", "/auth/logout", headers=headers, expect=401)
+    await anon_walker.call(
+        "POST", "/auth/logout", headers={**headers, "Authorization": f"Bearer {apple.json()['token']}"},
+        expect=200,
+    )
     # Демо-вход App Review: без обоих секретов ручка — 404, поэтому включаем
     # и проверяем язык ошибки неверного пароля (успешный вход — тот же
     # _issue_token_response, что у /auth/apple выше).

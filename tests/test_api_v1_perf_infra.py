@@ -2,7 +2,7 @@
 Server-Timing, gzip, PRAGMA соединения.
 
 Главное здесь — не скорость, а то, что ускорение не сломало отзыв: токен,
-погашенный перевыпуском, удалением аккаунта или слиянием, обязан перестать
+погашенный выходом, подрезкой сверх потолка, удалением аккаунта или слиянием, обязан перестать
 работать СРАЗУ, а не через TTL кэша.
 """
 
@@ -58,15 +58,30 @@ async def test_revoked_token_is_rejected_immediately(fresh_db, client_factory):
     assert resp.status_code == 401
 
 
-async def test_reissued_token_kills_the_old_one_immediately(fresh_db, client_factory):
+async def test_token_evicted_by_the_cap_is_rejected_immediately(fresh_db, client_factory, monkeypatch):
+    """Новый вход больше не гасит прежний токен (у каждого устройства свой),
+    но сверх db.MAX_API_TOKENS_PER_USER самый давний вылетает — и из кэша
+    тоже сразу, а не через TTL."""
+    monkeypatch.setattr(db, "MAX_API_TOKENS_PER_USER", 1)
     client, old = await _linked_client(fresh_db, client_factory)
     assert (await client.get("/me")).status_code == 200
+    assert old in db._api_token_cache
 
     new = await db.issue_api_token(111)
 
     assert (await client.get("/me")).status_code == 401
     client.headers["Authorization"] = f"Bearer {new}"
     assert (await client.get("/me")).status_code == 200
+
+
+async def test_logout_is_rejected_immediately_even_when_cached(fresh_db, client_factory):
+    client, token = await _linked_client(fresh_db, client_factory)
+    assert (await client.get("/me")).status_code == 200
+    assert token in db._api_token_cache
+
+    assert (await client.post("/auth/logout")).status_code == 200
+
+    assert (await client.get("/me")).status_code == 401
 
 
 async def test_deleted_account_token_is_rejected_immediately(fresh_db, client_factory):

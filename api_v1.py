@@ -288,6 +288,20 @@ async def auth_password(request: Request) -> JSONResponse:
     return await _issue_token_response(user_id)
 
 
+async def auth_logout(request: Request) -> JSONResponse:
+    """Выход на ЭТОМ устройстве: гасится только токен из заголовка запроса,
+    остальные устройства человека остаются в аккаунте (токенов /v1 на
+    человека несколько — см. db.issue_api_token). Удаление аккаунта
+    (DELETE /account), наоборот, сносит все его токены.
+
+    Без тела. Неизвестный или уже погашенный токен — 401, как и у любого
+    авторизованного маршрута: клиенту на выходе это всё равно, он в любом
+    случае стирает токен у себя."""
+    await _authed_user_id(request)
+    revoked = await db.revoke_single_api_token(request.state.api_token)
+    return JSONResponse({"logged_out": revoked})
+
+
 async def request_telegram_link_code(request: Request) -> JSONResponse:
     """Код, которым app-only аккаунт (заведён Apple ID без Telegram) связывает
     себя с настоящим Telegram — направление, обратное `/auth/link`: там код
@@ -1638,6 +1652,7 @@ routes = [
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/auth/apple", auth_apple, methods=["POST"]),
     Route("/auth/password", auth_password, methods=["POST"]),
+    Route("/auth/logout", auth_logout, methods=["POST"]),
     Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/push/register", register_push_token, methods=["POST"]),
