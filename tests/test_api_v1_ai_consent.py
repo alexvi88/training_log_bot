@@ -13,6 +13,8 @@
   раньше — ради них флаг и заведён.
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -177,3 +179,131 @@ async def test_reading_endpoints_are_not_gated(fresh_db, client_factory, fake_mo
     for path in ("/ai/limits", "/ai/history", "/ai/pending"):
         resp = await client.get(path, headers=HEADER)
         assert resp.status_code == 200, (path, resp.text)
+
+
+# ---------- фоновые вызовы модели, которые человек не заказывал ----------
+#
+# Тумблер «🤖 Комментарии тренера» и согласие — разные настройки. Отозвал
+# согласие, а тумблер оставил — комментарий к тренировке всё равно не должен
+# уходить модели; ошибки клиенту при этом нет: finish — карточка итога.
+
+
+@pytest.fixture
+def fake_comment(monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    calls: list[int] = []
+
+    async def fake_comment_on_workout(user_id, workout_id):
+        calls.append(workout_id)
+        return "Хорошая работа."
+
+    monkeypatch.setattr(ai_trainer, "comment_on_workout", fake_comment_on_workout)
+    return calls
+
+
+async def _finish_one_workout(client, headers=None) -> int:
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets",
+        json={"exercise_id": exercise_id, "weight": 80, "reps": 5},
+    )
+    assert resp.status_code in (200, 201), resp.text
+    resp = await client.post(f"/workouts/{workout_id}/finish", json={}, headers=headers or {})
+    assert resp.status_code == 200, resp.text
+    # Комментарий пишется фоновой задачей — дождаться её, иначе «модель не
+    # позвали» было бы правдой только потому, что задача ещё не стартовала.
+    pending = list(api_v1._ai_comment_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+    return workout_id
+
+
+@pytest.mark.asyncio
+async def test_finish_without_consent_does_not_call_model(fresh_db, client_factory, fake_comment):
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_comments_enabled=1)
+    await client.patch("/settings", json={"ai_consent": True})
+    await client.patch("/settings", json={"ai_consent": False})
+
+    workout_id = await _finish_one_workout(client, headers=HEADER)
+
+    assert fake_comment == []
+    resp = await client.get(f"/workouts/{workout_id}/ai-comment")
+    assert resp.json() == {"comment": None}
+
+
+@pytest.mark.asyncio
+async def test_finish_without_consent_is_skipped_under_global_flag(
+    fresh_db, client_factory, fake_comment, monkeypatch
+):
+    monkeypatch.setattr(config, "AI_CONSENT_REQUIRED", True)
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_comments_enabled=1)
+
+    await _finish_one_workout(client)
+
+    assert fake_comment == []
+
+
+@pytest.mark.asyncio
+async def test_finish_with_consent_still_comments(fresh_db, client_factory, fake_comment):
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_comments_enabled=1)
+    await client.patch("/settings", json={"ai_consent": True})
+
+    workout_id = await _finish_one_workout(client, headers=HEADER)
+
+    assert fake_comment == [workout_id]
+    resp = await client.get(f"/workouts/{workout_id}/ai-comment")
+    assert resp.json() == {"comment": "Хорошая работа."}
+
+
+@pytest.mark.asyncio
+async def test_finish_from_released_build_still_comments(
+    fresh_db, client_factory, fake_comment, monkeypatch
+):
+    """Сборки без листа согласия (без заголовка) при выключенном флаге
+    получают комментарий как раньше."""
+    monkeypatch.setattr(config, "AI_CONSENT_REQUIRED", False)
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_comments_enabled=1)
+
+    workout_id = await _finish_one_workout(client)
+
+    assert fake_comment == [workout_id]
+
+
+CSV_UNKNOWN_EXERCISE = "date,exercise,weight,reps\n2024-01-03,Жим Арнольда сидя,20,10\n"
+
+
+@pytest.fixture
+def fake_matcher(monkeypatch):
+    calls: list[list[str]] = []
+
+    async def fake_match(user_id, names):
+        calls.append(list(names))
+        return {}
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_import_without_consent_skips_ai_matching(fresh_db, client_factory, fake_matcher):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/import/csv", json={"csv": CSV_UNKNOWN_EXERCISE}, headers=HEADER)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["workouts_imported"] == 1
+    assert fake_matcher == []
+    # Имя из файла заведено как есть — тренировка не потерялась.
+    assert await fresh_db.find_exercise_by_name(111, "Жим Арнольда сидя") is not None
+
+
+@pytest.mark.asyncio
+async def test_import_with_consent_uses_ai_matching(fresh_db, client_factory, fake_matcher):
+    client = await _linked_client(fresh_db, client_factory)
+    await client.patch("/settings", json={"ai_consent": True})
+    resp = await client.post("/import/csv", json={"csv": CSV_UNKNOWN_EXERCISE}, headers=HEADER)
+    assert resp.status_code == 200, resp.text
+    assert fake_matcher == [["Жим Арнольда сидя"]]

@@ -1167,13 +1167,21 @@ async def _write_ai_comment(user_id: int, workout_id: int) -> None:
         logger.exception("AI trainer workout comment failed for workout %s", workout_id)
 
 
-def _spawn_ai_comment(user_id: int, workout_id: int, user, workout) -> None:
+def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, workout) -> None:
     """Запустить генерацию комментария в фоне — если он нужен и возможен.
 
-    Условия ровно те же, что у бота (`needs_ai_comment` в
+    Условия те же, что у бота (`needs_ai_comment` в
     handlers.workout._finalize_workout): комментария ещё нет, тумблер
     `ai_comments_enabled` включён и провайдер настроен. Без проверки
     is_configured каждая тренировка заводила бы задачу, которая сразу падает.
+
+    Плюс одно условие, которого у бота нет: согласие на передачу данных AI
+    (common.ai_consent_given, то же правило, что у 403 в ручках тренера).
+    Тумблер и согласие — разные настройки: человек, отозвавший согласие в
+    приложении, но не выключивший «🤖 Комментарии тренера», иначе продолжал
+    бы отправлять модели каждую тренировку (App Store 5.1.2(i)). Пропуск
+    молчаливый — комментарий необязателен, а GET .../ai-comment отдаст null,
+    ровно как при выключенном тумблере.
 
     Сам запуск обёрнут в try/except: ответ finish — это карточка итога, ради
     которой человек и жал кнопку, и уронить её из-за необязательного
@@ -1182,6 +1190,8 @@ def _spawn_ai_comment(user_id: int, workout_id: int, user, workout) -> None:
     if workout["ai_comment"] is not None:
         return
     if not user["ai_comments_enabled"] or not ai_trainer.is_configured():
+        return
+    if not common.ai_consent_given(request, user):
         return
     try:
         task = asyncio.create_task(_write_ai_comment(user_id, workout_id))
@@ -1368,7 +1378,7 @@ async def finish_workout(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     payload = await _workout_detail_json(workout, user)
     payload["rewards"] = await _finish_rewards_json(workout, user, new_codes, was_backfill)
-    _spawn_ai_comment(user_id, workout_id, user, workout)
+    _spawn_ai_comment(request, user_id, workout_id, user, workout)
     return JSONResponse(payload)
 
 
