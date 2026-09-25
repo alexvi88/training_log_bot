@@ -165,6 +165,11 @@ class LogApiActions(BaseHTTPMiddleware):
             return
 
         template = self._templates.get(request.scope.get("endpoint"), request.url.path)
+        # Удаление аккаунта: запрос уже снёс всё, что о человеке было, и
+        # событие «удалил аккаунт» под его id было бы первой строкой нового
+        # следа — после «удалить всё» в базе оставалась user_events на него.
+        if method == "DELETE" and template == "/account":
+            return
         action = describe(method, template)
         path = request.url.path
         await db.log_user_event(
