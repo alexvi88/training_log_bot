@@ -106,3 +106,48 @@ async def test_wal_pragma_failure_falls_back_instead_of_crashing_startup(monkeyp
     finally:
         monkeypatch.setattr(db_module._conn, "execute", real_execute)
         await db_module.close_db()
+
+
+_LEGACY_API_TOKENS = (
+    "DROP TABLE api_tokens;"
+    "CREATE TABLE api_tokens (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE,"
+    " created_at TEXT NOT NULL, last_used_at TEXT);"
+    "INSERT INTO api_tokens VALUES ('old-token', 4242, '2026-01-01T00:00:00', '2026-02-01T00:00:00');"
+)
+
+
+async def test_api_tokens_unique_user_is_dropped_and_tokens_survive(tmp_path):
+    """Раньше api_tokens держал UNIQUE(user_id) — один токен на человека, и
+    вход на втором устройстве разлогинивал первое. Ограничение колонки ALTER
+    не снимает, таблица перестраивается — и живой токен обязан это пережить,
+    иначе релиз разлогинит всех разом."""
+    path = await _legacy_db(tmp_path, _LEGACY_API_TOKENS)
+
+    await db_module.init_db(path)
+    try:
+        assert await db_module.resolve_api_token("old-token") == 4242
+        cur = await db_module.conn().execute(
+            "SELECT created_at, last_used_at FROM api_tokens WHERE token = 'old-token'"
+        )
+        row = await cur.fetchone()
+        assert row["created_at"] == "2026-01-01T00:00:00"
+        new = await db_module.issue_api_token(4242)
+        assert await db_module.resolve_api_token(new) == 4242
+        assert await db_module.resolve_api_token("old-token") == 4242
+        cur = await db_module.conn().execute("PRAGMA index_list(api_tokens)")
+        names = {r["name"] for r in await cur.fetchall()}
+        assert "idx_api_tokens_user" in names
+        cur = await db_module.conn().execute(
+            "SELECT name FROM sqlite_master WHERE name = 'api_tokens_rebuild'"
+        )
+        assert await cur.fetchone() is None
+    finally:
+        await db_module.close_db()
+
+    # Второй запуск — уже без UNIQUE, перестраивать нечего, токены на месте.
+    await db_module.init_db(path)
+    try:
+        cur = await db_module.conn().execute("SELECT COUNT(*) FROM api_tokens WHERE user_id = 4242")
+        assert (await cur.fetchone())[0] == 2
+    finally:
+        await db_module.close_db()

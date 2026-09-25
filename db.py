@@ -686,9 +686,15 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
 -- Токен доступа iOS-клиента к /v1 (см. api_v1.py) — та же форма, что у
 -- mcp_tokens, но отдельная таблица: это другой клиент того же человека, и его
 -- перевыпуск не должен трогать MCP-токен.
+--
+-- Строк на человека несколько — по одной на устройство (вход на iPad не
+-- разлогинивает iPhone), но не больше MAX_API_TOKENS_PER_USER: при выдаче
+-- нового лишние, дольше всех не ходившие, гасятся (см. issue_api_token).
+-- Раньше тут стоял UNIQUE(user_id); старые базы перестраивает
+-- _drop_api_tokens_user_unique.
 CREATE TABLE IF NOT EXISTS api_tokens (
     token TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     last_used_at TEXT
 );
@@ -1007,8 +1013,47 @@ async def _dedupe_exercise_links() -> None:
         )
 
 
+async def _drop_api_tokens_user_unique() -> None:
+    """Снять UNIQUE(user_id) со старой api_tokens: он держал «один токен на
+    человека», и вход на втором устройстве разлогинивал первое.
+
+    SQLite не умеет снимать ограничение колонки через ALTER, поэтому таблица
+    перестраивается: новая рядом, строки переносятся как есть, старая
+    удаляется, новая встаёт на её имя. Внешних ключей на api_tokens нет, так
+    что RENAME ничего не перецепляет. Идемпотентно: на уже перестроенной (или
+    новой) базе unique-индекса по одному user_id нет, и функция ничего не
+    делает. Коммит — общий в конце _migrate_schema."""
+    cur = await _conn.execute("PRAGMA index_list(api_tokens)")
+    for index in await cur.fetchall():
+        if not index["unique"]:
+            continue
+        info = await _conn.execute(f"PRAGMA index_info({index['name']})")
+        if [row["name"] for row in await info.fetchall()] == ["user_id"]:
+            break
+    else:
+        return
+    await _conn.execute("DROP TABLE IF EXISTS api_tokens_rebuild")
+    await _conn.execute(
+        "CREATE TABLE api_tokens_rebuild ("
+        "token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, "
+        "created_at TEXT NOT NULL, last_used_at TEXT)"
+    )
+    await _conn.execute(
+        "INSERT INTO api_tokens_rebuild (token, user_id, created_at, last_used_at) "
+        "SELECT token, user_id, created_at, last_used_at FROM api_tokens"
+    )
+    await _conn.execute("DROP TABLE api_tokens")
+    await _conn.execute("ALTER TABLE api_tokens_rebuild RENAME TO api_tokens")
+
+
 async def _migrate_schema() -> None:
     """Upgrade older on-disk databases to the current column set in-place."""
+    await _drop_api_tokens_user_unique()
+    # Токенов на человека теперь несколько: по user_id их гасит удаление
+    # аккаунта и подрезка до MAX_API_TOKENS_PER_USER при каждой выдаче.
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens (user_id)"
+    )
     await _conn.execute("DROP INDEX IF EXISTS idx_exercises_user_name")
 
     cost_cols = await _column_names("cost_events")
@@ -5604,8 +5649,9 @@ _api_token_generation = 0
 
 def _forget_api_tokens() -> None:
     """Сбросить кэш токенов /v1 целиком. Зовут все, кто удаляет строки
-    api_tokens или переписывает их владельца: issue_api_token (перевыпуск и есть
-    отзыв), revoke_api_token, wipe_user_account (удаление аккаунта),
+    api_tokens или переписывает их владельца: issue_api_token (подрезка сверх
+    MAX_API_TOKENS_PER_USER), revoke_api_token, revoke_single_api_token,
+    wipe_user_account (удаление аккаунта),
     link_telegram_to_app_account (слияние переносит токен на другой id), а
     также init_db/close_db. Целиком, а не по одному токену: отзыв редок, а
     промах стоит один SELECT."""
@@ -5624,16 +5670,34 @@ def _api_token_touch_due(last_used_at: Optional[str]) -> bool:
     return dt.datetime.now() - last >= API_TOKEN_TOUCH_INTERVAL
 
 
+# Сколько живых токенов /v1 держим на человека. Токен — это устройство
+# (телефон, планшет, переустановка приложения), и раньше он был один: вход на
+# втором устройстве молча выкидывал из первого. Но и без потолка нельзя —
+# каждый вход (переустановка, App Review под демо-аккаунтом) добавляет строку,
+# и таблица росла бы вечно. Десять — с запасом на все устройства одного
+# человека; сверх — гасятся те, что дольше всех не ходили.
+MAX_API_TOKENS_PER_USER = 10
+
+
 async def issue_api_token(user_id: int) -> str:
-    """Выдать iOS-клиенту новый токен доступа, погасив прежний (см.
-    issue_mcp_token — тот же приём: перевыпуск и есть отзыв)."""
+    """Выдать iOS-клиенту новый токен доступа. Прежние токены этого человека
+    НЕ гасятся (в отличие от issue_mcp_token): у каждого устройства свой, и
+    вход на втором не разлогинивает первое. Сверх MAX_API_TOKENS_PER_USER
+    удаляются те, что дольше всех не ходили (last_used_at, а у ни разу не
+    ходившего — created_at): живой телефон не должен вылететь из-за пачки
+    переустановок на другом."""
     token = secrets.token_urlsafe(32)
     async with _write_lock:
         try:
-            await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
             await conn().execute(
                 "INSERT INTO api_tokens (token, user_id, created_at) VALUES (?, ?, ?)",
                 (token, user_id, now_iso()),
+            )
+            await conn().execute(
+                "DELETE FROM api_tokens WHERE user_id = ? AND token NOT IN ("
+                "SELECT token FROM api_tokens WHERE user_id = ? "
+                "ORDER BY COALESCE(last_used_at, created_at) DESC, rowid DESC LIMIT ?)",
+                (user_id, user_id, MAX_API_TOKENS_PER_USER),
             )
             await conn().commit()
         finally:
@@ -5642,10 +5706,25 @@ async def issue_api_token(user_id: int) -> str:
 
 
 async def revoke_api_token(user_id: int) -> bool:
-    """True, если токен был и его удалили."""
+    """Погасить ВСЕ токены /v1 человека. True, если хоть один был."""
     async with _write_lock:
         try:
             cur = await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+            await conn().commit()
+        finally:
+            _forget_api_tokens()
+        return cur.rowcount > 0
+
+
+async def revoke_single_api_token(token: str) -> bool:
+    """Погасить один токен — выход на этом устройстве (POST /v1/auth/logout),
+    остальные устройства человека остаются в аккаунте. True, если такой
+    токен был."""
+    if not token:
+        return False
+    async with _write_lock:
+        try:
+            cur = await conn().execute("DELETE FROM api_tokens WHERE token = ?", (token,))
             await conn().commit()
         finally:
             _forget_api_tokens()
@@ -5798,9 +5877,15 @@ _MERGE_CONTENT_EXCLUDE_TABLES = frozenset({
 # `UPDATE ... SET user_id = приёмник` упадёт на UNIQUE. Слияние разрешено
 # только когда СОДЕРЖАТЕЛЬНЫХ данных с двух сторон нет одновременно (см.
 # выше), а строка токена содержательными данными не считается — так что чужую
-# по этим трём таблицам просто гасим перед переносом: свежий токен всё равно
+# по этим таблицам просто гасим перед переносом: свежий токен всё равно
 # переиздаёт вызывающий код после успешного слияния.
-_MERGE_UNIQUE_PER_OWNER_TABLES = frozenset({"api_tokens", "mcp_tokens", "push_tokens"})
+#
+# api_tokens здесь больше нет: токенов /v1 на человека теперь несколько (по
+# одному на устройство), UNIQUE по user_id снят, и токены приёмника переживают
+# слияние — его другое устройство не должно вылетать из аккаунта оттого, что
+# он связал с ним app-only аккаунт. Лишние сверх MAX_API_TOKENS_PER_USER
+# подрежет следующий issue_api_token.
+_MERGE_UNIQUE_PER_OWNER_TABLES = frozenset({"mcp_tokens", "push_tokens"})
 
 
 async def _has_content_data(telegram_id: int) -> bool:

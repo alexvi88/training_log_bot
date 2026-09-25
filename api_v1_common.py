@@ -154,6 +154,9 @@ async def authed_user_id(request: Request) -> int:
     if user_id is None:
         raise ApiError(401, "unauthorized", "invalid or revoked token")
     request.state.user_id = user_id
+    # Сам токен — для POST /auth/logout: он гасит только токен этого
+    # устройства, а не все токены человека.
+    request.state.api_token = token
     user = await db.get_user(user_id)
     # Строка пользователя — на весь запрос: язык берётся из неё здесь же, а
     # обработчикам, которым она нужна сразу после входа, незачем читать её из
