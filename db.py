@@ -33,11 +33,13 @@ import exercise_photos
 import i18n
 import search_terms
 from seed_data import (
+    ABS_GROUP_NAME,
     BODYWEIGHT_TEMPLATES,
     EXERCISE_TEMPLATES,
     MUSCLE_GROUP_PRESETS,
     PROGRAM_BY_KEY,
     canonical_exercise_name,
+    canonical_muscle_group_name,
     localized_exercise_name,
     localized_program_day_name,
     localized_program_description,
@@ -1407,17 +1409,53 @@ def conn() -> aiosqlite.Connection:
 
 
 async def _seed_globals() -> None:
+    """Reconcile the global muscle groups with MUSCLE_GROUP_PRESETS (idempotent).
+
+    Runs on every startup, like `_sync_exercise_templates`, and for the same
+    reason: seeding only into an empty table meant a preset added later
+    («Пресс») never reached a deployed database. A preset missing from the DB
+    is inserted; one that's there gets the preset's emoji/sort_order and is
+    un-archived. The last part matters for «Пресс» specifically: older
+    databases already carry a global «Пресс» row that `_migrate_muscle_groups`
+    archived back when the preset list had no such group — reviving that row
+    (its exercises were all moved out long ago) keeps one global «Пресс»
+    instead of adding a second one next to the archived ghost.
+
+    Global groups that are NOT in the presets are left alone: the legacy ones
+    are already archived by `_migrate_muscle_groups`, and nothing here should
+    delete a row exercises may still point at. User-owned groups
+    (`user_id IS NOT NULL`) are never touched here — a user's own «Пресс» is
+    handled once, by `_move_default_abs_exercises`.
+    """
     db = conn()
-    cur = await db.execute("SELECT COUNT(*) FROM muscle_groups WHERE user_id IS NULL")
-    (count,) = await cur.fetchone()
-    if count == 0:
-        async with _write_lock:
-            for name, emoji, sort_order in MUSCLE_GROUP_PRESETS:
+    cur = await db.execute(
+        "SELECT id, name, emoji, sort_order, is_archived FROM muscle_groups "
+        "WHERE user_id IS NULL ORDER BY is_archived, id"
+    )
+    # Active row first, then the oldest: if a name somehow has several global
+    # rows, the one people already see wins.
+    by_name: dict[str, aiosqlite.Row] = {}
+    for row in await cur.fetchall():
+        by_name.setdefault(row["name"], row)
+    async with _write_lock:
+        changed = False
+        for name, emoji, sort_order in MUSCLE_GROUP_PRESETS:
+            row = by_name.get(name)
+            if row is None:
                 await db.execute(
                     "INSERT INTO muscle_groups (user_id, name, emoji, sort_order) "
                     "VALUES (NULL, ?, ?, ?)",
                     (name, emoji, sort_order),
                 )
+                changed = True
+            elif row["is_archived"] or row["emoji"] != emoji or row["sort_order"] != sort_order:
+                await db.execute(
+                    "UPDATE muscle_groups SET emoji = ?, sort_order = ?, is_archived = 0 "
+                    "WHERE id = ?",
+                    (emoji, sort_order, row["id"]),
+                )
+                changed = True
+        if changed:
             await db.commit()
 
 
@@ -1462,17 +1500,34 @@ async def _sync_exercise_templates() -> None:
     existing = await cur.fetchall()
 
     kept: set[tuple[int, str]] = set()
-    to_delete: list[int] = []
+    leftovers: list[aiosqlite.Row] = []
     for row in existing:
         key = (row["primary_group_id"], (row["name"] or "").lower())
         if key in desired and key not in kept:
             kept.add(key)  # first row for this catalog entry — keep it
         else:
+            leftovers.append(row)
+
+    # Шаблон, у которого поменялась только группа (пресс уехал из «Другое» в
+    # «Пресс»), переносится на месте, а не пересоздаётся: id шаблона живёт в
+    # уже отправленных кнопках («📋 …» с `ai:tpladd:<id>`) и в открытом
+    # каталоге приложения — удалить и завести заново значило бы превратить их
+    # в «не найдено». Второй проход, а не в первом цикле: точное совпадение
+    # (та же группа) должно победить перенос, в каком бы порядке ни шли строки.
+    desired_key_by_name = {lname: (gid, lname) for (gid, lname) in desired}
+    to_delete: list[int] = []
+    to_regroup: list[tuple[int, int]] = []
+    for row in leftovers:
+        key = desired_key_by_name.get((row["name"] or "").lower())
+        if key is not None and key not in kept:
+            kept.add(key)
+            to_regroup.append((key[0], row["id"]))
+        else:
             to_delete.append(row["id"])  # obsolete entry, or a duplicate of a kept one
 
     to_insert = [(gid, name) for (gid, _lname), name in desired.items() if (gid, _lname) not in kept]
 
-    if not to_delete and not to_insert:
+    if not to_delete and not to_insert and not to_regroup:
         async with _write_lock:
             for ex_name, (load, factor) in BODYWEIGHT_TEMPLATES.items():
                 await db.execute(
@@ -1487,6 +1542,10 @@ async def _sync_exercise_templates() -> None:
     async with _write_lock:
         for ex_id in to_delete:
             await db.execute("DELETE FROM exercises WHERE id = ?", (ex_id,))
+        for group_id, ex_id in to_regroup:
+            await db.execute(
+                "UPDATE exercises SET primary_group_id = ? WHERE id = ?", (group_id, ex_id)
+            )
         for group_id, ex_name in to_insert:
             display_name = build_display_name(ex_name)
             load, factor = BODYWEIGHT_TEMPLATES.get(ex_name, ("none", 1.0))
@@ -1510,7 +1569,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 async def _run_one_shot_migrations() -> None:
@@ -1537,10 +1596,94 @@ async def _run_one_shot_migrations() -> None:
         await _migrate_programs_from_names()
     if version < 5:
         await _backfill_bodyweight_load()
+    if version < 6:
+        await _move_default_abs_exercises()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     await _conn.commit()
+
+
+async def _move_default_abs_exercises() -> None:
+    """Переложить пресс атлетов из «Другое» в новую встроенную группу «Пресс».
+
+    Каталог переехал сам (`_sync_exercise_templates`), но у каждого атлета
+    лежат свои копии шаблонов (`fork_exercise_from_template`), и их группа —
+    собственное поле строки, унаследованное в момент форка. Без этой миграции
+    новичок получал бы планку в «Пресс», а человек с полугодом истории — всё
+    так же в «Другое».
+
+    Что переезжает — упражнение атлета, чья идентичность (`original_name`, см.
+    seed_data) — шаблон из группы «Пресс», и которое лежит РОВНО в глобальной
+    «Другое», то есть там, куда его положил каталог. Отдельного флага «группу
+    меняли руками» в базе нет (`update_exercise_group` просто пишет новое
+    значение), поэтому это единственный честный признак нетронутости: кто
+    перенёс планку в «Ноги» или в свою группу, тот её там и найдёт. Переименование
+    не мешает — `original_name` от него не меняется. Своё упражнение, которое
+    атлет сам завёл под каталожным именем («Планка» руками, в «Другое»),
+    неотличимо от форка — у него тот же `original_name` — и переезжает тоже:
+    фото и техника к нему и так уже цеплялись как к каталожному.
+
+    Своя группа атлета с именем встроенной («Пресс», «Abs» — сверка та же, что
+    у `POST /v1/muscle-groups`, через `canonical_muscle_group_name`) сливается
+    со встроенной: её упражнения переезжают в глобальный «Пресс», сама она
+    архивируется (не удаляется). Иначе в каждом выборе группы и на панели
+    недельного объёма стояло бы два «Пресс» подряд, а подходы делились бы между
+    ними. Подходы привязаны к упражнению, а не к группе — теряться нечему.
+
+    One-shot: иначе атлет, который после миграции сознательно вернул планку в
+    «Другое», на следующем рестарте снова находил бы её в «Пресс».
+    """
+    cur = await _conn.execute(
+        "SELECT id, name FROM muscle_groups WHERE user_id IS NULL AND is_archived = 0"
+    )
+    global_ids = {r["name"]: r["id"] for r in await cur.fetchall()}
+    abs_id = global_ids.get(ABS_GROUP_NAME)
+    other_id = global_ids.get("Другое")
+    if abs_id is None:
+        return
+
+    cur = await _conn.execute(
+        "SELECT id, name FROM muscle_groups WHERE user_id IS NOT NULL AND is_archived = 0"
+    )
+    own_abs = [
+        r["id"] for r in await cur.fetchall()
+        if canonical_muscle_group_name(r["name"]) == ABS_GROUP_NAME
+    ]
+
+    abs_identities = {
+        _fold_exercise_name(name) for group, name in EXERCISE_TEMPLATES if group == ABS_GROUP_NAME
+    }
+    to_move: list[int] = []
+    if other_id is not None:
+        cur = await _conn.execute(
+            "SELECT id, original_name FROM exercises "
+            "WHERE user_id IS NOT NULL AND is_template = 0 AND primary_group_id = ?",
+            (other_id,),
+        )
+        to_move = [
+            r["id"] for r in await cur.fetchall()
+            if r["original_name"] and _fold_exercise_name(r["original_name"]) in abs_identities
+        ]
+
+    if not own_abs and not to_move:
+        return
+    async with _write_lock:
+        for group_id in own_abs:
+            await _conn.execute(
+                "UPDATE exercises SET primary_group_id = ? WHERE primary_group_id = ?",
+                (abs_id, group_id),
+            )
+            await _conn.execute("UPDATE muscle_groups SET is_archived = 1 WHERE id = ?", (group_id,))
+        for ex_id in to_move:
+            await _conn.execute(
+                "UPDATE exercises SET primary_group_id = ? WHERE id = ?", (abs_id, ex_id)
+            )
+        await _conn.commit()
+    logger.info(
+        "_move_default_abs_exercises: moved %s exercises, merged %s own abs groups",
+        len(to_move), len(own_abs),
+    )
 
 
 async def _backfill_bodyweight_load() -> None:
@@ -1790,17 +1933,19 @@ async def _backfill_seeded_from_program() -> None:
     await _conn.commit()
 
 
+# «Пресс» здесь был, пока его не было среди встроенных групп, — теперь он есть
+# (seed_data.MUSCLE_GROUP_PRESETS), и оставить его в карте значило бы на каждом
+# рестарте выгребать пресс обратно в «Другое» и архивировать встроенную группу.
 GROUP_MERGE_MAP = {
     "Ягодицы": "Ноги",
     "Икры": "Ноги",
-    "Пресс": "Другое",
     "Предплечья": "Другое",
     "Трапеции": "Другое",
 }
 
 
 async def _migrate_muscle_groups() -> None:
-    """Merge legacy muscle groups (from older on-disk DBs) into the current 7-group set."""
+    """Merge legacy muscle groups (from older on-disk DBs) into the current preset set."""
     db = conn()
     cur = await db.execute("SELECT id, name FROM muscle_groups WHERE user_id IS NULL")
     rows = await cur.fetchall()

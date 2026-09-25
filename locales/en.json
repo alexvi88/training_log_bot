@@ -799,6 +799,7 @@
   "mcp.server_address_label": "🌐 Server address:",
   "mcp.token_label": "🔑 Token:",
   "mcp.token_last_used": "🕒 Last request on this token: {when}",
+  "muscle_group.abs.name": "Abs",
   "muscle_group.back.name": "Back",
   "muscle_group.biceps.name": "Biceps",
   "muscle_group.chest.name": "Chest",
