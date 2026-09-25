@@ -1182,7 +1182,17 @@ async def exm_new_group_entered(message: Message, state: FSMContext):
     if not name:
         await message.reply(i18n.t("exercises.new_group.empty"))
         return
-    await db.create_muscle_group(message.from_user.id, name)
+    # Имя встроенной группы на любом языке («Пресс», «Abs», «Chest») — это та
+    # самая встроенная группа, а не новая, как и в POST /v1/muscle-groups.
+    # Без сверки рядом со встроенной заводился бы второй «Пресс», и
+    # упражнения с подходами расползались бы по двум группам.
+    canonical = seed_data.canonical_muscle_group_name(name)
+    builtin_exists = canonical is not None and any(
+        g["user_id"] is None and g["name"] == canonical
+        for g in await db.list_muscle_groups(message.from_user.id)
+    )
+    if not builtin_exists:
+        await db.create_muscle_group(message.from_user.id, name)
     # One screen, not three: the group list itself shows the new group, so the
     # separate "Группа «X» создана." and the placeholder it used to edit were
     # both just litter left in the chat.

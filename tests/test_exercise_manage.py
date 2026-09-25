@@ -843,6 +843,26 @@ async def test_group_creation_leaves_a_single_screen(fresh_db, user_id):
     assert "Предплечья" in groups
 
 
+async def test_new_group_with_a_builtin_name_does_not_duplicate_it(fresh_db, user_id):
+    """«Пресс» (или «Abs», «Chest») — это встроенная группа, а не новая своя:
+    иначе в списке групп стояло бы два «Пресс» подряд, и упражнения делились
+    бы между ними. Тот же ответ, что у POST /v1/muscle-groups."""
+    before = await fresh_db.list_muscle_groups(user_id)
+    assert any(g["user_id"] is None and g["name"] == "Пресс" for g in before)
+
+    for typed in ("Пресс", "abs ", "Chest"):
+        state = await _make_state(user_id)
+        await state.set_state(ExerciseManage.new_group_name)
+        message = _make_message(user_id, typed)
+        await exercises.exm_new_group_entered(message, state)
+        # Экран всё равно показывает список групп — человек видит, что группа есть.
+        assert "Выбери группу мышц" in message.answer.await_args.args[0]
+
+    after = await fresh_db.list_muscle_groups(user_id)
+    assert len(after) == len(before)
+    assert not [g for g in after if g["user_id"] == user_id]
+
+
 async def test_an_overlong_description_is_refused_not_stored(fresh_db, user_id):
     """Описание уезжает в подпись к фото, а у подписи лимит 1024, не 4096.
     Проверки не было нигде, и карточка упражнения с фото после длинного описания
