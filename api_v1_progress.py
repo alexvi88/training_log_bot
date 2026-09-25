@@ -202,6 +202,16 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
                         else None
                     ),
                     "sets": len(s.sets),
+                    # Ещё две величины той же тренировки — для переключателя
+                    # «вес / e1RM / тоннаж» у графика в приложении. Добавлены
+                    # рядом с `value`, а не вместо: `value` по-прежнему e1RM
+                    # (или повторы), и уже установленные версии приложения
+                    # читают только его. Считаются по тому же db.load_of, что
+                    # и e1RM (см. progress_data.load_sessions), в единицах
+                    # атлета; тоннаж — сумма вес×повторы, как у бота
+                    # (analytics.SessionStats.tonnage).
+                    "max_weight": round(max((x.weight for x in s.sets), default=0.0), 1),
+                    "tonnage": round(s.tonnage, 1),
                     "note": notes.get(s.workout_id),
                 }
                 for s, value in zip(shown, values, strict=True)
