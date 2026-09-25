@@ -205,3 +205,42 @@ async def test_bom_prefixed_csv_is_read_like_a_plain_one(fresh_db, client_factor
     assert resp.status_code == 200, resp.text
     assert resp.json()["workouts_imported"] == 2
     assert resp.json()["sets_imported"] == 3
+
+
+async def test_concurrent_double_import_writes_the_file_once(fresh_db, client_factory):
+    # Двойной тап / повтор после таймаута: два одинаковых запроса уходят
+    # почти одновременно. Без брони оба видели пустую историю до коммита
+    # первого, и файл записывался дважды (72 тренировки → 144).
+    import asyncio
+
+    user_id = 111
+    await fresh_db.get_or_create_user(telegram_id=user_id, username="tester")
+    await fresh_db.create_exercise(user_id, "Жим", None)
+    first = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    second = client_factory()
+    second.headers.update(first.headers)
+    csv = "date,exercise,weight,reps\n" + "\n".join(
+        f"2026-0{m}-1{d},Жим,100,5" for m in range(1, 9) for d in range(0, 9)
+    )
+
+    r1, r2 = await asyncio.gather(
+        first.post("/import/csv", json={"csv": csv}),
+        second.post("/import/csv", json={"csv": csv}),
+    )
+
+    codes = sorted([r1.status_code, r2.status_code])
+    assert codes == [200, 409], (r1.text, r2.text)
+    loser = r1 if r1.status_code == 409 else r2
+    assert loser.json()["error"] == "import_in_progress"
+    winner = r1 if r1.status_code == 200 else r2
+    assert winner.json()["workouts_imported"] == 72
+    cur = await fresh_db.conn().execute(
+        "SELECT COUNT(*) FROM workouts WHERE user_id = ?", (user_id,)
+    )
+    assert (await cur.fetchone())[0] == 72
+
+    # Бронь снимается после ответа: следующий импорт снова доступен (и,
+    # как и раньше, не плодит дубли).
+    again = await first.post("/import/csv", json={"csv": csv})
+    assert again.status_code == 200, again.text
+    assert again.json()["workouts_imported"] == 0

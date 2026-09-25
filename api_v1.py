@@ -339,9 +339,9 @@ async def me(request: Request) -> JSONResponse:
 
 # ---------- push-уведомления (APNs) ----------
 #
-# Только приём и хранение device token — само отправление пушей ждёт
-# .p8-ключа APNs (платный Apple Developer Program) и решения, что вообще
-# слать. См. db.push_tokens.
+# Приём и хранение device token — по строке на устройство (iPhone и iPad
+# одного человека получают пуши оба). Само отправление — engagement.py /
+# announcements.py через apns.py. См. db.push_tokens.
 
 async def register_push_token(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
@@ -354,8 +354,27 @@ async def register_push_token(request: Request) -> JSONResponse:
 
 
 async def unregister_push_token(request: Request) -> JSONResponse:
+    """Выход на устройстве: перестать слать пуши НА НЕГО.
+
+    Строка push_tokens теперь на устройство, так что клиент называет, какое
+    именно — `device_token` в JSON-теле или в query (`?device_token=…`), тот
+    же hex, что уходил в POST /push/register. Удаляется только этот токен и
+    только если он принадлежит вызывающему: выход на iPad не глушит iPhone.
+    Без `device_token` (старые сборки шлют DELETE без тела) — прежнее
+    поведение, все устройства человека: вышедший телефон не должен и дальше
+    получать пуши аккаунта, а остальные перерегистрируются сами при запуске.
+    """
     user_id = await _authed_user_id(request)
-    await db.unregister_push_token(user_id, "ios")
+    device_token = request.query_params.get("device_token")
+    if device_token is None and await request.body():
+        body = await _json_body(request)
+        if "device_token" in body and body["device_token"] is not None:
+            device_token = _require(body, "device_token", str)
+    if device_token is not None:
+        device_token = device_token.strip()
+        if not device_token:
+            raise ApiError(400, "bad_request", "device_token must not be empty")
+    await db.unregister_push_token(user_id, "ios", device_token)
     return JSONResponse({"unregistered": True})
 
 
@@ -450,12 +469,44 @@ async def list_exercises(request: Request) -> JSONResponse:
     return JSONResponse([_exercise_json(r) for r in rows])
 
 
-async def create_exercise(request: Request) -> JSONResponse:
-    user_id = await _authed_user_id(request)
-    body = await _json_body(request)
+def _exercise_name(body: dict[str, Any]) -> str:
+    """Имя упражнения из тела: не пустое и не длиннее
+    config.MAX_EXERCISE_NAME_LENGTH — того же порога, на котором бот
+    переспрашивает «точно это упражнение?» (handlers.exercises.
+    _suspicious_name_reason). Переспросить REST не может, так что здесь это
+    отказ: без него /v1 заводил упражнение с названием в 5000 символов, и оно
+    разваливало каждую карточку и список."""
     name = str(_require(body, "name", str)).strip()
     if not name:
         raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        raise ApiError(
+            400, "name_too_long",
+            f"name must be at most {config.MAX_EXERCISE_NAME_LENGTH} chars",
+            key="api.error.name_too_long", max=config.MAX_EXERCISE_NAME_LENGTH,
+        )
+    return name
+
+
+def _note_field(body: dict[str, Any]) -> Optional[str]:
+    """`note` из тела: строка или null, не длиннее config.MAX_WORKOUT_NOTE_LENGTH.
+    Раньше finish клал в базу что пришло — число, объект, мегабайт текста."""
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        raise ApiError(400, "bad_request", "note must be a string or null")
+    if note is not None and len(note) > config.MAX_WORKOUT_NOTE_LENGTH:
+        raise ApiError(
+            400, "bad_request",
+            f"note must be at most {config.MAX_WORKOUT_NOTE_LENGTH} characters",
+            key="api.error.text_too_long", max=config.MAX_WORKOUT_NOTE_LENGTH,
+        )
+    return note
+
+
+async def create_exercise(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    name = _exercise_name(body)
     group_id = body.get("group_id")
     if group_id is not None:
         if not isinstance(group_id, int):
@@ -481,9 +532,7 @@ async def update_exercise(request: Request) -> JSONResponse:
     body = await _json_body(request)
 
     if "name" in body:
-        name = str(_require(body, "name", str)).strip()
-        if not name:
-            raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
+        name = _exercise_name(body)
         # Клэш по display_name — та же ловушка, что update_exercise_name
         # разбирает в docstring: переименование в уже занятое имя должно
         # остаться отдельным ответом, а не молча слиться с чужой историей.
@@ -1024,14 +1073,55 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
     )
 
 
+async def _optional_set_id(request: Request) -> Optional[int]:
+    """`set_id` для delete_last_set — из query или из JSON-тела, если есть."""
+    raw = request.query_params.get("set_id")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise ApiError(400, "bad_request", "set_id must be int") from exc
+    if not await request.body():
+        return None
+    body = await _json_body(request)
+    value = body.get("set_id")
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ApiError(400, "bad_request", "set_id must be int")
+    return value
+
+
 async def delete_last_set(request: Request) -> JSONResponse:
     """Убрать последний подход этого упражнения — правка опечатки веса/повторов
-    сразу после записи, тем же приёмом, что «↩️ Отменить» в боте."""
+    сразу после записи, тем же приёмом, что «↩️ Отменить» в боте.
+
+    Необязательный `set_id` (query `?set_id=…` или JSON-тело `{"set_id": …}`)
+    — id подхода, который клиент видит последним. С ним ручка идемпотентна:
+    повтор после потерянного ответа находит подход уже удалённым и отвечает
+    200 `{"id": set_id, "already_deleted": true}`, а не сносит следующий;
+    если после этого подхода уже записан другой того же упражнения — 409
+    `set_not_last`, ничего не удалено (удалять молча не тот подход хуже, чем
+    переспросить: клиент перечитает тренировку). Без `set_id` — прежнее
+    поведение: удаляется текущий последний, каким бы он ни был."""
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     exercise_id = int(request.path_params["exercise_id"])
     workout = await _owned_workout(workout_id, user_id)
     _require_open(workout)
+    set_id = await _optional_set_id(request)
+    if set_id is not None:
+        outcome, deleted = await db.delete_set_if_last_for_exercise(
+            workout_id, exercise_id, set_id
+        )
+        if outcome == "gone":
+            return JSONResponse({"id": set_id, "already_deleted": True})
+        if outcome == "elsewhere":
+            raise ApiError(404, "not_found", "set not found for this exercise in this workout")
+        if outcome == "not_last":
+            raise ApiError(409, "set_not_last", "a newer set of this exercise exists")
+        await on_workout_edited(workout_id)
+        return JSONResponse(_set_json(deleted))
     block_id = await _find_block_for_exercise(workout_id, exercise_id)
     if block_id is None:
         raise ApiError(404, "not_found", "exercise has no sets in this workout")
@@ -1213,7 +1303,7 @@ async def finish_workout(request: Request) -> JSONResponse:
     # "note" отсутствует в теле — не значит "очисти её": iOS зовёт finish без
     # note, когда её уже поставили раньше через PATCH /note, и молчаливая
     # перезапись на NULL стёрла бы то, что пользователь только что написал.
-    note = body["note"] if "note" in body else workout["note"]
+    note = _note_field(body) if "note" in body else workout["note"]
     # У занесения задним числом время окончания берётся из его же даты, а не
     # с часов сервера: иначе тренировка за прошлый вторник закончилась бы
     # сегодня и растянулась в истории на неделю.
@@ -1350,9 +1440,7 @@ async def update_exercise_note(request: Request) -> JSONResponse:
     # в отличие от delete_last_set: там блок обязан существовать по смыслу
     # операции.
     body = await _json_body(request)
-    note = body.get("note")
-    if note is not None and not isinstance(note, str):
-        raise ApiError(400, "bad_request", "note must be a string or null")
+    note = _note_field(body)
     await db.set_workout_exercise_note(workout_id, exercise_id, note)
     # Пустая строка чистит заметку так же, как None (см. db.set_workout_
     # exercise_note) — перечитываем сохранённое, а не отдаём эхо тела запроса,
@@ -1369,9 +1457,7 @@ async def update_note(request: Request) -> JSONResponse:
     workout_id = int(request.path_params["workout_id"])
     await _owned_workout(workout_id, user_id)
     body = await _json_body(request)
-    note = body.get("note")
-    if note is not None and not isinstance(note, str):
-        raise ApiError(400, "bad_request", "note must be a string or null")
+    note = _note_field(body)
     await db.update_workout_note(workout_id, note)
     workout = await db.get_workout(workout_id)
     return JSONResponse(await _workout_detail_json(workout))

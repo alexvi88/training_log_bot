@@ -114,10 +114,10 @@ async def _capture_send(monkeypatch) -> list[dict]:
 
     monkeypatch.setattr(apns, "send_alert", fake_send_alert)
 
-    async def token(_telegram_id):
-        return "devtoken"
+    async def tokens(_telegram_id):
+        return ["devtoken"]
 
-    monkeypatch.setattr(engagement, "_ios_device_token", token)
+    monkeypatch.setattr(engagement, "_ios_device_tokens", tokens)
     return sent
 
 

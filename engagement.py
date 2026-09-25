@@ -444,18 +444,10 @@ def _should_show_tz_hint(user) -> bool:
     return not user["tz_set_by_user"] and not user["tz_push_hint_shown"]
 
 
-async def _ios_device_token(telegram_id: int) -> Optional[str]:
-    """Активный iOS device token пользователя, если он привязывал приложение
-    (db.register_push_token) — прямой SELECT, а не новая функция в db.py: эта
-    задача сознательно не трогает db.py (см. её постановку), а таблица
-    push_tokens и её схема там уже есть. Тот же приём прямого запроса через
-    db.conn(), которым уже пользуются тесты этого репозитория."""
-    cur = await db.conn().execute(
-        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = 'ios'",
-        (telegram_id,),
-    )
-    row = await cur.fetchone()
-    return row["device_token"] if row is not None else None
+async def _ios_device_tokens(telegram_id: int) -> list[str]:
+    """Все iOS device token'ы пользователя (db.register_push_token) — по
+    одному на устройство: iPhone и iPad получают один и тот же пуш."""
+    return await db.get_push_tokens(telegram_id, "ios")
 
 
 async def _send_apns_push(telegram_id: int, decision: PushDecision) -> None:
@@ -469,16 +461,19 @@ async def _send_apns_push(telegram_id: int, decision: PushDecision) -> None:
     """
     if not apns.is_configured():
         return
-    device_token = await _ios_device_token(telegram_id)
-    if device_token is None:
+    device_tokens = await _ios_device_tokens(telegram_id)
+    if not device_tokens:
         return
+    # Текст выбирается один раз на человека (push_ios крутит ротацию текстов
+    # в push_rotation) — на все его устройства уходит один и тот же пуш.
     title, body = await push_ios.ios_alert(
         telegram_id, decision.category, i18n.get_lang(), **decision.ios_params
     )
     route = push_ios.ios_route(decision.category, **decision.ios_route_params)
-    await apns.send_alert(
-        telegram_id, device_token, title, body, category=decision.category, route=route
-    )
+    for device_token in device_tokens:
+        await apns.send_alert(
+            telegram_id, device_token, title, body, category=decision.category, route=route
+        )
 
 
 async def _deliver(

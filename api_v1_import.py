@@ -47,6 +47,7 @@ import config
 import db
 import i18n
 import timeutil
+from handlers import csv_import as bot_csv_import
 from handlers.csv_import import (
     REQUIRED_FIELDS,
     _auto_detect,
@@ -198,6 +199,22 @@ async def import_csv(request: Request) -> JSONResponse:
     пропускаются — повторная заливка того же файла не плодит дубли; это то
     же поведение, что у кнопки "✅ Загрузить" в боте (не "Загрузить все")."""
     user_id = await common.authed_user_id(request)
+    # Проверка дублей (_duplicate_dates) и запись (apply_import) не атомарны:
+    # два одинаковых запроса подряд (двойной тап, повтор после таймаута)
+    # оба видят пустую историю до того, как первый успел закоммитить, и
+    # файл записывается дважды — 72 тренировки превращались в 144. Та же
+    # бронь, что у кнопки «✅ Загрузить» в боте (общий с ботом _saving: один
+    # процесс, один атлет не пишет импорт в двух местах сразу); ответ — тот
+    # же 409 import_in_progress, что у import_share.
+    if not bot_csv_import._try_claim_saving(user_id):
+        raise ApiError(409, "import_in_progress", "an import for this account is already running")
+    try:
+        return await _do_import_csv(request, user_id)
+    finally:
+        bot_csv_import._saving.discard(user_id)
+
+
+async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     user = await db.get_user(user_id)
     body = await common.json_body(request)
     text = _csv_text(body)
