@@ -23,6 +23,8 @@ from starlette.responses import JSONResponse
 import config
 import db
 import exercise_descriptions
+import exercise_media
+import exercise_photos
 import i18n
 import parser
 import timeutil
@@ -362,10 +364,14 @@ def _too_big(error: tuple[int, str, str]) -> ApiError:
     return ApiError(status, code, f"{code}: payload too large", human=text)
 
 
-def exercise_json(row) -> dict[str, Any]:
+def exercise_json(row, last_set: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Сериализация упражнения — общая для api_v1.py (CRUD своих упражнений)
     и api_v1_templates.py (форк каталожного шаблона возвращает уже свою
-    заведённую копию тем же форматом, каким её потом отдаст GET /exercises)."""
+    заведённую копию тем же форматом, каким её потом отдаст GET /exercises).
+
+    `last_set` считается пачкой на весь список (db.last_best_set_by_exercise),
+    поэтому приходит снаружи — отдавать его с полями ручки должны через
+    exercises_json, а не звать эту функцию по строке."""
     return {
         "id": row["id"],
         "display_name": row["display_name"],
@@ -382,7 +388,42 @@ def exercise_json(row) -> dict[str, Any]:
         # GET /exercises/{id}/description, а список рисует только значок.
         "has_description": bool(exercise_descriptions.effective_description(row)),
         "is_archived": bool(row["is_archived"]),
+        # Миниатюра строки списка — первый каталожный кадр, публичный URL той
+        # же формы, что `images` у GET /exercises/{id}/media; null — кадров нет.
+        "thumb": exercise_media.thumb_url_for(row),
+        # Своё фото атлета — приватные байты за токеном (GET /exercises/{id}/photo),
+        # в `thumb` оно не попадает; флаг говорит приложению, что за ним есть
+        # смысл сходить. True только когда файл на месте — фото, живущее пока
+        # только ссылкой в Telegram, ручка /photo отдать не может.
+        "has_photo": exercise_photos.path_for_exercise(row) is not None,
+        # {"weight", "reps", "date"} — лучший подход последней законченной
+        # тренировки («100×8 · вчера» под именем), null — истории нет.
+        "last_set": last_set,
     }
+
+
+async def exercises_json(user_id: int, rows) -> list[dict[str, Any]]:
+    """exercise_json для пачки строк с `last_set` — одним запросом на весь
+    список (плюс строка пользователя за формулой e1RM и часовым поясом), а не
+    по запросу на упражнение: у атлета их 150+."""
+    rows = list(rows)
+    if not rows:
+        return []
+    user = await db.get_user(user_id)
+    last = await db.last_best_set_by_exercise(
+        user_id,
+        [r["id"] for r in rows],
+        user["e1rm_formula"] if user else "epley",
+        tz_offset=timeutil.offset_hours(user),
+    )
+    return [exercise_json(r, last.get(r["id"])) for r in rows]
+
+
+async def one_exercise_json(user_id: int, row) -> dict[str, Any]:
+    """exercises_json для одной строки — ответы создания, правки, архива и
+    форка отдают упражнение тем же форматом, что и список, с тем же
+    `last_set`, чтобы приложение не затирало строку списка пустым полем."""
+    return (await exercises_json(user_id, [row]))[0]
 
 
 def query_int(request: Request, key: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:

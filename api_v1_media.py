@@ -85,8 +85,9 @@ def media_file_url(path: str) -> str:
     Публичная (без подчёркивания): тот же формат URL нужен и превью каталожного
     шаблона в api_v1_templates.py — маршрут `/media/exercises/{name}` ниже общий
     для своих упражнений и ещё не форкнутых шаблонов, второй раздачи для
-    шаблонов заводить незачем."""
-    return f"/media/exercises/{os.path.basename(path)}"
+    шаблонов заводить незачем. Сама сборка — exercise_media.media_url: её же
+    зовёт миниатюра в списке упражнений (api_v1_common.exercise_json)."""
+    return exercise_media.media_url(path)
 
 
 # Старое приватное имя — как было до того, как понадобилось использовать его

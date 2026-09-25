@@ -168,6 +168,29 @@ def get_images_for(ex) -> list[str]:
     return get_images(catalog_key(ex))
 
 
+def media_url(path: str) -> str:
+    """Абсолютный путь диска -> относительный URL раздачи /media/exercises/<name>
+    (маршрут api_v1_media.get_media_file). Живёт здесь, а не в api_v1_media:
+    тот же URL нужен сериализатору упражнения в api_v1_common, а api_v1_media
+    сам импортирует api_v1_common — оттуда был бы круговой импорт."""
+    return f"/media/exercises/{os.path.basename(path)}"
+
+
+def thumb_url_for(ex) -> str | None:
+    """Миниатюра строки списка упражнений — первый кадр каталога в том же
+    порядке, что GET /exercises/{id}/media отдаёт `images`, чтобы превью в
+    списке совпадало с первым кадром карточки. None — каталожных кадров нет
+    (своё упражнение, шаблон без пары фото).
+
+    Дёшево на 150+ строк: ни сети, ни базы — поиск слага в словаре и две
+    проверки файла на локальном диске (get_images), а у своего упражнения
+    без слага — только поиск в словаре. Своё фото атлета сюда не попадает
+    намеренно: это приватные байты за токеном (GET /exercises/{id}/photo), а
+    не публичный URL; о нём сообщает отдельный флаг `has_photo`."""
+    images = get_images_for(ex)
+    return media_url(images[0]) if images else None
+
+
 # Зацикленная демонстрация повтора: тот же тренер, что в пушах, вместо
 # случайного человека из открытой базы (TONE_OF_VOICE.md, «Стиль картинок» —
 # персонаж один на весь продукт). Собирается офлайн, scripts/gen_exercise_demos.py;

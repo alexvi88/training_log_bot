@@ -89,9 +89,9 @@ _require = common.require
 
 # ---------- сериализация ----------
 
-# Сериализация упражнения переехала в api_v1_common.exercise_json — на неё же
-# теперь опирается api_v1_templates.py (форк шаблона отдаёт тот же формат).
-_exercise_json = common.exercise_json
+# Сериализация упражнения живёт в api_v1_common (exercises_json для списков,
+# one_exercise_json для одной строки) — на неё же опирается api_v1_templates.py
+# (форк шаблона отдаёт тот же формат).
 
 
 def _set_json(row) -> dict[str, Any]:
@@ -468,7 +468,7 @@ async def list_exercises(request: Request) -> JSONResponse:
         rows = await db.search_exercises(user_id, query, limit=50)
     else:
         rows = await db.list_user_exercises(user_id)
-    return JSONResponse([_exercise_json(r) for r in rows])
+    return JSONResponse(await common.exercises_json(user_id, rows))
 
 
 def _exercise_name(body: dict[str, Any]) -> str:
@@ -521,7 +521,7 @@ async def create_exercise(request: Request) -> JSONResponse:
             raise ApiError(404, "not_found", "muscle group not found")
     exercise_id = await db.create_exercise(user_id, name, group_id)
     row = await db.get_exercise(exercise_id)
-    return JSONResponse(_exercise_json(row), status_code=201)
+    return JSONResponse(await common.one_exercise_json(user_id, row), status_code=201)
 
 
 async def update_exercise(request: Request) -> JSONResponse:
@@ -555,7 +555,7 @@ async def update_exercise(request: Request) -> JSONResponse:
         await db.set_exercise_description(exercise_id, description)
 
     row = await db.get_exercise(exercise_id)
-    return JSONResponse(_exercise_json(row))
+    return JSONResponse(await common.one_exercise_json(user_id, row))
 
 
 async def archive_exercise(request: Request) -> JSONResponse:
@@ -564,7 +564,7 @@ async def archive_exercise(request: Request) -> JSONResponse:
     await _owned_exercise(exercise_id, user_id)
     await db.archive_exercise(exercise_id)
     row = await db.get_exercise(exercise_id)
-    return JSONResponse(_exercise_json(row))
+    return JSONResponse(await common.one_exercise_json(user_id, row))
 
 
 async def unarchive_exercise(request: Request) -> JSONResponse:
@@ -573,7 +573,7 @@ async def unarchive_exercise(request: Request) -> JSONResponse:
     await _owned_exercise(exercise_id, user_id)
     await db.unarchive_exercise(exercise_id)
     row = await db.get_exercise(exercise_id)
-    return JSONResponse(_exercise_json(row))
+    return JSONResponse(await common.one_exercise_json(user_id, row))
 
 
 async def merge_exercises(request: Request) -> JSONResponse:
@@ -600,7 +600,7 @@ async def merge_exercises(request: Request) -> JSONResponse:
         }.get(outcome, ("bad_request", "cannot merge these exercises"))
         raise ApiError(409, code, message)
     row = await db.get_exercise(target_id)
-    return JSONResponse(_exercise_json(row))
+    return JSONResponse(await common.one_exercise_json(user_id, row))
 
 
 async def exercise_progress(request: Request) -> JSONResponse:
