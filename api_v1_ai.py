@@ -223,7 +223,9 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     незачем, а человек, отозвавший согласие, должен иметь возможность забрать
     уже предложенную программу.
 
-    Проверка работает, только если клиент прислал `X-AI-Consent-Flow: 1` (то
+    Правило — common.ai_consent_given (им же молча пропускаются фоновые
+    вызовы модели: комментарий к тренировке, импорт). Проверка работает,
+    только если клиент прислал `X-AI-Consent-Flow: 1` (то
     есть сам показывает лист) или включён config.AI_CONSENT_REQUIRED. Выпущенные
     сборки 1.0 (3)/(4) листа не знают, и 403 превратил бы им тренера в
     непонятную ошибку — см. комментарий у флага. Главная проверка — в
@@ -231,25 +233,16 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     ещё помнит старое) и сборку, в которой какую-то точку отправки забыли.
     Бот в Telegram сюда не ходит вовсе.
     """
-    if await has_ai_consent(request, user_id):
+    if common.ai_consent_given(request, await db.get_user(user_id)):
         return
     raise ApiError(403, "ai_consent_required", "consent to share data with the AI provider is required")
 
 
 async def has_ai_consent(request: Request, user_id: int) -> bool:
     """Та же проверка, что у _require_ai_consent, но ответом, а не 403 — для
-    ручек, у которых модель лишь необязательный шаг: импорт CSV без согласия
-    просто не отдаёт названия упражнений модели и сопоставляет их с
-    каталогом точным совпадением (api_v1_import). Гейт тот же: без
-    `X-AI-Consent-Flow: 1` и config.AI_CONSENT_REQUIRED проверка не
-    действует (см. докстринг _require_ai_consent)."""
-    if not (
-        config.AI_CONSENT_REQUIRED
-        or request.headers.get(config.AI_CONSENT_CLIENT_HEADER) == "1"
-    ):
-        return True
-    user = await db.get_user(user_id)
-    return bool(user is not None and user["ai_consent_at"])
+    ручек, у которых модель лишь необязательный шаг (импорт CSV, см.
+    api_v1_import). Правило одно — common.ai_consent_given."""
+    return common.ai_consent_given(request, await db.get_user(user_id))
 
 
 # Вопрос через HTTP не режется телеграмным лимитом сообщения (4096 символов,

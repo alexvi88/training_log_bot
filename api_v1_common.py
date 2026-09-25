@@ -20,6 +20,7 @@ from typing import Any, Optional
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import config
 import db
 import exercise_descriptions
 import i18n
@@ -28,6 +29,30 @@ import timeutil
 
 logger = logging.getLogger(__name__)
 
+
+
+def ai_consent_given(request: Request, user: Any) -> bool:
+    """Можно ли отдавать данные этого атлета стороннему AI (App Store
+    5.1.2(i), users.ai_consent_at) — одно правило на весь `/v1`.
+
+    Проверка действует, только если клиент прислал `X-AI-Consent-Flow: 1`
+    (сам показывает лист согласия) или включён config.AI_CONSENT_REQUIRED;
+    иначе — True, как раньше: выпущенные сборки 1.0 (3)/(4) листа не знают
+    (см. комментарий у флага).
+
+    Ручки, где человек сам спрашивает тренера, отвечают на False 403-й
+    (api_v1_ai._require_ai_consent). Фоновые вызовы модели, которые человек
+    не заказывал (комментарий тренера после финиша, сопоставление названий
+    при импорте), на False просто не делаются — молча, без ошибки клиенту:
+    иначе отозванное согласие при включённом тумблере «🤖 Комментарии
+    тренера» всё равно отправляло бы тренировку модели.
+    """
+    if not (
+        config.AI_CONSENT_REQUIRED
+        or request.headers.get(config.AI_CONSENT_CLIENT_HEADER) == "1"
+    ):
+        return True
+    return user is not None and bool(user["ai_consent_at"])
 
 class ApiError(Exception):
     """Ошибка `/v1`: машинный `code`, машинная `message` и человеческий текст.
