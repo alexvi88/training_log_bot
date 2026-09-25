@@ -888,6 +888,21 @@ def review_demo_available() -> bool:
 COMMUNITY_CHAT_URL = os.getenv("COMMUNITY_CHAT_URL", "").strip()
 
 
+# Ссылка на приложение в App Store (https://apps.apple.com/app/id...). Друг с
+# iPhone, которому переслали приглашение или визитку, попадал только в
+# Telegram-бота, а не в приложение: Universal Links не сделать (личная
+# сборка на бесплатном Apple ID не умеет associated domains), поэтому рядом
+# с t.me-ссылкой — строка «С iPhone — приложение: <url>»
+# (sharing.app_store_line, в приложение — полем `app_store_url` в /me).
+# Пусто — строки нет вовсе: ссылка в никуда хуже отсутствующей.
+APP_STORE_URL = os.getenv("APP_STORE_URL", "").strip()
+
+
+def app_store_url() -> str | None:
+    """Ссылка на App Store или None, если она не задана или не https."""
+    return APP_STORE_URL if APP_STORE_URL.startswith("https://") else None
+
+
 def community_available() -> bool:
     """Показывать ли вход в общий чат."""
     return COMMUNITY_CHAT_URL.startswith(("https://t.me/", "http://t.me/", "tg://"))

@@ -13,7 +13,7 @@
   <li><b>AI coach chat.</b> Your questions, the answers, and whatever the coach logged at your request.</li>
   <li><b>Photos and video.</b> Your own exercise photos are stored on the server. A photo you send the coach in the app is kept in the chat history. A set video is not stored in full: after the review, a single preview frame is kept for the chat history. Voice messages are sent for speech recognition; only the recognized text is saved.</li>
   <li><b>Notifications.</b> The Apple Push Notification service (APNs) device token, to send push notifications to your iPhone.</li>
-  <li><b>Service data.</b> Access tokens for the app and for AI clients you connected (MCP); an activity log (which buttons were tapped and what was typed); the cost of AI requests; app crash reports from iOS (MetricKit: app and iOS version, iPhone model, call stack — no diary content; they are sent even before you sign in); the link tag you arrived through and who invited you; share links you created; if you supported the project with Telegram Stars — the payment ID and amount.</li>
+  <li><b>Service data.</b> Access tokens for the app and for AI clients you connected (MCP); an activity log (which buttons were tapped and what was typed); the cost of AI requests; app crash reports from iOS (MetricKit: app and iOS version, iPhone model, call stack — no diary content; they are sent even before you sign in); the link tag you arrived through and who invited you; share links you created; before you sign in to the app — which onboarding step this install reached (a random ID the app creates itself, not tied to your account or your address); if you supported the project with Telegram Stars — the payment ID and amount.</li>
 </ul>
 <p>The service does not collect your location, contacts, advertising identifiers or Apple Health data.</p>
 
@@ -38,7 +38,7 @@
 <h2>How long it is kept</h2>
 <ul>
   <li>Your log, settings and photos — as long as the account exists.</li>
-  <li>Activity log — 30 days; AI cost records and app crash reports — 90 days.</li>
+  <li>Activity log and pre-sign-in app steps — 30 days; AI cost records and app crash reports — 90 days.</li>
   <li>Past AI coach conversations in the app — 180 days; the current conversation — until you start a new one.</li>
 </ul>
 <p><b>Backups.</b> The database is continuously copied to Tigris storage; once a day a separate copy is made — the last several are kept on the server, and the same copy is sent to the service owner on Telegram. The host also takes disk snapshots and keeps them for a few days. Backups exist only to recover from failures. After you delete your account, your data remains in them until they are replaced by newer ones, and in the owner's Telegram until they are deleted there.</p>

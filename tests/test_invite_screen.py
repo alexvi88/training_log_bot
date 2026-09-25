@@ -84,3 +84,27 @@ def test_settings_keyboard_ends_with_invite_delete_then_menu():
     )
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert cbs[-3:] == ["invite:show", "settings:delete", "settings:back"]
+
+
+async def test_invite_show_adds_the_app_store_line_only_when_configured(fresh_db, user_id, monkeypatch):
+    """Друг с iPhone по t.me-ссылке попадал в бота, а не в App Store: рядом —
+    ссылка на приложение (config.APP_STORE_URL), а без неё строки нет вовсе."""
+    import config
+    import i18n
+
+    callback = _make_callback(user_id, "invite:show")
+    await history.invite_show(callback, await _make_state(user_id))
+    assert "apps.apple.com" not in callback.message.answer.await_args.args[0]
+
+    monkeypatch.setattr(config, "APP_STORE_URL", "https://apps.apple.com/app/id123")
+    callback = _make_callback(user_id, "invite:show")
+    await history.invite_show(callback, await _make_state(user_id))
+    text = callback.message.answer.await_args.args[0]
+    assert i18n.t("share.app_store_line", url="https://apps.apple.com/app/id123") in text
+
+
+def test_app_store_line_ignores_a_non_https_value(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "APP_STORE_URL", "apps.apple.com/app/id123")
+    assert sharing.app_store_line() is None

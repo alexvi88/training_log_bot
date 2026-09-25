@@ -48,6 +48,7 @@ import api_v1_dashboard
 import api_v1_diagnostics
 import api_v1_feedback
 import api_v1_food
+import api_v1_funnel
 import api_v1_hall_of_fame
 import api_v1_history
 import api_v1_import
@@ -177,6 +178,18 @@ def _signup_language_code(body: dict[str, Any], request: Request) -> str:
     return i18n.lang_from_accept_language(request.headers.get("accept-language"))
 
 
+def _signup_unit(body: dict[str, Any]) -> str | None:
+    """Единицы НОВОГО app-only аккаунта из поля `unit` тела ("kg"/"lb" — по
+    региону телефона, Locale.measurementSystem). До этого каждый аккаунт из
+    приложения заводился в кг, и американец записывал «225 8» как 225 кг.
+    Кривое значение молча игнорируется (None → config.DEFAULT_UNIT в
+    db.create_app_only_user) — вход из-за него не срывается."""
+    raw = body.get("unit")
+    if isinstance(raw, str) and raw.strip().lower() in ("kg", "lb"):
+        return raw.strip().lower()
+    return None
+
+
 def _set_pre_auth_lang(body: dict[str, Any], request: Request) -> None:
     """Язык ошибок входа («код не подошёл»): пользователя ещё нет, users.lang
     взять неоткуда, поэтому тот же сигнал, что и у заведения аккаунта —
@@ -205,6 +218,8 @@ async def auth_apple(request: Request) -> JSONResponse:
     Необязательное `tz_offset_minutes` (int, офсет телефона от UTC в минутах) —
     пояс того же НОВОГО аккаунта (см. common.device_tz_offset_hours); кривое
     значение молча игнорируется, вход из-за него не срывается.
+    Необязательное `unit` ("kg"/"lb", по региону телефона) — единицы того же
+    НОВОГО аккаунта (см. _signup_unit); существующему не меняем.
     Необязательное `authorization_code` (строка из
     `ASAuthorizationAppleIDCredential.authorizationCode`) — сервер меняет его
     на refresh_token для отзыва при удалении аккаунта (apple_signin); без
@@ -242,6 +257,7 @@ async def auth_apple(request: Request) -> JSONResponse:
                 # серии и время пушей считались не по его часам. Поле
                 # необязательное — старые сборки его не шлют.
                 tz_offset=common.device_tz_offset_hours(body.get("tz_offset_minutes")),
+                unit=_signup_unit(body),
             )
             user_id = new_user["telegram_id"]
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
@@ -335,6 +351,11 @@ async def me(request: Request) -> JSONResponse:
             "unit": user["unit"],
             "lang": user["lang"],
             "telegram_linked": bool(user["telegram_linked"]),
+            # Ссылка на приложение в App Store (config.APP_STORE_URL) — её
+            # приложение кладёт рядом с t.me-ссылкой в приглашение и визитку,
+            # чтобы друг с iPhone попал в App Store, а не только в бота.
+            # null — не задана, и строки в тексте шаринга нет вовсе.
+            "app_store_url": config.app_store_url(),
         }
     )
 
@@ -1939,6 +1960,7 @@ routes += (
     + api_v1_sharing.routes
     + api_v1_media.routes
     + api_v1_feedback.routes
+    + api_v1_funnel.routes
     + api_v1_dashboard.routes
     + api_v1_progress.routes
     + api_v1_hall_of_fame.routes

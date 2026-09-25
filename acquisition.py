@@ -212,6 +212,43 @@ def format_onboarding_funnel(rows: Iterable[Any], days: int, day: Optional[str] 
     return "\n".join(lines)
 
 
+# Шаги воронки приложения до входа (api_v1_funnel.STEPS) — в том порядке, в
+# каком их проходит человек, и с подписью для админа.
+APP_FUNNEL_STEPS: tuple[tuple[str, str], ...] = (
+    ("onboarding_slide_1", "слайд 1"),
+    ("onboarding_slide_2", "слайд 2 (локскрин, iOS 17+)"),
+    ("onboarding_slide_3", "слайд 3"),
+    ("onboarding_slide_4", "слайд 4"),
+    ("onboarding_slide_5", "слайд 5"),
+    ("push_priming", "экран уведомлений"),
+    ("signin_shown", "экран входа"),
+    ("signin_tapped", "нажал «Войти с Apple»"),
+    ("signin_ok", "вошёл"),
+    ("signin_failed", "вход сорвался"),
+)
+
+
+def format_app_funnel(rows: Iterable[Any], days: int, day: Optional[str] = None) -> str:
+    """Воронка приложения ДО входа (db.funnel_events): сколько установок
+    дошло до каждого шага, с разрезом по языку. Процент — от первого слайда:
+    это и есть «открыли приложение»."""
+    head = f"📱 <b>ПРИЛОЖЕНИЕ ДО ВХОДА · {period_label(days, day)}</b>"
+    by_step: dict[str, dict[str, int]] = {}
+    for r in rows:
+        by_step.setdefault(r["step"], {})[r["lang"]] = r["installs"]
+    if not by_step:
+        return f"{head}\n\nУстановок за этот срок не было."
+    first = sum(by_step.get("onboarding_slide_1", {}).values())
+    lines = [head]
+    for step, title in APP_FUNNEL_STEPS:
+        langs = by_step.get(step, {})
+        total = sum(langs.values())
+        split = ", ".join(f"{lang} {n}" for lang, n in sorted(langs.items()))
+        tail = f" ({split})" if split else ""
+        lines.append(f"{title}: {total} ({_percent(total, first)}%){tail}")
+    return "\n".join(lines)
+
+
 # Ниже скольких новичков источник не называем «хуже всех» — 1-2 человека
 # дают 0% или 100% на ровном месте, и такая «диагностика» — шум, а не сигнал
 # (см. engagement._maybe_send_admin_funnel_digest).

@@ -105,3 +105,17 @@ async def test_hist_card_also_carries_a_copy_button_for_the_same_link(fresh_db, 
     assert copies == [link]
     # Лимит Bot API на copy_text — 256 символов; ссылка обязана в него влезать.
     assert len(link) <= 256
+
+
+async def test_hist_card_caption_carries_the_app_store_link_when_configured(fresh_db, user_id, monkeypatch):
+    import config
+
+    workout_id = await _finished_workout_with_set(fresh_db, user_id)
+    callback = _make_callback(user_id, f"hist:card:{workout_id}")
+    await history.hist_card(callback, await _make_state(user_id))
+    assert "apps.apple.com" not in callback.message.answer_photo.await_args.kwargs["caption"]
+
+    monkeypatch.setattr(config, "APP_STORE_URL", "https://apps.apple.com/app/id123")
+    callback = _make_callback(user_id, f"hist:card:{workout_id}")
+    await history.hist_card(callback, await _make_state(user_id))
+    assert "https://apps.apple.com/app/id123" in callback.message.answer_photo.await_args.kwargs["caption"]
