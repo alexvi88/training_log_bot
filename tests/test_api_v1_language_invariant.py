@@ -547,6 +547,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", "/feedback", json={"text": text["feedback"]}, expect=201)
     await w.call("POST", "/feedback", json={"text": ""}, expect=400)
     await w.call("POST", "/factcheck", json={"text": text["post"]}, expect=200)
+    await w.call("POST", "/diagnostics", json={
+        "kind": "crash", "payload": {"diagnosticMetaData": {"appVersion": "1.0", "signal": 11}},
+    }, expect=201)
+    await w.call("POST", "/diagnostics", json={"kind": "nope", "payload": {"a": 1}}, expect=400)
     await w.call("DELETE", "/profile", expect=200)
 
     # --- импорт ---
