@@ -36,6 +36,7 @@ from starlette.routing import Route
 
 import achievement_sync
 import achievements
+import ai_limits
 import ai_trainer
 import analytics
 import api_v1_account
@@ -1149,22 +1150,76 @@ asyncio держит задачу только слабой ссылкой: бе
 появится никогда — молча, без единой строки в логе.
 """
 
+_ai_comment_inflight: dict[int, asyncio.Task] = {}
+"""Генерация комментария, которая летит прямо сейчас, — по id тренировки.
 
-async def _write_ai_comment(user_id: int, workout_id: int) -> None:
+Одна запись на тренировку на оба входа: фоновый после finish
+(_spawn_ai_comment) и ручной POST /workouts/{id}/ai-comment. Второй вход,
+заставший запись, не заказывает модель заново, а ждёт ту же задачу: два тапа
+«Разобрать» подряд или тап, пока ещё пишется автоматический комментарий, —
+это один платный вызов, а не два.
+
+Приём тот же, что у busy_lock.try_claim (проверка и запись без `await`
+между ними, одна реплика — см. инвариант там же), только в наборе лежит
+задача, а не голый id: busy_lock отказал бы второму тапу 429 «ещё думаю»,
+а здесь у второго есть что подождать — ровно тот ответ, который он и просил.
+Ключ — тренировка, а не человек: комментарий к одной тренировке не должен
+держать разбор другой, и с чатом тренера (api_v1_ai._busy) он не делит
+ничего, кроме дневного потолка денег.
+"""
+
+
+async def _write_ai_comment(user_id: int, workout_id: int) -> Optional[str]:
     """Та же пара шагов, что делает бот в фоне после финиша
     (handlers.workout._attach_ai_comment): спросить модель и положить ответ в
     workouts.ai_comment. Правки сообщения, которая есть у бота, здесь нет —
     приложение забирает готовое через GET /workouts/{id}/ai-comment.
 
-    Любое исключение гасится здесь: задача уже отвязана от запроса, ронять ей
-    нечего, а необработанное исключение в задаче видно только под конец
-    процесса строкой «Task exception was never retrieved».
+    Возвращает сохранённый текст или None, если генерация сорвалась. Любое
+    исключение гасится здесь: у фоновой задачи уже нет запроса, которому его
+    отдать, а необработанное исключение в задаче видно только под конец
+    процесса строкой «Task exception was never retrieved». Ручной POST узнаёт
+    о срыве по None и отвечает 502 сам.
+
+    Сохранённый комментарий перечитывается ПЕРЕД моделью, уже внутри
+    застолблённой задачи: предыдущая генерация могла дописать его между тем,
+    как вызывающий прочитал тренировку, и тем, как застолбил запись в
+    _ai_comment_inflight (между ними есть `await`). Здесь этот разрыв закрыт —
+    прежняя задача пишет в базу раньше, чем освобождает запись.
     """
     try:
+        workout = await db.get_workout(workout_id)
+        if workout is not None and workout["ai_comment"] is not None:
+            return workout["ai_comment"]
         comment = await ai_trainer.comment_on_workout(user_id, workout_id)
         await db.set_workout_ai_comment(workout_id, comment)
+        return comment
     except Exception:
         logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+        return None
+
+
+def _ai_comment_task(user_id: int, workout_id: int) -> asyncio.Task:
+    """Генерация комментария к этой тренировке — уже летящая или новая.
+
+    Между чтением _ai_comment_inflight и записью в него нет ни одного
+    `await`, поэтому два параллельных входа не могут оба решить «никто не
+    генерирует» (см. докстринг _ai_comment_inflight). Запись снимается, когда
+    задача закончилась, любым исходом."""
+    task = _ai_comment_inflight.get(workout_id)
+    if task is not None:
+        return task
+    task = asyncio.create_task(_write_ai_comment(user_id, workout_id))
+    _ai_comment_inflight[workout_id] = task
+    _ai_comment_tasks.add(task)
+
+    def _release(done: asyncio.Task) -> None:
+        _ai_comment_tasks.discard(done)
+        if _ai_comment_inflight.get(workout_id) is done:
+            del _ai_comment_inflight[workout_id]
+
+    task.add_done_callback(_release)
+    return task
 
 
 def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, workout) -> None:
@@ -1183,6 +1238,10 @@ def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, wor
     молчаливый — комментарий необязателен, а GET .../ai-comment отдаст null,
     ровно как при выключенном тумблере.
 
+    Задача заводится через _ai_comment_task — ту же запись, которую видит
+    ручной POST .../ai-comment: тап «Разобрать», пока этот фон ещё пишет,
+    ждёт его, а не платит второй раз.
+
     Сам запуск обёрнут в try/except: ответ finish — это карточка итога, ради
     которой человек и жал кнопку, и уронить её из-за необязательного
     комментария нельзя ни при каком состоянии event loop.
@@ -1194,12 +1253,9 @@ def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, wor
     if not common.ai_consent_given(request, user):
         return
     try:
-        task = asyncio.create_task(_write_ai_comment(user_id, workout_id))
+        _ai_comment_task(user_id, workout_id)
     except Exception:
         logger.exception("failed to spawn AI comment task for workout %s", workout_id)
-        return
-    _ai_comment_tasks.add(task)
-    task.add_done_callback(_ai_comment_tasks.discard)
 
 
 _HTML_TAG = re.compile(r"<[^>]+>")
@@ -1425,6 +1481,66 @@ async def get_ai_comment(request: Request) -> JSONResponse:
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
     return JSONResponse({"comment": workout["ai_comment"]})
+
+
+async def request_ai_comment(request: Request) -> JSONResponse:
+    """Комментарий AI-тренера по запросу — кнопка «🤖 Разобрать» под итогом
+    тренировки, как `ai:comment:<id>` у бота (handlers.ai_trainer.
+    ai_comment_workout). Тело не нужно. Ответ — `{"comment": "<текст>"}`, 200.
+
+    Работает и при выключенном тумблере `ai_comments_enabled`: тумблер решает
+    только, писать ли комментарий САМОМУ после каждой тренировки, а здесь
+    человек попросил сам — ровно как кнопка у бота, которая и появляется там,
+    где тумблер выключен (handlers.workout._finished_workout_ai_button_visible).
+
+    Порядок проверок и ответы:
+
+    * чужая или несуществующая тренировка — 404 `not_found` (как у GET);
+    * тренировка не закончена (`status != 'finished'`: идущая или занесение
+      задним числом) — 409 `workout_not_finished`. У бота кнопка висит только
+      на карточке законченной тренировки, а комментарий строится по её
+      итоговой карточке;
+    * комментарий уже есть — 200 с ним, без модели, согласия и лимитов:
+      наружу ничего не уходит и ничего не стоит (тот же расклад у бота);
+    * нет согласия на передачу данных AI — 403 `ai_consent_required`
+      (api_v1_ai._require_ai_consent, то же правило, что у ручек тренера);
+    * провайдер не настроен — 503 `not_configured`;
+    * HARD-стоп по деньгам за сутки (ai_limits.hard_stop_block — тот же замок,
+      что у кнопки бота; личной квоты у комментария нет) — 429
+      `spend_limit_exceeded` с текстом лимита в `message`. Не проверяется,
+      если генерация по этой тренировке уже летит: новых денег такой запрос
+      не тратит;
+    * модель не ответила — 502 `comment_failed` с `ai.screen.comment_failed`
+      (текст кнопки бота), не 500.
+
+    Двойной запрос: генерация одна на тренировку (_ai_comment_inflight).
+    Второй тап — как и тап, заставший автоматический комментарий после finish
+    (_spawn_ai_comment), — не зовёт модель, а ждёт ту же задачу и получает тот
+    же ответ. Ждём до конца, без своего таймаута: у вызова модели он уже есть
+    на клиенте провайдера, а второй таймаут поверх вернул бы ошибку на
+    запрос, чей ответ через секунду всё равно ляжет в базу. Ожидание — через
+    asyncio.shield: оборванное соединение отменяет только этот запрос, а не
+    общую генерацию, которую ждут другие (или фон, которому её дописать).
+    """
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    if workout["status"] != "finished":
+        raise ApiError(409, "workout_not_finished", "workout is not finished yet")
+    if workout["ai_comment"] is not None:
+        return JSONResponse({"comment": workout["ai_comment"]})
+    await api_v1_ai._require_ai_consent(request, user_id)
+    if not ai_trainer.is_configured():
+        raise ApiError(503, "not_configured", "ai trainer is not configured")
+    if workout_id not in _ai_comment_inflight:
+        block = await ai_limits.hard_stop_block()
+        if block is not None:
+            logger.info("AI workout comment blocked for user %s: %s", user_id, block.log)
+            raise ApiError(429, "spend_limit_exceeded", "daily AI spend limit reached", human=block.user_text)
+    comment = await asyncio.shield(_ai_comment_task(user_id, workout_id))
+    if comment is None:
+        raise ApiError(502, "comment_failed", "ai trainer failed to comment", key="ai.screen.comment_failed")
+    return JSONResponse({"comment": comment})
 
 
 async def update_exercise_note(request: Request) -> JSONResponse:
@@ -1786,6 +1902,7 @@ routes = [
     ),
     Route("/workouts/{workout_id:int}/finish", finish_workout, methods=["POST"]),
     Route("/workouts/{workout_id:int}/ai-comment", get_ai_comment, methods=["GET"]),
+    Route("/workouts/{workout_id:int}/ai-comment", request_ai_comment, methods=["POST"]),
     Route("/workouts/{workout_id:int}/note", update_note, methods=["PATCH"]),
     Route("/bodyweight", list_bodyweight, methods=["GET"]),
     Route("/bodyweight", add_bodyweight, methods=["POST"]),

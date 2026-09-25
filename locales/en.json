@@ -106,6 +106,7 @@
   "api.error.routine_limit": "Your programs already have as many days as fit. Delete the extra ones and try again.",
   "api.error.workout_finished": "That workout's already finished — start a new one.",
   "api.error.workout_active": "Finish the workout first — only a finished one can be edited this way.",
+  "api.error.workout_not_finished": "The workout's still going — I'll break it down once you finish.",
   "api.error.active_workout_exists": "Finish or discard your current workout first.",
   "api.error.no_exercises": "That workout has no exercises — nothing to repeat.",
   "api.error.unit_conversion_in_progress": "Already converting your weights to the new unit — give it a minute.",
