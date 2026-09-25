@@ -63,7 +63,7 @@ async def test_line_names_only_the_groups_still_short_of_recovered(fresh_db, use
 
 
 async def test_other_is_never_named_even_when_it_looks_spent(fresh_db, user_id):
-    """«Другое» — мешок (пресс, предплечья, трапеции), а не мышца, которую можно
+    """«Другое» — мешок (предплечья, трапеции, шраги), а не мышца, которую можно
     поберечь сегодня: его процент в подсказке ничего не значит."""
     from handlers import workout
 
