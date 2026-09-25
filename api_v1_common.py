@@ -23,6 +23,8 @@ from starlette.responses import JSONResponse
 import config
 import db
 import exercise_descriptions
+import exercise_media
+import exercise_photos
 import i18n
 import parser
 import timeutil
@@ -382,6 +384,14 @@ def exercise_json(row) -> dict[str, Any]:
         # GET /exercises/{id}/description, а список рисует только значок.
         "has_description": bool(exercise_descriptions.effective_description(row)),
         "is_archived": bool(row["is_archived"]),
+        # Миниатюра строки списка — первый каталожный кадр, публичный URL той
+        # же формы, что `images` у GET /exercises/{id}/media; null — кадров нет.
+        "thumb": exercise_media.thumb_url_for(row),
+        # Своё фото атлета — приватные байты за токеном (GET /exercises/{id}/photo),
+        # в `thumb` оно не попадает; флаг говорит приложению, что за ним есть
+        # смысл сходить. True только когда файл на месте — фото, живущее пока
+        # только ссылкой в Telegram, ручка /photo отдать не может.
+        "has_photo": exercise_photos.path_for_exercise(row) is not None,
     }
 
 
