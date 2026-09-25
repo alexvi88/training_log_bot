@@ -656,6 +656,25 @@ CREATE TABLE IF NOT EXISTS user_events (
 CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events (telegram_id, id);
 CREATE INDEX IF NOT EXISTS idx_user_events_created ON user_events (created_at);
 
+-- Воронка приложения ДО входа (api_v1_funnel.py): до какого шага онбординга
+-- дошла установка. user_events для этого не годится — там telegram_id NOT
+-- NULL, а до входа аккаунта ещё нет. install_id — случайный UUID, который
+-- приложение само завело в UserDefaults: он ни с аккаунтом, ни с устройством
+-- не связан и после входа никуда не пишется, адрес клиента не хранится.
+-- Строка на пару (установка, шаг) — первое касание, повтор игнорируется
+-- (UNIQUE ниже): так одна установка не может завести больше строк, чем
+-- шагов в белом списке, сколько бы раз ни прислала. Живёт столько же, сколько
+-- лог действий (ACTIVITY_RETENTION_DAYS, prune_old_funnel_events).
+CREATE TABLE IF NOT EXISTS funnel_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    install_id TEXT NOT NULL,
+    step TEXT NOT NULL,
+    lang TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (install_id, step)
+);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_created ON funnel_events (created_at);
+
 -- Разборы поведения за сутки (admin_tasks._send_behaviour_digest) — память
 -- анализатора. Без неё каждое утро разбирается с чистого листа: одни и те же
 -- гипотезы предлагаются заново, а «стало лучше или хуже, чем вчера» сказать
@@ -2125,7 +2144,9 @@ async def _next_synthetic_telegram_id(db: aiosqlite.Connection) -> int:
 
 
 async def create_app_only_user(
-    language_code: Optional[str] = None, tz_offset: Optional[int] = None
+    language_code: Optional[str] = None,
+    tz_offset: Optional[int] = None,
+    unit: Optional[str] = None,
 ) -> aiosqlite.Row:
     """Завести аккаунт из приложения, без единого сообщения в Telegram — вход
     через Sign in with Apple, когда этот Apple ID ещё никому не известен и
@@ -2140,8 +2161,13 @@ async def create_app_only_user(
     без него — config.DEFAULT_TZ_OFFSET, как раньше. tz_set_by_user при этом
     остаётся 0: пояс не выбран человеком, и приложение вправе поправить его
     по телефону позже (api_v1_account.update_settings, device_tz_offset_minutes).
+
+    `unit` — единицы по региону телефона ("kg"/"lb"), если приложение их
+    прислало; всё остальное (None, мусор) — config.DEFAULT_UNIT, как раньше.
+    Без этого американец записывал «225 8» в кг.
     """
     db = conn()
+    unit = unit if unit in ("kg", "lb") else config.DEFAULT_UNIT
     async with _write_lock:
         new_id = await _next_synthetic_telegram_id(db)
         await db.execute(
@@ -2153,7 +2179,7 @@ async def create_app_only_user(
             (
                 new_id,
                 now_iso(),
-                config.DEFAULT_UNIT,
+                unit,
                 config.DEFAULT_E1RM_FORMULA,
                 config.DEFAULT_TZ_OFFSET if tz_offset is None else int(tz_offset),
                 i18n.normalize(language_code),
@@ -8467,6 +8493,42 @@ async def prune_old_behaviour_digests(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
         cur = await conn().execute("DELETE FROM behaviour_digests WHERE day < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
+
+
+async def log_funnel_event(install_id: str, step: str, lang: Optional[str]) -> bool:
+    """Записать шаг воронки до входа (см. таблицу funnel_events). True — если
+    строка легла, False — эта установка уже доходила до этого шага."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT OR IGNORE INTO funnel_events (install_id, step, lang, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (install_id, step, lang, now_iso()),
+        )
+        await conn().commit()
+    return cur.rowcount > 0
+
+
+async def app_funnel(days: int = 30, *, day: Optional[str] = None) -> list[aiosqlite.Row]:
+    """Сколько установок дошло до каждого шага воронки до входа — по шагам и
+    языку, за то же окно, что у остальной /growth (_growth_window)."""
+    since, until = _growth_window(days, day)
+    cur = await conn().execute(
+        "SELECT step, COALESCE(lang, '?') AS lang, COUNT(DISTINCT install_id) AS installs "
+        "FROM funnel_events WHERE created_at >= ? AND (? IS NULL OR created_at < ?) "
+        "GROUP BY step, lang",
+        (since, until, until),
+    )
+    return await cur.fetchall()
+
+
+async def prune_old_funnel_events(retention_days: int) -> int:
+    """Выкинуть шаги воронки старше retention_days — тот же срок, что у лога
+    действий (config.ACTIVITY_RETENTION_DAYS)."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM funnel_events WHERE date(created_at) < ?", (cutoff,))
         await conn().commit()
     return cur.rowcount
 

@@ -318,6 +318,11 @@ async def invite_show(callback: CallbackQuery, state: FSMContext):
         await sharing.get_bot_username(callback.bot), callback.from_user.id
     )
     text = i18n.t("invite.screen", link=escape(link))
+    # Друг с iPhone по t.me-ссылке попал бы в бота, а не в приложение — рядом
+    # ссылка на App Store, если она задана (sharing.app_store_line).
+    app_store = sharing.app_store_line()
+    if app_store:
+        text += f"\n\n{app_store}"
     kb = InlineKeyboardBuilder()
     kb.button(text=i18n.t("btn.home_menu"), callback_data="hist:menu")
     kb.adjust(1)
@@ -417,10 +422,19 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     kb.adjust(1)
     await callback.message.answer_photo(
         BufferedInputFile(card.png, filename="workout.png"),
-        caption=f"{card.title} · {card.footer}",
+        # Картинку пересылают друзьям — с iPhone им нужна ссылка на App Store,
+        # а не только URL-кнопка в бота (sharing.app_store_line). Подпись без
+        # parse_mode — поэтому URL не экранируется.
+        caption=_card_caption(card),
         reply_markup=kb.as_markup(),
     )
     await callback.answer()
+
+
+def _card_caption(card) -> str:
+    caption = f"{card.title} · {card.footer}"
+    app_store = sharing.app_store_line(html=False)
+    return f"{caption}\n\n{app_store}" if app_store else caption
 
 
 @router.callback_query(F.data.startswith("hist:edit:"))

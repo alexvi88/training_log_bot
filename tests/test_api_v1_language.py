@@ -93,6 +93,60 @@ async def test_auth_apple_link_code_path_keeps_the_telegram_users_language(fresh
     assert (await fresh_db.get_user(222))["lang"] == "ru"
 
 
+# ---------- единицы нового app-only аккаунта (/auth/apple) ----------
+
+
+@pytest.mark.parametrize(
+    ("body_unit", "expected"),
+    [
+        ("lb", "lb"),
+        ("LB", "lb"),
+        ("kg", "kg"),
+        ("stone", "kg"),  # мусор — молча прежний дефолт, вход не срывается
+        (5, "kg"),
+        (None, "kg"),  # старая сборка без поля
+    ],
+)
+async def test_auth_apple_new_account_takes_the_device_unit(fresh_db, monkeypatch, body_unit, expected):
+    _apple(monkeypatch, "apple-unit")
+    body = {"identity_token": "t"}
+    if body_unit is not None:
+        body["unit"] = body_unit
+    resp = await _client().post("/auth/apple", json=body)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["unit"] == expected
+    assert (await fresh_db.get_user(resp.json()["user_id"]))["unit"] == expected
+
+
+async def test_auth_apple_never_overwrites_an_existing_users_unit(fresh_db, monkeypatch):
+    _apple(monkeypatch, "apple-unit-existing")
+    first = await _client().post("/auth/apple", json={"identity_token": "t"})
+    user_id = first.json()["user_id"]
+    assert first.json()["unit"] == "kg"
+    again = await _client().post("/auth/apple", json={"identity_token": "t2", "unit": "lb"})
+    assert again.json()["user_id"] == user_id
+    assert again.json()["unit"] == "kg"
+    assert (await fresh_db.get_user(user_id))["unit"] == "kg"
+
+
+async def test_auth_apple_link_code_path_keeps_the_telegram_users_unit(fresh_db, monkeypatch):
+    _apple(monkeypatch, "apple-unit-link")
+    await fresh_db.get_or_create_user(telegram_id=223, username="tg")
+    code = await fresh_db.issue_oauth_link_code(223, ttl_seconds=600, digits=8)
+    resp = await _client().post("/auth/apple", json={"identity_token": "t", "link_code": code, "unit": "lb"})
+    assert resp.status_code == 200
+    assert (await fresh_db.get_user(223))["unit"] == "kg"
+
+
+async def test_me_carries_the_app_store_url_only_when_configured(fresh_db, monkeypatch):
+    import config
+
+    client = await _linked(fresh_db, "en")
+    assert (await client.get("/me")).json()["app_store_url"] is None
+    monkeypatch.setattr(config, "APP_STORE_URL", "https://apps.apple.com/app/id123")
+    assert (await client.get("/me")).json()["app_store_url"] == "https://apps.apple.com/app/id123"
+
+
 # ---------- язык на весь запрос ----------
 
 

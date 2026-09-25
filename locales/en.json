@@ -1806,5 +1806,6 @@
   "ios_link.merge_rate_limited": "Too many attempts in a row — wait a bit and try again.",
   "ios_link.merge_conflict": "This Telegram account and the app account both already have their own training history — I won't merge them myself, too easy to get it wrong. Message /feedback and we'll sort it out by hand.",
   "ios_link.merge_ok": "Linked! It's one account now — everything from the app is right here, phone and Telegram both lead to the same place.",
-  "api.error.payload_too_large": "That file's too heavy — I didn't take it, nothing got saved. Send a smaller one: a lighter photo or a shorter video."
+  "api.error.payload_too_large": "That file's too heavy — I didn't take it, nothing got saved. Send a smaller one: a lighter photo or a shorter video.",
+  "share.app_store_line": "📱 On iPhone — get the app: {url}"
 }

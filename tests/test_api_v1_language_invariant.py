@@ -79,7 +79,7 @@ MACHINE_KEYS = {
     "achievement_key", "rank_key", "program_key", "catalog_key", "unit_label_key",
     "achieved_at", "unlocked_at", "since", "until", "period", "window", "metric",
     "trend", "state", "verdict_code", "category", "family", "goal_key", "level_key",
-    "reason", "topic",
+    "reason", "topic", "app_store_url",
     # Ник в Telegram — идентификатор, который человек выбрал сам, а не текст продукта.
     "username",
 }
@@ -299,6 +299,18 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     anon_walker = _Walker(anon, lang)
     await anon_walker.call("GET", "/health", expect=200)
     await anon_walker.call("POST", "/auth/link", json={"code": "nope"}, headers=headers, expect=400)
+    # Воронка до входа (api_v1_funnel): без токена, ответ — машинный флаг,
+    # а отказ по шагу вне белого списка — текст на языке тела.
+    await anon_walker.call(
+        "POST", "/funnel",
+        json={"install_id": "8e7b0c9e-5b2a-4f4e-9d0a-2f1b8b2c3d4e", "step": "onboarding_slide_1", "lang": lang},
+        expect=200,
+    )
+    await anon_walker.call(
+        "POST", "/funnel",
+        json={"install_id": "8e7b0c9e-5b2a-4f4e-9d0a-2f1b8b2c3d4e", "step": "nope", "lang": lang},
+        headers=headers, expect=400,
+    )
     apple = await anon_walker.call("POST", "/auth/apple", json={"identity_token": "new", "lang": lang}, expect=200)
     # Выход: без токена — 401 (язык ошибки из Accept-Language), с токеном —
     # гасит только его.

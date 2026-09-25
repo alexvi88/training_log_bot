@@ -18,6 +18,9 @@ primary_region = "fra"
   MCP_PUBLIC_URL = "https://training-log-bot.fly.dev"
   COMMUNITY_CHAT_URL = "https://t.me/training_log_athletes"
   TEST_USER_ID = "8789172252"
+  # Ссылка на приложение в App Store — строкой рядом с t.me в приглашении и
+  # визитке (config.APP_STORE_URL). Пока не задана, строки нет вовсе.
+  # APP_STORE_URL = "https://apps.apple.com/app/id<номер из App Store Connect>"
 
 [deploy]
   # С volume второй машины рядом не поднять: старая гасится, новая

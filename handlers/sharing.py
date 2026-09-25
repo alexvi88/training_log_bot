@@ -107,6 +107,26 @@ def _deep_link(username: str, token: str) -> str:
     return f"https://t.me/{username}?start={START_PREFIX}{token}"
 
 
+def app_store_line(*, html: bool = True) -> Optional[str]:
+    """Строка «С iPhone — приложение: <url>» под приглашением и визиткой, или
+    None, если config.APP_STORE_URL не задан (тогда строки нет вовсе).
+
+    Зачем: ссылки в визитке и приглашении — t.me, и друг с iPhone попадал в
+    бота, а не в App Store. Universal Links сделать нельзя (associated domains
+    не поддерживает личная сборка на бесплатном Apple ID), поэтому просто
+    вторая ссылка рядом. Вызывается на каждый рендер, а не константой модуля —
+    язык берётся текущий (см. «Ловушку» в CLAUDE.md)."""
+    url = config.app_store_url()
+    if url is None:
+        return None
+    return i18n.t("share.app_store_line", url=escape(url) if html else url)
+
+
+def _with_app_store_line(lines: list[str]) -> list[str]:
+    line = app_store_line()
+    return lines + [line] if line else lines
+
+
 # ---------- создание визитки ----------
 
 
@@ -300,7 +320,7 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
     url = _deep_link(await get_bot_username(callback.bot), token)
 
     text = "\n".join(
-        _routine_preview_lines(payload) + ["", i18n.t("share.forward_hint_program")]
+        _with_app_store_line(_routine_preview_lines(payload) + ["", i18n.t("share.forward_hint_program")])
     )
     await callback.message.answer(
         text, parse_mode="HTML",
@@ -371,9 +391,11 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
 
     note = _omitted_days_note(payload)
     text = "\n".join(
-        _program_preview_lines(payload)
-        + ([f"\n{note}"] if note else [])
-        + ["", i18n.t("share.forward_hint_program")]
+        _with_app_store_line(
+            _program_preview_lines(payload)
+            + ([f"\n{note}"] if note else [])
+            + ["", i18n.t("share.forward_hint_program")]
+        )
     )
     await callback.message.answer(
         text, parse_mode="HTML",
@@ -459,7 +481,7 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
         lines.append(escape(description))
     lines += ["", i18n.t("share.forward_hint_exercise")]
     await callback.message.answer(
-        "\n".join(lines), parse_mode="HTML",
+        "\n".join(_with_app_store_line(lines)), parse_mode="HTML",
         reply_markup=_share_card_keyboard(url, i18n.t("share.add_exercise_button"), token),
     )
     await callback.answer(i18n.t("share.card_ready"))

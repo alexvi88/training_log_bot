@@ -572,6 +572,7 @@ async def cmd_growth(message: Message, state: FSMContext):
         days, alive_days=acquisition.ALIVE_WINDOW_DAYS, day=day
     )
     onboarding = await db.onboarding_funnel(days, day=day)
+    app_funnel = await db.app_funnel(days, day=day)
     referrers = await db.top_referrers(GROWTH_REFERRERS)
     donation_stars, donation_people = await db.donation_totals(days, day=day)
     period = acquisition.period_label(days, day)
@@ -579,6 +580,7 @@ async def cmd_growth(message: Message, state: FSMContext):
     text = (
         f"{acquisition.format_funnel(funnel, days, day)}\n\n"
         f"{acquisition.format_onboarding_funnel(onboarding, days, day)}\n\n"
+        f"{acquisition.format_app_funnel(app_funnel, days, day)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
         # Донат («Поддержать проект», handlers/donate.py) — не часть воронки
         # источников: это разовый жест, не шаг в онбординге, и число просто

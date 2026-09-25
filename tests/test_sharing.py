@@ -138,6 +138,35 @@ async def test_share_routine_snapshots_names_and_targets(fresh_db, user_id):
     assert url.startswith("https://t.me/TrainLogBot?start=sh_")
 
 
+async def test_share_cards_carry_the_app_store_link_only_when_configured(fresh_db, user_id, monkeypatch):
+    """Визитка ведёт в бота (t.me), и друг с iPhone попадал туда, а не в App
+    Store: рядом строка со ссылкой на приложение, а без config.APP_STORE_URL
+    её нет вовсе."""
+    import config
+
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    callback = _make_callback(user_id, f"share:rt:{routine_id}")
+    await sharing.share_routine(callback, await _state(user_id))
+    assert "apps.apple.com" not in callback.message.answer.await_args.args[0]
+
+    monkeypatch.setattr(config, "APP_STORE_URL", "https://apps.apple.com/app/id123")
+    callback = _make_callback(user_id, f"share:rt:{routine_id}")
+    await sharing.share_routine(callback, await _state(user_id))
+    assert "https://apps.apple.com/app/id123" in callback.message.answer.await_args.args[0]
+
+    program_id = await _program_with_two_days(db, user_id)
+    callback = _make_callback(user_id, f"share:prg:{program_id}")
+    await sharing.share_program(callback, await _state(user_id))
+    assert "https://apps.apple.com/app/id123" in callback.message.answer.await_args.args[0]
+
+    gid = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Тяга", gid)
+    callback = _make_callback(user_id, f"share:ex:{ex_id}")
+    await sharing.share_exercise(callback, await _state(user_id))
+    assert "https://apps.apple.com/app/id123" in callback.message.answer.await_args.args[0]
+
+
 async def _program_with_two_days(db, user_id: int) -> int:
     gid = await db.create_muscle_group(user_id, "Ноги")
     squat = await db.create_exercise(user_id, "Присед", gid)
