@@ -188,3 +188,20 @@ async def test_preview_requires_auth(fresh_db, client_factory):
     client = client_factory()
     resp = await client.post("/import/csv/preview", json={"csv": CSV_TWO_WORKOUTS})
     assert resp.status_code == 401
+
+
+async def test_bom_prefixed_csv_is_read_like_a_plain_one(fresh_db, client_factory):
+    """CSV из Excel/Numbers начинается с BOM (U+FEFF). Бот снимает его
+    декодированием utf-8-sig, а в /v1 файл приезжает строкой: BOM оставался
+    приклеенным к первому заголовку («\\ufeffdate»), strip() его не снимает, и
+    колонка даты не узнавалась."""
+    client = await _linked_client(fresh_db, client_factory)
+    preview = await client.post("/import/csv/preview", json={"csv": "﻿" + CSV_TWO_WORKOUTS})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["workout_count"] == 2
+    assert preview.json()["set_count"] == 3
+
+    resp = await client.post("/import/csv", json={"csv": "﻿" + CSV_TWO_WORKOUTS})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["workouts_imported"] == 2
+    assert resp.json()["sets_imported"] == 3
