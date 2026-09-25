@@ -104,7 +104,7 @@ def test_pounds_column_converts_to_kilograms():
     mapping = _auto_detect(headers)
 
     workouts = _build_workout_groups(
-        rows, mapping, weight_factor=_weight_factor(headers, mapping)
+        rows, mapping, weight_factor=_weight_factor(headers, mapping, "kg")
     )
 
     assert workouts[0]["entries"][0]["sets"] == [[102.1, 5, None]]
@@ -118,7 +118,7 @@ def test_kilogram_column_is_left_alone():
     headers, rows, _ = _read_table(text)
     mapping = _auto_detect(headers)
 
-    assert _weight_factor(headers, mapping) == 1.0
+    assert _weight_factor(headers, mapping, "kg") == 1.0
     workouts = _build_workout_groups(rows, mapping)
     assert workouts[0]["entries"][0]["sets"] == [[100.0, 5, None]]
 

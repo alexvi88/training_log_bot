@@ -38,7 +38,7 @@ def _groups(text: str, today: dt.date = TODAY, stats: dict | None = None) -> lis
     mapping = _auto_detect(headers)
     return _build_workout_groups(
         rows, mapping, first_line=2 if has_header else 1, today=today,
-        weight_factor=_weight_factor(headers, mapping), stats=stats,
+        weight_factor=_weight_factor(headers, mapping, "kg"), stats=stats,
     )
 
 
@@ -109,7 +109,7 @@ def test_hevy_weight_lbs_is_auto_detected_and_converted_to_kg():
 def test_pounds_are_recognized_by_suffix_and_word(header, is_lbs):
     """Та же проверка работает и после ручного выбора колонки в боте:
     _finish_mapping зовёт _weight_factor с заголовком выбранной колонки."""
-    factor = _weight_factor(["date", "exercise", header, "reps"], MAPPING)
+    factor = _weight_factor(["date", "exercise", header, "reps"], MAPPING, "kg")
     assert (factor != 1.0) is is_lbs
 
 

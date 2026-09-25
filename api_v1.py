@@ -423,9 +423,10 @@ async def create_muscle_group(request: Request) -> JSONResponse:
     называют группы в конкретном зале."""
     user_id = await _authed_user_id(request)
     body = await _json_body(request)
-    name = str(_require(body, "name", str)).strip()
-    if not name:
-        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
+    # Тот же порог и та же ошибка, что у имени упражнения: без него группа с
+    # названием в 5000 символов разваливала каталог и каждую карточку, где
+    # показывается группа.
+    name = _exercise_name(body)
     emoji = body.get("emoji")
     if emoji is not None and not isinstance(emoji, str):
         raise ApiError(400, "bad_request", "emoji must be a string")

@@ -90,7 +90,7 @@ def _csv_text(body: dict[str, Any]) -> str:
     return text
 
 
-def _parse_workouts(text: str, today: dt.date | None) -> tuple[list[dict], dict]:
+def _parse_workouts(text: str, today: dt.date | None, account_unit: str) -> tuple[list[dict], dict]:
     """headers/rows/mapping/workouts — целиком через handlers.csv_import, в
     английской локали (см. докстринг модуля), чтобы ошибка при необходимости
     ушла клиенту не русской строкой. `today` — тот же смысл, что в боте
@@ -130,15 +130,18 @@ def _parse_workouts(text: str, today: dt.date | None) -> tuple[list[dict], dict]
                 data_rows, mapping,
                 first_line=2 if has_header else 1,
                 today=today,
-                weight_factor=_weight_factor(headers, mapping),
+                weight_factor=_weight_factor(headers, mapping, account_unit),
                 stats=stats,
+                account_unit=account_unit,
             )
         except ParseError as e:
             match = _ERR_LINE_RE.match(e.message)
             detail = match.group(2) if match else e.message
             raise ApiError(
                 400, "invalid_csv", detail,
-                human=_localized_parse_error(data_rows, mapping, headers, has_header, today, user_lang),
+                human=_localized_parse_error(
+                    data_rows, mapping, headers, has_header, today, user_lang, account_unit,
+                ),
             ) from e
         if not workouts:
             raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
@@ -159,7 +162,9 @@ def _skipped_fields(stats: dict) -> dict[str, int]:
     }
 
 
-def _localized_parse_error(data_rows, mapping, headers, has_header, today, lang: str) -> str | None:
+def _localized_parse_error(
+    data_rows, mapping, headers, has_header, today, lang: str, account_unit: str,
+) -> str | None:
     """Та же ошибка разбора, но на языке человека: разбор уже упал в
     английской локали ради машинного `detail`, и повторить его под `lang` —
     единственный способ получить «Строка 3: отрицательный вес» без второй
@@ -170,7 +175,8 @@ def _localized_parse_error(data_rows, mapping, headers, has_header, today, lang:
                 data_rows, mapping,
                 first_line=2 if has_header else 1,
                 today=today,
-                weight_factor=_weight_factor(headers, mapping),
+                weight_factor=_weight_factor(headers, mapping, account_unit),
+                account_unit=account_unit,
             )
         except ParseError as e:
             return i18n.t("import.file_error", message=e.message)
@@ -193,7 +199,7 @@ async def preview_csv(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     body = await common.json_body(request)
     text = _csv_text(body)
-    workouts, stats = _parse_workouts(text, timeutil.user_today(user))
+    workouts, stats = _parse_workouts(text, timeutil.user_today(user), user["unit"])
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
@@ -253,7 +259,7 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     create_missing = body.get("create_missing_exercises", True)
     if not isinstance(create_missing, bool):
         raise ApiError(400, "bad_request", "create_missing_exercises must be a boolean")
-    workouts, stats = _parse_workouts(text, timeutil.user_today(user))
+    workouts, stats = _parse_workouts(text, timeutil.user_today(user), user["unit"])
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)

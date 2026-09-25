@@ -47,7 +47,7 @@ async def test_export_then_reimport_same_file_does_not_duplicate_or_shift_date(f
     mapping = csv_import._auto_detect(headers)
     workouts = csv_import._build_workout_groups(
         rows, mapping, first_line=2 if has_header else 1,
-        weight_factor=csv_import._weight_factor(headers, mapping),
+        weight_factor=csv_import._weight_factor(headers, mapping, "kg"),
     )
     # Дата из экспортированного файла должна совпасть с местной календарной
     # датой тренировки, а не с UTC-датой.
