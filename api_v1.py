@@ -1222,7 +1222,7 @@ def _ai_comment_task(user_id: int, workout_id: int) -> asyncio.Task:
     return task
 
 
-def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, workout) -> None:
+def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, workout) -> bool:
     """Запустить генерацию комментария в фоне — если он нужен и возможен.
 
     Условия те же, что у бота (`needs_ai_comment` в
@@ -1247,15 +1247,17 @@ def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, wor
     комментария нельзя ни при каком состоянии event loop.
     """
     if workout["ai_comment"] is not None:
-        return
+        return False
     if not user["ai_comments_enabled"] or not ai_trainer.is_configured():
-        return
+        return False
     if not common.ai_consent_given(request, user):
-        return
+        return False
     try:
         _ai_comment_task(user_id, workout_id)
     except Exception:
         logger.exception("failed to spawn AI comment task for workout %s", workout_id)
+        return False
+    return True
 
 
 _HTML_TAG = re.compile(r"<[^>]+>")
@@ -1434,7 +1436,12 @@ async def finish_workout(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     payload = await _workout_detail_json(workout, user)
     payload["rewards"] = await _finish_rewards_json(workout, user, new_codes, was_backfill)
-    _spawn_ai_comment(request, user_id, workout_id, user, workout)
+    # `ai_comment_pending` — пишется ли комментарий прямо сейчас. Без него
+    # приложение ждало комментарий после каждого финиша и держало кнопку
+    # «🤖 Комментарий» в «тренер печатает…» секунд пятнадцать даже там, где
+    # сервер ничего не заказывал (автокомментарии выключены, нет согласия),
+    # и тап по ней в это время ничего не делал.
+    payload["ai_comment_pending"] = _spawn_ai_comment(request, user_id, workout_id, user, workout)
     return JSONResponse(payload)
 
 
@@ -1458,6 +1465,7 @@ async def _finish_replay_response(workout, user_id: int) -> JSONResponse:
         workout, user, [], was_backfill=True, announce_rank=False
     )
     payload["replayed"] = True
+    payload["ai_comment_pending"] = False
     return JSONResponse(payload)
 
 
