@@ -751,7 +751,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "3. На вдохе дай гире вернуться между ног и сразу повтори. Половину "
         "повторов сделай другой рукой."
     ),
-    # ---------- Другое (пресс, кор, предплечья, трапеции) ----------
+    # ---------- Пресс и Другое (пресс, кор, предплечья, трапеции) ----------
     "Скручивания": (
         "1. Ляг на спину, колени согнуты, стопы на полу, руки за головой "
         "без сцепления пальцев — исходное положение.\n"
@@ -1639,7 +1639,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Inhale, let it swing back between your legs and go again. Do "
         "half the reps with the other hand."
     ),
-    # ---------- Other (abs, core, forearms, traps) ----------
+    # ---------- Abs and Other (abs, core, forearms, traps) ----------
     "Скручивания": (
         "1. Lie on your back, knees bent, feet on the floor, hands behind "
         "your head without lacing your fingers — starting position.\n"

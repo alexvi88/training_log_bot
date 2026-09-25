@@ -799,6 +799,7 @@
   "mcp.server_address_label": "🌐 Адрес сервера:",
   "mcp.token_label": "🔑 Токен:",
   "mcp.token_last_used": "🕒 Последний запрос по токену: {when}",
+  "muscle_group.abs.name": "Пресс",
   "muscle_group.back.name": "Спина",
   "muscle_group.biceps.name": "Бицепс",
   "muscle_group.chest.name": "Грудь",
