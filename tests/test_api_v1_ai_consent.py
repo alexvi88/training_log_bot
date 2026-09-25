@@ -307,3 +307,35 @@ async def test_import_with_consent_uses_ai_matching(fresh_db, client_factory, fa
     resp = await client.post("/import/csv", json={"csv": CSV_UNKNOWN_EXERCISE}, headers=HEADER)
     assert resp.status_code == 200, resp.text
     assert fake_matcher == [["Жим Арнольда сидя"]]
+
+
+async def _finish_payload(client, headers=None) -> dict:
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets",
+        json={"exercise_id": exercise_id, "weight": 80, "reps": 5},
+    )
+    resp = await client.post(f"/workouts/{workout_id}/finish", json={}, headers=headers or {})
+    assert resp.status_code == 200, resp.text
+    pending = list(api_v1._ai_comment_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+    return resp.json()
+
+
+@pytest.mark.asyncio
+async def test_finish_reports_comment_pending_only_when_ordered(fresh_db, client_factory, fake_comment):
+    """`ai_comment_pending` в ответе finish — приложение ждёт комментарий
+    («тренер печатает…») только тогда, когда сервер его правда заказал."""
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_comments_enabled=1)
+    await client.patch("/settings", json={"ai_consent": True})
+    assert (await _finish_payload(client, headers=HEADER))["ai_comment_pending"] is True
+
+    await fresh_db.update_user(111, ai_comments_enabled=0)
+    assert (await _finish_payload(client, headers=HEADER))["ai_comment_pending"] is False
+
+    await fresh_db.update_user(111, ai_comments_enabled=1)
+    await client.patch("/settings", json={"ai_consent": False})
+    assert (await _finish_payload(client, headers=HEADER))["ai_comment_pending"] is False
