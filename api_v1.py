@@ -45,6 +45,7 @@ import api_v1_activity
 import api_v1_ai
 import api_v1_common as common
 import api_v1_dashboard
+import api_v1_diagnostics
 import api_v1_feedback
 import api_v1_food
 import api_v1_funnel
@@ -1965,6 +1966,7 @@ routes += (
     + api_v1_hall_of_fame.routes
     + api_v1_history.routes
     + api_v1_templates.routes
+    + api_v1_diagnostics.routes
 )
 
 

@@ -779,6 +779,11 @@ SHARED_ITEMS_RETENTION_DAYS = int(os.getenv("SHARED_ITEMS_RETENTION_DAYS", "180"
 # про недавнее: «что человек делал на этой неделе». Месяца на это хватает.
 ACTIVITY_RETENTION_DAYS = int(os.getenv("ACTIVITY_RETENTION_DAYS", "30"))
 
+# Сколько живут отчёты о сбоях iOS-приложения (db.diagnostics, MetricKit —
+# api_v1_diagnostics.py). Чинят свежие сборки; три месяца — с запасом на
+# «падает у одного человека раз в месяц», дальше сборки уже ни у кого нет.
+DIAGNOSTICS_RETENTION_DAYS = int(os.getenv("DIAGNOSTICS_RETENTION_DAYS", "90"))
+
 # Сколько живёт память утреннего разбора поведения (db.behaviour_digests): по
 # строке на сутки, читается ради «что изменилось с прошлого раза». Дольше
 # месяца держать нечего — сам лог действий к тому времени уже вычищен, и

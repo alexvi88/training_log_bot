@@ -113,6 +113,23 @@ async def test_point_value_is_e1rm_not_the_heaviest_weight(fresh_db, client_fact
     assert point["top_set"] == "50×10"
 
 
+async def test_point_carries_max_weight_and_tonnage_per_workout(fresh_db, client_factory):
+    """Для переключателя «вес / e1RM / тоннаж» в приложении: у каждой точки —
+    тяжелейший подход и сумма вес×повторы ЭТОЙ тренировки, а `value` при этом
+    остаётся e1RM (старые версии приложения читают только его)."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _exercise(user_id)
+    await _log_session(user_id, ex_id, 1, [(50.0, 10), (60.0, 2)])
+    await _log_session(user_id, ex_id, 8, [(55.0, 8), (55.0, 8)])
+
+    points = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()["points"]
+
+    assert [p["max_weight"] for p in points] == [60.0, 55.0]
+    assert [p["tonnage"] for p in points] == [620.0, 880.0]
+    assert points[0]["value"] == round(analytics.e1rm(50.0, 10, "epley"), 1)
+
+
 # ---------- has_rpe ----------
 
 

@@ -433,12 +433,13 @@ async def _send_behaviour_digest(bot: Bot, day: dt.date) -> None:
 
 async def _run_retention_cleanup() -> None:
     """Стереть то, что дольше положенного лежит в базе — стоимость AI-вызовов,
-    сырой лог действий, отметки о показанных предупреждениях лимита, архив
+    сырой лог действий, отчёты о сбоях iOS, отметки о показанных предупреждениях лимита, архив
     прошлых разговоров с тренером, отданные ссылки на общие тренировки."""
     await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
     await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
     # Воронка до входа (db.funnel_events) — тот же срок, что у лога действий.
     await db.prune_old_funnel_events(config.ACTIVITY_RETENTION_DAYS)
+    await db.prune_old_diagnostics(config.DIAGNOSTICS_RETENTION_DAYS)
     await db.prune_old_behaviour_digests(config.BEHAVIOUR_DIGEST_RETENTION_DAYS)
     await db.prune_old_limit_acks()
     # Архив прошлых разговоров с тренером: текущий не трогается никогда, см.

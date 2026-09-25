@@ -685,6 +685,29 @@ CREATE TABLE IF NOT EXISTS behaviour_digests (
     created_at TEXT NOT NULL
 );
 
+-- Отчёты о сбоях iOS-приложения из MetricKit (api_v1_diagnostics.py): падения,
+-- зависания, перерасход CPU и записи на диск. Строка на одну диагностику,
+-- payload — её jsonRepresentation() от Apple как есть (стек адресами, без
+-- данных атлета). user_id — NULL, если сбой пришёл до входа или токен не
+-- подошёл: сбой на экране входа важнее всего, а привязать его не к кому.
+-- app_version/build/os_version/device — того запуска, который упал (из
+-- diagnosticMetaData), а не того, что прислал отчёт: Apple отдаёт его через
+-- сутки, часто уже после обновления. Чистится по DIAGNOSTICS_RETENTION_DAYS в
+-- суточном джобе, как cost_events; при сносе аккаунта уходит вместе с ним
+-- (колонка user_id — см. _user_scoped_tables).
+CREATE TABLE IF NOT EXISTS diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    user_id INTEGER,
+    app_version TEXT,
+    build TEXT,
+    os_version TEXT,
+    device TEXT,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diagnostics_created ON diagnostics (created_at);
+
 CREATE TABLE IF NOT EXISTS achievements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -8542,6 +8565,83 @@ async def prune_old_user_events(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
         cur = await conn().execute("DELETE FROM user_events WHERE date(created_at) < ?", (cutoff,))
+        await conn().commit()
+        return cur.rowcount
+
+
+# ---------- отчёты о сбоях iOS (MetricKit) ----------
+#
+# Пишет api_v1_diagnostics.py, читает админская /crashes. Посмотреть руками:
+#
+#   SELECT app_version, build, kind, COUNT(*) FROM diagnostics
+#   WHERE created_at >= datetime('now', '-7 days')
+#   GROUP BY app_version, build, kind ORDER BY app_version DESC, build DESC;
+#
+#   -- последние падения с причиной:
+#   SELECT created_at, app_version, build, device, os_version,
+#          json_extract(payload, '$.diagnosticMetaData.exceptionType') AS exc,
+#          json_extract(payload, '$.diagnosticMetaData.signal') AS sig,
+#          json_extract(payload, '$.diagnosticMetaData.terminationReason') AS reason
+#   FROM diagnostics WHERE kind = 'crash' ORDER BY id DESC LIMIT 20;
+
+
+async def log_diagnostic(
+    *,
+    user_id: Optional[int],
+    kind: str,
+    payload: str,
+    app_version: Optional[str],
+    build: Optional[str],
+    os_version: Optional[str],
+    device: Optional[str],
+) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO diagnostics "
+            "(created_at, user_id, app_version, build, os_version, device, kind, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (now_iso(), user_id, app_version, build, os_version, device, kind, payload),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def diagnostics_summary(days: int) -> list[aiosqlite.Row]:
+    """Сколько сбоев каждого вида за последние `days` суток — по версиям и
+    сборкам, свежие версии первыми."""
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT COALESCE(app_version, '?') AS app_version, COALESCE(build, '?') AS build, "
+        "kind, COUNT(*) AS n, COUNT(DISTINCT user_id) AS users "
+        "FROM diagnostics WHERE created_at >= ? "
+        "GROUP BY 1, 2, kind ORDER BY 1 DESC, 2 DESC, n DESC",
+        (since,),
+    )
+    return await cur.fetchall()
+
+
+async def recent_crashes(days: int, limit: int) -> list[aiosqlite.Row]:
+    """Последние падения за `days` суток с причиной из diagnosticMetaData —
+    чтобы по сводке было видно, одно это падение или разные."""
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT id, created_at, user_id, app_version, build, os_version, device, "
+        "json_extract(payload, '$.diagnosticMetaData.exceptionType') AS exception_type, "
+        "json_extract(payload, '$.diagnosticMetaData.signal') AS signal, "
+        "json_extract(payload, '$.diagnosticMetaData.terminationReason') AS termination_reason "
+        "FROM diagnostics WHERE kind = 'crash' AND created_at >= ? "
+        "ORDER BY id DESC LIMIT ?",
+        (since, limit),
+    )
+    return await cur.fetchall()
+
+
+async def prune_old_diagnostics(retention_days: int) -> int:
+    """Выкинуть отчёты о сбоях старше retention_days: чинят свежие версии, а
+    падение трёхмесячной сборки, которой ни у кого уже нет, чинить незачем."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM diagnostics WHERE date(created_at) < ?", (cutoff,))
         await conn().commit()
         return cur.rowcount
 
