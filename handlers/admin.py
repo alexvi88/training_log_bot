@@ -590,6 +590,74 @@ async def cmd_growth(message: Message, state: FSMContext):
     await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
+CRASHES_WINDOW_DAYS = 7
+CRASHES_RECENT_LIMIT = 5
+
+_KIND_LABELS = {
+    "crash": "падения",
+    "hang": "зависания",
+    "cpu_exception": "перерасход CPU",
+    "disk_write_exception": "запись на диск",
+}
+
+
+def format_crash_report(summary, recent, days: int) -> str:
+    """Сводка `/crashes`: сколько сбоев каждого вида по версиям и сборкам и
+    несколько последних падений с причиной из diagnosticMetaData. Сами стеки —
+    в базе (db.diagnostics.payload), в чат они не влезают и без символикации
+    всё равно читаются адресами."""
+    if not summary:
+        return f"🧯 Сбоев iOS-приложения за {days} дн. не пришло."
+    lines = [f"🧯 <b>Сбои iOS-приложения за {days} дн.</b>", ""]
+    current = None
+    for row in summary:
+        version = f"{row['app_version']} ({row['build']})"
+        if version != current:
+            current = version
+            lines.append(f"<b>{escape(version)}</b>")
+        label = _KIND_LABELS.get(row["kind"], row["kind"])
+        lines.append(f"  {escape(label)}: {row['n']} (людей с входом: {row['users']})")
+    if recent:
+        lines += ["", "<b>Последние падения:</b>"]
+        for row in recent:
+            reason = []
+            if row["exception_type"] is not None:
+                reason.append(f"exc {row['exception_type']}")
+            if row["signal"] is not None:
+                reason.append(f"sig {row['signal']}")
+            if row["termination_reason"]:
+                reason.append(str(row["termination_reason"])[:80])
+            who = f"id {row['user_id']}" if row["user_id"] is not None else "без входа"
+            lines.append(
+                f"#{row['id']} {admin_time(row['created_at']).strftime('%d.%m %H:%M')} · "
+                f"{escape(str(row['app_version']))} ({escape(str(row['build']))}) · "
+                f"{escape(str(row['device']))} iOS {escape(str(row['os_version']))} · {who}"
+                + (f"\n  {escape(', '.join(reason))}" if reason else "")
+            )
+    lines += [
+        "",
+        "Стек целиком: <code>SELECT payload FROM diagnostics WHERE id = N</code>",
+    ]
+    return "\n".join(lines)
+
+
+@router.message(Command("crashes"))
+async def cmd_crashes(message: Message, state: FSMContext):
+    """Сбои iOS-приложения из MetricKit (api_v1_diagnostics.py) — по версиям.
+
+    Без аргументов — CRASHES_WINDOW_DAYS дней, `/crashes 30` — за столько.
+    """
+    if not _is_admin(message.from_user.id):
+        return
+    days = CRASHES_WINDOW_DAYS
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip().isdigit() and int(parts[1].strip()) > 0:
+        days = int(parts[1].strip())
+    summary = await db.diagnostics_summary(days)
+    recent = await db.recent_crashes(days, CRASHES_RECENT_LIMIT)
+    await message.answer(format_crash_report(summary, recent, days), parse_mode="HTML")
+
+
 @router.message(Command("activity"))
 async def cmd_activity(message: Message, state: FSMContext):
     if not _is_admin(message.from_user.id):

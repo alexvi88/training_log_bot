@@ -404,6 +404,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="testpush", description="Проверочный пуш на iOS (админ)"),
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="growth", description="Воронка по источникам (админ)"),
+                BotCommand(command="crashes", description="Сбои iOS-приложения по версиям (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
                 BotCommand(command="announce", description="Релизный анонс: проверить и разослать (админ)"),
                 BotCommand(command="admin_wipe", description="Снести TEST_USER_ID для проверки онбординга (админ)"),
