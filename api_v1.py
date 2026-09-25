@@ -1466,7 +1466,13 @@ async def _finish_replay_response(workout, user_id: int) -> JSONResponse:
         workout, user, [], was_backfill=True, announce_rank=False
     )
     payload["replayed"] = True
-    payload["ai_comment_pending"] = False
+    # Повтор комментарий не заказывает, но генерация, заказанная первым
+    # вызовом, может ещё лететь: двойной тап «Завершить» или повтор после
+    # таймаута приходят ровно в эти секунды. Жёсткое False говорило
+    # приложению «комментария не будет», и оно не опрашивало GET ai-comment.
+    payload["ai_comment_pending"] = (
+        workout["ai_comment"] is None and workout["id"] in _ai_comment_inflight
+    )
     return JSONResponse(payload)
 
 
