@@ -25,7 +25,8 @@
     его не зовёт вовсе: непопавшие в каталог по точному имени помечены
     «будет создано» безусловно, без обращения к модели. Настоящий импорт
     (`/import/csv`) зовёт его как и бот, если create_missing_exercises не
-    выключен явно.
+    выключен явно и атлет разрешил передавать данные AI
+    (common.ai_consent_given).
 
 AI-обзор истории после импорта (ai_trainer.import_history_overview) сюда
 нарочно не подключён: в боте это отдельное сообщение, отправляемое в чат
@@ -226,9 +227,15 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
     if unresolved and create_missing:
-        ai_resolved = await resolve_exercise_names_via_ai(user_id, unresolved)
-        resolved.update(ai_resolved)
-        unresolved = [n for n in unresolved if n not in resolved]
+        # Сопоставление через модель — не то, о чём человек просил (он жал
+        # «Загрузить», а не спрашивал тренера), но названия из его файла
+        # уходят стороннему AI. Без согласия (common.ai_consent_given) шаг
+        # молча пропускается: имена заводятся как есть циклом ниже — тот же
+        # исход, что и когда модель ничего не нашла.
+        if common.ai_consent_given(request, user):
+            ai_resolved = await resolve_exercise_names_via_ai(user_id, unresolved)
+            resolved.update(ai_resolved)
+            unresolved = [n for n in unresolved if n not in resolved]
         # Модель не нашла шаблон каталога вовсе — в боте это идёт на ручное
         # разрешение (handlers/exercise_resolve.py), которого у REST нет;
         # заводим упражнение как есть, под именем из файла, без группы мышц,

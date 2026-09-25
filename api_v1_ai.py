@@ -223,7 +223,9 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     незачем, а человек, отозвавший согласие, должен иметь возможность забрать
     уже предложенную программу.
 
-    Проверка работает, только если клиент прислал `X-AI-Consent-Flow: 1` (то
+    Правило — common.ai_consent_given (им же молча пропускаются фоновые
+    вызовы модели: комментарий к тренировке, импорт). Проверка работает,
+    только если клиент прислал `X-AI-Consent-Flow: 1` (то
     есть сам показывает лист) или включён config.AI_CONSENT_REQUIRED. Выпущенные
     сборки 1.0 (3)/(4) листа не знают, и 403 превратил бы им тренера в
     непонятную ошибку — см. комментарий у флага. Главная проверка — в
@@ -231,13 +233,7 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     ещё помнит старое) и сборку, в которой какую-то точку отправки забыли.
     Бот в Telegram сюда не ходит вовсе.
     """
-    if not (
-        config.AI_CONSENT_REQUIRED
-        or request.headers.get(config.AI_CONSENT_CLIENT_HEADER) == "1"
-    ):
-        return
-    user = await db.get_user(user_id)
-    if user is not None and user["ai_consent_at"]:
+    if common.ai_consent_given(request, await db.get_user(user_id)):
         return
     raise ApiError(403, "ai_consent_required", "consent to share data with the AI provider is required")
 
