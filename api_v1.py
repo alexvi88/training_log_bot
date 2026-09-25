@@ -423,9 +423,10 @@ async def create_muscle_group(request: Request) -> JSONResponse:
     называют группы в конкретном зале."""
     user_id = await _authed_user_id(request)
     body = await _json_body(request)
-    name = str(_require(body, "name", str)).strip()
-    if not name:
-        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
+    # Тот же порог и та же ошибка, что у имени упражнения: без него группа с
+    # названием в 5000 символов разваливала каталог и каждую карточку, где
+    # показывается группа.
+    name = _exercise_name(body)
     emoji = body.get("emoji")
     if emoji is not None and not isinstance(emoji, str):
         raise ApiError(400, "bad_request", "emoji must be a string")
@@ -1465,7 +1466,13 @@ async def _finish_replay_response(workout, user_id: int) -> JSONResponse:
         workout, user, [], was_backfill=True, announce_rank=False
     )
     payload["replayed"] = True
-    payload["ai_comment_pending"] = False
+    # Повтор комментарий не заказывает, но генерация, заказанная первым
+    # вызовом, может ещё лететь: двойной тап «Завершить» или повтор после
+    # таймаута приходят ровно в эти секунды. Жёсткое False говорило
+    # приложению «комментария не будет», и оно не опрашивало GET ai-comment.
+    payload["ai_comment_pending"] = (
+        workout["ai_comment"] is None and workout["id"] in _ai_comment_inflight
+    )
     return JSONResponse(payload)
 
 

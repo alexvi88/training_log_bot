@@ -6168,6 +6168,60 @@ async def _has_content_data(telegram_id: int) -> bool:
     return False
 
 
+# Колонки users, которые при слиянии в пустую телеграм-строку НЕ берутся из
+# app-строки как есть (см. _adopt_app_user_settings). Всё остальное — настройки
+# и профиль атлета — берётся из приложения: там человек реально жил.
+#   source/referrer_id — первое касание из deep link'а бота (acquisition.py):
+#     у app-only аккаунта их нет, бот-строке они принадлежат по праву;
+#   username — телеграмный, приходит свежим аргументом;
+#   reply_keyboard_version — версия клавиатуры, отправленной в ЭТОТ чат;
+#   *_hint_shown, manual_sets_typed — одноразовые подсказки: показана хоть
+#     где-то — значит показана;
+#   rank_level_seen — объявленное звание: большее, чтобы не объявить повторно;
+#   created_at — когда человек пришёл впервые, какой бы дорогой ни пришёл.
+_MERGE_USER_COLUMN_SQL = {
+    "source": "COALESCE(source, ?)",
+    "referrer_id": "COALESCE(referrer_id, ?)",
+    "voice_hint_shown": "MAX(voice_hint_shown, ?)",
+    "tz_push_hint_shown": "MAX(tz_push_hint_shown, ?)",
+    "ai_actions_hint_shown": "MAX(ai_actions_hint_shown, ?)",
+    "manual_sets_typed": "MAX(manual_sets_typed, ?)",
+    "rank_level_seen": "MAX(rank_level_seen, ?)",
+    "created_at": "MIN(created_at, ?)",
+}
+# Колонки, которые остаются у телеграм-строки без сравнения.
+_MERGE_USER_KEEP_TARGET_COLUMNS = frozenset({
+    "telegram_id", "telegram_linked", "username", "reply_keyboard_version",
+})
+
+
+async def _adopt_app_user_settings(
+    db: aiosqlite.Connection, app_row: dict, telegram_id: int, username: Optional[str]
+) -> None:
+    """Переписать пустую телеграм-строку `telegram_id` настройками app-строки.
+
+    Список колонок — из схемы (PRAGMA table_info), а не руками: новая
+    настройка в users по умолчанию переезжает из приложения, как и при
+    target_row is None, где переписывается id самой app-строки. Исключения —
+    _MERGE_USER_COLUMN_SQL. Выполняется внутри транзакции слияния."""
+    cur = await db.execute("PRAGMA table_info(users)")
+    columns = [row["name"] for row in await cur.fetchall()]
+    assignments: list[str] = []
+    params: list = []
+    for column in columns:
+        if column in _MERGE_USER_KEEP_TARGET_COLUMNS:
+            continue
+        assignments.append(f"{column} = {_MERGE_USER_COLUMN_SQL.get(column, '?')}")
+        params.append(app_row[column])
+    assignments.append("telegram_linked = 1")
+    assignments.append("username = COALESCE(?, username, ?)")
+    params.extend([username, app_row["username"]])
+    await db.execute(
+        f"UPDATE users SET {', '.join(assignments)} WHERE telegram_id = ?",
+        (*params, telegram_id),
+    )
+
+
 async def link_telegram_to_app_account(
     app_user_id: int, telegram_id: int, username: Optional[str] = None
 ) -> str:
@@ -6198,6 +6252,7 @@ async def link_telegram_to_app_account(
             )
             target_row = await target_cur.fetchone()
 
+            target_has_data = False
             if target_row is not None:
                 target_has_data = await _has_content_data(telegram_id)
                 if target_has_data and await _has_content_data(app_user_id):
@@ -6246,11 +6301,23 @@ async def link_telegram_to_app_account(
                     "username = COALESCE(?, username) WHERE telegram_id = ?",
                     (telegram_id, username, app_user_id),
                 )
+            elif not target_has_data:
+                # Телеграм-строка есть, но пустая: человек сначала нажал /start
+                # в боте, а потом привязал приложение, где уже жил. Это тот же
+                # случай, что target_row is None, — настройки атлета (язык,
+                # согласие на AI, пояс, единицы, профиль) живут в app-строке, и
+                # победить должна она. Раньше побеждала бот-строка: англоязычный
+                # из приложения становился русским и заново давал согласие.
+                # Строка приёмника не удаляется, а переписывается значениями
+                # app-строки — её id уже держат перенесённые выше строки.
+                await db.execute("DELETE FROM users WHERE telegram_id = ?", (app_user_id,))
+                await _adopt_app_user_settings(db, dict(app_row), telegram_id, username)
             else:
-                # Телеграм-аккаунт уже есть (пустой — иначе была бы ошибка
-                # выше) — он и остаётся канонической строкой, app-only строку
-                # сносим: две строки с одинаковым telegram_id после переноса
-                # выше и так не нужны, а PRIMARY KEY второй не даст завести.
+                # Телеграм-аккаунт уже есть и с историей (значит, app-only
+                # пустой — иначе была бы ошибка выше) — он и остаётся
+                # канонической строкой, app-only строку сносим: две строки с
+                # одинаковым telegram_id после переноса выше и так не нужны,
+                # а PRIMARY KEY второй не даст завести.
                 await db.execute("DELETE FROM users WHERE telegram_id = ?", (app_user_id,))
                 await db.execute(
                     "UPDATE users SET telegram_linked = 1, username = COALESCE(?, username) "

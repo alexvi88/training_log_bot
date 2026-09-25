@@ -704,6 +704,7 @@
   "import.err_empty_name": "empty exercise name",
   "import.err_generic_parse": "couldn't parse the weight or reps",
   "import.err_line": "Line {n}: {message}",
+  "import.err_name_too_long": "exercise name is longer than {max} characters — shorten it in the file",
   "import.err_negative_weight": "negative weight ({weight})",
   "import.err_not_integer": "{label}: \"{text}\" isn't a whole number",
   "import.err_reps_nonpositive": "reps at 0 or below",

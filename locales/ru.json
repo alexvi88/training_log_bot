@@ -704,6 +704,7 @@
   "import.err_empty_name": "пустое название упражнения",
   "import.err_generic_parse": "не разобрал вес или повторы",
   "import.err_line": "Строка {n}: {message}",
+  "import.err_name_too_long": "название упражнения длиннее {max} символов — сократи его в файле",
   "import.err_negative_weight": "отрицательный вес ({weight})",
   "import.err_not_integer": "{label}: «{text}» — не целое число",
   "import.err_reps_nonpositive": "повторы 0 или меньше",

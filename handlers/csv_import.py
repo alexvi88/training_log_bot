@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, Message
 
 import achievement_sync
 import ai_trainer
+import config
 import db
 import formatting
 import i18n
@@ -495,13 +496,46 @@ _LBS_IN_KG = 0.45359237
 # отдельное слово, в скобках или через подчёркивание. Буквы вокруг не
 # допускаются, чтобы «bulbs» или «climbs» не превратились в фунты.
 _LBS_HEADER_RE = re.compile(r"(?:^|[^a-z])(?:lbs?|pounds?)(?:[^a-z]|$)", re.IGNORECASE)
+# Явные килограммы: «weight_kg» у Hevy, «Weight (kg)» у Strong, «Вес (кг)» из
+# русского Excel. Отличать их от просто «Weight» нужно атлету в фунтах: у него
+# безымянная колонка — это его же единица (так пишет наш экспорт), а явные
+# килограммы надо перевести в фунты. Границы — любой не-буквенно-цифровой знак
+# или «_», чтобы «kgs»/«кг» внутри слова не считались единицей.
+_KG_UNIT_RU = "кг"
+_KG_HEADER_RE = re.compile(
+    r"(?:^|[\W_])(?:kgs?|kilos?|kilograms?|" + _KG_UNIT_RU + r")(?:[\W_]|$)", re.IGNORECASE,
+)
 
 
-def _weight_factor(headers: list[str], mapping: dict[str, int]) -> float:
+def _file_weight_unit(headers: list[str], mapping: dict[str, int]) -> Optional[str]:
+    """Единица колонки веса по её заголовку: "lb", "kg" или None — не указана."""
     idx = mapping.get("weight")
     if idx is None or idx >= len(headers):
+        return None
+    header = headers[idx].strip()
+    if _LBS_HEADER_RE.search(header):
+        return "lb"
+    if _KG_HEADER_RE.search(header):
+        return "kg"
+    return None
+
+
+def _weight_factor(headers: list[str], mapping: dict[str, int], account_unit: str) -> float:
+    """Множитель «единица файла → единица аккаунта».
+
+    Вес подхода хранится в единице аккаунта (см. db.scale_user_set_weights,
+    которая пересчитывает историю при смене кг↔lb), поэтому целевая единица —
+    `users.unit`, а не всегда килограммы: раньше атлет в фунтах получал из
+    «weight_lbs = 225» подход 102.1 (показ — «102 lb»), а явные килограммы
+    ложились у него как фунты без пересчёта. Колонка без единицы считается
+    записанной в единице аккаунта — так пишет наш собственный экспорт.
+    """
+    file_unit = _file_weight_unit(headers, mapping)
+    if file_unit is None or file_unit == account_unit:
         return 1.0
-    return _LBS_IN_KG if _LBS_HEADER_RE.search(headers[idx].strip()) else 1.0
+    if file_unit == "lb":
+        return _LBS_IN_KG
+    return config.LB_PER_KG
 
 
 def _parse_count(text: str, label: str) -> int:
@@ -585,9 +619,13 @@ def _date_column_values(rows: list[list[str]], mapping: dict[str, int]) -> list[
 def _build_workout_groups(
     rows: list[list[str]], mapping: dict[str, int], first_line: int = 2,
     today: Optional[dt.date] = None, weight_factor: float = 1.0,
-    stats: Optional[dict] = None,
+    stats: Optional[dict] = None, account_unit: str = "kg",
 ) -> list[dict]:
     """Строки файла → тренировки по датам.
+
+    Вес на выходе — в единице аккаунта (`weight_factor` из _weight_factor),
+    а потолок MAX_WEIGHT сверяется в килограммовом эквиваленте: он задан в
+    кг, и у атлета в фунтах честные 1600 lb (≈726 кг) иначе валили бы файл.
 
     `stats`, если передан, дополняется тем, что разбор решил сам и о чём
     стоит сказать человеку до записи: сколько строк пропущено и почему
@@ -659,6 +697,18 @@ def _build_workout_groups(
 
         if not name:
             raise ParseError(i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_empty_name")))
+        # Тот же порог, что у имени упражнения в /v1 (api_v1._exercise_name):
+        # импорт заводит недостающие упражнения под именем из файла, и без
+        # проверки съехавшая колонка (заметки вместо названия) давала
+        # упражнение в 5000 символов, разваливающее каждую карточку и список.
+        # Здесь, а не в REST: этот разбор общий у бота и /v1.
+        if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+            raise ParseError(
+                i18n.t(
+                    "import.err_line", n=line_no,
+                    message=i18n.t("import.err_name_too_long", max=config.MAX_EXERCISE_NAME_LENGTH),
+                )
+            )
         if reps <= 0:
             raise ParseError(i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_reps_nonpositive")))
         # Same ceilings the typed-set parser enforces, and for the same reason:
@@ -677,7 +727,7 @@ def _build_workout_groups(
                     message=i18n.t("import.err_negative_weight", weight=weight_text),
                 )
             )
-        if weight > MAX_WEIGHT:
+        if formatting.to_kg(weight, account_unit) > MAX_WEIGHT:
             raise ParseError(
                 i18n.t(
                     "import.err_line", n=line_no,
@@ -733,7 +783,10 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             # Считаем здесь, а не при приёме файла: колонку веса могли выбрать
             # руками, и единица берётся из заголовка той колонки, что выбрана в
             # итоге, — какой бы дорогой она сюда ни пришла.
-            weight_factor=_weight_factor(data.get("imp_headers") or [], data["imp_mapping"]),
+            weight_factor=_weight_factor(
+                data.get("imp_headers") or [], data["imp_mapping"], user["unit"],
+            ),
+            account_unit=user["unit"],
         )
     except ParseError as e:
         await _back_to_file(i18n.t("import.file_error", message=e.message))
