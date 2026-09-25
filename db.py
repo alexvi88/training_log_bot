@@ -7571,6 +7571,27 @@ async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
     return None
 
 
+async def find_global_templates_by_names(names: list[str]) -> dict[str, aiosqlite.Row]:
+    """Пакетный _find_global_template_by_name: имя → шаблон каталога тем же
+    сравнением (регистр, ё=е, пробелы по краям, английское показанное имя →
+    русская идентичность), но одним чтением шаблонов на весь список, а не
+    по запросу на имя — импорт приносит сотни названий за раз. Имена без
+    совпадения в словарь не попадают."""
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE is_template = 1 AND user_id IS NULL ORDER BY id"
+    )
+    by_fold: dict[str, aiosqlite.Row] = {}
+    for r in await cur.fetchall():
+        by_fold.setdefault(_fold_exercise_name(r["name"] or ""), r)
+    result: dict[str, aiosqlite.Row] = {}
+    for name in names:
+        for needle in _exercise_name_candidates(name):
+            if needle in by_fold:
+                result[name] = by_fold[needle]
+                break
+    return result
+
+
 def _exercise_name_candidates(name: str) -> list[str]:
     """Свёрнутые имена, под которыми стоит искать шаблон: как дали и как
     идентичность, если дали показанное (переведённое) имя."""

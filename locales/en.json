@@ -699,6 +699,7 @@
   "import.confirm_header": "📥 <b>Import: {n, plural, one{# workout} other{# workouts}}</b>",
   "import.err_count": "couldn't parse {label} \"{text}\"",
   "import.err_date": "couldn't parse the date \"{text}\"",
+  "import.err_date_too_old": "the date \"{text}\" is before 2000 — check the year on this line",
   "import.err_empty_name": "empty exercise name",
   "import.err_generic_parse": "couldn't parse the weight or reps",
   "import.err_line": "Line {n}: {message}",

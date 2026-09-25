@@ -2988,6 +2988,13 @@ _EXERCISE_ALIAS_SCHEMA = {
 }
 
 
+# Сколько названий уходит модели одним запросом. Раньше весь список шёл
+# одним вызовом с max_tokens=2000: у экспорта Strong/Hevy за пару лет
+# названий сотня-другая, ответ обрезался посреди JSON и целиком становился {} —
+# ни одно имя не сопоставлялось. 40 пар в ответе с запасом влезают в потолок.
+EXERCISE_ALIAS_BATCH = 40
+
+
 async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dict[str, str]:
     """Названия упражнений из чужого экспорта (Hevy и т.п.) → точные имена из
     нашего каталога, если модель уверена, что это то же движение — на лету, при
@@ -2995,19 +3002,35 @@ async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dic
     названий, и ошибиться в написанном руками списке проще, чем спросить
     модель точь-в-точь по каталогу, который и так уже есть.
 
+    Имена уходят модели пачками по EXERCISE_ALIAS_BATCH. Точное совпадение
+    с каталогом сюда не доходит: его без модели снимает вызывающий код
+    (handlers.csv_import.resolve_exercise_names_via_ai).
+
     Совпавшее имя резолвится через db.get_or_create_user_exercise_by_name —
     оно форкает шаблон целиком, вместе с фото и описанием техники (см.
     handlers/exercise_resolve.py:resolve_pick_template, тот же путь для
     ручного выбора). Не совпавшее идёт по обычному пути ручного разрешения
     (handlers/csv_import.py), как и раньше.
 
-    Пустой словарь, если модель не настроена, недоступна или ответ не
-    разобрать, — импорт при этом не должен падать, просто ничего не
-    подставится само и человек разрешит имена руками.
+    Модель не настроена, недоступна или ответ пачки не разобрать — эта
+    пачка просто ничего не добавляет: импорт при этом не должен падать,
+    человек разрешит имена руками.
     """
     if not names or not is_configured():
         return {}
+    rest = list(dict.fromkeys(names))
+    result: dict[str, str] = {}
     catalog_flat = [name for group_names in _CATALOG_BY_GROUP.values() for name in group_names]
+    for i in range(0, len(rest), EXERCISE_ALIAS_BATCH):
+        result.update(
+            await _match_alias_batch(user_id, rest[i:i + EXERCISE_ALIAS_BATCH], catalog_flat)
+        )
+    return result
+
+
+async def _match_alias_batch(
+    user_id: int, names: list[str], catalog_flat: list[str]
+) -> dict[str, str]:
     try:
         client = _get_client()
         response = await client.chat.completions.create(
@@ -3019,8 +3042,10 @@ async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dic
                 {"role": "system", "content": _EXERCISE_ALIAS_SYSTEM_PROMPT},
                 {
                     "role": "user",
+                    # Каталог первым: он одинаковый у всех пачек, и неизменный
+                    # префикс запроса попадает в кэш провайдера.
                     "content": json.dumps(
-                        {"import_names": names, "catalog": catalog_flat}, ensure_ascii=False
+                        {"catalog": catalog_flat, "import_names": names}, ensure_ascii=False
                     ),
                 },
             ],

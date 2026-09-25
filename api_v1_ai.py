@@ -238,6 +238,13 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     raise ApiError(403, "ai_consent_required", "consent to share data with the AI provider is required")
 
 
+async def has_ai_consent(request: Request, user_id: int) -> bool:
+    """Та же проверка, что у _require_ai_consent, но ответом, а не 403 — для
+    ручек, у которых модель лишь необязательный шаг (импорт CSV, см.
+    api_v1_import). Правило одно — common.ai_consent_given."""
+    return common.ai_consent_given(request, await db.get_user(user_id))
+
+
 # Вопрос через HTTP не режется телеграмным лимитом сообщения (4096 символов,
 # см. handlers/ai_trainer.py DRAFT_TEXT_LIMIT) — клиент может прислать что
 # угодно. Свой потолок нужен ради того же, ради чего он нужен боту: без него

@@ -118,10 +118,16 @@ DELIMITERS = ",;\t|"
 SYNONYMS = {
     "date": {"дата", "date", "started_at", "start_time"},
     "exercise": {"упражнение", "exercise", "exercise_title", "exercise name"},
-    "weight": {"вес", "weight", "weight_kg"},
+    # weight_lbs/weight_lb — тот же Hevy у атлета с фунтами в настройках: без
+    # синонима файл упирался в ручной маппинг веса, а единицу колонки после
+    # выбора всё равно определяет _weight_factor по заголовку.
+    "weight": {"вес", "weight", "weight_kg", "weight_lbs", "weight_lb"},
     "reps": {"повторы", "reps"},
     "round": {"подход", "раунд", "round", "set", "round_index", "set_index", "set order"},
     "rpe": {"rpe", "рпе"},
+    # Тип подхода у Hevy (normal/warmup/failure/dropset): разминку пропускаем,
+    # см. _is_warmup. Не обязательная колонка — в ручной маппинг не попадает.
+    "set_type": {"set_type", "set type"},
 }
 # Единицы в скобках у заголовка — «Weight (kg)», «Weight (lbs)», «Distance (m)»:
 # Strong подписывает ими колонки по настройкам аккаунта, и без этой срезки один
@@ -187,13 +193,17 @@ def _looks_like_data(row: list[str]) -> bool:
     Признак — читаемая дата в любой из ячеек: названия колонок датами не бывают.
     Без этой проверки первая строка файла без заголовков уходила в headers и
     первая тренировка исчезала молча (два подхода в файле → импортирован один).
+    Проверки на будущее и на слишком старую дату здесь нет нарочно: строка с
+    такой датой — всё равно данные, и ошибку про неё скажет разбор ниже, со
+    своим номером строки, а не «не понял, где заголовки».
     """
     for cell in row:
-        try:
-            _parse_row_date(cell)
-        except ParseError:
-            continue
-        return True
+        for month_first in (False, True):
+            try:
+                _parse_row_date_raw(cell, month_first=month_first)
+            except ParseError:
+                continue
+            return True
     return False
 
 
@@ -343,24 +353,87 @@ _MONTH_ABBR_RU = {
     "июл": 7, "авг": 8, "сен": 9, "окт": 10, "ноя": 11, "дек": 12,
 }
 _MONTH_ABBR = {**_MONTH_ABBR_EN, **_MONTH_ABBR_RU}
+# Время после даты: «18:30», «18:30:00» и 12-часовое «6:30 PM» (американский
+# экспорт пишет «3/15/2024 6:30 PM»). Для импорта оно не нужно — тренировка
+# ложится на календарный день, — но раньше хвост со временем валил всю строку
+# в «не понял дату».
+_TIME_PART = r"\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp]\.?\s?[Mm]\.?)?"
 _HEVY_DATE_RE = re.compile(
-    r"^(?P<d>\d{1,2}) (?P<mon>[A-Za-zА-Яа-яЁё]{3})\.? (?P<y>\d{4})(?:,\s*\d{1,2}:\d{2})?$"
+    # [^\W\d_] — любая буква (латиница и кириллица), без самой кириллицы в
+    # литерале; месяц всё равно сверяется со словарём _MONTH_ABBR.
+    r"^(?P<d>\d{1,2}) (?P<mon>[^\W\d_]{3})\.? (?P<y>\d{4})(?:,?\s*" + _TIME_PART + r")?$"
 )
+_TIME_SUFFIX_RE = re.compile(r"[,\s]+" + _TIME_PART + r"$")
+# Числовая дата «день-разделитель-месяц-разделитель-год» — та же форма, что
+# у parser.parse_ru_date, только отдельно ради косой черты: её одну читаем
+# как месяц/день, если колонка это доказывает (см. _slash_date_order).
+_NUMERIC_DATE_RE = re.compile(r"^\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4}$")
+_SLASH_DATE_RE = re.compile(r"^(?P<a>\d{1,2})/(?P<b>\d{1,2})/(?P<y>\d{2,4})$")
+# Нижняя граница даты из файла. Дневник заведён сильно позже, и дата до 2000
+# года — почти всегда пустая ячейка, выгруженная как эпоха Unix
+# («1970-01-01»), или перепутанный год, а не настоящая тренировка: записанная
+# молча, она навсегда растягивает историю и график прогресса на десятилетия.
+_MIN_IMPORT_DATE = dt.date(2000, 1, 1)
 
 
-def _parse_row_date(text: str, today: Optional[dt.date] = None) -> dt.date:
-    text = text.strip()
+def _strip_time_suffix(text: str) -> str:
+    """«05.03.2024 18:30» → «05.03.2024», «3/15/2024 6:30 PM» → «3/15/2024».
+    Срезаем только когда перед временем стоит именно числовая дата — ISO и
+    Hevy со своим временем разбираются своими ветками ниже."""
+    match = _TIME_SUFFIX_RE.search(text)
+    if match and _NUMERIC_DATE_RE.match(text[:match.start()]):
+        return text[:match.start()]
+    return text
+
+
+def _slash_date_order(values: list[str]) -> tuple[Optional[str], bool]:
+    """(как читать «a/b/гггг»: "mdy", "dmy" или None — в колонке нет дат через
+    косую черту; неоднозначна ли колонка).
+
+    Решаем по всей колонке, а не по ячейке: «03/04/2024» в одиночку — это и
+    3 апреля, и 4 марта, и только соседние строки говорят, какой формат у
+    файла. Вторая часть больше 12 хоть где-то — файл американский (м/д);
+    первая больше 12 — европейский (д/м), как раньше. Если все значения
+    неоднозначны — остаёмся на д/м (прежнее поведение, формат бота), а
+    превью честно показывает получившийся диапазон дат и флаг
+    неоднозначности. Точки и дефисы не трогаем: у них формат всегда д.м.
+    """
+    day_first_seen = month_first_seen = has_slash = False
+    for value in values:
+        match = _SLASH_DATE_RE.match(_strip_time_suffix(value.strip()))
+        if not match:
+            continue
+        has_slash = True
+        if int(match["a"]) > 12:
+            day_first_seen = True
+        if int(match["b"]) > 12:
+            month_first_seen = True
+    if not has_slash:
+        return None, False
+    order = "mdy" if month_first_seen and not day_first_seen else "dmy"
+    return order, not month_first_seen and not day_first_seen
+
+
+def _parse_row_date_raw(text: str, month_first: bool = False) -> dt.date:
+    """Календарная дата из ячейки без проверки границ (будущее, до 2000) —
+    их ставит _parse_row_date. Отдельно ради _looks_like_data: строке с
+    датой в будущем всё равно положено остаться строкой данных."""
+    text = _strip_time_suffix(text.strip())
+    slash = _SLASH_DATE_RE.match(text)
+    if month_first and slash:
+        year = int(slash["y"])
+        if year < 100:
+            year += 2000
+        try:
+            return dt.date(year, int(slash["a"]), int(slash["b"]))
+        except ValueError:
+            raise ParseError(i18n.t("import.err_date", text=text)) from None
     try:
-        return parse_ru_date(text, today)
-    except ParseError as e:
-        # dd.mm.yyyy разобрался, но дата не прошла проверку на будущее: это не
-        # "формат не тот", а настоящая ошибка данных, и топить её в общем
-        # "не понял дату" ниже, пробуя чужие форматы, не стоит. Сравниваем с
-        # готовым переводом ключа (i18n.t уже отрендерил parser.ParseError на
-        # языке текущего пользователя), а не ищем русскую подстроку — иначе
-        # проверка молча ломалась бы на английском (см. TONE_OF_VOICE.md).
-        if e.message == i18n.t("input.date_in_future"):
-            raise
+        # dt.date.max вместо «сегодня»: будущее проверяет _parse_row_date,
+        # одинаково для всех форматов, а не только для дд.мм.
+        return parse_ru_date(text, dt.date.max)
+    except ParseError:
+        pass
     match = _HEVY_DATE_RE.match(text)
     if match and match["mon"].lower() in _MONTH_ABBR:
         try:
@@ -373,6 +446,23 @@ def _parse_row_date(text: str, today: Optional[dt.date] = None) -> dt.date:
         return dt.date.fromisoformat(text[:10])
     except ValueError:
         raise ParseError(i18n.t("import.err_date", text=text)) from None
+
+
+def _parse_row_date(
+    text: str, today: Optional[dt.date] = None, month_first: bool = False
+) -> dt.date:
+    """Дата строки импорта в любом из форматов — и с одними и теми же
+    границами для всех. Раньше «ещё в будущем» ловил только дд.мм
+    (parser.parse_ru_date), а ISO и Hevy пропускали и 2099-01-01, и
+    1970-01-01: такая тренировка становилась вечной «последней» или
+    растягивала историю на полвека. `today` — местный день пользователя
+    (timeutil.user_today), одинаково в боте и в REST."""
+    date = _parse_row_date_raw(text, month_first=month_first)
+    if date > (today or dt.date.today()):
+        raise ParseError(i18n.t("input.date_in_future"))
+    if date < _MIN_IMPORT_DATE:
+        raise ParseError(i18n.t("import.err_date_too_old", text=text.strip()))
+    return date
 
 
 # Запятая-разделитель тысяч: ровно три цифры в каждой группе после первой
@@ -401,7 +491,10 @@ def _parse_number(text: str) -> float:
 # и разом открыли бы весовые клубы, которые уже не отбираются. Строка «Weight
 # (lbs)» бывает только у Strong: он подписывает колонку единицей аккаунта.
 _LBS_IN_KG = 0.45359237
-_LBS_HEADER_RE = re.compile(r"\((?:lb|lbs|pounds?)\)\s*$", re.IGNORECASE)
+# «Weight (lbs)» у Strong, «weight_lbs» у Hevy, «Weight lb» руками: единица —
+# отдельное слово, в скобках или через подчёркивание. Буквы вокруг не
+# допускаются, чтобы «bulbs» или «climbs» не превратились в фунты.
+_LBS_HEADER_RE = re.compile(r"(?:^|[^a-z])(?:lbs?|pounds?)(?:[^a-z]|$)", re.IGNORECASE)
 
 
 def _weight_factor(headers: list[str], mapping: dict[str, int]) -> float:
@@ -454,22 +547,80 @@ def _is_not_a_set(row: list[str], mapping: dict[str, int]) -> bool:
     return True
 
 
+# Номер подхода у Strong бывает буквой: W — разминка, D — дроп-сет, F — отказ.
+# Раньше любая буква валила весь файл на «не понял номер подхода».
+_WARMUP_SET_MARKS = {"W"}
+_UNNUMBERED_SET_MARKS = {"D", "F"}
+# set_type у Hevy.
+_WARMUP_SET_TYPES = {"warmup", "warm-up", "warm up"}
+
+
+def _cell(row: list[str], mapping: dict[str, int], field: str) -> str:
+    idx = mapping.get(field)
+    if idx is None or idx >= len(row):
+        return ""
+    return row[idx].strip()
+
+
+def _is_warmup(row: list[str], mapping: dict[str, int]) -> bool:
+    """Разминочный подход (Strong «W» в Set Order, Hevy set_type=warmup).
+
+    Пропускаем, а не пишем: разминка с пустым грифом в истории портила бы
+    средний вес, тоннаж и «последний раз» упражнения, а у нас самих разминка
+    в дневник не записывается. И это не ошибка файла — пропуск только
+    считается (для превью), а не валит импорт.
+    """
+    if _cell(row, mapping, "round").upper() in _WARMUP_SET_MARKS:
+        return True
+    return _cell(row, mapping, "set_type").lower() in _WARMUP_SET_TYPES
+
+
+def _date_column_values(rows: list[list[str]], mapping: dict[str, int]) -> list[str]:
+    idx = mapping.get("date")
+    if idx is None:
+        return []
+    return [r[idx] for r in rows if idx < len(r)]
+
+
 def _build_workout_groups(
     rows: list[list[str]], mapping: dict[str, int], first_line: int = 2,
     today: Optional[dt.date] = None, weight_factor: float = 1.0,
+    stats: Optional[dict] = None,
 ) -> list[dict]:
+    """Строки файла → тренировки по датам.
+
+    `stats`, если передан, дополняется тем, что разбор решил сам и о чём
+    стоит сказать человеку до записи: сколько строк пропущено и почему
+    (rows_skipped_warmup, rows_skipped_no_load) и как прочитан формат
+    «a/b/гггг» (date_order: "dmy"/"mdy"/None, date_order_ambiguous).
+    """
     groups: dict[str, dict[str, list[tuple]]] = {}
     name_order: dict[str, list[str]] = {}
     date_order: list[str] = []
+    # Одно упражнение, записанное в файле по-разному («Жим лёжа», «жим лежа»,
+    # «Жим лёжа »), — одно упражнение, а не три: тем же сравнением, что у
+    # db.find_exercise_by_name (регистр, ё=е, пробелы по краям). Показываем
+    # то написание, что встретилось первым.
+    name_by_fold: dict[str, str] = {}
+    warmups = 0
+    no_load = 0
+    slash_order, ambiguous = _slash_date_order(_date_column_values(rows, mapping))
+    month_first = slash_order == "mdy"
 
     for line_no, row in enumerate(rows, start=first_line):
         if not row or all(not c.strip() for c in row):
             continue
+        if _is_warmup(row, mapping):
+            warmups += 1
+            continue
         if _is_not_a_set(row, mapping):
+            no_load += 1
             continue
         try:
-            date_val = _parse_row_date(row[mapping["date"]], today)
+            date_val = _parse_row_date(row[mapping["date"]], today, month_first=month_first)
             name = row[mapping["exercise"]].strip()
+            if name:
+                name = name_by_fold.setdefault(db._fold_exercise_name(name), name)
             weight_text = row[mapping["weight"]].strip()
             try:
                 weight = _parse_number(weight_text) * weight_factor if weight_text else 0.0
@@ -481,7 +632,8 @@ def _build_workout_groups(
             round_val = None
             if "round" in mapping and mapping["round"] < len(row):
                 round_text = row[mapping["round"]].strip()
-                round_val = _parse_count(round_text, _field_label("round")) if round_text else None
+                if round_text and round_text.upper() not in _UNNUMBERED_SET_MARKS:
+                    round_val = _parse_count(round_text, _field_label("round"))
             rpe_val = None
             if "rpe" in mapping and mapping["rpe"] < len(row):
                 rpe_text = row[mapping["rpe"]].strip()
@@ -552,6 +704,12 @@ def _build_workout_groups(
                 rows_for_ex = sorted(rows_for_ex, key=lambda r: r[0])
             entries.append({"name": name, "sets": [[w, r, rpe] for _, w, r, rpe in rows_for_ex]})
         workouts.append({"date": date_iso, "entries": entries})
+    if stats is not None:
+        stats["rows_skipped_warmup"] = warmups
+        stats["rows_skipped_no_load"] = no_load
+        stats["rows_skipped"] = warmups + no_load
+        stats["date_order"] = slash_order
+        stats["date_order_ambiguous"] = ambiguous
     return workouts
 
 
@@ -641,14 +799,30 @@ async def resolve_exercise_names_exact(
     return resolved, unresolved
 
 
-async def resolve_exercise_names_via_ai(user_id: int, unresolved: list[str]) -> dict[str, int]:
+async def resolve_exercise_names_via_ai(
+    user_id: int, unresolved: list[str], use_model: bool = True
+) -> dict[str, int]:
     """Неразрешённые модель сопоставляет с шаблонами каталога, а совпавшее
     заводится под ИСХОДНЫМ именем из файла (фото и техника подтягиваются от
     шаблона) — см. комментарий у вызова в _finish_mapping. В отличие от
     resolve_exercise_names_exact эта функция пишет в базу (создаёт
     упражнения), поэтому REST-превью её не зовёт, а только настоящий импорт.
+
+    Сначала — точное совпадение с шаблоном каталога (регистр, ё=е, пробелы,
+    английское показанное имя нашего же каталога): бесплатно, без сети, и
+    новый аккаунт получает упражнения каталога с группой мышц, даже когда
+    модель выключена, недоступна или ответила пустым. Модели уходит только
+    остаток.
+
+    use_model=False — только это точное совпадение: так REST-импорт идёт у
+    атлета, не давшего согласия передавать данные стороннему AI
+    (api_v1_ai.has_ai_consent).
     """
-    aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
+    templates = await db.find_global_templates_by_names(unresolved)
+    aliases = {name: row["name"] for name, row in templates.items()}
+    rest = [n for n in unresolved if n not in aliases]
+    if rest and use_model:
+        aliases.update(await ai_trainer.match_exercise_names_to_catalog(user_id, rest))
     resolved: dict[str, int] = {}
     for name, catalog_name in aliases.items():
         ex_id = await db.create_exercise_matching_catalog_name(user_id, name, catalog_name)
@@ -720,19 +894,15 @@ async def apply_import(
     Возвращает (сколько тренировок записано, сколько сорвалось).
     """
     # Дата тренировки в файле — календарная, местная для пользователя, а
-    # started_at хранится в UTC и местный день восстанавливается прибавлением
-    # tz_offset (db._local_day). «Безопасный полдень» без поправки на офсет
-    # ловит верхнюю границу пикера часовых поясов (UTC+12,
-    # keyboards.py:1183): 12:00 + 12 часов перекатывается на полночь
-    # следующих суток. Сдвигаем полдень назад на величину офсета — тогда
-    # 12:00 + tz_offset - tz_offset снова даёт исходную дату при любом
-    # значении из диапазона пикера (-1…+12).
+    # started_at хранится в UTC. Прежний «полдень минус офсет» чинил местный
+    # день, но у UTC+13/+14 уводил сырую дату (started_at[:10]) во вчера —
+    # timeutil.backdated_moment держит обе в тех же сутках при любом офсете
+    # пикера (см. её докстринг).
     tz_offset = await db.user_tz_offset(user_id)
     imported = 0
     failed = 0
     for w in workouts:
-        local_noon = dt.datetime.fromisoformat(f"{w['date']}T12:00:00")
-        started_at = (local_noon - dt.timedelta(hours=tz_offset)).isoformat()
+        started_at = timeutil.backdated_moment(dt.date.fromisoformat(w["date"]), tz_offset)
         workout_id = await db.create_finished_workout(user_id, started_at, started_at, source="import")
         try:
             for entry in w["entries"]:
