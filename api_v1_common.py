@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import logging
+import math
 import re
 from typing import Any, Optional
 
@@ -412,10 +413,34 @@ async def reject_future_date(date: dt.date, user_id: int, field: str = "date") -
 # отвергающий то же самое, — это один и тот же подход, который клиент может
 # записать, но не может поправить.
 
+def optional_non_negative_number(body: dict[str, Any], key: str) -> Optional[float]:
+    """Необязательное неотрицательное конечное число из тела (ккал, БЖУ):
+    None, если поля нет или оно null. `True` — не число (bool в Python —
+    подкласс int, и без явной проверки `"protein": true` ложилось в базу как
+    1 г белка), NaN/Infinity (их принимает json.loads) — тоже, отрицательное
+    — опечатка, а не «съел минус 9000 ккал»."""
+    value = body.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ApiError(400, "bad_request", f"{key} must be a number")
+    if not math.isfinite(value):
+        raise ApiError(400, "bad_request", f"{key} must be a finite number")
+    if value < 0:
+        raise ApiError(
+            400, "bad_request", f"{key} must not be negative", key="api.error.number_negative"
+        )
+    return value
+
+
 def set_weight(value: Any, field: str = "weight") -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ApiError(400, "bad_request", f"{field} must be a number")
     weight = float(value)
+    # json.loads принимает NaN и Infinity: NaN проходил обе проверки ниже
+    # (любое сравнение с ним ложно) и падал 500-й уже на NOT NULL в sets.
+    if not math.isfinite(weight):
+        raise ApiError(400, "bad_request", f"{field} must be a finite number")
     # 0 — это не «пусто», а честный вес собственного тела (подтягивания).
     if weight < 0:
         raise ApiError(400, "bad_request", f"{field} must not be negative", key="api.error.weight_negative")

@@ -103,15 +103,10 @@ async def add_entry(request: Request) -> JSONResponse:
     description = str(common.require(body, "name", str)).strip()
     if not description:
         raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
-    calories = body.get("kcal")
-    if calories is not None and not isinstance(calories, (int, float)):
-        raise ApiError(400, "bad_request", "kcal must be a number")
-    protein = body.get("protein")
-    fat = body.get("fat")
-    carbs = body.get("carbs")
-    for field_name, value in (("protein", protein), ("fat", fat), ("carbs", carbs)):
-        if value is not None and not isinstance(value, (int, float)):
-            raise ApiError(400, "bad_request", f"{field_name} must be a number")
+    calories = common.optional_non_negative_number(body, "kcal")
+    protein = common.optional_non_negative_number(body, "protein")
+    fat = common.optional_non_negative_number(body, "fat")
+    carbs = common.optional_non_negative_number(body, "carbs")
     eaten_on_raw = common.optional_str(body, "eaten_on")
     eaten_on = _parse_date(eaten_on_raw, user)
     # Съесть что-то завтра нельзя — та же проверка, что у занесения

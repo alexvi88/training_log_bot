@@ -43,7 +43,7 @@
 ошибкой на каждого такого человека, `record_push` не писался, и на
 следующем перезапуске рассылка пыталась снова — а сам атлет анонс вообще не
 получал, хотя у него есть свой канал (APNs, см. engagement.py
-`_send_apns_push`/`_ios_device_token`), просто это не Telegram.
+`_send_apns_push`/`_ios_device_tokens`), просто это не Telegram.
 
 Ветвление — по `users.telegram_linked`, тот же признак, каким engagement.py
 уже отличает app-only от обычных в `_deliver`. У app-only анонс уходит
@@ -241,29 +241,21 @@ def _photo(ann: Announcement) -> FSInputFile | None:
     return None
 
 
-async def _ios_device_token(telegram_id: int) -> str | None:
-    """Тот же прямой SELECT, что engagement._ios_device_token, и по той же
-    причине: не своя функция в db.py, а короткое чтение уже существующей
-    таблицы push_tokens прямо здесь."""
-    cur = await db.conn().execute(
-        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = 'ios'",
-        (telegram_id,),
-    )
-    row = await cur.fetchone()
-    return row["device_token"] if row is not None else None
-
-
 async def _send_apns_announcement(telegram_id: int, ann: Announcement, lang: str) -> None:
     """APNs-баннер анонса app-only атлету (см. докстринг модуля, «App-only
     атлеты»). Ничего не делает молча, если APNs не настроен или устройство
     не привязано — тот же контракт, что у engagement._send_apns_push."""
     if not apns.is_configured():
         return
-    device_token = await _ios_device_token(telegram_id)
-    if device_token is None:
+    device_tokens = await db.get_push_tokens(telegram_id, "ios")
+    if not device_tokens:
         return
     title, body = await push_ios.ios_alert(telegram_id, push_ios.ANNOUNCEMENT, lang)
-    await apns.send_alert(telegram_id, device_token, title, body, category=push_ios.ANNOUNCEMENT)
+    # Каждое устройство атлета (iPhone и iPad) — тот же баннер.
+    for device_token in device_tokens:
+        await apns.send_alert(
+            telegram_id, device_token, title, body, category=push_ios.ANNOUNCEMENT
+        )
 
 
 async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:

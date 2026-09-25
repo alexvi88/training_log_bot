@@ -259,20 +259,29 @@ async def cmd_testpush(message: Message, state: FSMContext):
             "❌ APNs не настроен: нужны APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID и APNS_BUNDLE_ID."
         )
         return
-    token = await db.get_push_token(target)
-    if token is None:
+    tokens = await db.get_push_tokens(target)
+    if not tokens:
         total = await db.count_push_tokens()
         await message.answer(
             f"❌ У пользователя {target} нет iOS-токена. Открой приложение, разреши "
             f"уведомления и войди — токен придёт сам. iOS-токенов в базе всего: {total}."
         )
         return
-    ok = await apns.send_alert(
-        target, token, "Проверка пушей", "ПРИВЕТ АТЛЕТ! Если ты это читаешь — пуши доходят.",
-        category="admin_test",
-    )
+    # На каждое устройство атлета — проверка должна показать, что пуш доходит
+    # и до iPad, а не только до последнего зарегистрированного телефона.
+    results = [
+        await apns.send_alert(
+            target, token, "Проверка пушей", "ПРИВЕТ АТЛЕТ! Если ты это читаешь — пуши доходят.",
+            category="admin_test",
+        )
+        for token in tokens
+    ]
+    ok = any(results)
     if ok:
-        await message.answer(f"✅ Apple принял пуш для {target} ({config.APNS_ENV}). Смотри телефон.")
+        await message.answer(
+            f"✅ Apple принял пуш для {target} ({config.APNS_ENV}) на "
+            f"{sum(results)} из {len(results)} устройств. Смотри телефон."
+        )
     else:
         await message.answer(
             "❌ Apple пуш не принял. Причина — в логах: fly logs -a training-log-bot | grep -i apns"

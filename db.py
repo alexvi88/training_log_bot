@@ -726,21 +726,23 @@ CREATE TABLE IF NOT EXISTS auth_identities (
     UNIQUE(provider, provider_user_id)
 );
 
--- Device token для APNs (см. README iOS-репозитория). Один активный на
--- (user_id, platform) — переустановка или новый телефон получает новый
--- токен, слать пуш на мёртвый старый незачем. Само отправление ещё не
--- реализовано: ждёт .p8-ключа APNs, который выпускается только в платном
--- Apple Developer Program, и решения, какие из существующих пушей
--- (engagement.py) вообще дублировать на это устройство. Таблица и приём
--- токена готовы заранее, чтобы включить рассылку одним шагом позже, без
--- обновления приложения.
+-- Device token для APNs (см. README iOS-репозитория). Строка — на
+-- физическое устройство, а не на человека: вход в /v1 теперь по токену на
+-- устройство (api_tokens), и при старом PRIMARY KEY (user_id, platform)
+-- регистрация на iPad перетирала iPhone, а выход на одном устройстве глушил
+-- пуши на другом. Один device_token — максимум один владелец (вход другим
+-- аккаунтом на том же телефоне переписывает user_id), у человека — сколько
+-- угодно устройств, но не больше MAX_PUSH_TOKENS_PER_USER (лишние, дольше
+-- всех не обновлявшиеся, гасит register_push_token). Мёртвые токены чистит
+-- apns.py по ответу 410. Старые базы перестраивает
+-- _rebuild_push_tokens_per_device; индекс по user_id — там же.
 CREATE TABLE IF NOT EXISTS push_tokens (
     user_id INTEGER NOT NULL,
     platform TEXT NOT NULL,        -- 'ios' пока единственная
     device_token TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, platform)
+    PRIMARY KEY (platform, device_token)
 );
 
 -- OAuth к тому же доступу (см. mcp_oauth.py). Статический токен выше умеют
@@ -1048,9 +1050,52 @@ async def _drop_api_tokens_user_unique() -> None:
     await _conn.execute("ALTER TABLE api_tokens_rebuild RENAME TO api_tokens")
 
 
+async def _rebuild_push_tokens_per_device() -> None:
+    """Перевести push_tokens со «строки на (user_id, platform)» на «строку на
+    устройство» — PRIMARY KEY (platform, device_token).
+
+    Тот же приём, что _drop_api_tokens_user_unique: SQLite не меняет первичный
+    ключ через ALTER, так что таблица строится рядом, строки переносятся,
+    старая удаляется, новая встаёт на её имя (внешних ключей на push_tokens
+    нет). Строки старой таблицы переносятся все: у одного человека там была
+    максимум одна на платформу, а один и тот же device_token на двух людях
+    register_push_token не допускал и раньше — если такой всё же найдётся,
+    побеждает свежее обновлённая (ORDER BY updated_at + OR REPLACE).
+    Идемпотентно: на перестроенной или новой базе первичный ключ уже
+    (platform, device_token), и функция ничего не делает. Коммит — общий в
+    конце _migrate_schema."""
+    cur = await _conn.execute("PRAGMA table_info(push_tokens)")
+    pk = [row["name"] for row in sorted(
+        (r for r in await cur.fetchall() if r["pk"]), key=lambda r: r["pk"]
+    )]
+    if pk != ["user_id", "platform"]:
+        return
+    await _conn.execute("DROP TABLE IF EXISTS push_tokens_rebuild")
+    await _conn.execute(
+        "CREATE TABLE push_tokens_rebuild ("
+        "user_id INTEGER NOT NULL, platform TEXT NOT NULL, device_token TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "PRIMARY KEY (platform, device_token))"
+    )
+    await _conn.execute(
+        "INSERT OR REPLACE INTO push_tokens_rebuild "
+        "(user_id, platform, device_token, created_at, updated_at) "
+        "SELECT user_id, platform, device_token, created_at, updated_at FROM push_tokens "
+        "ORDER BY updated_at"
+    )
+    await _conn.execute("DROP TABLE push_tokens")
+    await _conn.execute("ALTER TABLE push_tokens_rebuild RENAME TO push_tokens")
+
+
 async def _migrate_schema() -> None:
     """Upgrade older on-disk databases to the current column set in-place."""
     await _drop_api_tokens_user_unique()
+    await _rebuild_push_tokens_per_device()
+    # Устройств на человека теперь несколько: рассылка, выход и удаление
+    # аккаунта ищут их по user_id.
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens (user_id, platform)"
+    )
     # Токенов на человека теперь несколько: по user_id их гасит удаление
     # аккаунта и подрезка до MAX_API_TOKENS_PER_USER при каждой выдаче.
     await _conn.execute(
@@ -5206,6 +5251,49 @@ async def delete_last_set_for_exercise_in_block(
     return row
 
 
+async def delete_set_if_last_for_exercise(
+    workout_id: int, exercise_id: int, set_id: int
+) -> tuple[str, Optional[aiosqlite.Row]]:
+    """Идемпотентная «отмена последнего подхода»: удалить подход `set_id`,
+    только если он всё ещё последний подход `exercise_id` в своём блоке этой
+    тренировки.
+
+    Возвращает (исход, строка):
+      - ("deleted", row) — удалён;
+      - ("gone", None) — такого подхода уже нет: повтор запроса, ответ на
+        который потерялся, — удалять больше нечего, и второй по счёту подход
+        не трогаем (ради этого функция и есть);
+      - ("elsewhere", None) — подход есть, но не этого упражнения/тренировки;
+      - ("not_last", None) — после него записан ещё подход того же
+        упражнения: «последний» уже другой, и молча сносить ни тот, ни другой
+        нельзя.
+    Проверка и удаление — под одним _write_lock, без зазора, в который успел
+    бы вклиниться параллельный запрос."""
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT s.*, b.workout_id AS _workout_id FROM sets s "
+            "JOIN workout_blocks b ON b.id = s.block_id WHERE s.id = ?",
+            (set_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return "gone", None
+        if row["_workout_id"] != workout_id or row["exercise_id"] != exercise_id:
+            return "elsewhere", None
+        cur = await db.execute(
+            "SELECT MAX(id) FROM sets WHERE block_id = ? AND exercise_id = ?",
+            (row["block_id"], exercise_id),
+        )
+        (last_id,) = await cur.fetchone()
+        if last_id != set_id:
+            return "not_last", None
+        await _delete_set_write_attempts(db, "id = ?", (set_id,))
+        await db.execute("DELETE FROM sets WHERE id = ?", (set_id,))
+        await db.commit()
+    return "deleted", row
+
+
 async def delete_block(block_id: int) -> None:
     async with _write_lock:
         await conn().execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
@@ -6013,40 +6101,53 @@ async def auth_identity_tokens_for_user(user_id: int, provider: str) -> list[dic
 #  3. Всё внутри одной транзакции (_write_lock + commit/rollback) — не
 #     бывает состояния «часть таблиц перенесли, часть нет».
 
-# Технические таблицы (токены, привязка identity, коды) не в счёт при проверке
-# «есть ли у аккаунта данные» — сам факт того, что кто-то когда-то получил
-# токен, не история тренировок. Но перенести их всё равно надо (тест
-# проверяет доступность токена под новым id) — поэтому исключены только из
-# проверки "есть контент", не из переноса.
-_MERGE_CONTENT_EXCLUDE_TABLES = frozenset({
-    "api_tokens", "mcp_tokens", "auth_identities",
-    "push_tokens", "oauth_auth_codes", "oauth_tokens", "oauth_link_codes",
+# «Есть ли у аккаунта данные» решается по белому списку содержательных
+# таблиц, а не по чёрному списку служебных. Раньше было наоборот — и слияние
+# app-only аккаунта с telegram-аккаунтом почти всегда отказывало с
+# both_accounts_have_data: любой запрос к /v1 пишет служебные строки
+# (user_events «POST /push/register», push_rotation, счётчики ai_*_usage,
+# set_write_attempts, cost_events…), и app-only аккаунт, где человек только
+# вошёл и разрешил пуши, считался «с историей». Чёрный список устаревает молча
+# на каждой новой служебной таблице; белый — ошибается только в безопасную
+# сторону (новая содержательная таблица, не внесённая сюда, переедет вместе со
+# служебными, а не потеряется).
+#
+# Что считается историей атлета — то, что он создал сам и потерю/задвоение
+# чего увидит:
+#   workouts (+ blocks/sets через них) — тренировки и подходы, в т.ч. начатая;
+#   exercises, muscle_groups — свои упражнения и группы (уникальность имени на
+#     владельца: две стороны с упражнениями слить простым UPDATE нельзя);
+#   bodyweight_logs — вес тела; food_entries — дневник еды;
+#   programs, routines — программы и дни (уникальность имени программы);
+#   ai_conversation_turns, ai_chat_messages — разговор с тренером;
+#   achievements — заработанные звания (UNIQUE (user_id, code));
+#   shared_items — визитки, которые атлет раздал (ссылки у других людей).
+# Всё остальное — служебное: токены, identity, коды, журналы событий и пушей,
+# счётчики лимитов, стоимость, черновики/состояние AI-диалога, результаты
+# мини-игры, донаты — переезжает, но слиянию не мешает. Проверено тестом
+# tests/test_app_account_merge_content.py.
+_MERGE_CONTENT_TABLES = frozenset({
+    "workouts", "exercises", "muscle_groups",
+    "bodyweight_logs", "food_entries",
+    "programs", "routines",
+    "ai_conversation_turns", "ai_chat_messages",
+    "achievements", "shared_items",
 })
 
-# У этих таблиц уникальность на владельца (UNIQUE user_id или составной
-# PRIMARY KEY, включающий его) — если у аккаунта-приёмника уже есть своя
-# строка (старый токен, зарегистрированный push-token), простой
-# `UPDATE ... SET user_id = приёмник` упадёт на UNIQUE. Слияние разрешено
-# только когда СОДЕРЖАТЕЛЬНЫХ данных с двух сторон нет одновременно (см.
-# выше), а строка токена содержательными данными не считается — так что чужую
-# по этим таблицам просто гасим перед переносом: свежий токен всё равно
-# переиздаёт вызывающий код после успешного слияния.
 #
-# api_tokens здесь больше нет: токенов /v1 на человека теперь несколько (по
-# одному на устройство), UNIQUE по user_id снят, и токены приёмника переживают
-# слияние — его другое устройство не должно вылетать из аккаунта оттого, что
-# он связал с ним app-only аккаунт. Лишние сверх MAX_API_TOKENS_PER_USER
-# подрежет следующий issue_api_token.
-_MERGE_UNIQUE_PER_OWNER_TABLES = frozenset({"mcp_tokens", "push_tokens"})
+# push_tokens здесь тоже больше нет: строка теперь на устройство (PRIMARY KEY
+# по device_token), и iPad telegram-аккаунта не должен замолкать оттого, что
+# к нему привязали app-only аккаунт с iPhone.
+_MERGE_UNIQUE_PER_OWNER_TABLES = frozenset({"mcp_tokens"})
 
 
 async def _has_content_data(telegram_id: int) -> bool:
-    """Есть ли у аккаунта что-то, кроме токенов и служебных привязок —
-    тренировка, подход, еда, вес, программа, достижение и т.п. Ровно та же
-    проверка, что различает случаи «пустой telegram-аккаунт» и «с историей»."""
+    """Есть ли у аккаунта содержательные данные — строки хотя бы в одной
+    таблице из _MERGE_CONTENT_TABLES (тренировка, своё упражнение, еда, вес,
+    программа, разговор с тренером, звание…). Служебные строки не в счёт."""
     db = conn()
     for table, column in await _user_scoped_tables():
-        if table == "users" or table in _MERGE_CONTENT_EXCLUDE_TABLES:
+        if table not in _MERGE_CONTENT_TABLES:
             continue
         cur = await db.execute(f"SELECT 1 FROM {table} WHERE {column} = ? LIMIT 1", (telegram_id,))
         if await cur.fetchone():
@@ -6098,9 +6199,30 @@ async def link_telegram_to_app_account(
             for table, column in scoped:
                 if table == "users":
                     continue
+                if table in _MERGE_CONTENT_TABLES:
+                    # Содержательные данные есть максимум у одной стороны
+                    # (проверено выше) — конфликтов по уникальности быть не
+                    # может, а если вдруг есть, пусть UPDATE упадёт и откатит
+                    # всё слияние, а не молча выкинет чью-то строку.
+                    await db.execute(
+                        f"UPDATE {table} SET {column} = ? WHERE {column} = ?",
+                        (telegram_id, app_user_id),
+                    )
+                    continue
+                # Служебные таблицы теперь бывают заполнены у ОБЕИХ сторон, и у
+                # части из них ключ на владельца (счётчики ai_*_usage по дню,
+                # push_rotation по категории, ai_setup_states/ai_program_drafts
+                # по атлету, ai_undo_actions по ключу): простой UPDATE упал бы на
+                # UNIQUE. Строка приёмника на конфликте побеждает (OR IGNORE),
+                # несъехавшие строки app-аккаунта сносим — после слияния их
+                # владельца больше нет. Для счётчиков лимитов это значит «за
+                # сегодня считается счёт telegram-аккаунта» — осознанно.
                 await db.execute(
-                    f"UPDATE {table} SET {column} = ? WHERE {column} = ?",
+                    f"UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?",
                     (telegram_id, app_user_id),
+                )
+                await db.execute(
+                    f"DELETE FROM {table} WHERE {column} = ?", (app_user_id,)
                 )
 
             if target_row is None:
@@ -6135,40 +6257,58 @@ async def link_telegram_to_app_account(
 
 # ---------- device tokens для APNs (см. push_tokens выше) ----------
 
-async def register_push_token(user_id: int, platform: str, device_token: str) -> None:
-    """Привязать `device_token` к `user_id`.
+# Сколько устройств одного человека получают пуши. С запасом на iPhone +
+# iPad + переустановки: мёртвый токен от переустановки чистит 410 при первой же
+# рассылке, а этот потолок — на случай, когда рассылки к человеку долго нет.
+MAX_PUSH_TOKENS_PER_USER = 10
 
-    Один физический токен — максимум один живой владелец. Логаут и вход
-    другим Apple ID на том же телефоне не меняют APNs-токен устройства
-    (меняется он только при переустановке), так что без явной зачистки
-    старая строка с тем же device_token оставалась бы висеть на прежнем
-    аккаунте — и оба человека получали бы пуши на один физический телефон,
-    включая того, кто уже вышел. Поэтому сначала гасим ЧУЖИЕ строки с этим
-    же токеном (свою — трогать незачем, её обновит ON CONFLICT ниже), потом
-    апсертим на нового владельца.
+
+async def register_push_token(user_id: int, platform: str, device_token: str) -> None:
+    """Привязать `device_token` (одно физическое устройство) к `user_id`.
+
+    Строка — на устройство: у человека может быть iPhone и iPad, и
+    регистрация одного не трогает другой. Один физический токен — максимум
+    один владелец: логаут и вход другим Apple ID на том же телефоне не меняют
+    APNs-токен устройства, так что апсерт по (platform, device_token)
+    переписывает владельца — иначе оба человека получали бы пуши на один
+    телефон, включая того, кто уже вышел. Сверх MAX_PUSH_TOKENS_PER_USER
+    гасятся дольше всех не обновлявшиеся токены этого человека.
     """
+    now = now_iso()
     async with _write_lock:
-        await conn().execute(
-            "DELETE FROM push_tokens WHERE platform = ? AND device_token = ? AND user_id != ?",
-            (platform, device_token, user_id),
-        )
         await conn().execute(
             "INSERT INTO push_tokens (user_id, platform, device_token, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(user_id, platform) DO UPDATE SET "
-            "device_token = excluded.device_token, updated_at = excluded.updated_at",
-            (user_id, platform, device_token, now_iso(), now_iso()),
+            "ON CONFLICT(platform, device_token) DO UPDATE SET "
+            "user_id = excluded.user_id, updated_at = excluded.updated_at, "
+            "created_at = CASE WHEN push_tokens.user_id = excluded.user_id "
+            "THEN push_tokens.created_at ELSE excluded.created_at END",
+            (user_id, platform, device_token, now, now),
+        )
+        await conn().execute(
+            "DELETE FROM push_tokens WHERE user_id = ? AND platform = ? AND device_token NOT IN ("
+            "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = ? "
+            "ORDER BY updated_at DESC, rowid DESC LIMIT ?)",
+            (user_id, platform, user_id, platform, MAX_PUSH_TOKENS_PER_USER),
         )
         await conn().commit()
 
 
-async def get_push_token(user_id: int, platform: str = "ios") -> Optional[str]:
-    """Токен устройства пользователя или None — для админской /testpush."""
+async def get_push_tokens(user_id: int, platform: str = "ios") -> list[str]:
+    """Все device token'ы человека на платформе, свежие первыми — рассылка
+    идёт на каждый (iPhone и iPad получают один и тот же пуш)."""
     cur = await conn().execute(
-        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = ?", (user_id, platform)
+        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = ? "
+        "ORDER BY updated_at DESC, rowid DESC",
+        (user_id, platform),
     )
-    row = await cur.fetchone()
-    return row["device_token"] if row is not None else None
+    return [row["device_token"] for row in await cur.fetchall()]
+
+
+async def get_push_token(user_id: int, platform: str = "ios") -> Optional[str]:
+    """Самый свежий токен устройства пользователя или None."""
+    tokens = await get_push_tokens(user_id, platform)
+    return tokens[0] if tokens else None
 
 
 async def count_push_tokens(platform: str = "ios") -> int:
@@ -6177,13 +6317,28 @@ async def count_push_tokens(platform: str = "ios") -> int:
     return int(row[0]) if row is not None else 0
 
 
-async def unregister_push_token(user_id: int, platform: str) -> bool:
-    """True, если токен был и его удалили — вызывается при отвязке аккаунта
-    в приложении, чтобы не копить мёртвые токены после логаута."""
+async def unregister_push_token(
+    user_id: int, platform: str, device_token: Optional[str] = None
+) -> bool:
+    """True, если что-то удалили — зовётся при выходе из аккаунта в
+    приложении, чтобы вышедшее устройство перестало получать пуши.
+
+    С `device_token` — удаляется только это устройство (и только если оно
+    принадлежит `user_id`): выход на iPad не глушит iPhone. Без него — старое
+    поведение, все устройства человека на платформе: старые сборки
+    приложения токен не присылают, а оставить вышедшему телефону пуши чужого
+    теперь аккаунта хуже, чем заставить второе устройство перерегистрироваться
+    при следующем запуске."""
     async with _write_lock:
-        cur = await conn().execute(
-            "DELETE FROM push_tokens WHERE user_id = ? AND platform = ?", (user_id, platform)
-        )
+        if device_token is None:
+            cur = await conn().execute(
+                "DELETE FROM push_tokens WHERE user_id = ? AND platform = ?", (user_id, platform)
+            )
+        else:
+            cur = await conn().execute(
+                "DELETE FROM push_tokens WHERE user_id = ? AND platform = ? AND device_token = ?",
+                (user_id, platform, device_token),
+            )
         await conn().commit()
         return cur.rowcount > 0
 
@@ -6198,7 +6353,8 @@ async def unregister_push_token_if_current(user_id: int, platform: str, device_t
     тиком рассылки). Безусловный DELETE по (user_id, platform), как у
     unregister_push_token, стёр бы в этом случае свежий, живой токен —
     ровно потому, что тот совпадает по (user_id, platform), но не по
-    значению. Условие по device_token делает удаление точечным."""
+    значению. Условие по device_token делает удаление точечным — и
+    остальные устройства человека (iPad рядом с iPhone) не трогает."""
     async with _write_lock:
         cur = await conn().execute(
             "DELETE FROM push_tokens WHERE user_id = ? AND platform = ? AND device_token = ?",
