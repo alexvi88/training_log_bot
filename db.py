@@ -2485,6 +2485,13 @@ _WIPE_USER_COLUMNS = ("user_id", "telegram_id", "owner_id")
 # «чей это подход» уже не спросить. Порядок внутри списка — сверху вниз, от
 # самого дальнего потомка к ближнему, как в discard_workout/delete_routine.
 _WIPE_ORPHAN_DELETES = (
+    # Первым: set_write_attempts держит FK на sets(id) без каскада (ключи
+    # идемпотентности записи подхода из приложения), и DELETE FROM sets ниже
+    # падал «FOREIGN KEY constraint failed» у любого, кто хоть раз записал
+    # подход из приложения, — удаление аккаунта отвечало 500 и не удаляло
+    # ничего, хотя токены Apple уже были отозваны. Своя колонка user_id у
+    # таблицы есть, но цикл по таблицам ниже идёт уже после sets.
+    "DELETE FROM set_write_attempts WHERE user_id = ?",
     "DELETE FROM sets WHERE block_id IN "
     "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
     "WHERE w.user_id = ?)",
