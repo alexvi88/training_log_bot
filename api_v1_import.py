@@ -25,7 +25,10 @@
     его не зовёт вовсе: непопавшие в каталог по точному имени помечены
     «будет создано» безусловно, без обращения к модели. Настоящий импорт
     (`/import/csv`) зовёт его как и бот, если create_missing_exercises не
-    выключен явно.
+    выключен явно. Без согласия атлета передавать данные стороннему AI
+    (api_v1_ai.has_ai_consent) модель не зовётся вовсе — 403 тут не нужен:
+    названия сопоставляются с каталогом только точным совпадением, а
+    остальные заводятся как есть.
 
 AI-обзор истории после импорта (ai_trainer.import_history_overview) сюда
 нарочно не подключён: в боте это отдельное сообщение, отправляемое в чат
@@ -42,6 +45,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import api_v1_ai
 import api_v1_common as common
 import config
 import db
@@ -86,12 +90,15 @@ def _csv_text(body: dict[str, Any]) -> str:
     return text
 
 
-def _parse_workouts(text: str, today: dt.date | None) -> list[dict]:
+def _parse_workouts(text: str, today: dt.date | None) -> tuple[list[dict], dict]:
     """headers/rows/mapping/workouts — целиком через handlers.csv_import, в
     английской локали (см. докстринг модуля), чтобы ошибка при необходимости
     ушла клиенту не русской строкой. `today` — тот же смысл, что в боте
     (timeutil.user_today): дата "в будущем" сравнивается с местным днём
-    пользователя, а не с UTC сервера."""
+    пользователя, а не с UTC сервера.
+
+    Второе значение — что разбор решил сам (пропущенные строки, как прочитан
+    формат «a/b/гггг»), см. _build_workout_groups(stats=...)."""
     # Язык человека (выставлен authed_user_id на весь запрос) — для поля
     # `message`, которое покажет приложение; машинное `detail` по-прежнему
     # собирается в английской локали (см. докстринг модуля).
@@ -117,12 +124,14 @@ def _parse_workouts(text: str, today: dt.date | None) -> list[dict]:
                 400, "unrecognized_columns",
                 "could not auto-detect column(s): " + ", ".join(missing),
             )
+        stats: dict = {}
         try:
             workouts = _build_workout_groups(
                 data_rows, mapping,
                 first_line=2 if has_header else 1,
                 today=today,
                 weight_factor=_weight_factor(headers, mapping),
+                stats=stats,
             )
         except ParseError as e:
             match = _ERR_LINE_RE.match(e.message)
@@ -133,7 +142,21 @@ def _parse_workouts(text: str, today: dt.date | None) -> list[dict]:
             ) from e
         if not workouts:
             raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
-        return workouts
+        return workouts, stats
+
+
+def _skipped_fields(stats: dict) -> dict[str, int]:
+    """Сколько строк файла разбор пропустил сам и почему — только добавленные
+    поля, прежние ключи ответа не меняются (их декодирует приложение):
+    разминка (Strong «W», Hevy set_type=warmup) и строки без нагрузки (вес и
+    повторы — ноль или пусто: кардио, планка). Ни то, ни другое не ошибка
+    файла, но «в файле 300 строк, а подходов 240» без объяснения выглядит
+    как потеря данных."""
+    return {
+        "rows_skipped": stats.get("rows_skipped", 0),
+        "rows_skipped_warmup": stats.get("rows_skipped_warmup", 0),
+        "rows_skipped_no_load": stats.get("rows_skipped_no_load", 0),
+    }
 
 
 def _localized_parse_error(data_rows, mapping, headers, has_header, today, lang: str) -> str | None:
@@ -170,7 +193,7 @@ async def preview_csv(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     body = await common.json_body(request)
     text = _csv_text(body)
-    workouts = _parse_workouts(text, timeutil.user_today(user))
+    workouts, stats = _parse_workouts(text, timeutil.user_today(user))
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
@@ -188,6 +211,15 @@ async def preview_csv(request: Request) -> JSONResponse:
             "date_range": _date_range(workouts),
             "exercises": exercises,
             "duplicate_dates": sorted(dup),
+            **_skipped_fields(stats),
+            # Как прочитаны даты вида «a/b/гггг»: "mdy" — колонка доказала
+            # американский формат, "dmy" — европейский или (при
+            # date_order_ambiguous=true) не доказала ничего, и остался
+            # прежний д/м; null — таких дат в файле нет. Неоднозначный случай
+            # стоит показать человеку рядом с date_range: «03/04/2024» легло
+            # 3 апреля, а в его приложении это могло быть 4 марта.
+            "date_order": stats.get("date_order"),
+            "date_order_ambiguous": stats.get("date_order_ambiguous", False),
         }
     )
 
@@ -221,12 +253,15 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     create_missing = body.get("create_missing_exercises", True)
     if not isinstance(create_missing, bool):
         raise ApiError(400, "bad_request", "create_missing_exercises must be a boolean")
-    workouts = _parse_workouts(text, timeutil.user_today(user))
+    workouts, stats = _parse_workouts(text, timeutil.user_today(user))
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
     if unresolved and create_missing:
-        ai_resolved = await resolve_exercise_names_via_ai(user_id, unresolved)
+        # Без согласия на передачу данных стороннему AI названия модели не
+        # уходят — только точное совпадение с каталогом (см. докстринг модуля).
+        use_model = await api_v1_ai.has_ai_consent(request, user_id)
+        ai_resolved = await resolve_exercise_names_via_ai(user_id, unresolved, use_model=use_model)
         resolved.update(ai_resolved)
         unresolved = [n for n in unresolved if n not in resolved]
         # Модель не нашла шаблон каталога вовсе — в боте это идёт на ручное
@@ -268,6 +303,7 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
             "workouts_failed": failed,
             "workouts_skipped_unresolved_exercise": len(workouts) - len(importable),
             "skipped_exercises": skipped_exercises,
+            **_skipped_fields(stats),
         }
     )
 

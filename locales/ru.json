@@ -699,6 +699,7 @@
   "import.confirm_header": "📥 <b>Импорт: {n, plural, one{# тренировка} few{# тренировки} many{# тренировок} other{# тренировки}}</b>",
   "import.err_count": "не понял {label} «{text}»",
   "import.err_date": "не понял дату «{text}»",
+  "import.err_date_too_old": "дата «{text}» раньше 2000 года — проверь год в этой строке",
   "import.err_empty_name": "пустое название упражнения",
   "import.err_generic_parse": "не разобрал вес или повторы",
   "import.err_line": "Строка {n}: {message}",

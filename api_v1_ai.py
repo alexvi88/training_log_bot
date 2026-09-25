@@ -231,15 +231,25 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     ещё помнит старое) и сборку, в которой какую-то точку отправки забыли.
     Бот в Telegram сюда не ходит вовсе.
     """
+    if await has_ai_consent(request, user_id):
+        return
+    raise ApiError(403, "ai_consent_required", "consent to share data with the AI provider is required")
+
+
+async def has_ai_consent(request: Request, user_id: int) -> bool:
+    """Та же проверка, что у _require_ai_consent, но ответом, а не 403 — для
+    ручек, у которых модель лишь необязательный шаг: импорт CSV без согласия
+    просто не отдаёт названия упражнений модели и сопоставляет их с
+    каталогом точным совпадением (api_v1_import). Гейт тот же: без
+    `X-AI-Consent-Flow: 1` и config.AI_CONSENT_REQUIRED проверка не
+    действует (см. докстринг _require_ai_consent)."""
     if not (
         config.AI_CONSENT_REQUIRED
         or request.headers.get(config.AI_CONSENT_CLIENT_HEADER) == "1"
     ):
-        return
+        return True
     user = await db.get_user(user_id)
-    if user is not None and user["ai_consent_at"]:
-        return
-    raise ApiError(403, "ai_consent_required", "consent to share data with the AI provider is required")
+    return bool(user is not None and user["ai_consent_at"])
 
 
 # Вопрос через HTTP не режется телеграмным лимитом сообщения (4096 символов,

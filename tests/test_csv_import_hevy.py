@@ -3,9 +3,10 @@
 Раньше файл из Hevy (start_time, exercise_title, weight_kg, set_index —
 колонки, не совпадающие ни с одним из наших синонимов) не автоопределялся ни
 по одному из четырёх обязательных полей: человек проходил маппинг с нуля.
-Разминочные подходы (Hevy: set_type) импортируются как обычные — у нас нет
-своего понятия «разминка», и фильтровать их не стали: пусть решает сам
-пользователь, стоит ли их чистить руками.
+Разминочные подходы (Hevy: set_type=warmup) пропускаются: раньше они
+ложились как обычные, и разминка с пустым грифом портила средний вес, тоннаж
+и «последний раз» упражнения. Пропуск не ошибка — он только считается
+(stats у _build_workout_groups, rows_skipped_warmup в превью REST).
 """
 
 from types import SimpleNamespace
@@ -51,15 +52,19 @@ def test_hevy_columns_auto_detect_without_manual_mapping():
     assert mapping["round"] == headers.index("set_index")
 
 
-def test_all_sets_import_including_warmups():
+def test_warmup_sets_are_skipped_and_counted():
     headers, rows, _ = _read_table(HEVY_SAMPLE)
     mapping = _auto_detect(headers)
+    assert mapping["set_type"] == headers.index("set_type")
 
-    workouts = _build_workout_groups(rows, mapping)
+    stats: dict = {}
+    workouts = _build_workout_groups(rows, mapping, stats=stats)
 
     (workout,) = workouts
     bench_sets = next(e for e in workout["entries"] if e["name"] == "Bench Press (Barbell)")["sets"]
-    assert bench_sets == [[50.0, 10, None], [100.0, 8, None]]
+    assert bench_sets == [[100.0, 8, None]]
+    assert stats["rows_skipped_warmup"] == 1
+    assert stats["rows_skipped"] == 1
 
 
 def test_bodyweight_style_blank_weight_still_imports():
