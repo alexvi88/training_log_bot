@@ -72,8 +72,9 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "груди."
     ),
     "Жим гантелей на наклонной скамье вниз головой": (
-        "1. Зафиксируй ноги на скамье с отрицательным наклоном и ляг, "
-        "гантели у плеч ладонями вперёд.\n"
+        "1. Зафиксируй ноги на скамье с отрицательным наклоном и ляг — "
+        "голова ниже таза. Выжми гантели над грудью на прямые руки, ладони "
+        "вперёд — исходное положение.\n"
         "2. На вдохе медленно опусти гантели к нижней части груди.\n"
         "3. На выдохе выжми гантели вверх, сжимая грудные мышцы."
     ),
@@ -186,7 +187,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "3. На выдохе разогни руки, вернувшись в исходное положение."
     ),
     "Разгибание на трицепс в кроссовере одной рукой": (
-        "1. Встань боком к нижнему блоку, возьми рукоять одной рукой "
+        "1. Встань боком к верхнему блоку, возьми рукоять одной рукой "
         "хватом снизу, локоть прижат к корпусу — исходное положение.\n"
         "2. На выдохе разогни руку вниз до конца, двигая только "
         "предплечьем.\n"
@@ -317,7 +318,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
     "Жим гантелей стоя": (
         "1. Встань, ноги на ширине плеч, подними гантели к плечам, "
         "локти разведены под 90° — исходное положение.\n"
-        "2. Без раскачивания и читинга выжми гантели вверх до прямых рук "
+        "2. Без раскачки корпусом и рывков выжми гантели вверх до прямых рук "
         "над головой.\n"
         "3. Сделай паузу и медленно опусти гантели обратно."
     ),
@@ -373,8 +374,10 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "3. На вдохе медленно опусти штангу обратно."
     ),
     "Разведение гантелей в наклоне": (
-        "1. Ляг грудью на наклонную скамью, руки с гантелями вытянуты "
-        "вниз перед собой, ладони друг к другу — исходное положение.\n"
+        "1. Возьми гантели и наклонись вперёд почти до параллели с полом — "
+        "стоя с чуть согнутыми коленями или сидя на краю скамьи грудью к "
+        "бёдрам. Спина ровная, руки свисают вниз, ладони друг к другу — "
+        "исходное положение.\n"
         "2. На выдохе разведи руки в стороны дугой до уровня плеч, сводя "
         "лопатки.\n"
         "3. На вдохе медленно опусти гантели обратно."
@@ -449,8 +452,11 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "1. Встань над грифом Т-тяги, возьмись за рукоять и, работая "
         "ногами и бёдрами, выпрямись — исходное положение с прямыми "
         "руками и широкой стойкой.\n"
-        "2. На выдохе потяни вес к верхней части живота, сводя лопатки.\n"
-        "3. На вдохе медленно вернись в исходное положение."
+        "2. Наклонись вперёд примерно на 45°, спина ровная, колени чуть "
+        "согнуты.\n"
+        "3. На выдохе потяни вес к верхней части живота, сводя лопатки.\n"
+        "4. На вдохе медленно опусти вес до прямых рук, не выходя из "
+        "наклона."
     ),
     "Тяга гантели в наклоне": (
         "1. Обопрись коленом и рукой на скамью, спина прямая, в свободной "
@@ -515,7 +521,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
     "Тяга с плинтов": (
         "1. Выставь гриф в раме на упоры чуть ниже колен и встань к нему "
         "как на становую: стопы под тазом, хват на ширине плеч, спина "
-        "прогнута.\n"
+        "ровная, с естественным прогибом в пояснице.\n"
         "2. На выдохе разогни таз и колени, тяни штангу вверх до полного "
         "выпрямления и в конце разведи плечи назад.\n"
         "3. На вдохе верни штангу на упоры — положи, а не сбрось."
@@ -564,7 +570,8 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "плеч, разблокируй предохранители и выпрями ноги — исходное "
         "положение.\n"
         "2. На вдохе медленно согни колени до угла 90°.\n"
-        "3. На выдохе выжми платформу обратно, отталкиваясь пятками."
+        "3. На выдохе выжми платформу обратно, отталкиваясь пятками. Не "
+        "выпрямляй колени до упора."
     ),
     "Гак-присед": (
         "1. Прижмись спиной к спинке тренажёра, плечи под валиками, "
@@ -572,7 +579,8 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "выпрямленными ногами.\n"
         "2. На вдохе присядь, сгибая колени, пока бёдра не окажутся чуть "
         "ниже параллели с полом.\n"
-        "3. На выдохе поднимись обратно, отталкиваясь пятками."
+        "3. На выдохе поднимись обратно, отталкиваясь пятками. Не "
+        "выпрямляй колени до упора."
     ),
     "Выпады с гантелями": (
         "1. Встань прямо с гантелями в опущенных руках — исходное "
@@ -594,7 +602,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "1. Встань спиной к возвышению, поставь на него подъём задней "
         "ноги, в руках гантели — исходное положение.\n"
         "2. На вдохе опустись, сгибая переднюю ногу в колене и "
-        "тазобедренном суставе, колено не выходит за носок.\n"
+        "тазобедренном суставе, колено смотрит по направлению носка.\n"
         "3. На выдохе оттолкнись пяткой передней ноги и вернись вверх."
     ),
     "Зашагивания на платформу": (
@@ -668,8 +676,8 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
     ),
     "Отведение ноги в кроссовере": (
         "1. Встань на четвереньки перед нижним блоком, закрепи манжету "
-        "на голени — исходное положение.\n"
-        "2. На выдохе отведи ногу назад и вверх до уровня спины, сжимая "
+        "на лодыжке — исходное положение.\n"
+        "2. На выдохе отведи ногу назад и вверх до уровня таза, сжимая "
         "ягодицу.\n"
         "3. На вдохе верни ногу в исходное положение. Повтори на "
         "другую ногу."
@@ -691,7 +699,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "1. Положи штангу на верх спины, как в приседе, стопы на ширине "
         "плеч, колени чуть согнуты, лопатки сведены.\n"
         "2. На вдохе отведи таз назад и наклонись вперёд почти до параллели "
-        "с полом, спину держи прогнутой.\n"
+        "с полом, спина ровная, с естественным прогибом в пояснице.\n"
         "3. На выдохе разогнись за счёт ягодиц и задней поверхности бедра. "
         "Вес здесь берут скромный — это работа на технику, а не на рекорд."
     ),
@@ -744,8 +752,9 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "неподвижны."
     ),
     "Свинги с гирей одной рукой": (
-        "1. Поставь гирю на пол перед собой, стопы шире плеч, наклонись с "
-        "прогнутой спиной и возьми её одной рукой.\n"
+        "1. Поставь гирю на пол перед собой, стопы шире плеч, наклонись — "
+        "спина ровная, с естественным прогибом в пояснице — и возьми её "
+        "одной рукой.\n"
         "2. Качни гирю между ног назад, а на выдохе резко разогни таз — "
         "гиря сама вылетает вперёд до груди, руками её не поднимай.\n"
         "3. На вдохе дай гире вернуться между ног и сразу повтори. Половину "
@@ -781,9 +790,10 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "3. На вдохе медленно опусти ноги обратно."
     ),
     "Подъём коленей в висе": (
-        "1. Обопрись предплечьями на упоры вертикального тренажёра, ноги "
+        "1. Повисни на турнике хватом на ширине плеч, руки прямые, ноги "
         "выпрямлены вниз — исходное положение.\n"
-        "2. На выдохе подтяни согнутые колени к груди, напрягая пресс.\n"
+        "2. На выдохе подтяни согнутые колени к груди, подкручивая таз и "
+        "напрягая пресс. Не раскачивайся.\n"
         "3. На вдохе медленно опусти ноги обратно."
     ),
     "Подъём ног лёжа": (
@@ -795,8 +805,8 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
     "Планка": (
         "1. Прими упор на предплечьях и носках, руки под плечами, тело "
         "прямой линией — исходное положение.\n"
-        "2. Удерживай позу, не прогибая поясницу и не поднимая таз, "
-        "максимально долго."
+        "2. Удерживай позу 30–60 секунд, не прогибая поясницу и не "
+        "поднимая таз. Дольше — когда станет легко."
     ),
     "Боковая планка": (
         "1. Ляг на бок, обопрись на предплечье, локоть под плечом, "
@@ -858,9 +868,9 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
     "Обратные скручивания": (
         "1. Ляг на спину, руки вдоль корпуса ладонями в пол, бёдра подними "
         "вертикально, голени параллельно полу.\n"
-        "2. На вдохе подтяни колени к груди, скручивая таз и отрывая его от "
+        "2. На выдохе подтяни колени к груди, скручивая таз и отрывая его от "
         "пола.\n"
-        "3. Задержись на секунду и на выдохе медленно опусти таз обратно. "
+        "3. Задержись на секунду и на вдохе медленно опусти таз обратно. "
         "Руками не помогай."
     ),
     "Пресс в тренажёре": (
@@ -923,7 +933,8 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Exhale and press it back up, squeezing your chest at the top."
     ),
     "Жим штанги на наклонной скамье вниз головой": (
-        "1. Lock your legs into a decline bench and lie down head-first.\n"
+        "1. Lock your legs into a decline bench and lie back, head lower "
+        "than your hips.\n"
         "2. Take the bar with a grip a bit wider than shoulder-width, arms "
         "perpendicular to the floor — starting position.\n"
         "3. Inhale and lower the bar to your lower chest, then exhale and "
@@ -944,8 +955,9 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Inhale and lower them back to your upper chest."
     ),
     "Жим гантелей на наклонной скамье вниз головой": (
-        "1. Lock your legs into a decline bench and lie down, dumbbells at "
-        "your shoulders, palms forward.\n"
+        "1. Lock your legs into a decline bench and lie back, head lower "
+        "than your hips. Press the dumbbells up over your chest on straight "
+        "arms, palms forward — starting position.\n"
         "2. Inhale and lower the dumbbells slowly to your lower chest.\n"
         "3. Exhale and press them back up, squeezing your chest."
     ),
@@ -978,10 +990,10 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
     ),
     "Сведение рук в кроссовере": (
         "1. Stand between the cable stacks, grab the top handles, arms "
-        "crossed in front of you — starting position.\n"
+        "together in front of you — starting position.\n"
         "2. Inhale and open your arms out in a wide arc until you feel a "
         "stretch in your chest, elbows slightly bent.\n"
-        "3. Exhale and bring your arms back the same arc."
+        "3. Exhale and bring your arms back together along the same arc."
     ),
     "Сведение рук в тренажёре «бабочка»": (
         "1. Sit with your back against the pad, grab the handles, upper "
@@ -1058,7 +1070,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Exhale and extend your arms back to the starting position."
     ),
     "Разгибание на трицепс в кроссовере одной рукой": (
-        "1. Stand side-on to the low pulley, grab the handle with one "
+        "1. Stand side-on to the high pulley, grab the handle with one "
         "hand, elbow pinned to your side — starting position.\n"
         "2. Exhale and extend your arm all the way down, moving only your "
         "forearm.\n"
@@ -1243,9 +1255,10 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Inhale and lower it back down slowly."
     ),
     "Разведение гантелей в наклоне": (
-        "1. Lie chest-down on an incline bench, dumbbells hanging straight "
-        "down in front of you, palms facing each other — starting "
-        "position.\n"
+        "1. Hold the dumbbells and hinge forward until your torso is nearly "
+        "parallel to the floor — standing with soft knees, or seated on the "
+        "end of a bench with your chest to your thighs. Flat back, arms "
+        "hanging down, palms facing each other — starting position.\n"
         "2. Exhale and raise your arms out to the sides in an arc to "
         "shoulder height, squeezing your shoulder blades together.\n"
         "3. Inhale and lower the dumbbells back down slowly."
@@ -1322,9 +1335,11 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "1. Straddle the bar, take the handle, and stand up using your "
         "legs and hips — starting position with your arms straight and a "
         "wide stance.\n"
-        "2. Exhale and pull the weight to your upper stomach, squeezing "
+        "2. Hinge forward to about 45° with a flat back, knees soft.\n"
+        "3. Exhale and pull the weight to your upper stomach, squeezing "
         "your shoulder blades together.\n"
-        "3. Inhale and return to the starting position."
+        "4. Inhale and lower it slowly back to straight arms, keeping the "
+        "hinge."
     ),
     "Тяга гантели в наклоне": (
         "1. Brace your knee and hand on a bench, back flat, the other arm "
@@ -1390,7 +1405,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
     "Тяга с плинтов": (
         "1. Set the bar on the rack pins just below your knees and stand to "
         "it like a deadlift: feet under your hips, grip shoulder-width, "
-        "back arched.\n"
+        "back flat with its natural arch.\n"
         "2. Exhale and extend your hips and knees, pulling the bar up to a "
         "full lockout, pulling your shoulders back at the top.\n"
         "3. Inhale and return the bar to the pins — set it down, don't drop "
@@ -1441,7 +1456,8 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "1. Sit in the machine, feet on the platform at shoulder-width, "
         "release the safeties, legs straight — starting position.\n"
         "2. Inhale and bend your knees slowly to about 90°.\n"
-        "3. Exhale and press the platform back up through your heels."
+        "3. Exhale and press the platform back up through your heels. "
+        "Don't lock your knees out at the top."
     ),
     "Гак-присед": (
         "1. Brace your back against the pad, shoulders under the pads, "
@@ -1449,7 +1465,8 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "position.\n"
         "2. Inhale and squat down, bending your knees, until your thighs "
         "are just below parallel.\n"
-        "3. Exhale and drive back up through your heels."
+        "3. Exhale and drive back up through your heels. Don't lock your "
+        "knees out at the top."
     ),
     "Выпады с гантелями": (
         "1. Stand tall with a dumbbell in each hand at your sides — "
@@ -1470,7 +1487,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "1. Stand with your back to a bench, rest the top of your rear "
         "foot on it, dumbbells in your hands — starting position.\n"
         "2. Inhale and lower yourself, bending your front knee and hip, "
-        "keeping the knee over your foot.\n"
+        "keeping your knee in line with your toes.\n"
         "3. Exhale and push through your front heel back up."
     ),
     "Зашагивания на платформу": (
@@ -1569,7 +1586,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "1. Rack the bar across your upper back like a squat, feet "
         "shoulder-width, knees slightly bent, shoulder blades pinched.\n"
         "2. Inhale, push your hips back and bend forward to near parallel "
-        "with the floor, keeping your back arched.\n"
+        "with the floor, back flat with its natural arch.\n"
         "3. Exhale and extend through your glutes and hamstrings. Keep the "
         "weight modest here — this one is about form, not records."
     ),
@@ -1627,7 +1644,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "2. Exhale and press the platform up as high as your toes go, "
         "holding the squeeze in your calves for a second.\n"
         "3. Inhale and lower your heels slowly into the stretch. Keep your "
-        "knees locked in place the whole time."
+        "knees still — soft, not locked out."
     ),
     "Свинги с гирей одной рукой": (
         "1. Set the kettlebell on the floor in front of you, feet wider "
@@ -1669,10 +1686,10 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Inhale and lower them back down slowly."
     ),
     "Подъём коленей в висе": (
-        "1. Brace your forearms on the vertical raise station, legs "
-        "hanging straight down — starting position.\n"
-        "2. Exhale and pull your bent knees up to your chest, squeezing "
-        "your abs.\n"
+        "1. Hang from a pull-up bar with a shoulder-width grip, arms "
+        "straight, legs hanging down — starting position.\n"
+        "2. Exhale and pull your bent knees up to your chest, curling your "
+        "pelvis up and squeezing your abs. No swinging.\n"
         "3. Inhale and lower your legs back down."
     ),
     "Подъём ног лёжа": (
@@ -1685,8 +1702,8 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
     "Планка": (
         "1. Prop yourself up on your forearms and toes, arms under your "
         "shoulders, body in a straight line — starting position.\n"
-        "2. Hold it, keeping your lower back from sagging and your hips "
-        "from rising, for as long as you can."
+        "2. Hold it for 30–60 seconds, keeping your lower back from sagging "
+        "and your hips from rising. Go longer once that gets easy."
     ),
     "Боковая планка": (
         "1. Lie on your side, prop yourself up on one forearm, elbow under "
@@ -1749,9 +1766,9 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
     "Обратные скручивания": (
         "1. Lie on your back, arms along your body palms down, thighs "
         "vertical and shins parallel to the floor.\n"
-        "2. Inhale and pull your knees toward your chest, rolling your "
+        "2. Exhale and pull your knees toward your chest, rolling your "
         "pelvis up off the floor.\n"
-        "3. Hold for a second, then exhale and lower your hips back down "
+        "3. Hold for a second, then inhale and lower your hips back down "
         "slowly. No help from your arms."
     ),
     "Пресс в тренажёре": (
