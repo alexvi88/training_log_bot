@@ -369,7 +369,8 @@ def _dash_growth_tiles(
     tile_w = (DASH_RIGHT - DASH_LEFT - 0.02 * (_LIFT_COLS - 1)) / _LIFT_COLS
     pad_x = 0.028
     name_texts = []
-    for i, (name, pct, abs_str) in enumerate(tiles):
+    # Хвост кортежа (id упражнения для приложения) картинке не нужен.
+    for i, (name, pct, abs_str, *_) in enumerate(tiles):
         row, col = divmod(i, _LIFT_COLS)
         x = DASH_LEFT + col * (tile_w + 0.02)
         y = _LIFT_ROWS_TOP[row]
@@ -393,7 +394,7 @@ def render_menu_dashboard(
     tiles: list[tuple[str, str]] | None = None,
     volume_rows: list[tuple[str, int, str]] | None = None,
     volume_title: str = "",
-    lift_tiles: list[tuple[str, str, str]] | None = None,
+    lift_tiles: list[tuple] | None = None,
     lifts_title: str = "",
     lifts_note: str = "",
 ) -> bytes:
