@@ -73,7 +73,32 @@ async def test_content_is_a_human_phrase_not_a_raw_path(fresh_db, client_factory
 
     rows = await fresh_db.list_user_events(111, limit=10)
     logged = next(r for r in rows if r["payload"] == f"POST /workouts/{workout_id}/sets")
-    assert logged["content"] == "записал подход"
+    # Как в боте, где в ленте виден набранный «60 8»: что именно записал, а
+    # не только «записал подход».
+    assert logged["content"] == "записал подход: Жим лёжа · 60×8"
+
+    line = await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise.json()["id"], "text": "62.5 6", "idempotency_key": "k1"},
+    )
+    assert line.status_code in (200, 201), line.text
+    rows = await fresh_db.list_user_events(111, limit=10)
+    logged = next(r for r in rows if r["payload"] == f"POST /workouts/{workout_id}/sets/parse")
+    assert logged["content"] == "записал подход строкой: Жим лёжа · «62.5 6»"
+
+
+@pytest.mark.asyncio
+async def test_detail_takes_only_whitelisted_fields():
+    """Ключ попытки, base64 фото и прочее служебное в ленту не попадает."""
+    detail = await api_v1_activity.describe_detail(
+        {"question": "что  делать\nс плечом?", "image_data_url": "data:image/jpeg;base64,AAAA",
+         "idempotency_key": "abc", "password": "secret"},
+        {},
+    )
+    assert detail == "«что делать с плечом?»"
+    assert await api_v1_activity.describe_detail({"unit": "lb"}, {}) == "unit=lb"
+    assert await api_v1_activity.describe_detail({"weight": 82.5, "reps": 5, "rpe": 9.0}, {}) == "82.5×5 @9"
+    assert await api_v1_activity.describe_detail({}, {}) == ""
 
 
 def test_route_template_keys_the_phrase_not_the_concrete_path():
