@@ -166,6 +166,8 @@ async def test_record_set_reacts_and_keeps_message_briefly(fresh_db, user_id):
     message.bot.set_message_reaction.assert_awaited_once()
     react = message.bot.set_message_reaction.await_args.kwargs["reaction"]
     assert react[0].emoji == "🔥"
+    # Большая анимация — рекорд видно на весь чат, а не уголком сообщения.
+    assert message.bot.set_message_reaction.await_args.kwargs["is_big"] is True
     message.delete.assert_not_awaited()  # not tidied away immediately, unlike a normal set
 
 

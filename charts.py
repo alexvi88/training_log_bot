@@ -91,16 +91,44 @@ def _fig_to_png(fig, dpi: int = 150, tight: bool = True) -> bytes:
     return buf.read()
 
 
+def record_flags(values: list[float]) -> list[bool]:
+    """Какие точки графика — рекордные дни: значение строго выше всех точек ДО
+    неё (бегущий максимум). Порт `ProgressRecords` iOS-приложения, чтобы
+    огоньки на графике в боте и в приложении стояли на одних и тех же днях.
+
+    Первая точка рекордом не считается — сравнивать её не с чем, и огонёк на
+    самой первой тренировке говорил бы «рекорд» там, где просто начало
+    графика. Равное прежнему максимуму — не рекорд: повторить лучший результат
+    не значит его побить (иначе огоньки рассыпались бы по каждой ровной
+    полке).
+
+    Считается по показанным точкам, а не по всей истории: это отметка «здесь
+    кривая пошла выше всего, что видно слева», а рекорды за всё время живут
+    своими строками в тексте над графиком.
+    """
+    flags: list[bool] = []
+    best: float | None = None
+    for v in values:
+        flags.append(best is not None and v > best)
+        best = v if best is None else max(best, v)
+    return flags
+
+
 def render_metric_over_sessions(
     points: list[tuple[dt.datetime, float]],
     title: str,
     ylabel: str,
     show_weekly_rate: bool = True,
+    mark_records: bool = False,
 ) -> bytes:
     """`show_weekly_rate` picks the title annotation: the per-week trend rate
     (used by the bodyweight diary) or the plain total change across the
     plotted points (used by the exercise progress chart, where a rate reads
-    as noise next to "how much did it actually grow")."""
+    as noise next to "how much did it actually grow").
+
+    `mark_records` — рекордные дни (`record_flags`) крупной точкой цвета лампы:
+    для графика упражнения, где «выше» значит «лучше». Дневнику веса тела это
+    не нужно — там рост бывает и целью, и проблемой."""
     fig = _new_figure(figsize=(6, 3.5))
     fig.patch.set_facecolor(PAPER)
     ax = fig.subplots()
@@ -108,6 +136,20 @@ def render_metric_over_sessions(
     dates = [p[0] for p in points]
     values = [p[1] for p in points]
     ax.plot(dates, values, marker="o", color=BRICK, linewidth=2, markersize=5, zorder=3)
+    if mark_records:
+        flags = record_flags(values)
+        rec_dates = [d for d, f in zip(dates, flags, strict=True) if f]
+        rec_values = [v for v, f in zip(values, flags, strict=True) if f]
+        if rec_dates:
+            # Эмодзи 🔥 matplotlib без цветного шрифта не нарисует — огонёк
+            # передаёт цвет лампы (LAMP — «рекорды, огонёк» в палитре выше),
+            # поверх линии и крупнее обычной точки.
+            ax.scatter(
+                rec_dates, rec_values, s=110, color=LAMP, edgecolors=BRICK_DEEP,
+                linewidths=1.5, zorder=4, label=i18n.t("chart.record_label"),
+            )
+            # Цвет сам по себе ничего не говорит — подписываем, что это за точки.
+            ax.legend(loc="best", frameon=False, labelcolor=INK_DIM, fontsize=9)
 
     trend = linear_trend(points)
     if trend is not None and len(points) >= 2:

@@ -4206,6 +4206,80 @@ async def _delete_set_write_attempts(db: aiosqlite.Connection, where_sql: str, p
     )
 
 
+# Что снимает discard_workout, в порядке вставки при возврате (родитель раньше
+# ребёнка — `PRAGMA foreign_keys=ON`). `set_write_attempts` сюда нарочно не
+# входит: это ключи идемпотентности попыток записи по HTTP, а не данные
+# тренировки, и возвращать их незачем.
+_WORKOUT_SNAPSHOT_TABLES = ("workouts", "workout_blocks", "block_exercises", "sets", "exercise_notes")
+
+
+async def snapshot_workout(workout_id: int) -> Optional[dict[str, list[dict[str, Any]]]]:
+    """Всё, что снесёт discard_workout, — строками как есть, с их id.
+
+    Нужно для «↩️ Вернуть» после удаления из истории (handlers/history.py):
+    снимок кладётся в FSM, и restore_workout вставляет те же строки обратно.
+    Просто словари, чтобы пережить JSON-хранилище FSM (fsm_storage.py).
+    None — тренировки уже нет.
+    """
+    db = conn()
+    cur = await db.execute("SELECT 1 FROM workouts WHERE id = ?", (workout_id,))
+    if await cur.fetchone() is None:
+        return None
+    block_ids_sql = "SELECT id FROM workout_blocks WHERE workout_id = ?"
+    queries = {
+        "workouts": "SELECT * FROM workouts WHERE id = ?",
+        "workout_blocks": "SELECT * FROM workout_blocks WHERE workout_id = ?",
+        "block_exercises": f"SELECT * FROM block_exercises WHERE block_id IN ({block_ids_sql})",
+        "sets": f"SELECT * FROM sets WHERE block_id IN ({block_ids_sql})",
+        "exercise_notes": "SELECT * FROM exercise_notes WHERE workout_id = ?",
+    }
+    snapshot: dict[str, list[dict[str, Any]]] = {}
+    for table in _WORKOUT_SNAPSHOT_TABLES:
+        cur = await db.execute(queries[table], (workout_id,))
+        snapshot[table] = [dict(row) for row in await cur.fetchall()]
+    return snapshot
+
+
+async def restore_workout(snapshot: dict[str, list[dict[str, Any]]]) -> bool:
+    """Вставить обратно то, что снял snapshot_workout, с теми же id.
+
+    Те же id безопасны: у всех таблиц снимка с id стоит `AUTOINCREMENT`, и
+    SQLite не выдаёт удалённый id повторно, — так что за время между удалением
+    и «Вернуть» его никто не занял, а всё, что ссылается на тренировку по id
+    без внешнего ключа (карточки, логи), снова на неё и указывает.
+
+    False — вернуть нельзя: тренировка с этим id уже есть (второй тап по
+    «Вернуть») или упражнения из неё за это время не стало (объединили,
+    удалили) — внешний ключ валит вставку, и откат транзакции не оставляет
+    тренировку выпотрошенной наполовину.
+    """
+    workouts = snapshot.get("workouts") or []
+    if len(workouts) != 1:
+        return False
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute("SELECT 1 FROM workouts WHERE id = ?", (workouts[0]["id"],))
+        if await cur.fetchone() is not None:
+            return False
+        try:
+            for table in _WORKOUT_SNAPSHOT_TABLES:
+                for row in snapshot.get(table) or []:
+                    # Имена колонок — из самой базы (SELECT * снимка), не из ввода.
+                    columns = ", ".join(f'"{c}"' for c in row)
+                    marks = ", ".join("?" for _ in row)
+                    await db.execute(
+                        f"INSERT INTO {table} ({columns}) VALUES ({marks})", tuple(row.values())
+                    )
+            await db.commit()
+        except sqlite3.IntegrityError:
+            await db.rollback()
+            return False
+        except Exception:
+            await db.rollback()
+            raise
+    return True
+
+
 async def discard_workout(workout_id: int) -> None:
     """Снести тренировку целиком — вместе со всем, что на неё ссылается.
 

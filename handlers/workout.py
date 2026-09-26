@@ -2526,9 +2526,14 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
     if is_record:
         # A record-setting message keeps its place in the chat with a 🔥 reaction —
         # instant, wordless celebration — instead of being tidied away like a normal set.
+        # is_big — реакция с большой анимацией на весь экран чата: тихий 🔥 в
+        # углу сообщения легко пропустить, а в iOS-приложении рекорд — отдельная
+        # сцена с конфетти. Это ближайшее, что Telegram даёт боту на чужом
+        # сообщении без лишнего сообщения, которое сломало бы «дно» чата.
         with suppress(TelegramBadRequest):
             await bot.set_message_reaction(
                 chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
+                is_big=True,
             )
         _spawn(_delete_message_later(bot, chat_id, message_id, _RECORD_MESSAGE_LIFETIME_SECONDS))
     elif message is not None:
@@ -2568,6 +2573,8 @@ async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active:
     with suppress(TelegramBadRequest):
         await bot.set_message_reaction(
             chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji=emoji)],
+            # Рекорд — с большой анимацией, как у набранного текстом; обычный ✅ — тихо.
+            is_big=is_record,
         )
     # Уже нашёл голос сам — подсказку про него больше показывать незачем.
     await db.mark_voice_hint_shown(user["telegram_id"])

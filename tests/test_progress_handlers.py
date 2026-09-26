@@ -475,3 +475,30 @@ async def test_tapping_a_deleted_exercise_card_says_so_instead_of_crashing(fresh
 
     callback.answer.assert_awaited()
     assert "Не нашёл это упражнение" in callback.answer.await_args.args[0]
+
+
+async def test_progress_entry_offers_coach_review_first(fresh_db, user_id, monkeypatch):
+    """«Как я расту» спрашивают на экране прогресса, а не на интро тренера —
+    кнопка разбора стоит первой и ведёт в тот же готовый вопрос тренеру."""
+    import ai_trainer
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 100.0, 8)
+    await db.finish_workout(workout_id)
+
+    for configured, expected in ((True, True), (False, False)):
+        monkeypatch.setattr(ai_trainer, "is_configured", lambda c=configured: c)
+        state = await _make_state(user_id)
+        callback = _make_callback(user_id, "menu:progress")
+
+        await history.show_progress_entry(callback, state)
+
+        kb = callback.message.answer.await_args.kwargs["reply_markup"]
+        cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert (cbs[0] == "ai:preset:progress") is expected
+        assert ("ai:preset:progress" in cbs) is expected
