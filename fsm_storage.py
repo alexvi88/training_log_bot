@@ -172,6 +172,23 @@ class JSONFileStorage(BaseStorage):
     async def get_data(self, key: StorageKey) -> dict:
         return dict(self._data.get(_key_to_str(key), {}).get("data", {}))
 
+    def user_keys(self, user_id: int) -> list[StorageKey]:
+        """Все ключи состояния атлета — во всех его чатах и у любого бота.
+
+        Для тех, кто трогает состояние не из апдейта Telegram (REST-слой,
+        смена единиц из приложения — fsm_unit_rescale): у них нет ни
+        FSMContext, ни bot_id, а собрать ключ руками значит угадать чат.
+        """
+        keys: list[StorageKey] = []
+        for key_str in self._data:
+            try:
+                fields = json.loads(key_str)
+            except ValueError:
+                continue
+            if fields.get("user_id") == user_id:
+                keys.append(StorageKey(**fields))
+        return keys
+
     async def drop_user(self, user_id: int) -> int:
         """Забыть про атлета всё, что помнит диалог, — сколько записей снесли.
 

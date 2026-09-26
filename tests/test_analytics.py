@@ -5,6 +5,7 @@ import datetime as dt
 import pytest
 
 import analytics
+import config
 from analytics import SessionStats, SetRow
 
 # ---------- e1RM formulas ----------
@@ -290,7 +291,7 @@ def test_suggest_progression_ignores_inferred_step_coarser_than_default():
 #
 # `rule` — правило из routine_exercises.progression. Модель, собирающая
 # программу, чистит его перед записью (ai_trainer._clean_progression:
-# step зажат в [0.25, 25], rule — из закрытого списка), но это не
+# step зажат в [0.25, 25 кг] — для фунтов тот же вес в lb, rule — из закрытого списка), но это не
 # единственный писатель колонки: `PATCH /routine-exercises/{id}`
 # (api_v1_programs.update_routine_exercise) пишет присланный клиентом
 # progression дословно, без этой чистки вовсе — опечатка или баг в
@@ -302,10 +303,20 @@ def test_suggest_progression_ignores_inferred_step_coarser_than_default():
 
 def test_suggest_progression_clamps_an_absurd_linear_load_step():
     # 60кг + необоснованный шаг в 999999 — цель «подойди с тонной» вместо
-    # честного шага, зажатого тем же потолком, что и у AI-тренера (25кг/lb).
+    # честного шага, зажатого тем же потолком, что и у AI-тренера (25 кг).
     rule = {"rule": "linear_load", "step": 999999}
     s = analytics.suggest_progression([(60.0, 5)], rule=rule)
     assert s.target_weight == pytest.approx(85.0)  # 60 + 25 (потолок), не 1 000 059
+
+
+def test_suggest_progression_step_cap_is_in_kg_and_converted_for_lb():
+    # Потолок — одно число в кг, а не «25 чего угодно»: в фунтах это ≈55 lb,
+    # иначе атлету в lb законный шаг 30 lb (≈13.6 кг) срезало бы до 25.
+    rule = {"rule": "linear_load", "step": 999999}
+    s = analytics.suggest_progression([(135.0, 5)], unit="lb", rule=rule)
+    assert s.target_weight == pytest.approx(135.0 + 25.0 * config.LB_PER_KG, abs=0.01)
+    ok = analytics.suggest_progression([(135.0, 5)], unit="lb", rule={"rule": "linear_load", "step": 30})
+    assert ok.target_weight == pytest.approx(165.0)
 
 
 def test_suggest_progression_clamps_an_absurd_reps_top():

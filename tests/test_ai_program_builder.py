@@ -271,7 +271,7 @@ async def test_progression_schema_declares_the_closed_rule_set():
     ]["items"]["properties"]
     prog_props = ex_props["progression"]["properties"]
     assert set(prog_props["rule"]["enum"]) == set(ai_trainer.PROGRESSION_RULES)
-    assert prog_props["step"]["maximum"] == ai_trainer.PROGRESSION_MAX_STEP
+    assert prog_props["step"]["maximum"] == ai_trainer.PROGRESSION_SCHEMA_MAX_STEP
 
 
 async def test_progression_is_carried_through_to_the_draft(fresh_db, user_id):
@@ -328,6 +328,29 @@ async def test_progression_step_is_clamped_to_a_sane_range(fresh_db, user_id):
     )
 
     assert draft["days"][0]["items"][0]["progression"]["step"] == ai_trainer.PROGRESSION_MAX_STEP
+
+
+async def test_progression_step_cap_is_the_same_weight_in_pounds(fresh_db, user_id):
+    """Потолок шага — в кг: у атлета в фунтах тот же физический потолок
+    (25 кг ≈ 55 lb), а не 25 lb — одно число на обе единицы зажимало ему
+    законный шаг вдвое."""
+    await fresh_db.update_user(user_id, unit="lb")
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [
+                        {"name": TEMPLATE_A, "progression": {"rule": "linear_load", "step": 999}},
+                    ],
+                )
+            ],
+        },
+    )
+    step = draft["days"][0]["items"][0]["progression"]["step"]
+    assert step == round(ai_trainer.PROGRESSION_MAX_STEP * config.LB_PER_KG, 2)
 
 
 async def test_reps_top_out_of_sync_with_the_range_is_snapped_to_reps_max(fresh_db, user_id):

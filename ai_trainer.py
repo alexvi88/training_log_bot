@@ -99,7 +99,13 @@ SETUP_CHOICE_LIMIT = 32
 # в _clean_program_item.
 PROGRESSION_RULES = ("double_progression", "linear_load")
 PROGRESSION_MIN_STEP = 0.25
-PROGRESSION_MAX_STEP = 25.0
+# Потолок шага — в кг, для фунтов тот же физический (analytics.
+# progression_max_step): одно число на обе единицы зажимало атлету в lb шаг
+# вдвое уже. В схеме инструмента — потолок в фунтах, самый широкий: схема одна
+# на всех (и на кэшируемом префиксе), а зажим по единице атлета делает
+# _clean_progression.
+PROGRESSION_MAX_STEP = analytics.PROGRESSION_MAX_STEP
+PROGRESSION_SCHEMA_MAX_STEP = analytics.progression_max_step("lb")
 
 _client: Optional[AsyncOpenAI] = None
 
@@ -2316,7 +2322,7 @@ TOOLS: list[dict[str, Any]] = [
                                                     "step": {
                                                         "type": "number",
                                                         "minimum": PROGRESSION_MIN_STEP,
-                                                        "maximum": PROGRESSION_MAX_STEP,
+                                                        "maximum": PROGRESSION_SCHEMA_MAX_STEP,
                                                         "description": (
                                                             "Прибавка веса в единицах пользователя "
                                                             "(unit из get_training_overview): типично "
@@ -3658,7 +3664,7 @@ def _clean_int(raw: Any, low: int, high: int) -> Optional[int]:
     return max(low, min(value, high))
 
 
-def _clean_progression(raw: Any) -> Optional[dict[str, Any]]:
+def _clean_progression(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
     """Правило прогрессии одного упражнения — {"rule", "reps_top"?, "step"?}.
 
     5.6/3.2: раньше прогрессия существовала только прозой в ответе тренера и
@@ -3678,7 +3684,7 @@ def _clean_progression(raw: Any) -> Optional[dict[str, Any]]:
     out: dict[str, Any] = {"rule": rule}
     step = _as_number(raw.get("step"))
     if step is not None:
-        out["step"] = max(PROGRESSION_MIN_STEP, min(step, PROGRESSION_MAX_STEP))
+        out["step"] = max(PROGRESSION_MIN_STEP, min(step, analytics.progression_max_step(unit)))
     if raw.get("reps_top") is not None:
         reps_top = _clean_int(raw.get("reps_top"), 1, PROGRAM_MAX_REPS)
         if reps_top is not None:
@@ -3686,7 +3692,7 @@ def _clean_progression(raw: Any) -> Optional[dict[str, Any]]:
     return out
 
 
-def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
+def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
     """Одно упражнение из предложенной программы: имя плюс схема подходов.
 
     Схема необязательна — тренер может задать только подходы или только
@@ -3733,7 +3739,7 @@ def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
     elif raw_reps_max is not None and reps_max != raw_reps_max:
         clamped.append(f"reps_max {raw_reps_max}→{reps_max}")
 
-    progression = _clean_progression(raw.get("progression"))
+    progression = _clean_progression(raw.get("progression"), unit)
     if progression is not None:
         rule = progression["rule"]
         if rule == "double_progression" and reps_max is not None:
@@ -4993,6 +4999,9 @@ async def _propose_program(
         user_id, tool_input.get("replaces_program")
     )
     truncated_days = len(raw_days) > PROGRAM_MAX_DAYS
+    # Шаг прогрессии — в единицах атлета, и потолок у него свой на кг и lb.
+    user = await db.get_user(user_id)
+    unit = (user["unit"] if user else None) or "kg"
 
     days: list[dict[str, Any]] = []
     report: list[dict[str, Any]] = []
@@ -5019,7 +5028,7 @@ async def _propose_program(
         seen: set[str] = set()
         clamped: list[str] = []
         for raw_item in raw_exercises[:PROGRAM_MAX_EXERCISES_PER_DAY]:
-            item = _clean_program_item(raw_item)
+            item = _clean_program_item(raw_item, unit)
             if item is None:
                 continue
             source, display_name = await db.resolve_exercise_name(user_id, item["name"])
