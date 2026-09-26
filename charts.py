@@ -17,6 +17,31 @@ import i18n  # noqa: E402
 from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN, linear_trend  # noqa: E402
 from formatting import format_weight  # noqa: E402
 
+# ---------- палитра ----------
+#
+# Одна гамма на все картинки бота — та же, что у iOS-приложения
+# (training_log_bot_ios: TrainingLog/DesignSystem/Theme.swift). Владелец хочет,
+# чтобы сводка в Telegram, график прогресса и визитка тренировки выглядели как
+# экраны приложения, а не как отдельный тёмный «терминал». Цвета заданы здесь
+# один раз: рендеры ниже берут их по смыслу (фон, текст, акцент), а не по hex.
+#
+# Контраст текста проверен на фоне, где он лежит (WCAG AA ≥ 4.5:1):
+# INK 17.4, INK_DIM 4.9, BRICK 5.1, LAMP_TEXT 4.9 — на PAPER; на белой
+# карточке (SURFACE) каждый ещё немного выше. FAINT и LAMP — только для
+# декора (дорожки, полосы), не для текста.
+PAPER = "#faf7f4"        # фон страницы
+SURFACE = "#ffffff"      # приподнятая карточка/плитка
+SURFACE_SUNK = "#f1ece6" # утопленная поверхность: пустая дорожка полосы
+HAIRLINE = (22 / 255, 18 / 255, 16 / 255, 0.08)   # rgba(22,18,16,.08) — рамки, линейки
+INK = "#161210"          # основной текст
+INK_DIM = "#6f6c6b"      # вторичный текст, подписи
+FAINT = "#a6a5a4"        # только декор
+BRICK = "#b4472f"        # бренд: главная линия, выбранное, акцент
+BRICK_DEEP = "#963a26"
+LAMP = "#e9a83d"         # подсветка: рекорды, огонёк (заливки, не текст)
+LAMP_TEXT = "#8f6414"    # та же лампа, но читаемая как текст на светлом
+GREEN = "#2e7d4f"        # «в норме» у коридора объёма
+
 
 def _arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
@@ -77,10 +102,12 @@ def render_metric_over_sessions(
     plotted points (used by the exercise progress chart, where a rate reads
     as noise next to "how much did it actually grow")."""
     fig = _new_figure(figsize=(6, 3.5))
+    fig.patch.set_facecolor(PAPER)
     ax = fig.subplots()
+    ax.set_facecolor(PAPER)
     dates = [p[0] for p in points]
     values = [p[1] for p in points]
-    ax.plot(dates, values, marker="o", color="#3366cc")
+    ax.plot(dates, values, marker="o", color=BRICK, linewidth=2, markersize=5, zorder=3)
 
     trend = linear_trend(points)
     if trend is not None and len(points) >= 2:
@@ -88,12 +115,18 @@ def render_metric_over_sessions(
         xs_days = [(d.date() - t0).days for d in dates]
         slope_per_day = trend.slope_per_week / 7
         trend_y = [trend.intercept + slope_per_day * x for x in xs_days]
-        ax.plot(dates, trend_y, linestyle="--", color="#cc3333", alpha=0.7)
-        ax.set_title(_trend_title(title, trend, values, show_weekly_rate))
+        ax.plot(dates, trend_y, linestyle="--", color=INK_DIM, linewidth=1.2, zorder=2)
+        ax.set_title(_trend_title(title, trend, values, show_weekly_rate),
+                     color=INK, fontweight="bold")
     else:
-        ax.set_title(title)
+        ax.set_title(title, color=INK, fontweight="bold")
 
-    ax.set_ylabel(ylabel)
+    ax.set_ylabel(ylabel, color=INK_DIM)
+    ax.tick_params(colors=INK_DIM, labelcolor=INK_DIM)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(FAINT)
     # Ticks only at dates that actually have a point — matplotlib's default date
     # locator picks evenly-spaced calendar dates, which can land on a day with
     # no session and misleadingly imply one happened there.
@@ -102,7 +135,8 @@ def render_metric_over_sessions(
     ax.set_xticks(dates[::step])
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     fig.autofmt_xdate()
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, color=HAIRLINE, linewidth=0.8)
+    ax.set_axisbelow(True)
     # Lower dpi than the other charts here: this one gets re-rendered and
     # re-uploaded to Telegram on every period-switch tap, so shaving ~35% off
     # the PNG (barely visible at this chart's small chat-embedded size) trims
@@ -111,10 +145,10 @@ def render_metric_over_sessions(
 
 
 # Фон и акцент сводки. Имена достались от тепловой карты, которая раньше жила на
-# главном экране; те же два цвета носят на себе плашка звания, карточки движений
-# и заголовки блоков.
-HEATMAP_EMPTY = "#1e242e"
-HEATMAP_FILLED = "#4f8cff"  # same accent used elsewhere (e.g. render_workout_card)
+# главном экране: EMPTY — пустая дорожка полосы объёма, FILLED — бренд-акцент
+# (плашка звания).
+HEATMAP_EMPTY = SURFACE_SUNK
+HEATMAP_FILLED = BRICK
 
 
 # Цвета статусов недельного объёма (см. analytics.classify_weekly_volume). Цвет
@@ -122,9 +156,9 @@ HEATMAP_FILLED = "#4f8cff"  # same accent used elsewhere (e.g. render_workout_ca
 # трицепса в базе один и тот же эмодзи 💪, так что значком группы их не
 # различить, а подпись занята названием.
 VOLUME_COLOURS = {
-    "low": "#e0a845",
-    "in_range": "#45b97c",
-    "high": "#e2685a",
+    "low": LAMP,
+    "in_range": GREEN,
+    "high": BRICK,
 }
 
 # Геометрия строки объёма в долях ширины картинки: название группы прижато
@@ -179,13 +213,13 @@ def _draw_volume_panel(
     ax.add_patch(
         Rectangle(
             (lo, -0.5), hi - lo, len(rows),
-            linewidth=0, facecolor=HEATMAP_FILLED, alpha=0.17, zorder=0,
+            linewidth=0, facecolor=INK, alpha=0.05, zorder=0,
         )
     )
     for edge in (lo, hi):
         ax.plot(
             [edge, edge], [-0.5, len(rows) - 0.5],
-            color=HEATMAP_FILLED, alpha=0.5, linewidth=0.9,
+            color=INK_DIM, alpha=0.6, linewidth=0.9,
             linestyle=(0, (1.5, 2)), zorder=1,
         )
     # Подпись коридора — в строке заголовка, а не под последней полосой: снизу она
@@ -193,7 +227,7 @@ def _draw_volume_panel(
     ax.text(
         (lo + hi) / 2, -0.95,
         _volume_norm_label(WEEKLY_VOLUME_MIN, WEEKLY_VOLUME_MAX),
-        color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION, ha="center", va="center",
+        color=INK_DIM, fontsize=DASH_FS_CAPTION, ha="center", va="center",
     )
 
     for row, (label, sets, status) in enumerate(rows):
@@ -230,8 +264,10 @@ DASH_WIDTH_IN = 6.67          # 1000 px при 150 dpi
 DASH_LEFT, DASH_RIGHT = 0.04, 0.96
 DASH_GAP = 0.34               # распорка между виджетами, с линейкой
 DASH_PAD = 0.08               # распорка внутри группы, без линейки
-DASH_CARD = "#171d26"
-DASH_RULE = "#2b3543"
+DASH_CARD = SURFACE
+# Линейка — та же волосяная HAIRLINE, но уже смешанная с PAPER в непрозрачный
+# цвет: тест ищет её по точному пикселю, а полупрозрачная дала бы смесь.
+DASH_RULE = "#e8e5e2"
 
 # Типографика сводки: шесть роле́й вместо одиннадцати случайных размеров. До этого
 # в одной картинке жили 6, 6.5, 7, 7.5, 8, 8.5, 9, 10, 13.5, 15 и 23 pt, причём
@@ -285,18 +321,22 @@ _LIFT_BOTTOM = _LIFT_ROWS_TOP[-1] + _LIFT_ROW_H + 0.25
 _DASH_LIFTS_H = _LIFT_UNIT_IN * (_LIFT_BOTTOM - _LIFT_TOP)
 
 
-def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
+def _dash_card(ax, x, y, w, h, colour=DASH_CARD, edge=HAIRLINE) -> None:
+    """Плоская карточка со скруглением и волосяной рамкой — как в приложении:
+    белая плитка на тёплом фоне почти не отличается по светлоте, рамка её и
+    отделяет (тени и градиенты приложение не использует)."""
     ax.add_patch(
         FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=0.02",
-                       linewidth=0, facecolor=colour, zorder=0)
+                       linewidth=0.8 if edge else 0, edgecolor=edge or "none",
+                       facecolor=colour, zorder=0)
     )
 
 
-def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FILLED) -> None:
+def _dash_section(ax, title: str, note: str = "", note_colour: str = INK_DIM) -> None:
     """Подпись виджета. Всегда на DASH_LEFT, примечание — на DASH_RIGHT: три
     разных левых края в одной картинке читаются как небрежность, и именно так
     выглядела первая версия."""
-    ax.text(DASH_LEFT, -0.98, title, color="#9aa4b2", fontsize=DASH_FS_LABEL,
+    ax.text(DASH_LEFT, -0.98, title, color=INK_DIM, fontsize=DASH_FS_LABEL,
             fontweight="bold", va="center")
     if note:
         ax.text(DASH_RIGHT, -0.98, note, color=note_colour, fontsize=DASH_FS_CAPTION,
@@ -309,10 +349,11 @@ def _dash_growth_tiles(
     """Плитки роста e1RM: 2 строки по 3, имя — процент — «227кг vs 220кг».
 
     `tiles` — то, что вернул formatting.menu_lift_tiles: только выросшие
-    движения, отсортированные по проценту роста. Процент — синим (тот же
-    акцент, что у плашки звания и примечаний блоков), а не зелёным: зелёный
-    уже занят статусом коридора объёма («в норме»), и тот же цвет у процента
-    роста читался бы как ещё один статус, а не как отдельная цифра.
+    движения, отсортированные по проценту роста. Процент — «лампой» в текстовом
+    варианте (LAMP_TEXT, как рост на экране прогресса в приложении), а не
+    зелёным: зелёный уже занят статусом коридора объёма («в норме»), и тот же
+    цвет у процента роста читался бы как ещё один статус, а не как отдельная
+    цифра.
 
     Имя не обрезается многоточием, но и не вылезает за плитку — вместо этого
     все шесть имён сжимаются по кеглю до общего размера, в котором помещается
@@ -369,7 +410,7 @@ def render_menu_dashboard(
     Любой из виджетов можно не передавать: у нового пользователя нет ни объёма,
     ни движений, и пустой блок сообщал бы только то, что он пуст.
     """
-    BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", "#6b7684"
+    BG, FG, MUTED, DIM = PAPER, INK, INK_DIM, INK_DIM
 
     tiles = list(tiles or ())
     rows = list(volume_rows or ())
@@ -428,8 +469,8 @@ def render_menu_dashboard(
         # плашка по короткому «Атлет» его бы обрезала. Эмодзи звания сюда не
         # едет — matplotlib рисует 🪨 и 👑 квадратиком, шрифта с эмодзи в
         # контейнере нет.
-        _dash_card(ax, _DASH_BADGE_X, 0.28, DASH_RIGHT - _DASH_BADGE_X, 0.44, HEATMAP_EMPTY)
-        ax.text((_DASH_BADGE_X + DASH_RIGHT) / 2, 0.50, badge, color=HEATMAP_FILLED, fontsize=DASH_FS_LABEL,
+        _dash_card(ax, _DASH_BADGE_X, 0.28, DASH_RIGHT - _DASH_BADGE_X, 0.44, HEATMAP_FILLED, edge=None)
+        ax.text((_DASH_BADGE_X + DASH_RIGHT) / 2, 0.50, badge, color=SURFACE, fontsize=DASH_FS_LABEL,
                 fontweight="bold", ha="center", va="center")
 
     if tiles:
@@ -463,7 +504,7 @@ def render_menu_dashboard(
         _draw_volume_panel(ax, rows, volume_title, BG, FG, MUTED)
 
     if lift_tiles:
-        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, HEATMAP_FILLED, lifts_title, lifts_note)
+        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, LAMP_TEXT, lifts_title, lifts_note)
 
     for key in bands:
         if not key.startswith("gap:"):
@@ -516,18 +557,18 @@ def _quote_marks() -> tuple[str, str]:
     return i18n.t("chart.quote_open"), i18n.t("chart.quote_close")
 
 
-#  bot — тёмная терминальная карточка, исходный и до сих пор единственный вид
-#  на стороне Telegram (handlers/history.py); менять её незачем — это
-#  визуальная идентичность самого бота, а не что-то унаследованное по ошибке.
-#  app — тёплая светлая палитра iOS-приложения (TrainingLog/DesignSystem/
-#  Theme.swift: paper/ink/brick/lamp), используется только вызовом из /v1
-#  (api_v1_history.py) — владелец продукта забраковал тёмную схему и в самом
-#  приложении (см. Backdrop.swift), и просил ту же гамму на визитке, которой
-#  делятся из него.
-_CARD_THEMES = {
-    "bot": {"BG": "#12161d", "FG": "#e6e6e6", "ACCENT": "#4f8cff", "MUTED": "#9aa4b2", "NOTE": "#d9c98a"},
-    "app": {"BG": "#faf7f4", "FG": "#161210", "ACCENT": "#b4472f", "MUTED": "#8a7f78", "NOTE": "#d4a32a"},
+#  Раньше у бота была своя тёмная «терминальная» карточка, а светлая гамма
+#  приложения шла только в /v1 (api_v1_history.py просит theme="app").
+#  Владелец захотел один стиль картинок у бота и приложения, поэтому обе темы
+#  теперь — одна палитра из блока наверху модуля. Параметр theme оставлен,
+#  чтобы не ломать вызовы и кэш по ключу; различать темы снова — значит
+#  завести здесь вторую запись, а не трогать рендер.
+#  RECORD — строка рекорда (★): рекорды в приложении подсвечиваются лампой.
+_APP_CARD_PALETTE = {
+    "BG": PAPER, "FG": INK, "ACCENT": BRICK, "MUTED": INK_DIM,
+    "NOTE": LAMP_TEXT, "RECORD": LAMP_TEXT,
 }
+_CARD_THEMES = {"bot": _APP_CARD_PALETTE, "app": _APP_CARD_PALETTE}
 
 
 def render_workout_card(
@@ -544,7 +585,7 @@ def render_workout_card(
 
     `theme` picks the palette (see `_CARD_THEMES`) — everything below this
     point (layout, wrapping, row styles) is identical between them, only the
-    five colours change.
+    colours change.
     """
     colors = _CARD_THEMES[theme]
     BG = colors["BG"]
@@ -552,6 +593,7 @@ def render_workout_card(
     ACCENT = colors["ACCENT"]
     MUTED = colors["MUTED"]
     NOTE = colors["NOTE"]
+    RECORD = colors["RECORD"]
 
     # (text, style) rows, top to bottom.
     rows: list[tuple[str, str]] = [(_workout_card_header(), "header"), (title, "muted"), ("", "normal")]
@@ -569,7 +611,7 @@ def render_workout_card(
         # Строка рекорда приходит со звёздочкой (formatting.build_workout_card) —
         # на картинке она выделяется цветом, как и подпись внизу.
         if line.lstrip().startswith("★"):
-            style = "accent"
+            style = "record"
         # Wrapped for the same reason the note above is: the figure is a fixed
         # 6.6in wide and nothing clips text, so an over-long line (a long exercise
         # name, or an exercise with many distinct sets) just ran off the right
@@ -597,6 +639,7 @@ def render_workout_card(
         "muted": dict(color=MUTED, fontsize=11),
         "exercise": dict(color=FG, fontsize=12, fontweight="bold"),
         "accent": dict(color=ACCENT, fontsize=12, fontweight="bold"),
+        "record": dict(color=RECORD, fontsize=12, fontweight="bold"),
         "note": dict(color=NOTE, fontsize=11, style="italic"),
         "normal": dict(color=FG, fontsize=12),
     }

@@ -422,7 +422,7 @@ def test_a_long_headline_stops_before_the_rank_badge():
     img = Image.open(io.BytesIO(_render(headline="3 тренировки за 30 дней"))).convert("RGB")
     width, _ = img.size
     badge_left = round(charts._DASH_BADGE_X * width)
-    fg = (0xE6, 0xE6, 0xE6)
+    fg = tuple(int(charts.INK[i:i + 2], 16) for i in (1, 3, 5))
     head_rows = range(round(0.28 * charts._DASH_HEAD_H * 150), round(0.72 * charts._DASH_HEAD_H * 150))
 
     assert not any(

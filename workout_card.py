@@ -40,9 +40,10 @@ async def build(workout_id: int, user, theme: str = "bot") -> Optional[WorkoutCa
     `hint_for_workout` в `progression_data.py`.
 
     `theme` — палитра растра (см. `charts.render_workout_card`): "bot"
-    (по умолчанию, тёмная терминальная — как в Telegram) или "app" (светлая,
-    в цветах iOS-приложения). Бот своё значение не передаёт вовсе — ему
-    положен дефолт; `api_v1_history.py` просит "app" явно.
+    (по умолчанию) или "app". Сейчас обе — одна светлая палитра
+    iOS-приложения (единый стиль картинок бота и приложения); параметр
+    оставлен, чтобы вызовы не менялись. Бот своё значение не передаёт вовсе,
+    `api_v1_history.py` просит "app" явно.
     """
     workout = await db.get_workout(workout_id)
     if workout is None:
