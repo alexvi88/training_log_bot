@@ -104,7 +104,13 @@ async def test_user_thread_roundtrip_and_unread(fresh_db, telegram, pushes):
     assert resp.json()["marked"] == 1
     assert (await user.get("/support/messages")).json()["unread"] == 0
 
-    # Админ прочитал ветку — у него счётчик обнуляется.
+    # Ответ уже отметил ветку прочитанной у админа — ручке «прочитал» нечего отмечать.
+    assert (await admin_client.get("/me")).json()["support_unread"] == 0
+    assert (await admin_client.post(f"/support/threads/{USER_ID}/read")).json()["marked"] == 0
+
+    # Новая реплика без ответа — отмечается ручкой «прочитал».
+    await user.post("/support/messages", json={"text": "Спасибо"})
+    assert (await admin_client.get("/me")).json()["support_unread"] == 1
     assert (await admin_client.post(f"/support/threads/{USER_ID}/read")).json()["marked"] == 1
     assert (await admin_client.get("/me")).json()["support_unread"] == 0
 
@@ -162,10 +168,66 @@ async def test_user_message_uses_feedback_validation(fresh_db, telegram):
     assert resp.status_code == 400 and resp.json()["error"] == "bad_request"
     resp = await user.post("/support/messages", json={"text": "a" * (api_v1_feedback.MAX_FEEDBACK_LENGTH + 1)})
     assert resp.status_code == 400
+    # Фото без текста можно только в поддержку, а текст без фото пустым быть не может.
+    resp = await user.post("/support/messages", json={"text": "", "image_data_url": None})
+    assert resp.status_code == 400
+
+
+async def test_support_quota_is_separate_and_higher_than_feedback(fresh_db, telegram):
+    # Живая переписка не упирается в пять писем разработчику в день.
+    assert api_v1_feedback.SUPPORT_DAILY_LIMIT > api_v1_feedback.FEEDBACK_DAILY_LIMIT
+    user = await _client(fresh_db, USER_ID)
     for _ in range(api_v1_feedback.FEEDBACK_DAILY_LIMIT):
+        assert (await user.post("/feedback", json={"text": "отзыв"})).status_code == 201
+    assert (await user.post("/feedback", json={"text": "отзыв"})).status_code == 429
+    # /feedback исчерпан — поддержке это не мешает.
+    for _ in range(api_v1_feedback.SUPPORT_DAILY_LIMIT):
         assert (await user.post("/support/messages", json={"text": "ещё"})).status_code == 201
     resp = await user.post("/support/messages", json={"text": "ещё"})
     assert resp.status_code == 429 and resp.json()["error"] == "feedback_limit_exceeded"
+
+
+async def test_photo_only_support_message(fresh_db, telegram, pushes):
+    user = await _client(fresh_db, USER_ID)
+    await fresh_db.get_or_create_user(telegram_id=ADMIN_ID, username="owner")
+    await fresh_db.register_push_token(ADMIN_ID, "ios", "admintok")
+    for body in (
+        {"image_data_url": f"data:image/png;base64,{PNG}"},
+        {"text": "   ", "image_data_url": f"data:image/png;base64,{PNG}"},
+    ):
+        resp = await user.post("/support/messages", json=body)
+        assert resp.status_code == 201, resp.text
+        msg = resp.json()["message"]
+        assert msg["text"] == "" and msg["photo_url"].startswith("/support/photos/")
+    # Админу в Telegram — строка-заглушка вместо пустоты, и само фото.
+    assert telegram.sent[0][1] == api_v1_feedback.PHOTO_ONLY_PLACEHOLDER
+    assert telegram.sent[0][2] == base64.b64decode(PNG)
+    assert pushes.await_args.args[3] == f"id {USER_ID}: {api_v1_feedback.PHOTO_ONLY_PLACEHOLDER}"
+
+
+async def test_feedback_still_requires_text_with_photo(fresh_db, telegram):
+    user = await _client(fresh_db, USER_ID)
+    resp = await user.post("/feedback", json={"image_data_url": f"data:image/png;base64,{PNG}"})
+    assert resp.status_code == 400
+    resp = await user.post("/feedback", json={"text": " ", "image_data_url": f"data:image/png;base64,{PNG}"})
+    assert resp.status_code == 400
+    assert telegram.sent == []
+
+
+async def test_admin_reply_marks_thread_read(fresh_db, telegram, pushes):
+    user = await _client(fresh_db, USER_ID)
+    admin_client = await _client(fresh_db, ADMIN_ID, username="owner")
+    await user.post("/support/messages", json={"text": "раз"})
+    await user.post("/support/messages", json={"text": "два"})
+    assert (await admin_client.get("/me")).json()["support_unread"] == 2
+
+    resp = await admin_client.post(f"/support/threads/{USER_ID}/messages", json={"text": "Видел"})
+    assert resp.status_code == 201
+    assert (await admin_client.get("/me")).json()["support_unread"] == 0
+    threads = (await admin_client.get("/support/threads")).json()["threads"]
+    assert threads[0]["unread"] == 0
+    # Ответ админа атлету по-прежнему непрочитан — отметка только в сторону админа.
+    assert (await user.get("/support/messages")).json()["unread"] == 1
 
 
 async def test_delivery_failure_rolls_back_the_message(fresh_db, monkeypatch):
@@ -289,6 +351,7 @@ async def test_telegram_reply_maps_to_user_thread(fresh_db, telegram, pushes):
     await fresh_db.register_push_token(USER_ID, "ios", "usertok")
     await user.post("/support/messages", json={"text": "Помоги"})
     tg_id = telegram.next_id - 1
+    assert await fresh_db.support_unread_for_admin() == 1
 
     message = _admin_reply(tg_id, "Уже смотрю")
     target = await admin._support_reply_target(message)
@@ -300,6 +363,8 @@ async def test_telegram_reply_maps_to_user_thread(fresh_db, telegram, pushes):
     assert body["unread"] == 1
     assert pushes.await_args.args[:2] == (USER_ID, "usertok")
     assert message.reply.await_args.args[0].startswith("✅")
+    # Ответил реплаем — ветка у админа больше не висит непрочитанной.
+    assert await fresh_db.support_unread_for_admin() == 0
 
 
 async def test_telegram_reply_to_old_feedback_uses_header(fresh_db, pushes):

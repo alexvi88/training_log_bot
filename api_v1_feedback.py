@@ -44,7 +44,8 @@ JSON-теле, а не multipart. Формат и потолок байт — т
 `support_messages` (`store_and_forward`): старая сборка, которая знает только
 `/feedback`, после обновления увидит свой отзыв в ветке вместе с ответом.
 `POST /support/messages` зовёт тот же `read_incoming`/`store_and_forward` —
-проверки, квота и коды ошибок у двух ручек одни. Админу в Telegram уходит
+проверки и коды ошибок у двух ручек одни (суточная квота у каждой своя, и
+только в поддержку можно прислать фото без текста). Админу в Telegram уходит
 то же сообщение, что и раньше, и его message_id запоминается: реплай на него
 становится ответом в ветку (handlers/admin.py, `support_reply`).
 
@@ -122,8 +123,20 @@ MAX_FACTCHECK_TEXT_LENGTH = 4000
 # любое число запросов за день, но не рестарт процесса и не второй воркер.
 FEEDBACK_DAILY_LIMIT = 5
 
-# user_id -> (date отправки последнего отзыва, счётчик за этот день).
-_daily_counts: dict[int, tuple[dt.date, int]] = {}
+# Реплик в ветку поддержки (`POST /support/messages`) в сутки — свой, более
+# высокий потолок и свой счётчик. Пять в день — норма для письма разработчику
+# в пустоту, но не для переписки: на ответ поддержки человек отвечает, и
+# пятая реплика живого разговора упиралась бы в 429. Потолок остаётся —
+# предохранитель от зациклившегося клиента, заливающего Telegram админа.
+SUPPORT_DAILY_LIMIT = 30
+
+# Канал квоты: отзыв (`/feedback`) и реплика в поддержку считаются раздельно.
+FEEDBACK_CHANNEL = "feedback"
+SUPPORT_CHANNEL = "support"
+_DAILY_LIMITS = {FEEDBACK_CHANNEL: FEEDBACK_DAILY_LIMIT, SUPPORT_CHANNEL: SUPPORT_DAILY_LIMIT}
+
+# (канал, user_id) -> (date последней отправки, счётчик за этот день).
+_daily_counts: dict[tuple[str, int], tuple[dt.date, int]] = {}
 
 # Свой, отдельный от api_v1_ai._busy/api_v1_food._busy набор — см. докстринг
 # модуля про фактчек и почему он не делит замок ни с чатом тренера, ни с
@@ -131,20 +144,22 @@ _daily_counts: dict[int, tuple[dt.date, int]] = {}
 _busy: set[int] = set()
 
 
-def _feedback_quota_left(user_id: int) -> bool:
-    """True, если у пользователя ещё остался отзыв на сегодня (UTC)."""
+def _feedback_quota_left(user_id: int, channel: str = FEEDBACK_CHANNEL) -> bool:
+    """True, если у пользователя ещё осталась отправка на сегодня (UTC) в
+    этом канале."""
     today = dt.datetime.now(dt.timezone.utc).date()
-    entry = _daily_counts.get(user_id)
+    entry = _daily_counts.get((channel, user_id))
     if entry is None or entry[0] != today:
         return True
-    return entry[1] < FEEDBACK_DAILY_LIMIT
+    return entry[1] < _DAILY_LIMITS[channel]
 
 
-def _record_feedback_sent(user_id: int) -> None:
+def _record_feedback_sent(user_id: int, channel: str = FEEDBACK_CHANNEL) -> None:
     today = dt.datetime.now(dt.timezone.utc).date()
-    entry = _daily_counts.get(user_id)
+    key = (channel, user_id)
+    entry = _daily_counts.get(key)
     count = entry[1] + 1 if entry is not None and entry[0] == today else 1
-    _daily_counts[user_id] = (today, count)
+    _daily_counts[key] = (today, count)
 
 
 # Шапка сообщения админу в Telegram. "из приложения" обязательно в тексте:
@@ -164,6 +179,10 @@ ADMIN_PUSH_TITLE = "Новое сообщение в поддержку"
 # Сколько символов реплики влезает в тело банера после «id N: » — с запасом
 # под push_ios.BODY_LIMIT.
 _PUSH_TEXT_CLIP = 80
+# Реплика в поддержку может быть одним скриншотом без слов (text пустой) —
+# админу в Telegram и в банер вместо пустоты идёт эта строка. Аудитория —
+# один человек, по-русски.
+PHOTO_ONLY_PLACEHOLDER = "(фото)"
 
 
 def _admin_text(user_id: int, text: str) -> str:
@@ -232,17 +251,27 @@ async def _push_admin_new_message(user_id: int, text: str) -> None:
         logger.exception("support: admin push failed for user %s", user_id)
 
 
-async def read_incoming(request: Request, user_id: int) -> tuple[str, Optional[tuple[bytes, str]]]:
+async def read_incoming(
+    request: Request, user_id: int, allow_photo_only: bool = False
+) -> tuple[str, Optional[tuple[bytes, str]]]:
     """Тело реплики атлета — общее для `POST /feedback` и `POST
     /support/messages`: те же проверки, те же коды ошибок. Возвращает текст и
-    (байты, расширение) фото или None."""
+    (байты, расширение) фото или None.
+
+    `allow_photo_only` (только `/support/messages`): с приложенным фото текст
+    можно не присылать вовсе или прислать пустым — в переписке скриншот сам по
+    себе реплика («вот, смотри»). Без фото пустой текст — по-прежнему 400.
+    У `/feedback` текст обязателен, как был: старые сборки другого не шлют."""
     if config.ADMIN_ID is None:
         raise ApiError(503, "not_configured", "feedback has no recipient configured")
 
     body = await common.json_body(request)
-    text = str(common.require(body, "text", str)).strip()
-    if not text:
-        raise ApiError(400, "bad_request", "text must not be empty", key="api.error.text_empty")
+    if allow_photo_only and body.get("image_data_url") is not None:
+        text = common.optional_str(body, "text") or ""
+    else:
+        text = str(common.require(body, "text", str)).strip()
+        if not text:
+            raise ApiError(400, "bad_request", "text must not be empty", key="api.error.text_empty")
     if len(text) > MAX_FEEDBACK_LENGTH:
         raise ApiError(
             400, "bad_request", f"text must be at most {MAX_FEEDBACK_LENGTH} characters",
@@ -283,22 +312,32 @@ def _save_photo(user_id: int, photo: Optional[tuple[bytes, str]]) -> Optional[st
         return None
 
 
-async def store_and_forward(user_id: int, text: str, photo: Optional[tuple[bytes, str]]):
+async def store_and_forward(
+    user_id: int,
+    text: str,
+    photo: Optional[tuple[bytes, str]],
+    channel: str = FEEDBACK_CHANNEL,
+):
     """Реплика атлета: в ветку поддержки (support_messages), админу в Telegram
     (как отзыв было всегда) и банером админу на iPhone.
 
     Строка заводится ДО отправки в Telegram — чтобы реплай админа, пришедший
     сразу, уже нашёл ветку, — и откатывается, если Telegram не принял: тогда
     это 503 `delivery_failed`, как у отзыва, и повтор человека не задваивает
-    реплику в ветке. Суточная квота — одна на `/feedback` и `/support/messages`
-    (это одно и то же письмо разработчику)."""
-    if not _feedback_quota_left(user_id):
+    реплику в ветке. Суточная квота у `/feedback` и `/support/messages` своя
+    (`channel`, см. SUPPORT_DAILY_LIMIT): переписка не упирается в пять писем.
+
+    Пустой `text` (скриншот без слов, только из `/support/messages`) в ветке
+    так и лежит пустым, а админу уходит PHOTO_ONLY_PLACEHOLDER."""
+    if not _feedback_quota_left(user_id, channel):
         raise ApiError(429, "feedback_limit_exceeded", "daily feedback limit reached")
 
     photo_path = _save_photo(user_id, photo)
     row = await db.add_support_message(user_id, "user", text, photo_path=photo_path)
     try:
-        ids = await _send_feedback_to_admin(user_id, text, photo[0] if photo else None)
+        ids = await _send_feedback_to_admin(
+            user_id, text or PHOTO_ONLY_PLACEHOLDER, photo[0] if photo else None
+        )
     except Exception as exc:
         logger.exception("feedback: delivery to admin failed for user %s", user_id)
         await db.delete_support_message(row["id"])
@@ -310,8 +349,8 @@ async def store_and_forward(user_id: int, text: str, photo: Optional[tuple[bytes
         await db.set_support_tg_message_ids(row["id"], tg_message_id, tg_photo_message_id)
     # Считаем только реально доставленные — упавшая отправка не должна съедать
     # попытку человека, у которого и так что-то не работает.
-    _record_feedback_sent(user_id)
-    await _push_admin_new_message(user_id, text)
+    _record_feedback_sent(user_id, channel)
+    await _push_admin_new_message(user_id, text or PHOTO_ONLY_PLACEHOLDER)
     return await db.get_support_message(row["id"])
 
 

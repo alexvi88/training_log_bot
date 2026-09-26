@@ -7,8 +7,10 @@ app-only аккаунта (вошёл через Apple) нет чата с бо�
 лежит в `support_messages` одной веткой на атлета:
 
 - **атлет** читает свою ветку (`GET /support/messages`), пишет в неё (`POST
-  /support/messages` — ровно тот же приём, проверки, квота и коды ошибок, что
-  у `/feedback`, общий код в api_v1_feedback.read_incoming/store_and_forward)
+  /support/messages` — тот же приём, проверки и коды ошибок, что у
+  `/feedback`, общий код в api_v1_feedback.read_incoming/store_and_forward;
+  отличия два: своя, более высокая суточная квота (SUPPORT_DAILY_LIMIT) и
+  фото можно прислать без текста)
   и отмечает ответы прочитанными (`POST /support/read`);
 - **админ** — тот же аккаунт, что `config.ADMIN_ID`, отдельной роли нет —
   видит список веток (`GET /support/threads`), читает и отвечает в любую
@@ -125,8 +127,14 @@ async def _push_user_reply(user_id: int, text: str) -> int:
 async def send_admin_reply(user_id: int, text: str) -> tuple[Any, int]:
     """Ответ поддержки в ветку `user_id` + пуш атлету. Общий для `POST
     /support/threads/{user_id}/messages` и реплая админа в Telegram.
-    Возвращает (строку реплики, на сколько устройств ушёл пуш)."""
+    Возвращает (строку реплики, на сколько устройств ушёл пуш).
+
+    Ответ заодно отмечает реплики атлета в этой ветке прочитанными админом:
+    раз ответил — значит видел. Иначе ветка, на которую ответили реплаем из
+    Telegram (а в приложении её не открывали), висела бы непрочитанной в
+    счётчике `/me` и в начале списка веток навсегда."""
     row = await db.add_support_message(user_id, "admin", text)
+    await db.mark_support_read(user_id, "admin")
     pushed = await _push_user_reply(user_id, text)
     return row, pushed
 
@@ -162,8 +170,10 @@ async def list_my_messages(request: Request) -> JSONResponse:
 
 async def post_my_message(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
-    text, photo = await api_v1_feedback.read_incoming(request, user_id)
-    row = await api_v1_feedback.store_and_forward(user_id, text, photo)
+    text, photo = await api_v1_feedback.read_incoming(request, user_id, allow_photo_only=True)
+    row = await api_v1_feedback.store_and_forward(
+        user_id, text, photo, channel=api_v1_feedback.SUPPORT_CHANNEL
+    )
     return JSONResponse({"message": message_json(row)}, status_code=201)
 
 
