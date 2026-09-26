@@ -24,6 +24,7 @@ import achievement_sync
 import api_v1_common as common
 import config
 import db
+import fsm_unit_rescale
 import i18n
 from workout_edit_data import move_workout_to_date, on_workout_edited
 
@@ -198,7 +199,16 @@ async def _apply_unit_change(user_id: int, new_unit: str) -> None:
     # Неподобранный черновик тренера («Забрать» в чате) — тоже шаг в единицах
     # пользователя, только ещё не в routine_exercises.
     await db.scale_ai_program_draft_steps(user_id, factor)
+    await db.scale_ai_undo_actions(user_id, factor)
     await db.update_user(user_id, unit=new_unit)
+    # Аккаунт, привязанный к Telegram, может прямо сейчас стоять в тренировке
+    # или в чате с тренером в боте: кэши весов, черновик программы и
+    # припаркованные «555 кг? да/нет» лежат в FSM, а не в базе, и без этого
+    # продолжали бы отвечать в старой единице. Тот же пересчёт, что у кнопки
+    # в handlers.settings (общий модуль); никогда не бросает.
+    user = await db.get_user(user_id)
+    if user is not None and user["telegram_linked"]:
+        await fsm_unit_rescale.rescale_user_state(user_id, factor)
     await achievement_sync.resync(user_id)
 
 
@@ -275,7 +285,14 @@ async def update_settings(request: Request) -> JSONResponse:
         if not _try_claim_converting(user_id):
             raise ApiError(409, "unit_conversion_in_progress", "a unit switch is already running")
         try:
-            await _apply_unit_change(user_id, new_unit)
+            # `user` прочитан до `await _json_body` и до захвата флага: повтор
+            # того же PATCH (офлайн-очередь, ретрай на таймауте) успевал
+            # увидеть старую единицу, дождаться, пока первый запрос закончит
+            # и отпустит флаг, и пересчитать всю историю второй раз. Под
+            # флагом единица перечитывается — уже переключённую не трогаем.
+            fresh = await db.get_user(user_id)
+            if fresh is not None and fresh["unit"] != new_unit:
+                await _apply_unit_change(user_id, new_unit)
         finally:
             _converting.discard(user_id)
 

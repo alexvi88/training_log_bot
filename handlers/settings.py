@@ -14,6 +14,7 @@ import achievement_sync
 import config
 import csv_export
 import db
+import fsm_unit_rescale
 import i18n
 import keyboards
 import ui
@@ -230,48 +231,6 @@ async def settings_unit_confirm(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _rescale_active_workout_weight_cache(state: FSMContext, factor: float) -> None:
-    """Rescale the in-progress workout's FSM weight caches by the same factor
-    used on the DB, so a unit switch mid-workout doesn't leave them stuck in
-    the old unit.
-
-    `db.scale_user_set_weights` only touches rows already on disk — but
-    `last_by_exercise` (carry-forward for bare "8" input), `last_session_sets`
-    (the "в прошлый раз" hint), `weight_steps` (progression step) and
-    `confirmed_weights` (the "555кг? да/нет" answer) are cached in FSM state
-    for the exercises already open this session, and without this they'd keep
-    answering in the unit the user just switched away from — e.g. "8" would
-    carry forward 100 as if it were still kg right after switching to lb.
-    """
-    data = await state.get_data()
-    updates: dict = {}
-
-    last_by = data.get("last_by_exercise")
-    if last_by:
-        updates["last_by_exercise"] = {
-            ex_id: (weight * factor, reps) for ex_id, (weight, reps) in last_by.items()
-        }
-
-    last_session_sets = data.get("last_session_sets")
-    if last_session_sets:
-        updates["last_session_sets"] = {
-            ex_id: [(weight * factor, reps, rpe) for weight, reps, rpe in sets]
-            for ex_id, sets in last_session_sets.items()
-        }
-
-    draft = data.get("ai_program_draft")
-    if draft and db.scale_draft_progression_steps(draft, factor):
-        updates["ai_program_draft"] = draft
-
-    for key in ("weight_steps", "confirmed_weights"):
-        values = data.get(key)
-        if values:
-            updates[key] = {ex_id: value * factor for ex_id, value in values.items()}
-
-    if updates:
-        await state.update_data(**updates)
-
-
 @router.callback_query(F.data == "settings:unityes")
 async def settings_unit(callback: CallbackQuery, state: FSMContext):
     """Claims `_converting` before the first `await`: two fast taps on
@@ -296,8 +255,13 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
         # И в ещё не сохранённом черновике тренера — и в том, что ждёт «Забрать»
         # в приложении (ai_program_drafts), и в том, что висит в этом чате (FSM).
         await db.scale_ai_program_draft_steps(user_id, factor)
+        # Кнопки «↩️ Отменить» тренера в приложении (ai_undo_actions): откат
+        # удалённого взвешивания хранит сам вес.
+        await db.scale_ai_undo_actions(user_id, factor)
         await db.update_user(user_id, unit=new_unit)
-        await _rescale_active_workout_weight_cache(state, factor)
+        # Кэши открытой тренировки, черновик и припаркованные вопросы в FSM
+        # этого чата — общий с PATCH /v1/settings пересчёт.
+        await fsm_unit_rescale.rescale_state(state, factor)
         # Badge thresholds are in kilograms and the stored weights just changed unit,
         # so what the user qualifies for has to be recomputed both ways — resync
         # revokes as well as awards, unlike the award-only path used at finish time.

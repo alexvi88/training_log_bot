@@ -641,6 +641,72 @@ def localized_program_day_name(key: str, day_index: int, lang: str) -> str:
     return i18n.t_in(lang, f"program.{key}.day.{day_index}.name")
 
 
+# Прежние каталожные тексты программ — те, что уже лежат в базе у копий,
+# снятых до правки каталога (коммит f3c805c: «Верх / Низ — 4 дня» → «Верх /
+# Низ», описания fullbody3/strength5x5/upperlower/ppl). Копия — снимок текста
+# на момент «➕ Добавить себе», и без этой таблицы она перестала бы считаться
+# «нетронутой»: смена языка её бы не переводила (db.relocalize_catalog_copies),
+# а проверка «уже есть такая программа» по новому имени её бы не нашла и
+# завела дубль. Старое имя/описание ведёт на ТЕКУЩИЙ текст того же (key, lang)
+# — им db._migrate_legacy_catalog_program_texts переписывает такие копии.
+# Правишь каталожное имя или описание — допиши сюда прежний текст.
+LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
+    ("upperlower", "ru"): {
+        "name": ("Верх / Низ — 4 дня",),
+        "description": (
+            "Тело делится на верх и низ, каждый прорабатывается дважды в неделю. "
+            "Больше объёма на группу, чем в full body, но восстановиться проще, "
+            "чем в сплите на каждый день. Если вечеров всего два — гоняй те же "
+            "два дня один раз за неделю.",
+        ),
+    },
+    ("upperlower", "en"): {
+        "name": ("Upper / Lower — 4 Days",),
+    },
+    ("fullbody3", "ru"): {
+        "description": (
+            "Классика для старта. Три похожие тренировки на всё тело за неделю "
+            "(например пн/ср/пт). Базовые движения, минимум изоляции — быстро "
+            "ставишь технику и прибавляешь в силе.",
+        ),
+    },
+    ("strength5x5", "ru"): {
+        "description": (
+            "Пять подходов по пять, три больших движения за тренировку, "
+            "чередуешь день A и день B: A-B-A на одной неделе, B-A-B на "
+            "следующей. Изоляции тут нет намеренно — весь смысл в том, чтобы "
+            "каждую тренировку добавлять на гриф по 2.5 кг, пока добавляется.",
+        ),
+    },
+    ("strength5x5", "en"): {
+        "description": (
+            "Five sets of five, three big lifts a session, alternating day A and "
+            "day B: A-B-A one week, B-A-B the next. No isolation on purpose — the "
+            "whole point is adding 2.5kg to the bar every session, for as long as "
+            "it keeps going up.",
+        ),
+    },
+    ("ppl", "ru"): {
+        "description": (
+            "Push / Pull / Legs. Тренировки бьются по функции: жимовые мышцы, "
+            "тянущие мышцы и ноги. Гоняешь по кругу 3 или 6 раз в неделю — "
+            "гибко под твой график.",
+        ),
+    },
+}
+
+
+def legacy_program_texts(key: str, field: str) -> set[str]:
+    """Все прежние написания поля `field` ("name"/"description") программы
+    `key` на любом языке — см. LEGACY_PROGRAM_TEXTS."""
+    return {
+        text
+        for (legacy_key, _lang), fields in LEGACY_PROGRAM_TEXTS.items()
+        if legacy_key == key
+        for text in fields.get(field, ())
+    }
+
+
 # Схема подходов («3×8–12») почти везде language-neutral: цифры, «×» и тире
 # читаются одинаково. Исключение — планка и прочее «на время», где к схеме
 # приписана единица: «3×30–60 сек».

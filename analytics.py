@@ -8,6 +8,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+import config
 import i18n
 
 # RPE говорит, сколько повторов осталось в запасе: @9 — ещё один, @8 — два.
@@ -597,7 +598,17 @@ def _reps_holding_e1rm(
 # значит и одна граница того, что он готов предложить, а не по одной на
 # каждого, кто в состоянии дозаписать колонку в БД напрямую.
 PROGRESSION_MIN_STEP = 0.25
+# Потолок — в килограммах: шаг хранится в единицах пользователя, и одно число
+# на обе единицы давало атлету в фунтах потолок в 25 lb (≈11 кг) — вдвое уже,
+# чем в кг. Для фунтов — тот же физический потолок (progression_max_step).
 PROGRESSION_MAX_STEP = 25.0
+
+
+def progression_max_step(unit: str) -> float:
+    """Верхняя граница шага прогрессии в единицах пользователя."""
+    if unit == "lb":
+        return round(PROGRESSION_MAX_STEP * config.LB_PER_KG, 2)
+    return PROGRESSION_MAX_STEP
 # Верх диапазона повторов у явного правила — тот же потолок, что у схемы
 # подходов программы (ai_trainer.PROGRAM_MAX_REPS): невалидный reps_top не
 # должен требовать от человека забега на сотни повторов в одном подходе.
@@ -654,7 +665,7 @@ def suggest_progression(
     rule_name = (rule or {}).get("rule")
     rule_step = _positive_number((rule or {}).get("step"))
     if rule_step is not None:
-        rule_step = max(PROGRESSION_MIN_STEP, min(rule_step, PROGRESSION_MAX_STEP))
+        rule_step = max(PROGRESSION_MIN_STEP, min(rule_step, progression_max_step(unit)))
     reps_top = _positive_int((rule or {}).get("reps_top"))
     if reps_top is not None:
         reps_top = min(reps_top, PROGRESSION_MAX_REPS_TOP)

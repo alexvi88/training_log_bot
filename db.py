@@ -36,10 +36,12 @@ from seed_data import (
     ABS_GROUP_NAME,
     BODYWEIGHT_TEMPLATES,
     EXERCISE_TEMPLATES,
+    LEGACY_PROGRAM_TEXTS,
     MUSCLE_GROUP_PRESETS,
     PROGRAM_BY_KEY,
     canonical_exercise_name,
     canonical_muscle_group_name,
+    legacy_program_texts,
     localized_exercise_name,
     localized_program_day_name,
     localized_program_description,
@@ -1691,7 +1693,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 async def _run_one_shot_migrations() -> None:
@@ -1720,6 +1722,8 @@ async def _run_one_shot_migrations() -> None:
         await _backfill_bodyweight_load()
     if version < 6:
         await _move_default_abs_exercises()
+    if version < 7:
+        await _migrate_legacy_catalog_program_texts()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -1806,6 +1810,53 @@ async def _move_default_abs_exercises() -> None:
         "_move_default_abs_exercises: moved %s exercises, merged %s own abs groups",
         len(to_move), len(own_abs),
     )
+
+
+async def _migrate_legacy_catalog_program_texts() -> None:
+    """Каталожные копии программ со старым текстом из каталога → текущий.
+
+    Копия программы — снимок имени и описания на момент «➕ Добавить себе».
+    Когда каталог переименовал «Верх / Низ — 4 дня» в «Верх / Низ», старые
+    копии остались под прежним именем, и проверка «уже есть такая программа»
+    (find_program_by_name по текущему имени — в боте и в /v1) их больше не
+    находила: второй тап заводил дубль. Переписываем только то, что всё ещё
+    дословно совпадает с прежним каталожным текстом (seed_data.
+    LEGACY_PROGRAM_TEXTS) и помечено source='catalog' с тем же source_ref:
+    своё имя, данное человеком, не трогаем. Занятое новое имя (у атлета уже
+    есть своя «Верх / Низ») — пропуск, а не слияние, как в rename_program_by_id.
+    """
+    renamed = described = 0
+    for (key, lang), fields in LEGACY_PROGRAM_TEXTS.items():
+        if key not in PROGRAM_BY_KEY:
+            continue
+        new_name = localized_program_name(key, lang)
+        for old_name in fields.get("name", ()):
+            cur = await _conn.execute(
+                "SELECT id FROM programs WHERE source = 'catalog' AND source_ref = ? AND name = ?",
+                (key, old_name),
+            )
+            for row in await cur.fetchall():
+                try:
+                    await _conn.execute(
+                        "UPDATE programs SET name = ?, name_key = ? WHERE id = ?",
+                        (new_name, _program_key(new_name), row["id"]),
+                    )
+                    renamed += 1
+                except aiosqlite.IntegrityError:
+                    continue
+        new_description = _catalog_program_description(key, lang)
+        for old_description in fields.get("description", ()):
+            cur = await _conn.execute(
+                "UPDATE programs SET description = ? "
+                "WHERE source = 'catalog' AND source_ref = ? AND description = ?",
+                (new_description, key, clean_program_description(old_description)),
+            )
+            described += cur.rowcount or 0
+    await _conn.commit()
+    if renamed or described:
+        logger.info(
+            "legacy catalog program texts: renamed %s, descriptions %s", renamed, described
+        )
 
 
 async def _backfill_bodyweight_load() -> None:
@@ -2362,14 +2413,20 @@ async def relocalize_catalog_copies(user_id: int, lang: str) -> dict[str, int]:
         wanted = localized_program_name(key, lang)
         if (
             program["name"] != wanted
-            and program["name"] in _catalog_spellings(localized_program_name, key)
+            and (
+                program["name"] in _catalog_spellings(localized_program_name, key)
+                or program["name"] in legacy_program_texts(key, "name")
+            )
             and await rename_program_by_id(program["id"], wanted)
         ):
             counts["programs"] += 1
 
         wanted_description = _catalog_program_description(key, lang)
-        if program["description"] != wanted_description and program["description"] in _catalog_spellings(
-            _catalog_program_description, key
+        if program["description"] != wanted_description and (
+            program["description"] in _catalog_spellings(_catalog_program_description, key)
+            or program["description"] in {
+                clean_program_description(text) for text in legacy_program_texts(key, "description")
+            }
         ):
             await set_program_description(program["id"], wanted_description)
             counts["descriptions"] += 1
@@ -9915,26 +9972,84 @@ async def scale_ai_program_draft_steps(telegram_id: int, factor: float) -> None:
     """То же, что scale_progression_steps, но для неподобранного черновика
     программы из /ai/ask (таблица ai_program_drafts). id и created_at не
     трогаем: карточка в чате приложения ссылается на черновик по id, и после
-    смены единиц «Забрать» под ней должно продолжать работать."""
-    cur = await conn().execute(
-        "SELECT draft_json FROM ai_program_drafts WHERE telegram_id = ?", (telegram_id,)
-    )
-    row = await cur.fetchone()
-    if row is None:
-        return
-    try:
-        draft = json.loads(row["draft_json"])
-    except (TypeError, ValueError):
-        # get_ai_program_draft такой ряд и так отдаёт как «черновика нет».
-        return
-    if not scale_draft_progression_steps(draft, factor):
-        return
+    смены единиц «Забрать» под ней должно продолжать работать.
+
+    Чтение и запись — под одним `_write_lock`, а UPDATE ещё и по draft_id:
+    между чтением снаружи замка и слепым UPDATE по telegram_id успевал лечь
+    НОВЫЙ черновик (следующий ответ тренера), и его молча затирал пересчитанный
+    старый."""
     async with _write_lock:
+        cur = await conn().execute(
+            "SELECT draft_id, draft_json FROM ai_program_drafts WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return
+        try:
+            draft = json.loads(row["draft_json"])
+        except (TypeError, ValueError):
+            # get_ai_program_draft такой ряд и так отдаёт как «черновика нет».
+            return
+        if not scale_draft_progression_steps(draft, factor):
+            return
         await conn().execute(
-            "UPDATE ai_program_drafts SET draft_json = ? WHERE telegram_id = ?",
-            (json.dumps(draft, ensure_ascii=False), telegram_id),
+            "UPDATE ai_program_drafts SET draft_json = ? WHERE telegram_id = ? AND draft_id = ?",
+            (json.dumps(draft, ensure_ascii=False), telegram_id, row["draft_id"]),
         )
         await conn().commit()
+
+
+def scale_ai_undo_weights(undo: Any, factor: float) -> bool:
+    """Пересчитать вес в описании отката тренера («↩️ Отменить» под ответом).
+
+    Откат удаления взвешивания (`bodyweight_restore`) хранит сам вес — в
+    единицах, что были на момент удаления. После смены кг↔lb все взвешивания
+    уже пересчитаны (scale_bodyweight_logs), а описание — нет: тап по кнопке
+    вернул бы «80» в фунтах вместо 176 lb. Сложенный откат (`batch`) несёт
+    такие же описания в `items`. Меняет `undo` на месте, True — если поменял.
+    """
+    if not isinstance(undo, dict):
+        return False
+    kind = undo.get("kind")
+    if kind == "batch":
+        changed = False
+        for item in undo.get("items") or []:
+            changed = scale_ai_undo_weights(item, factor) or changed
+        return changed
+    if kind == "bodyweight_restore":
+        weight = undo.get("weight")
+        if isinstance(weight, (int, float)) and not isinstance(weight, bool):
+            # ROUND(…, 1) — как у scale_bodyweight_logs: откат вернёт ровно
+            # то число, что стоит у соседних, уже пересчитанных взвешиваний.
+            undo["weight"] = round(weight * factor, 1)
+            return True
+    return False
+
+
+async def scale_ai_undo_actions(telegram_id: int, factor: float) -> int:
+    """То же для откатов приложения (таблица ai_undo_actions) — см.
+    scale_ai_undo_weights. Возвращает, сколько описаний пересчитали."""
+    changed = 0
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT id, payload_json FROM ai_undo_actions WHERE telegram_id = ?", (telegram_id,)
+        )
+        for row in await cur.fetchall():
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                continue
+            if not scale_ai_undo_weights(payload, factor):
+                continue
+            await conn().execute(
+                "UPDATE ai_undo_actions SET payload_json = ? WHERE id = ?",
+                (json.dumps(payload, ensure_ascii=False), row["id"]),
+            )
+            changed += 1
+        if changed:
+            await conn().commit()
+    return changed
 
 
 async def record_push(telegram_id: int, category: str, text: str, sent_on: str) -> None:
