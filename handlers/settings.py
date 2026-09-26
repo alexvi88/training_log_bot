@@ -259,6 +259,10 @@ async def _rescale_active_workout_weight_cache(state: FSMContext, factor: float)
             for ex_id, sets in last_session_sets.items()
         }
 
+    draft = data.get("ai_program_draft")
+    if draft and db.scale_draft_progression_steps(draft, factor):
+        updates["ai_program_draft"] = draft
+
     for key in ("weight_steps", "confirmed_weights"):
         values = data.get(key)
         if values:
@@ -289,6 +293,9 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
         # Шаг прогрессии в программах хранится в единицах пользователя, как и веса
         # подходов, — без пересчёта «+2.5 кг» после переключения читалось бы как «+2.5 lb».
         await db.scale_progression_steps(user_id, factor)
+        # И в ещё не сохранённом черновике тренера — и в том, что ждёт «Забрать»
+        # в приложении (ai_program_drafts), и в том, что висит в этом чате (FSM).
+        await db.scale_ai_program_draft_steps(user_id, factor)
         await db.update_user(user_id, unit=new_unit)
         await _rescale_active_workout_weight_cache(state, factor)
         # Badge thresholds are in kilograms and the stored weights just changed unit,
