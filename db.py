@@ -2950,8 +2950,10 @@ async def count_user_exercises_in_group(user_id: int, group_id: int) -> int:
 
 
 async def list_user_exercises(
-    user_id: int, limit: Optional[int] = None, offset: int = 0
+    user_id: int, limit: Optional[int] = None, offset: int = 0, *, ungrouped_only: bool = False
 ) -> list[aiosqlite.Row]:
+    """ungrouped_only: только упражнения без группы мышц (primary_group_id IS
+    NULL) — см. count_user_exercises."""
     sql = (
         "SELECT e.*, "
         "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
@@ -2960,6 +2962,7 @@ async def list_user_exercises(
         "FROM exercises e "
         "WHERE e.user_id = ? "
         "AND e.is_archived = 0 AND e.is_template = 0 "
+        f"{'AND e.primary_group_id IS NULL ' if ungrouped_only else ''}"
         f"AND {_VISIBLE_EXERCISE_FILTER} "
         "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
     )
@@ -3120,9 +3123,16 @@ async def list_common_followups(
     return await cur.fetchall()
 
 
-async def count_user_exercises(user_id: int) -> int:
+async def count_user_exercises(user_id: int, *, ungrouped_only: bool = False) -> int:
+    """ungrouped_only: только упражнения без группы мышц. Такие заводятся мимо
+    выбора группы — «➕ Создать» из поиска в живом трекере, «Без группы» в
+    пикере приложения, импорт CSV с нераспознанным названием, — и ни в одной
+    группе каталога их не видно, хотя их подходы недельный объём честно
+    складывает в строку «БЕЗ ГРУППЫ». По этому счётчику «Мои упражнения»
+    решают, показывать ли кнопку, за которой их можно найти и разложить."""
     cur = await conn().execute(
         "SELECT COUNT(*) FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
+        f"{'AND e.primary_group_id IS NULL ' if ungrouped_only else ''}"
         f"AND {_VISIBLE_EXERCISE_FILTER}",
         (user_id,),
     )

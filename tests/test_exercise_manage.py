@@ -912,3 +912,54 @@ async def test_long_name_warning_declines_symbol_count_correctly():
     assert reason_82 == "длинновато для упражнения (82 символа)"
     reason_85 = exercises._suspicious_name_reason("я" * 85)
     assert reason_85 == "длинновато для упражнения (85 символов)"
+
+
+# ---------- упражнения без группы ----------
+
+
+def _buttons(markup) -> dict[str, str]:
+    return {b.callback_data: b.text for row in markup.inline_keyboard for b in row}
+
+
+async def test_ungrouped_exercises_get_their_own_button_in_my_exercises(fresh_db, user_id, monkeypatch):
+    """Упражнение, заведённое мимо выбора группы (поиск → «➕ Создать» в живом
+    трекере, «Без группы» в пикере приложения, импорт CSV), не лежит ни в одной
+    группе каталога — а его подходы сводка показывает строкой «БЕЗ ГРУППЫ».
+    Владелец видел там 8 подходов и не находил в «Моих упражнениях» ни одного
+    такого упражнения: кнопки к ним не было, назначить группу было негде."""
+    db = fresh_db
+    triceps = await db.create_muscle_group(user_id, "Трицепс")
+    await db.create_exercise(user_id, "tric block - 1arm - cuff", triceps)
+    loose = await db.create_exercise(user_id, "TRIC ROPE - CABLE", None)
+
+    text, kb = await exercises._groups_payload(user_id)
+    assert _buttons(kb).get("exm:grp:none") == "БЕЗ ГРУППЫ"
+
+    edits = []
+
+    async def fake_safe_edit(target, text, **kwargs):
+        edits.append((text, kwargs.get("reply_markup")))
+
+    monkeypatch.setattr(ui, "safe_edit", fake_safe_edit)
+    state = await _make_state(user_id)
+    await state.set_state(ExerciseManage.picking_group)
+    await exercises.exm_pick_group(_make_exercise_callback(user_id, "exm:grp:none"), state)
+
+    shown_text, shown_kb = edits[-1]
+    assert "БЕЗ ГРУППЫ" in shown_text
+    assert set(_buttons(shown_kb)) >= {f"exm:ex:{loose}"}
+    assert not any(t == "tric block - 1arm - cuff" for t in _buttons(shown_kb).values())
+
+    # «Все» после «Без группы» — снова весь каталог, флаг не залипает.
+    await state.set_state(ExerciseManage.picking_group)
+    await exercises.exm_pick_group(_make_exercise_callback(user_id, "exm:grp:all"), state)
+    assert "tric block - 1arm - cuff" in _buttons(edits[-1][1]).values()
+
+
+async def test_no_ungrouped_button_when_every_exercise_has_a_group(fresh_db, user_id):
+    db = fresh_db
+    triceps = await db.create_muscle_group(user_id, "Трицепс")
+    await db.create_exercise(user_id, "tric block - 1arm - cuff", triceps)
+
+    _, kb = await exercises._groups_payload(user_id)
+    assert "exm:grp:none" not in _buttons(kb)

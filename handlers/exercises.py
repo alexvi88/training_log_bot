@@ -47,6 +47,12 @@ async def _groups_payload(user_id: int):
     b = InlineKeyboardBuilder()
     for g in groups:
         b.button(text=_group_display_name(g["name"]), callback_data=f"exm:grp:{g['id']}")
+    # Упражнения без группы ни в одну кнопку выше не попадают, а их подходы
+    # сводка складывает в строку «БЕЗ ГРУППЫ» — без этой кнопки человек видел
+    # там цифру и не находил в каталоге ни одного такого упражнения, чтобы
+    # назначить ему группу. Кнопка есть, только пока такие упражнения есть.
+    if await db.count_user_exercises(user_id, ungrouped_only=True):
+        b.button(text=i18n.t("dashboard.ungrouped_label"), callback_data="exm:grp:none")
     b.button(text=i18n.t("btn.all_templates"), callback_data="exm:grp:all")
     b.adjust(2)
     b.row(InlineKeyboardButton(text=i18n.t("exercises.btn.new_group"), callback_data="exm:newgroup"))
@@ -75,8 +81,11 @@ async def exm_back(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(ExerciseManage.picking_group), F.data.startswith("exm:grp:"))
 async def exm_pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
-    group_id = None if raw == "all" else int(raw)
-    await state.update_data(exm_group_id=group_id, exm_page=0)
+    group_id = None if raw in ("all", "none") else int(raw)
+    # «none» — упражнения без группы. exm_group_id остаётся None, как у «Все»:
+    # новое упражнение отсюда так же спросит группу следом, а не заведётся
+    # ещё одним безгрупповым.
+    await state.update_data(exm_group_id=group_id, exm_ungrouped=raw == "none", exm_page=0)
     await _show_exercise_list(callback, state)
 
 
@@ -136,11 +145,13 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     group_id = data.get("exm_group_id")
     page = data.get("exm_page", 0)
     offset = page * config.RECENT_EXERCISES_LIMIT
+    ungrouped = group_id is None and bool(data.get("exm_ungrouped"))
     if group_id is None:
         exercises = await db.list_user_exercises(
-            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset,
+            ungrouped_only=ungrouped,
         )
-        total = await db.count_user_exercises(callback.from_user.id)
+        total = await db.count_user_exercises(callback.from_user.id, ungrouped_only=ungrouped)
         group = None
     else:
         exercises = await db.list_user_exercises_in_group(
@@ -174,7 +185,12 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
         InlineKeyboardButton(text=i18n.t("exercises.btn.archive"), callback_data="exm:archivelist"),
         InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:backgroups"),
     )
-    title = _group_display_name(group["name"]) if group is not None else i18n.t("exercises.all_title")
+    if group is not None:
+        title = _group_display_name(group["name"])
+    elif ungrouped:
+        title = i18n.t("dashboard.ungrouped_label")
+    else:
+        title = i18n.t("exercises.all_title")
     title_html = f"<b>{escape(title)}</b>"
     if exercises:
         text = f"{title_html}\n\n{i18n.t('exercises.list.intro')}"
