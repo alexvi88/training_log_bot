@@ -444,12 +444,14 @@ async def test_progress_entry_shows_groups_once_a_workout_exists(fresh_db, user_
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert any(cb.startswith("prog:grp:") for cb in cbs)
     assert "menu:start_workout" not in cbs
+    # Достижения — в меню и на карточке тренировки, не на экране роста движений.
+    assert not any(cb.startswith("menu:achievements") for cb in cbs)
 
 
 async def test_achievements_back_button_follows_the_entry_point(fresh_db, user_id):
-    """Слепая зона: у достижений два входа — главное меню и экран прогресса, — а
-    «назад» всегда вело в прогресс. Открывший из меню оказывался на экране,
-    которого не открывал."""
+    """Слепая зона: «назад» с достижений всегда вело в прогресс, и открывший их
+    из меню оказывался на экране, которого не открывал. С прогресса кнопку
+    убрали, но старые экраны с «menu:achievements:prog» живут в чатах."""
     from handlers import history
 
     for data, expected in (
