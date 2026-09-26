@@ -56,6 +56,7 @@ import api_v1_media
 import api_v1_programs
 import api_v1_progress
 import api_v1_sharing
+import api_v1_support
 import api_v1_templates
 import api_v1_voice
 import apple_signin
@@ -356,6 +357,12 @@ async def me(request: Request) -> JSONResponse:
             # чтобы друг с iPhone попал в App Store, а не только в бота.
             # null — не задана, и строки в тексте шаринга нет вовсе.
             "app_store_url": config.app_store_url(),
+            # Поддержка (api_v1_support.py): админ видит в приложении список
+            # веток, остальные — свою ветку. support_unread — бейдж: админу
+            # все непрочитанные реплики атлетов, атлету — непрочитанные
+            # ответы поддержки. Оба поля новые, старые сборки их не читают.
+            "is_support_admin": api_v1_support.is_support_admin(user_id),
+            "support_unread": await api_v1_support.unread_for(user_id),
         }
     )
 
@@ -1960,6 +1967,7 @@ routes += (
     + api_v1_sharing.routes
     + api_v1_media.routes
     + api_v1_feedback.routes
+    + api_v1_support.routes
     + api_v1_funnel.routes
     + api_v1_dashboard.routes
     + api_v1_progress.routes

@@ -94,3 +94,27 @@ def test_every_page_links_to_the_other_and_the_other_language():
         assert f'href="/privacy?lang={lang}"' in terms
         assert f'href="/privacy?lang={other}"' in privacy
         assert f'href="/terms?lang={other}"' in terms
+
+
+async def test_support_page_is_public_in_both_languages():
+    ru = await _get("/support")
+    assert ru.status_code == 200
+    assert '<html lang=ru>' in ru.text
+    assert "«Поддержка и отзыв»" in ru.text
+    assert "t.me" not in ru.text
+
+    en = await _get("/support?lang=en")
+    assert '<html lang=en>' in en.text
+    assert "Support &amp; feedback" in en.text
+    assert "t.me" not in en.text
+    body = en.text.replace("Русский", "")
+    assert not any("а" <= ch.lower() <= "я" or ch in "ёЁ" for ch in body)
+
+
+def test_support_page_shows_email_only_when_set(monkeypatch):
+    for lang in legal_pages.LANGS:
+        assert "mailto:" not in legal_pages.render(legal_pages.SUPPORT_PAGE, lang)
+    monkeypatch.setattr(legal_pages, "CONTACT_EMAIL", "coach@example.com")
+    for lang in legal_pages.LANGS:
+        page = legal_pages.render(legal_pages.SUPPORT_PAGE, lang)
+        assert '<li>E-mail: <a href="mailto:coach@example.com">' in page

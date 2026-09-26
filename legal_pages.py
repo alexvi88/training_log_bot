@@ -1,5 +1,5 @@
 """Публичные страницы `/privacy` и `/terms` — политика конфиденциальности и
-условия использования.
+условия использования, — и `/support`: как связаться с поддержкой.
 
 Зачем: App Store (Guideline 5.1.1(i)) требует публичный URL политики — он
 вписывается в App Store Connect — и ссылку на неё внутри приложения. Страницы
@@ -39,12 +39,18 @@ import i18n
 _DIR = Path(__file__).resolve().parent / "legal"
 
 PAGES = ("privacy", "terms")
+# Страница «как связаться с поддержкой» — рядом с юридическими, тот же вид и
+# тот же выбор языка, но без даты вступления в силу: это не документ, а
+# справка (ссылка на неё — Support URL в App Store Connect).
+SUPPORT_PAGE = "support"
+ALL_PAGES = PAGES + (SUPPORT_PAGE,)
 LANGS = ("ru", "en")
 
 # Контактный e-mail для страниц. Пустой нарочно: владелец адрес ещё не выбрал,
 # а выдумывать его нельзя. Пока пусто — связь только через «Отзыв» в
 # приложении и /feedback в боте (они уже в тексте). Впишешь адрес — он сам
-# появится строкой в разделе «Связь» обеих страниц на обоих языках.
+# появится строкой в разделе «Связь» обеих страниц и на странице поддержки,
+# на обоих языках.
 CONTACT_EMAIL = ""
 
 _EMAIL_MARKER = "<!-- contact-email -->"
@@ -96,8 +102,9 @@ def render(page: str, lang: str) -> str:
     if CONTACT_EMAIL:
         address = escape(CONTACT_EMAIL)
         link = f'E-mail: <a href="mailto:{address}">{address}</a>'
-        # В политике «Связь» — список, в условиях — одна строка текстом.
-        snippet = f"<li>{link}</li>" if page == "privacy" else f" {link}."
+        # В политике «Связь» и на странице поддержки — список, в условиях —
+        # одна строка текстом.
+        snippet = f"<li>{link}</li>" if page in ("privacy", SUPPORT_PAGE) else f" {link}."
         body = body.replace(_EMAIL_MARKER, snippet)
     match = _H1.search(body)
     title = re.sub(r"<[^>]+>", "", match.group(1)) if match else page
@@ -131,8 +138,13 @@ async def terms_route(request: Request) -> HTMLResponse:
     return _response("terms", request)
 
 
+async def support_route(request: Request) -> HTMLResponse:
+    return _response(SUPPORT_PAGE, request)
+
+
 def register_routes(server: Any) -> None:
     """Повесить страницы на приложение MCP-сервера. `custom_route` кладёт роут
     без требования токена — страницы публичные по смыслу."""
     server.custom_route("/privacy", methods=["GET"])(privacy_route)
     server.custom_route("/terms", methods=["GET"])(terms_route)
+    server.custom_route("/support", methods=["GET"])(support_route)

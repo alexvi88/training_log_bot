@@ -24,6 +24,9 @@ SERVICE_TABLES = {
     "game_results",
     "mcp_tokens", "oauth_auth_codes", "oauth_link_codes", "oauth_tokens",
     "push_rotation", "push_tokens", "pushes", "set_write_attempts", "user_events",
+    # Переписка с поддержкой переезжает целиком (UNIQUE нет), но слиянию не
+    # мешает: написать в поддержку до привязки Telegram — не «своя история».
+    "support_messages",
 }
 
 

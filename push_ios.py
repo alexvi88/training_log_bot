@@ -234,6 +234,10 @@ SCREEN_WORKOUT = "workout"
 SCREEN_DASHBOARD = "dashboard"
 SCREEN_ACHIEVEMENTS = "achievements"
 SCREEN_EXERCISE_PROGRESS = "exercise_progress"
+# Переписка с поддержкой (api_v1_support.py): атлету — его ветка («Профиль» →
+# «Поддержка и отзыв»), админу — ветка конкретного атлета с его id.
+SCREEN_SUPPORT = "support"
+SCREEN_SUPPORT_THREAD = "support_thread"
 
 ROUTE_SCREEN_BY_CATEGORY: dict[str, str] = {
     **{category: SCREEN_WORKOUT for category in push_texts.SKIP_CATEGORY_BY_DAY.values()},
@@ -265,3 +269,15 @@ def ios_route(
         }
     screen = ROUTE_SCREEN_BY_CATEGORY.get(category)
     return {"screen": screen} if screen else None
+
+
+def support_route() -> dict:
+    """Маршрут банера «ответ поддержки» атлету: `{"screen": "support"}`."""
+    return {"screen": SCREEN_SUPPORT}
+
+
+def support_thread_route(user_id: int) -> dict:
+    """Маршрут банера админу о новой реплике: `{"screen": "support_thread",
+    "user_id": <id атлета>}` — id числом (у app-only аккаунта он
+    отрицательный, см. db.create_app_only_user)."""
+    return {"screen": SCREEN_SUPPORT_THREAD, "user_id": int(user_id)}

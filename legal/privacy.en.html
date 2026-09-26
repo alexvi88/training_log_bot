@@ -11,6 +11,7 @@
   <li><b>Body weight and food diary.</b> Weight entries; what you ate and the estimated calories and macros.</li>
   <li><b>Training profile.</b> Experience, goal, training days per week, equipment and limitations. You write the limitations yourself, and they may include health information — an injury, for example. Only write what you are comfortable sharing with a coach.</li>
   <li><b>AI coach chat.</b> Your questions, the answers, and whatever the coach logged at your request.</li>
+  <li><b>Support messages.</b> Messages and screenshots you send via “Support &amp; feedback” (or as feedback), and the service owner’s replies.</li>
   <li><b>Photos and video.</b> Your own exercise photos are stored on the server. A photo you send the coach in the app is kept in the chat history. A set video is not stored in full: after the review, a single preview frame is kept for the chat history. Voice messages are sent for speech recognition; only the recognized text is saved.</li>
   <li><b>Notifications.</b> The Apple Push Notification service (APNs) device token, to send push notifications to your iPhone.</li>
   <li><b>Service data.</b> Access tokens for the app and for AI clients you connected (MCP); an activity log (which buttons were tapped and what was typed); the cost of AI requests; app crash reports from iOS (MetricKit: app and iOS version, iPhone model, call stack — no diary content; they are sent even before you sign in); the link tag you arrived through and who invited you; share links you created; before you sign in to the app — which onboarding step this install reached (a random ID the app creates itself, not tied to your account or your address); if you supported the project with Telegram Stars — the payment ID and amount.</li>
@@ -28,7 +29,7 @@
   <li><b>Novita AI (Qwen3-VL model)</b> — technique review: receives the set video you sent for review.</li>
   <li><b>OpenAI</b> — speech recognition: receives your voice message when you log a set or ask a question by voice.</li>
   <li><b>Apple</b> — Sign in with Apple and push delivery (APNs).</li>
-  <li><b>Telegram</b> — if you use the bot, your conversation with it goes through Telegram. Feedback from the bot and the app is delivered to the service owner on Telegram.</li>
+  <li><b>Telegram</b> — if you use the bot, your conversation with it goes through Telegram. Feedback from the bot and support messages from the app are delivered to the service owner on Telegram.</li>
   <li><b>Fly.io</b> — hosting: the server and database run in a Fly.io data center in Frankfurt, Germany. <b>Tigris</b> — storage for the database backup.</li>
   <li><b>AI clients you connect yourself</b> (for example Claude or ChatGPT via MCP) get access to your log only after you grant it. You can revoke that access.</li>
 </ul>
@@ -48,7 +49,7 @@
   <li>In the app: Settings → “🗑 Delete account”.</li>
   <li>In the bot: “🔧 Settings” → “🗑 Delete account”.</li>
 </ul>
-<p>Deletion immediately erases everything from the database: workouts, sets, records, food, weight, programs, AI coach chat, tokens and the Apple ID link — and removes your exercise photos and AI chat photos from disk. There is one account for the bot and the app: delete it in one place and it is gone in both. Deletion cannot be undone. To keep your history, export it first with “📤 Export CSV”.</p>
+<p>Deletion immediately erases everything from the database: workouts, sets, records, food, weight, programs, AI coach chat, support messages, tokens and the Apple ID link — and removes your exercise photos, AI chat photos and support screenshots from disk. There is one account for the bot and the app: delete it in one place and it is gone in both. Deletion cannot be undone. To keep your history, export it first with “📤 Export CSV”.</p>
 <p>Signing out of the app deletes nothing — it only unlinks that device.</p>
 
 <h2>Age</h2>

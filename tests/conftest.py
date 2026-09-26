@@ -2,11 +2,20 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import config  # noqa: E402
 import db  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _support_media_dir(tmp_path, monkeypatch):
+    """Фото реплик поддержки (/feedback, /support/messages) пишутся на диск —
+    в тестах во временный каталог, а не в боевой /data."""
+    monkeypatch.setattr(config, "SUPPORT_MEDIA_DIR", str(tmp_path / "support_media"))
 
 
 @pytest_asyncio.fixture
