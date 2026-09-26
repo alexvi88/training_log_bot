@@ -66,9 +66,10 @@ async def test_workout_card_returns_png(fresh_db, client_factory):
     assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-async def test_workout_card_uses_app_theme_not_bot_theme(fresh_db, client_factory):
-    """`/v1` просит theme="app" (см. api_v1_history.get_workout_card) — эта
-    ручка отдаёт не тот же растр, что рисует бот для того же хода."""
+async def test_workout_card_uses_app_theme(fresh_db, client_factory):
+    """`/v1` просит theme="app" (см. api_v1_history.get_workout_card). С тех
+    пор как бот рисует визитку той же палитрой приложения (единый стиль
+    картинок), растр ручки совпадает с ботовым для того же хода."""
     client = await _linked_client(fresh_db, client_factory, 111)
     workout_id = await _finished_workout_with_set(111)
     user = await db.get_user(111)
@@ -76,8 +77,9 @@ async def test_workout_card_uses_app_theme_not_bot_theme(fresh_db, client_factor
     resp = await client.get(f"/workouts/{workout_id}/card")
     assert resp.status_code == 200, resp.text
 
+    app_card = await workout_card.build(workout_id, user, theme="app")
     bot_card = await workout_card.build(workout_id, user)
-    assert resp.content != bot_card.png
+    assert resp.content == app_card.png == bot_card.png
 
 
 async def test_workout_card_someone_elses_workout_is_404(fresh_db, client_factory):
