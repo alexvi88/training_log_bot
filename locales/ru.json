@@ -1063,7 +1063,7 @@
   "push.ios.newbie_nudge.title": "Первая запись ждёт",
   "push.ios.plateau.1": "ПРИВЕТ АТЛЕТ! {exercise}: вес засиделся. Пора добавить.",
   "push.ios.plateau.2": "ПРИВЕТ АТЛЕТ! {exercise}: 12+ повторов три тренировки подряд. Загружай больше.",
-  "push.ios.plateau.3": "ПРИВЕТ АТЛЕТ! {exercise} явно стал легче. Тело готово к большему.",
+  "push.ios.plateau.3": "ПРИВЕТ АТЛЕТ! {exercise}: вес явно стал легче. Тело готово к большему.",
   "push.ios.plateau.title": "Вес пора двигать",
   "push.ios.rank_near.1": "ПРИВЕТ АТЛЕТ! До «{rank}» — {missing}. Ты ближе, чем думаешь.",
   "push.ios.rank_near.2": "ПРИВЕТ АТЛЕТ! {missing} — и «{rank}» переезжает в профиль.",
