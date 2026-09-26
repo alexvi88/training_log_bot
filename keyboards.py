@@ -1372,7 +1372,9 @@ def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -
     return b.as_markup()
 
 
-def history_list_keyboard(workouts, page: int, has_next: bool, is_empty: bool = False) -> InlineKeyboardMarkup:
+def history_list_keyboard(
+    workouts, page: int, has_next: bool, is_empty: bool = False, undo_workout_id: int | None = None,
+) -> InlineKeyboardMarkup:
     """Dates only, two per row — what each session contained is spelled out in the
     message body (formatting.build_history_list), so these are just tap targets
     and don't need the full width.
@@ -1381,6 +1383,9 @@ def history_list_keyboard(workouts, page: int, has_next: bool, is_empty: bool = 
     with nothing marked on it isn't a useful escape hatch here, so it's
     replaced by the same "start a workout" way out the progress screen's own
     empty state uses (history.start_workout_button).
+
+    undo_workout_id: a workout was just deleted from here — «↩️ Вернуть» goes
+    first, right under the banner that names it (handlers.history.hist_delete).
     """
     b = InlineKeyboardBuilder()
     for w in workouts:
@@ -1399,7 +1404,12 @@ def history_list_keyboard(workouts, page: int, has_next: bool, is_empty: bool = 
         b.row(InlineKeyboardButton(text=i18n.t("btn.by_month"), callback_data="hist:cal"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.add_past_workouts"), callback_data="menu:backfill_workout"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="hist:menu"))
-    return b.as_markup()
+    markup = b.as_markup()
+    if undo_workout_id is not None:
+        markup.inline_keyboard.insert(0, [InlineKeyboardButton(
+            text=i18n.t("history.btn_undo_delete"), callback_data=f"hist:undo:{undo_workout_id}",
+        )])
+    return markup
 
 
 def history_search_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:

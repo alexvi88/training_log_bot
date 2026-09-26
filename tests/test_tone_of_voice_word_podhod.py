@@ -4,8 +4,8 @@
 - подвал карточки тренировки (`formatting.build_workout_card`), который
   видит каждый пользователь на каждой законченной тренировке и который
   уходит в PNG-картинку шеринга (`charts.render_workout_card`);
-- подтверждение удаления тренировки из истории (`handlers/history.py`,
-  `_delete_confirm_text`);
+- плашка «Удалил тренировку» над историей (`handlers/history.py`,
+  `_deleted_banner_text`);
 - творительный падеж в подтверждении «Убрать … вместе с N сетом/сетами»
   (`handlers/edit_workout.py`) — находка 24 уже чинила падеж, но оставила
   запрещённый корень «сет».
@@ -31,7 +31,7 @@ def test_workout_card_footer_says_podhod_not_set():
     assert "сет" not in footer
 
 
-async def test_delete_confirm_text_says_podhod_not_set(fresh_db, user_id):
+async def test_deleted_banner_says_podhod_not_set(fresh_db, user_id):
     gid = await fresh_db.create_muscle_group(user_id, "Ноги")
     ex_id = await fresh_db.create_exercise(user_id, "Присед", gid)
     workout_id = await fresh_db.create_finished_workout(
@@ -42,7 +42,7 @@ async def test_delete_confirm_text_says_podhod_not_set(fresh_db, user_id):
     await fresh_db.add_set(block_id, ex_id, 1, 0, 100.0, 8, None)
     workout = await db.get_workout(workout_id)
 
-    text = await history._delete_confirm_text(workout)
+    text = await history._deleted_banner_text(workout)
 
     assert "подход" in text
     assert "сет" not in text

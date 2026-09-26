@@ -46,7 +46,17 @@ HISTORY_PAGE_SIZE = 8
 
 # ---------- history ----------
 
-async def show_history_list(callback: CallbackQuery, state: FSMContext, page: int):
+async def show_history_list(
+    callback: CallbackQuery,
+    state: FSMContext,
+    page: int,
+    *,
+    banner: str | None = None,
+    undo_workout_id: int | None = None,
+    toast: str | None = None,
+):
+    """`banner`/`undo_workout_id` — плашка «Удалил …» над списком и кнопка
+    «↩️ Вернуть» сразу после удаления (см. hist_delete)."""
     await state.set_state(HistoryFlow.browsing)
     await state.update_data(history_page=page)
     user_id = callback.from_user.id
@@ -61,11 +71,14 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
         items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
         entries.append((started, names, set_count))
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
-    kb = keyboards.history_list_keyboard(items, page, has_next, is_empty=total == 0)
-    await ui.safe_edit(
-        callback, formatting.build_history_list(entries), reply_markup=kb, parse_mode="HTML"
+    kb = keyboards.history_list_keyboard(
+        items, page, has_next, is_empty=total == 0, undo_workout_id=undo_workout_id
     )
-    await callback.answer()
+    text = formatting.build_history_list(entries)
+    if banner:
+        text = f"{banner}\n\n{text}"
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer(toast)
 
 
 HISTORY_SEARCH_PAGE_SIZE = 20
@@ -449,11 +462,19 @@ async def hist_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-_DELETE_CONFIRM_SUMMARY_MAX = 120
+_DELETED_SUMMARY_MAX = 120
 
 
-async def _delete_confirm_text(workout) -> str:
-    """Names the workout about to be destroyed: date, duration and what was in it."""
+async def _deleted_banner_text(workout) -> str:
+    """Плашка над историей сразу после удаления: какая тренировка ушла — дата,
+    длительность и что в ней было — и что её можно вернуть.
+
+    Раньше удаление спрашивало «Точно?» отдельным экраном, и эти же строки
+    называли тренировку на нём. Теперь удаление сразу, а отменяет его
+    «↩️ Вернуть» (как «Удалил · Вернуть» в iOS-приложении): лишний тап платит
+    каждый, кто удаляет нарочно, а промахнувшемуся хватает кнопки. Название
+    тренировки остаётся — без него «Вернуть» непонятно к чему.
+    """
     started = dt.datetime.fromisoformat(workout["started_at"])
     header = formatting.format_date_ru(started)
     duration = await view_builder.workout_duration_seconds(workout)
@@ -470,53 +491,71 @@ async def _delete_confirm_text(workout) -> str:
                 seen.add(be["exercise_id"])
                 names.append(be["display_name"])
     summary = ", ".join(names)
-    if len(summary) > _DELETE_CONFIRM_SUMMARY_MAX:
-        summary = summary[:_DELETE_CONFIRM_SUMMARY_MAX].rstrip(" ,") + "…"
+    if len(summary) > _DELETED_SUMMARY_MAX:
+        summary = summary[:_DELETED_SUMMARY_MAX].rstrip(" ,") + "…"
 
-    lines = [f"{i18n.t('history.delete_confirm_title')}\n<b>{escape(header)}</b>"]
+    lines = [f"{i18n.t('history.deleted_title')}\n<b>{escape(header)}</b>"]
     if summary:
         # TONE_OF_VOICE.md: «подход», не «сет» — запрещённое слово словаря
         # (в английском наоборот — "set" законное слово, см. English voice).
         lines.append(f"<i>{escape(summary)} — {i18n.t('history.sets_count', n=set_count)}</i>")
-    lines.append(f"\n{i18n.t('history.delete_confirm_warning')}")
+    lines.append(i18n.t("history.deleted_undo_hint"))
     return "\n".join(lines)
 
 
-@router.callback_query(F.data.startswith("hist:del:"))
-async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
-    workout_id = int(callback.data.split(":")[2])
-    workout = await db.get_workout(workout_id)
-    if workout is None or workout["user_id"] != callback.from_user.id:
-        await ui.alert_workout_not_found(callback)
-        return
-    kb = keyboards.yes_no_keyboard(
-        yes_cb=f"hist:delyes:{workout_id}",
-        no_cb=f"hist:item:{workout_id}",
-        yes_text=i18n.t("btn.delete"),
-        no_text=i18n.t("btn.cancel"),
-    )
-    # safe_edit replaces the card being deleted, so the question has to carry the
-    # date and contents itself — otherwise the one screen that identifies the
-    # workout disappears exactly when the user is deciding whether to destroy it.
-    await ui.safe_edit(callback, await _delete_confirm_text(workout), reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("hist:delyes:"))
+# «hist:delyes:» — кнопка «Удалить» со старого экрана подтверждения, который
+# ещё может висеть в чатах после релиза: ведёт туда же, куда теперь сама
+# «🗑 Удалить» с карточки.
+@router.callback_query(F.data.startswith("hist:del:") | F.data.startswith("hist:delyes:"))
 async def hist_delete(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
         await ui.alert_workout_not_found(callback)
         return
+    banner = await _deleted_banner_text(workout)
+    # Снимок — до удаления и в FSM (переживает рестарт, см. fsm_storage.py).
+    # Только последний: «Вернуть» стоит под списком сразу после удаления, а
+    # не копится пачкой за всю историю.
+    snapshot = await db.snapshot_workout(workout_id)
     await db.discard_workout(workout_id)
+    await state.update_data(deleted_workout_snapshot=snapshot)
     # Deleting the workout has to delete what it earned too: a set typed as 500кг
     # unlocks the weight clubs, and leaving those badges behind would keep the
     # mistake visible in the grid forever, with no workout left to fix or remove.
     await achievement_sync.resync(callback.from_user.id)
     data = await state.get_data()
-    await show_history_list(callback, state, data.get("history_page", 0))
-    await callback.answer(i18n.t("history.deleted_toast"))
+    await show_history_list(
+        callback, state, data.get("history_page", 0),
+        banner=banner, undo_workout_id=workout_id, toast=i18n.t("history.deleted_toast"),
+    )
+
+
+@router.callback_query(F.data.startswith("hist:undo:"))
+async def hist_undo_delete(callback: CallbackQuery, state: FSMContext):
+    """«↩️ Вернуть» под историей сразу после удаления — та же тренировка, с теми
+    же id, подходами, заметками и комментарием тренера (db.restore_workout)."""
+    workout_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    snapshot = data.get("deleted_workout_snapshot") or {}
+    rows = snapshot.get("workouts") or []
+    # Чужой снимок сюда не попадёт (FSM у каждого свой), но снимок другой
+    # тренировки — легко: удалил две подряд, а тапнул «Вернуть» под первой.
+    if (
+        len(rows) != 1
+        or rows[0].get("id") != workout_id
+        or rows[0].get("user_id") != callback.from_user.id
+    ):
+        await callback.answer(i18n.t("history.undo_gone"), show_alert=True)
+        return
+    if not await db.restore_workout(snapshot):
+        await callback.answer(i18n.t("history.undo_failed"), show_alert=True)
+        return
+    await state.update_data(deleted_workout_snapshot=None)
+    # Ачивки сняли вместе с тренировкой — вернулась она, возвращаются и они.
+    await achievement_sync.resync(callback.from_user.id)
+    if await show_history_item(callback, workout_id):
+        await callback.answer(i18n.t("history.restored_toast"))
 
 
 # ---------- progress ----------
@@ -549,6 +588,15 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         callback.from_user.id, "2000-01-01", timeutil.user_today(user).isoformat()
     )
     top_buttons = [(ex["display_name"], f"prog:ex:{ex['id']}:top") for ex in top]
+    # Разбор от тренера — первым, над упражнениями (как «Разобрать» наверху
+    # «Прогресса» в iOS-приложении): вопрос «как я расту» человек задаёт
+    # именно здесь, а готовый вопрос «📈 Как мой прогресс?» жил только на
+    # интро тренера, куда с этого экрана надо было ещё дойти. Тот же пресет
+    # (ai:preset:progress) — лимит, busy-бронь и цитата вопроса как у него;
+    # тратится только по тапу. Без тренировок сюда не доходим (ранний выход
+    # выше), так что разбирать тренеру всегда есть что.
+    if ai_trainer.is_configured():
+        top_buttons.insert(0, (i18n.t("history.progress_ask_coach"), "ai:preset:progress"))
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",
@@ -723,6 +771,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
                 f"{ex['display_name']} — {metric}",
                 metric,
                 show_weekly_rate=False,
+                mark_records=True,
             )
         by_limit[limit] = (text, png)
         _progress_view_cache[user["telegram_id"]] = (ex_id, fingerprint, by_limit)
