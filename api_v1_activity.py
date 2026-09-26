@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -63,7 +64,41 @@ ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("POST", "/import/csv"): "импортировал CSV",
     ("POST", "/ai/program/save"): "сохранил программу от тренера",
     ("POST", "/ai/program/train"): "начал тренировку по плану от тренера",
+    ("POST", "/workouts/{workout_id}/sets/voice"): "записал подход голосом",
+    ("PATCH", "/workouts/{workout_id}/sets/{set_id}"): "исправил подход",
+    ("DELETE", "/workouts/{workout_id}/exercises/{exercise_id}"): "убрал упражнение из тренировки",
+    ("DELETE", "/workouts/active"): "удалил идущую тренировку",
+    ("DELETE", "/workouts/{workout_id}"): "удалил тренировку",
+    ("PATCH", "/workouts/{workout_id}/note"): "написал заметку к тренировке",
+    ("POST", "/workouts/{workout_id}/ai-comment"): "попросил разбор тренировки",
+    ("POST", "/workouts/{workout_id}/routines"): "сохранил тренировку днём программы",
+    ("POST", "/workouts/{workout_id}/repeat"): "повторил тренировку",
+    ("POST", "/exercises"): "создал упражнение",
+    ("PATCH", "/exercises/{exercise_id}"): "изменил упражнение",
+    ("POST", "/exercises/{exercise_id}/archive"): "убрал упражнение в архив",
+    ("POST", "/exercises/{exercise_id}/unarchive"): "вернул упражнение из архива",
+    ("POST", "/bodyweight"): "записал вес тела",
+    ("POST", "/ai/video"): "прислал видео тренеру",
+    ("POST", "/ai/questions/answer"): "ответил на вопрос тренера",
+    ("POST", "/support/messages"): "написал в поддержку",
+    ("POST", "/feedback"): "оставил отзыв",
+    ("PATCH", "/settings"): "поменял настройки",
+    ("POST", "/programs/catalog/{key}"): "добавил готовую программу",
+    ("POST", "/routines/{routine_id}/exercises"): "добавил упражнение в день программы",
 }
+
+# Что из тела запроса показать в ленте рядом с фразой — то, что в боте видно
+# само: набранный текст («100 8»), вопрос тренеру, надпись кнопки. Без этого
+# лента приложения читалась «записал подход, записал подход, записал подход»,
+# и что именно человек записал, было не узнать (владелец: «какие подходы чел
+# записал, не проваливается в /activity»). Список ключей — белый: пароли,
+# токены и base64 фото/видео в ленту не попадают ни при каком новом маршруте.
+_TEXT_FIELDS = ("text", "question", "answer", "name", "note", "description")
+# Короткие настройки (`PATCH /settings`) — «unit=lb», «lang=en».
+_SCALAR_FIELDS = ("unit", "lang", "e1rm_formula", "timezone", "goal")
+# Тело больше этого — почти наверняка фото или видео: не разбираем.
+_MAX_DETAIL_BODY = 64 * 1024
+_MAX_TEXT = 200
 
 # Вид события в ленте. Отдельный от телеграмных KIND_*: «нажал кнопку» и
 # «сделал запрос» — разные вещи, и смешивать их под одним видом значит потерять
@@ -81,6 +116,72 @@ def _template(path: str) -> str:
     дополнять, не помня, где `:int`, а где `:path`.
     """
     return _CONVERTER.sub(r"{\1}", path)
+
+
+def _clip(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= _MAX_TEXT else text[: _MAX_TEXT - 1] + "…"
+
+
+def _number(value) -> str:
+    """80.0 → «80», 82.5 → «82.5» — как человек и набирал."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+async def describe_detail(body: dict, path_params: dict) -> str:
+    """Подробности действия одной строкой: «Жим лёжа · 100×8», «Присед · «100 8»».
+
+    Упражнение — по `exercise_id` из тела или пути, названием, как его видит
+    человек; день программы — по `routine_id`. Незнакомое упражнение (чужое,
+    удалённое) просто не называем: лента — не место для 404.
+    """
+    parts: list[str] = []
+    exercise_id = body.get("exercise_id", path_params.get("exercise_id"))
+    if isinstance(exercise_id, int) and not isinstance(exercise_id, bool):
+        exercise = await db.get_exercise(exercise_id)
+        if exercise is not None:
+            parts.append(exercise["display_name"])
+    routine_id = body.get("routine_id")
+    if isinstance(routine_id, int) and not isinstance(routine_id, bool):
+        routine = await db.get_routine(routine_id)
+        if routine is not None:
+            parts.append(routine["name"])
+    weight, reps = body.get("weight"), body.get("reps")
+    if reps is not None:
+        line = f"{_number(weight)}×{_number(reps)}" if weight is not None else f"×{_number(reps)}"
+        if body.get("rpe") is not None:
+            line += f" @{_number(body['rpe'])}"
+        parts.append(line)
+    elif weight is not None:
+        parts.append(_number(weight))
+    for key in _TEXT_FIELDS:
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(f"«{_clip(value)}»")
+    for key in _SCALAR_FIELDS:
+        value = body.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            parts.append(f"{key}={_clip(str(value))}")
+    return " · ".join(parts)
+
+
+async def _request_json(request) -> dict:
+    """Тело запроса словарём — или пустой словарь, если это не JSON-объект.
+
+    Starlette кэширует прочитанное тело и отдаёт его обработчику заново, так
+    что чтение здесь ничего у обработчика не отнимает."""
+    if "json" not in request.headers.get("content-type", ""):
+        return {}
+    body = await request.body()
+    if not body or len(body) > _MAX_DETAIL_BODY:
+        return {}
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def describe(method: str, template: str) -> str:
@@ -113,10 +214,18 @@ class LogApiActions(BaseHTTPMiddleware):
         }
 
     async def dispatch(self, request, call_next):
+        # Тело читаем ДО обработчика: после него поток уже выбран. Только у
+        # меняющих запросов — GET в ленту не пишутся вовсе.
+        body: dict = {}
+        if request.method.upper() in WRITING_METHODS:
+            try:
+                body = await _request_json(request)
+            except Exception:
+                logger.exception("Failed to read api action body")
         response = await call_next(request)
         self._log_failure(request, response)
         try:
-            await self._record(request, response)
+            await self._record(request, response, body)
         except Exception:
             # Ровно как в activity_log.LogIncomingMessages: лог действий не тот
             # повод, чтобы человеку не засчиталась тренировка.
@@ -151,7 +260,7 @@ class LogApiActions(BaseHTTPMiddleware):
             response.status_code,
         )
 
-    async def _record(self, request, response) -> None:
+    async def _record(self, request, response, body: dict | None = None) -> None:
         method = request.method.upper()
         if method not in WRITING_METHODS:
             return
@@ -171,6 +280,9 @@ class LogApiActions(BaseHTTPMiddleware):
         if method == "DELETE" and template == "/account":
             return
         action = describe(method, template)
+        detail = await describe_detail(body or {}, dict(request.path_params))
+        if detail:
+            action = f"{action}: {detail}"
         path = request.url.path
         await db.log_user_event(
             user_id,
