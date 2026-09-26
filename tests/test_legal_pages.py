@@ -72,7 +72,8 @@ async def test_unknown_lang_falls_back_to_header_then_russian():
     assert '<html lang=ru>' in resp.text
 
 
-def test_email_is_not_rendered_while_constant_is_empty():
+def test_email_is_not_rendered_while_constant_is_empty(monkeypatch):
+    monkeypatch.setattr(legal_pages, "CONTACT_EMAIL", "")
     for page in legal_pages.PAGES:
         for lang in legal_pages.LANGS:
             assert "mailto:" not in legal_pages.render(page, lang)
@@ -112,9 +113,17 @@ async def test_support_page_is_public_in_both_languages():
 
 
 def test_support_page_shows_email_only_when_set(monkeypatch):
+    monkeypatch.setattr(legal_pages, "CONTACT_EMAIL", "")
     for lang in legal_pages.LANGS:
         assert "mailto:" not in legal_pages.render(legal_pages.SUPPORT_PAGE, lang)
     monkeypatch.setattr(legal_pages, "CONTACT_EMAIL", "coach@example.com")
     for lang in legal_pages.LANGS:
         page = legal_pages.render(legal_pages.SUPPORT_PAGE, lang)
         assert '<li>E-mail: <a href="mailto:coach@example.com">' in page
+
+
+def test_project_contact_email_is_on_pages():
+    assert legal_pages.CONTACT_EMAIL == "athletediary.app@gmail.com"
+    for page in legal_pages.ALL_PAGES:
+        for lang in legal_pages.LANGS:
+            assert "mailto:athletediary.app@gmail.com" in legal_pages.render(page, lang)
