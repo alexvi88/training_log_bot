@@ -76,6 +76,43 @@ async def test_unit_yes_converts_history(fresh_db, user_id):
     assert sets[0]["weight"] > 200  # 100kg converted to lb
 
 
+async def test_unit_yes_rescales_untaken_coach_program_draft(fresh_db, user_id):
+    """Неподобранный черновик тренера — и в чате бота (FSM), и в приложении
+    (ai_program_drafts) — хранит шаг прогрессии в единицах атлета, как и
+    routine_exercises: без пересчёта «+2.5 кг» после «Забрать» становилось
+    «+2.5 lb»."""
+    db = fresh_db
+
+    def draft():
+        return {
+            "id": "feed01",
+            "name": "Верх/низ",
+            "days": [{"name": "Верх", "items": [
+                {"name": "Жим лёжа", "target": "3x8",
+                 "progression": {"rule": "linear_load", "step": 2.5}},
+            ]}],
+            "replaces": {"kind": "program", "id": 1, "name": "Старая", "days": [
+                {"name": "Верх", "items": [
+                    {"name": "Жим лёжа", "target": "3x8",
+                     "progression": {"rule": "linear_load", "step": 5}},
+                ]},
+            ]},
+        }
+
+    await db.set_ai_program_draft(user_id, "app01", draft())
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=draft())
+
+    await settings.settings_unit(_make_callback(user_id, "settings:unityes"), state)
+
+    fsm_draft = (await state.get_data())["ai_program_draft"]
+    assert fsm_draft["id"] == "feed01"
+    assert fsm_draft["days"][0]["items"][0]["progression"]["step"] == pytest.approx(5.51, abs=0.01)
+    assert fsm_draft["replaces"]["days"][0]["items"][0]["progression"]["step"] == pytest.approx(11.02, abs=0.01)
+    app_draft = await db.get_ai_program_draft(user_id)
+    assert app_draft["days"][0]["items"][0]["progression"]["step"] == pytest.approx(5.51, abs=0.01)
+
+
 async def test_unit_switch_alert_stays_a_modal(fresh_db, user_id):
     """Конвертация всей истории — настоящее предупреждение (в отличие от
     пояса и формулы, которые стали тостами): модалка с ОК тут оправдана, а

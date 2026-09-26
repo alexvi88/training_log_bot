@@ -1985,18 +1985,19 @@ def _remaining_in_unit(remaining_kg: float, unit: str) -> str:
     return f"{value:.0f}{unit_label(unit)}"
 
 
-def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgeProgress
-    """Одна строка блока «Ближайшие» — значок плюс расстояние до цели словами
-    тренера, семейство в семейство ровно как format_rank_gap: числа считает
-    achievements.nearest_progress (в кг), согласование и единицы — здесь.
+def badge_remaining_text(bp, unit: str = "kg") -> str:  # achievements.BadgeProgress
+    """Расстояние до значка словами тренера — хвост строки блока «Ближайшие»
+    без эмодзи и названия. Отдельно от format_badge_progress, потому что тот
+    же текст отдаёт /v1 (`remaining_text` в /achievements/nearest): иначе
+    приложение собирало бы фразу из голых чисел в кг и на экране в фунтах
+    писало «ещё 40» там, где бот пишет «ещё 88lb». Без HTML — это чистый
+    текст каталога.
     """
     import achievements
 
-    a = achievements.BY_CODE[bp.code]
     family = achievements.FAMILY_BY_CODE[bp.code]
-    label = f"{a.emoji} <b>{escape(a.title)}</b>"
     if family == "weight":
-        return f"{label} — {i18n.t('achievements.nearest_weight', w=_remaining_in_unit(bp.remaining, unit))}"
+        return i18n.t("achievements.nearest_weight", w=_remaining_in_unit(bp.remaining, unit))
     if family in ("tonnage", "session_tonnage"):
         # «Пятитонник» (рекорд тоннажа за одну тренировку) — та же ось в кг,
         # что и пожизненный тоннаж, и та же фраза «осталось N т».
@@ -2005,16 +2006,28 @@ def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgePro
         # килограммами; выше — тоннами с одним знаком после запятой.
         if bp.remaining >= 100:
             tons = f"{round(bp.remaining / 1000, 1):g}"
-            return f"{label} — {i18n.t('achievements.nearest_tons', tons=tons)}"
-        return f"{label} — {i18n.t('achievements.nearest_tons_weight', w=_remaining_in_unit(bp.remaining, unit))}"
+            return i18n.t("achievements.nearest_tons", tons=tons)
+        return i18n.t("achievements.nearest_tons_weight", w=_remaining_in_unit(bp.remaining, unit))
     if family == "workouts":
-        return f"{label} — {i18n.t('achievements.nearest_count', n=int(bp.remaining))}"
+        return i18n.t("achievements.nearest_count", n=int(bp.remaining))
     # Все остальные счётные семейства (недельная серия, разные упражнения,
     # группы мышц, рекорды подходов/упражнений/повторов за раз, ранние
     # тренировки, записи веса) — «X из Y»: существительное у каждого своё и
     # уже стоит в названии/описании значка, а фраза без существительного не
     # требует отдельной плюральной ветки на каждое семейство.
-    return f"{label} — {i18n.t('achievements.nearest_of', current=int(bp.current), target=int(bp.target))}"
+    return i18n.t("achievements.nearest_of", current=int(bp.current), target=int(bp.target))
+
+
+def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgeProgress
+    """Одна строка блока «Ближайшие» — значок плюс расстояние до цели словами
+    тренера, семейство в семейство ровно как format_rank_gap: числа считает
+    achievements.nearest_progress (в кг), согласование и единицы — в
+    badge_remaining_text.
+    """
+    import achievements
+
+    a = achievements.BY_CODE[bp.code]
+    return f"{a.emoji} <b>{escape(a.title)}</b> — {badge_remaining_text(bp, unit)}"
 
 
 def build_achievements_screen(

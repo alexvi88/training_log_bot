@@ -139,6 +139,12 @@ FAMILY_BY_CODE: dict[str, str] = {
 }
 
 
+# Семейства, чьи current/target — вес в кг (пороги и AchievementContext
+# нормализованы через to_kg). Всё остальное — штуки. Нужно тем, кто показывает
+# голые числа (REST /v1): кг надо перевести в единицы атлета, штуки — нет.
+WEIGHT_FAMILIES: frozenset[str] = frozenset({"weight", "tonnage", "session_tonnage"})
+
+
 @dataclass(frozen=True)
 class BadgeProgress:
     """Текущее значение и порог одного ещё не открытого значка. Числа, а не

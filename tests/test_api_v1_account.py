@@ -122,6 +122,49 @@ async def test_patch_settings_unit_rescales_history(fresh_db, client_factory):
     assert workout_id  # sanity: fixture actually created the workout
 
 
+def _draft_with_step(step: float) -> dict:
+    return {
+        "name": "Верх/низ",
+        "days": [
+            {
+                "name": "Верх",
+                "items": [
+                    {"name": "Жим лёжа", "target": "3x8",
+                     "progression": {"rule": "linear_load", "step": step}},
+                    {"name": "Подтягивания", "target": "3x8", "progression": None},
+                ],
+            }
+        ],
+        "replaces": None,
+        "notes": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_settings_unit_rescales_untaken_coach_draft(fresh_db, client_factory):
+    """Черновик тренера, ещё ждущий «Забрать» (ai_program_drafts), — не
+    routine_exercises, и scale_progression_steps его не видел: «+2.5 кг»
+    после перехода на фунты сохранялось как «+2.5 lb». id черновика тот же —
+    карточка в чате ссылается на него."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    await db.set_ai_program_draft(user_id, "abcd1234", _draft_with_step(2.5))
+
+    resp = await client.patch("/settings", json={"unit": "lb"})
+    assert resp.status_code == 200
+
+    draft = await db.get_ai_program_draft(user_id)
+    assert draft["id"] == "abcd1234"
+    items = draft["days"][0]["items"]
+    assert items[0]["progression"]["step"] == pytest.approx(2.5 * 2.20462, abs=0.01)
+    assert items[1]["progression"] is None
+
+    resp = await client.patch("/settings", json={"unit": "kg"})
+    assert resp.status_code == 200
+    draft = await db.get_ai_program_draft(user_id)
+    assert draft["days"][0]["items"][0]["progression"]["step"] == pytest.approx(2.5, abs=0.01)
+
+
 @pytest.mark.asyncio
 async def test_patch_settings_tz_out_of_range_is_400_and_nothing_changes(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
