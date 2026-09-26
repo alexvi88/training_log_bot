@@ -179,6 +179,86 @@ async def test_nearest_includes_variety50_with_distinct_exercises(fresh_db, clie
 
 
 @pytest.mark.asyncio
+async def test_nearest_weight_badge_for_lb_account_is_in_pounds(fresh_db, client_factory, monkeypatch):
+    """Пороги значков — в кг, но атлет с фунтами не должен получить голые кг:
+    раньше приложение рисовало «100 из 140 · ещё 40» на экране в lb. Числа
+    весовых значков — в единицах атлета с явной `unit`, а `remaining_text` —
+    та же фраза, что пишет бот (formatting.badge_remaining_text)."""
+    import achievement_sync
+    import achievements
+    import formatting
+    import i18n
+
+    client = await _linked_client(fresh_db, client_factory)
+    await db.update_user(111, unit="lb")
+
+    async def fake_ctx(user_id):
+        return achievements.AchievementContext(
+            total_workouts=9,
+            lifetime_tonnage_kg=0.0,
+            best_week_streak=0,
+            max_weight_kg=90.0,
+            distinct_exercises=0,
+        )
+
+    monkeypatch.setattr(achievement_sync, "aggregate_context", fake_ctx)
+
+    resp = await client.get("/achievements/nearest?limit=20")
+    assert resp.status_code == 200
+    by_code = {item["code"]: item for item in resp.json()}
+    weight = next(
+        item for code, item in by_code.items()
+        if achievements.FAMILY_BY_CODE[code] == "weight"
+    )
+    target_kg = next(
+        t for t, c in achievements._TIERS_BY_FAMILY["weight"] if c == weight["code"]
+    )
+    assert weight["unit"] == "lb"
+    assert weight["current"] == pytest.approx(90.0 * 2.20462, abs=0.2)
+    assert weight["target"] == pytest.approx(target_kg * 2.20462, abs=0.2)
+    assert weight["remaining"] == pytest.approx(weight["target"] - weight["current"], abs=0.11)
+    with i18n.use_lang("ru"):
+        expected = formatting.badge_remaining_text(
+            achievements.BadgeProgress(weight["code"], 90.0, target_kg), "lb"
+        )
+    assert weight["remaining_text"] == expected
+    assert "lb" in weight["remaining_text"]
+
+    # Счётный значок — без единицы и без перевода, но тоже с готовой фразой.
+    workouts = by_code["w10"]
+    assert workouts["unit"] is None
+    assert workouts["current"] == 9 and workouts["remaining"] == 1
+    assert workouts["remaining_text"] == "ещё 1 тренировка"
+
+
+@pytest.mark.asyncio
+async def test_nearest_weight_badge_for_kg_account_stays_in_kg(fresh_db, client_factory, monkeypatch):
+    import achievement_sync
+    import achievements
+
+    client = await _linked_client(fresh_db, client_factory)
+
+    async def fake_ctx(user_id):
+        return achievements.AchievementContext(
+            total_workouts=0,
+            lifetime_tonnage_kg=0.0,
+            best_week_streak=0,
+            max_weight_kg=90.0,
+            distinct_exercises=0,
+        )
+
+    monkeypatch.setattr(achievement_sync, "aggregate_context", fake_ctx)
+
+    resp = await client.get("/achievements/nearest?limit=1")
+    item = resp.json()[0]
+    assert achievements.FAMILY_BY_CODE[item["code"]] == "weight"
+    assert item["unit"] == "kg"
+    assert item["current"] == 90.0
+    assert item["remaining"] == item["target"] - 90.0
+    assert item["remaining_text"] == f"ещё {item['remaining']:.0f}кг"
+
+
+@pytest.mark.asyncio
 async def test_stats_requires_auth(fresh_db, client_factory):
     client = client_factory()
     resp = await client.get("/achievements/stats")

@@ -9872,6 +9872,71 @@ async def scale_progression_steps(user_id: int, factor: float) -> None:
         await conn().commit()
 
 
+def scale_draft_progression_steps(draft: Any, factor: float) -> bool:
+    """Пересчитать `step` прогрессии внутри черновика программы от тренера.
+
+    Черновик (`ai_program_drafts.draft_json` для /v1, `ai_program_draft` в FSM
+    бота) — это ещё не routine_exercises, поэтому scale_progression_steps его
+    не видит: «+2.5 кг» в неподобранной карточке с «Забрать» после перехода на
+    фунты сохранялось бы как «+2.5 lb». Правило лежит у каждого пункта дня —
+    `days[].items[].progression.step`, и у снимка заменяемой программы
+    (`replaces.days[].items[]`) — тот уже в единицах пользователя, как и
+    сохранённые routine_exercises, которые конвертируются тем же проходом.
+
+    Меняет `draft` на месте, возвращает True, если что-то поменялось.
+    """
+    changed = False
+
+    def _scale_days(days: Any) -> None:
+        nonlocal changed
+        if not isinstance(days, list):
+            return
+        for day in days:
+            items = day.get("items") if isinstance(day, dict) else None
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                rule = item.get("progression") if isinstance(item, dict) else None
+                step = rule.get("step") if isinstance(rule, dict) else None
+                if not isinstance(step, (int, float)) or isinstance(step, bool):
+                    continue
+                rule["step"] = round(step * factor, 2)
+                changed = True
+
+    if isinstance(draft, dict):
+        _scale_days(draft.get("days"))
+        replaces = draft.get("replaces")
+        if isinstance(replaces, dict):
+            _scale_days(replaces.get("days"))
+    return changed
+
+
+async def scale_ai_program_draft_steps(telegram_id: int, factor: float) -> None:
+    """То же, что scale_progression_steps, но для неподобранного черновика
+    программы из /ai/ask (таблица ai_program_drafts). id и created_at не
+    трогаем: карточка в чате приложения ссылается на черновик по id, и после
+    смены единиц «Забрать» под ней должно продолжать работать."""
+    cur = await conn().execute(
+        "SELECT draft_json FROM ai_program_drafts WHERE telegram_id = ?", (telegram_id,)
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return
+    try:
+        draft = json.loads(row["draft_json"])
+    except (TypeError, ValueError):
+        # get_ai_program_draft такой ряд и так отдаёт как «черновика нет».
+        return
+    if not scale_draft_progression_steps(draft, factor):
+        return
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE ai_program_drafts SET draft_json = ? WHERE telegram_id = ?",
+            (json.dumps(draft, ensure_ascii=False), telegram_id),
+        )
+        await conn().commit()
+
+
 async def record_push(telegram_id: int, category: str, text: str, sent_on: str) -> None:
     """Log a delivered push. `sent_on` is the recipient's own calendar date
     (YYYY-MM-DD) — see has_push_today."""
