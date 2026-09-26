@@ -150,7 +150,7 @@ async def build_block_views(
                         entry["loads"], entry["sets"], entry["rpes"], strict=True
                     )
                 ],
-                best_before.get(ex_id, 0),
+                best_before.get(ex_id),
                 formula,
             )
         prev_sets = None
@@ -205,7 +205,9 @@ async def build_block_views(
 
 
 def best_gold_index(
-    loaded_sets: list[tuple[float, int, float | None]], previous_best: float, formula: str
+    loaded_sets: list[tuple[float, int, float | None]],
+    previous_best: float | None,
+    formula: str,
 ) -> int | None:
     """Index of the session's best set, if it clears the exercise's all-time
     best e1RM. Only the best one is marked: two 🥇 in one exercise would read
@@ -215,7 +217,15 @@ def best_gold_index(
     db.max_e1rm_before_workout, а та считает по load_weight. По сырому весу
     подтягивания с поясом не брали 🥇 никогда — их «10 кг» не могли перебить
     рекорд в 105 кг, который сами же и поставили.
+
+    previous_best=None — у упражнения ещё нет ни одного подхода в прошлых
+    тренировках: первая в жизни сессия упражнения 🥇 не даёт вовсе, даже
+    лучшему её подходу. Бить нечего, а «рекорд» на каждом новом упражнении
+    (с анимацией рекорда в приложении) — слово, которое перестаёт что-то
+    значить. Так же, как уже решают _session_record и sets_beat_record (🔥).
     """
+    if previous_best is None:
+        return None
     best_index = None
     best_score = previous_best
     for i, (load, reps, rpe) in enumerate(loaded_sets):

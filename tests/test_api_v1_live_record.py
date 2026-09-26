@@ -128,6 +128,26 @@ async def test_active_workout_marks_the_one_gold_set(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_first_ever_workout_of_exercise_has_no_gold(fresh_db, client_factory):
+    """Упражнение впервые — `is_gold` ни на одном подходе, иначе приложение
+    проиграет анимацию рекорда на каждом новом упражнении, где бить нечего."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    for weight in (60, 80, 100):
+        resp = await client.post(
+            f"/workouts/{workout_id}/sets",
+            json={"exercise_id": exercise_id, "weight": weight, "reps": 5},
+        )
+        assert resp.json()["is_record"] is False
+
+    body = (await client.get("/workouts/active")).json()
+    sets = _exercise_entry(body, exercise_id)["sets"]
+    assert [s["is_gold"] for s in sets] == [False, False, False]
+    assert _exercise_entry(body, exercise_id)["has_record"] is False
+
+
+@pytest.mark.asyncio
 async def test_finished_workout_has_no_gold_marks(fresh_db, client_factory):
     """У завершённой тренировки 🥇 не рисуется — там уже record_text (🔥)."""
     client = await _linked_client(fresh_db, client_factory)

@@ -4523,8 +4523,10 @@ async def max_e1rm_before_workout_by_exercise(
     user_id: int, exercise_ids, workout_id: int, formula: str = "epley"
 ) -> dict[int, float]:
     """max_e1rm_before_workout для нескольких упражнений одним GROUP BY.
-    Упражнения без истории в словарь не попадают — вызывающий берёт 0, как
-    COALESCE у одиночной версии."""
+    Упражнения без истории в словарь не попадают — и это значимо: отсутствие
+    ключа значит «делается впервые», и 🥇 такому упражнению не положено вовсе
+    (view_builder.best_gold_index с None), а не «планка 0», которую бьёт любой
+    подход."""
     ids = sorted(set(exercise_ids))
     if not ids:
         return {}
