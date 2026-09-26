@@ -4483,6 +4483,19 @@ async def mark_tz_set_by_user(user_id: int) -> None:
         await conn().commit()
 
 
+async def clear_tz_set_by_user(user_id: int) -> None:
+    """Человек вернул режим «Как на телефоне» (приложение, PATCH /v1/settings
+    с `tz_follow_device: true`) — пояс снова не считается выбранным руками, и
+    пояс телефона (device_tz_offset_minutes) опять его поправляет. Обратное к
+    mark_tz_set_by_user; ручной выбор (пикер в боте или в приложении) снова
+    поднимет флаг."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET tz_set_by_user = 0 WHERE telegram_id = ?", (user_id,)
+        )
+        await conn().commit()
+
+
 async def mark_tz_push_hint_shown(user_id: int) -> None:
     """Подсказку про пояс под пушем уже показывали этому человеку — один раз,
     под первым пушем, который он получил (см. engagement._deliver)."""

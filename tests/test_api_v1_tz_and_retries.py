@@ -112,6 +112,126 @@ async def test_device_timezone_patch_applies_until_user_picks_one(fresh_db, clie
 
 
 @pytest.mark.asyncio
+async def test_settings_report_follow_device_mode(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    assert (await client.get("/settings")).json()["tz_follows_device"] is True
+    await client.patch("/settings", json={"tz_offset": 2})
+    assert (await client.get("/settings")).json()["tz_follows_device"] is False
+
+
+@pytest.mark.asyncio
+async def test_follow_device_resets_manual_pick_and_applies_phone_zone(
+    fresh_db, client_factory
+):
+    """«Как на телефоне» в приложении снимает отметку «выбрал сам» и сразу
+    применяет пояс телефона — а не шлёт его как ручной tz_offset."""
+    client = await _linked_client(fresh_db, client_factory)
+    await client.patch("/settings", json={"tz_offset": 2})
+
+    resp = await client.patch(
+        "/settings", json={"tz_follow_device": True, "device_tz_offset_minutes": 600}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tz_offset"] == 10
+    assert body["tz_set_by_user"] is False
+    assert body["tz_follows_device"] is True
+    assert (await fresh_db.get_user(111))["tz_set_by_user"] == 0
+
+    # Дальше пояс телефона снова двигает пояс аккаунта (переезд).
+    moved = await client.patch("/settings", json={"device_tz_offset_minutes": -300})
+    assert moved.json()["tz_offset"] == -5
+
+
+@pytest.mark.asyncio
+async def test_follow_device_without_phone_zone_only_resets_flag(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    await client.patch("/settings", json={"tz_offset": 2})
+    resp = await client.patch("/settings", json={"tz_follow_device": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tz_offset"] == 2
+    assert resp.json()["tz_follows_device"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_pick_after_follow_device_raises_flag_again(fresh_db, client_factory):
+    """Ручной выбор — в приложении или пикером бота — снова закрепляет пояс,
+    и пояс телефона его больше не трогает."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from handlers import settings as bot_settings
+
+    client = await _linked_client(fresh_db, client_factory)
+    await client.patch(
+        "/settings", json={"tz_follow_device": True, "device_tz_offset_minutes": 600}
+    )
+
+    # Пикер пояса в боте (тот же колбэк, что в tests/test_timezone.py).
+    message = MagicMock()
+    message.delete = AsyncMock()
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=111, username="t", language_code=None)
+    callback.message = message
+    callback.data = "settings:tzset:4"
+    callback.answer = AsyncMock()
+    state = FSMContext(
+        storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=111, user_id=111)
+    )
+    await bot_settings.settings_timezone_set(callback, state)
+    user = await fresh_db.get_user(111)
+    assert user["tz_offset"] == 4
+    assert user["tz_set_by_user"] == 1
+
+    settings = (await client.get("/settings")).json()
+    assert settings["tz_follows_device"] is False
+    ignored = await client.patch("/settings", json={"device_tz_offset_minutes": 600})
+    assert ignored.json()["tz_offset"] == 4
+
+    # И ручной час в самом приложении тоже поднимает флаг.
+    await client.patch("/settings", json={"tz_follow_device": True})
+    picked = await client.patch("/settings", json={"tz_offset": 1})
+    assert picked.json()["tz_follows_device"] is False
+
+
+@pytest.mark.asyncio
+async def test_old_client_without_follow_field_keeps_manual_pick(fresh_db, client_factory):
+    """Старая сборка шлёт только device_tz_offset_minutes — выбранный руками
+    пояс, как и раньше, не трогается и флаг не снимается."""
+    client = await _linked_client(fresh_db, client_factory)
+    await client.patch("/settings", json={"tz_offset": 2})
+    resp = await client.patch("/settings", json={"device_tz_offset_minutes": 600, "unit": "kg"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tz_offset"] == 2
+    assert (await fresh_db.get_user(111))["tz_set_by_user"] == 1
+
+
+@pytest.mark.asyncio
+async def test_follow_device_false_pins_current_zone(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.patch("/settings", json={"tz_follow_device": False})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tz_follows_device"] is False
+    ignored = await client.patch("/settings", json={"device_tz_offset_minutes": 600})
+    assert ignored.json()["tz_offset"] != 10
+
+
+@pytest.mark.asyncio
+async def test_follow_device_rejects_garbage_and_conflict(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    bad = await client.patch("/settings", json={"tz_follow_device": "yes"})
+    assert bad.status_code == 400
+    conflict = await client.patch("/settings", json={"tz_follow_device": True, "tz_offset": 3})
+    assert conflict.status_code == 400
+    assert (await fresh_db.get_user(111))["tz_set_by_user"] == 0
+
+
+@pytest.mark.asyncio
 async def test_device_timezone_patch_rejects_garbage(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     resp = await client.patch("/settings", json={"device_tz_offset_minutes": 10_000})

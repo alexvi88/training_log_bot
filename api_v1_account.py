@@ -77,6 +77,10 @@ def _settings_json(user) -> dict[str, Any]:
         # приложение подтягивает пояс телефона (device_tz_offset_minutes в
         # PATCH), выбранный руками не трогает никогда.
         "tz_set_by_user": bool(user["tz_set_by_user"]),
+        # То же самое глазами приложения: режим «Как на телефоне» включён,
+        # пока пояс не выбран руками. Приложение по нему решает, слать ли пояс
+        # телефона при запуске; сборки, которые поля не знают, его не читают.
+        "tz_follows_device": not user["tz_set_by_user"],
         "e1rm_formula": user["e1rm_formula"],
         **{field: bool(user[field]) for field in _BOOL_FIELDS},
         # Согласие на передачу данных стороннему AI (App Store 5.1.2(i)) —
@@ -243,6 +247,25 @@ async def update_settings(request: Request) -> JSONResponse:
             raise ApiError(400, "bad_request", f"tz_offset must be between {_TZ_MIN} and {_TZ_MAX}")
         new_tz = raw_tz
 
+    # «Как на телефоне» в приложении: снять отметку «выбрал сам», чтобы пояс
+    # телефона снова применялся. Без этого поля приложению оставалось только
+    # слать час телефона как ручной tz_offset — и оно молча перезаписывало
+    # пояс, выбранный потом руками в боте. `false` — наоборот, закрепить
+    # текущий пояс как выбранный (то же, что выбрать его в пикере). Старые
+    # сборки поле не шлют — для них всё как раньше.
+    follow_device: Optional[bool] = None
+    if "tz_follow_device" in body:
+        follow_device = body["tz_follow_device"]
+        if not isinstance(follow_device, bool):
+            raise ApiError(400, "bad_request", "tz_follow_device must be bool")
+        if follow_device and new_tz is not None:
+            raise ApiError(
+                400, "bad_request", "tz_follow_device: true conflicts with tz_offset"
+            )
+    tz_set_by_user = bool(user["tz_set_by_user"])
+    if follow_device is True:
+        tz_set_by_user = False
+
     # Пояс телефона, который приложение шлёт само, без участия человека, —
     # в отличие от tz_offset (пикер): применяется только пока пояс не выбран
     # руками (users.tz_set_by_user) и отметку «выбран» не ставит. Явный
@@ -256,7 +279,7 @@ async def update_settings(request: Request) -> JSONResponse:
             raise ApiError(
                 400, "bad_request", "device_tz_offset_minutes must be int between -720 and 840"
             )
-        if new_tz is not None or user["tz_set_by_user"]:
+        if new_tz is not None or tz_set_by_user:
             device_tz = None
 
     new_formula: Optional[str] = None
@@ -298,6 +321,11 @@ async def update_settings(request: Request) -> JSONResponse:
 
     if new_lang is not None:
         await db.set_user_lang(user_id, new_lang)
+
+    if follow_device is True and user["tz_set_by_user"]:
+        await db.clear_tz_set_by_user(user_id)
+    elif follow_device is False and not user["tz_set_by_user"]:
+        await db.mark_tz_set_by_user(user_id)
 
     plain_updates: dict[str, Any] = dict(bool_updates)
     if new_tz is not None:
