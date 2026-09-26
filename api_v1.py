@@ -1765,7 +1765,9 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
             exercise_note = rows.notes.get(be["exercise_id"])
             gold_index = None
             if gold_formula is not None and own_sets:
-                previous_best = best_before.get(be["exercise_id"], 0)
+                # None — упражнение делается впервые: 🥇 (и анимации рекорда в
+                # приложении) нет, бить нечего (см. best_gold_index).
+                previous_best = best_before.get(be["exercise_id"])
                 gold_index = view_builder.best_gold_index(
                     [(db.load_of(s), s["reps"], s["rpe"]) for s in own_sets],
                     previous_best, gold_formula,

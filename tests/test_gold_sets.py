@@ -67,15 +67,35 @@ async def test_no_gold_when_nothing_beats_history(fresh_db, user_id):
     assert "🥇" not in formatting.build_live_session_text(blocks, active_exercise_id=ex_id)
 
 
-async def test_first_ever_session_earns_a_gold(fresh_db, user_id):
-    """Нет истории — первый же осмысленный сет и есть лучший за всё время."""
+async def test_first_ever_session_has_no_gold(fresh_db, user_id):
+    """Упражнение делается впервые — бить нечего, рекорда нет: ни 🥇 на
+    подходе, ни на лучшем из подходов этой же первой тренировки (решение
+    владельца: «рекорд, если первый раз делаешь упражнение, — не надо»)."""
     db = fresh_db
     ex_id = await _exercise(db, user_id)
     workout_id = await _live(db, user_id, ex_id, [(60.0, 10), (80.0, 8)])
 
     blocks = await view_builder.build_block_views(workout_id, "epley", mark_golds=True)
 
+    assert blocks[0].gold_index is None
+    assert "🥇" not in formatting.build_live_session_text(blocks, active_exercise_id=ex_id)
+
+
+async def test_second_session_beating_the_first_earns_the_gold(fresh_db, user_id):
+    """Со второй тренировки есть с чем сравнивать — перебил первую, получил 🥇."""
+    db = fresh_db
+    ex_id = await _exercise(db, user_id)
+    await _finished(db, user_id, ex_id, [(60.0, 10), (80.0, 8)], "2026-05-01T10:00:00")
+    workout_id = await _live(db, user_id, ex_id, [(80.0, 8), (85.0, 8)])
+
+    blocks = await view_builder.build_block_views(workout_id, "epley", mark_golds=True)
+
     assert blocks[0].gold_index == 1
+
+
+async def test_best_gold_index_without_history_marks_nothing():
+    assert view_builder.best_gold_index([(100.0, 5, None)], None, "epley") is None
+    assert view_builder.best_gold_index([(100.0, 5, None)], 0.0, "epley") == 0
 
 
 async def test_only_the_best_set_of_the_session_is_marked(fresh_db, user_id):
@@ -99,6 +119,8 @@ async def test_gold_ignores_other_users_and_other_exercises(fresh_db, user_id):
     stranger_ex = await _exercise(db, stranger, "Жим лёжа")
     await _finished(db, stranger, stranger_ex, [(200.0, 5)], "2026-05-01T10:00:00")
     await _finished(db, user_id, other_ex, [(300.0, 5)], "2026-05-01T10:00:00")
+    # своя история нужна: без неё 🥇 не было бы вовсе (первая сессия упражнения)
+    await _finished(db, user_id, ex_id, [(50.0, 5)], "2026-04-01T10:00:00")
 
     workout_id = await _live(db, user_id, ex_id, [(60.0, 5)])
     blocks = await view_builder.build_block_views(workout_id, "epley", mark_golds=True)
