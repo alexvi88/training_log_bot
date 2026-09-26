@@ -195,6 +195,9 @@ async def _apply_unit_change(user_id: int, new_unit: str) -> None:
     await db.scale_user_set_weights(user_id, factor)
     await db.scale_bodyweight_logs(user_id, factor)
     await db.scale_progression_steps(user_id, factor)
+    # Неподобранный черновик тренера («Забрать» в чате) — тоже шаг в единицах
+    # пользователя, только ещё не в routine_exercises.
+    await db.scale_ai_program_draft_steps(user_id, factor)
     await db.update_user(user_id, unit=new_unit)
     await achievement_sync.resync(user_id)
 

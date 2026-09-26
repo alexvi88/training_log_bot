@@ -39,7 +39,9 @@ from starlette.routing import Route
 
 import achievement_sync
 import achievements
+import config
 import db
+import formatting
 import i18n
 from api_v1_common import authed_user, query_int
 
@@ -66,34 +68,57 @@ async def list_achievements(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+def _in_unit(value_kg: float, unit: str) -> float:
+    return round(value_kg * config.LB_PER_KG, 1) if unit == "lb" else value_kg
+
+
+def _nearest_json(bp: "achievements.BadgeProgress", unit: str) -> dict[str, Any]:
+    a = achievements.BY_CODE[bp.code]
+    is_weight = achievements.FAMILY_BY_CODE[bp.code] in achievements.WEIGHT_FAMILIES
+    # Для весовых семейств числа — в единицах атлета, как и остальные веса в
+    # /v1 (клиент подписывает их users.unit из /me). Раньше здесь уезжали кг
+    # из achievements.nearest_progress, и на экране в фунтах приложение
+    # рисовало «100 из 140 · ещё 40» — килограммы без подписи среди фунтов.
+    # remaining считаем от уже переведённых чисел, чтобы current + remaining
+    # = target сходилось и после округления.
+    current = _in_unit(bp.current, unit) if is_weight else bp.current
+    target = _in_unit(bp.target, unit) if is_weight else bp.target
+    return {
+        "code": bp.code,
+        "emoji": a.emoji,
+        "title": a.title,
+        "description": a.description,
+        "current": current,
+        "target": target,
+        "remaining": round(max(target - current, 0.0), 1) if is_weight else bp.remaining,
+        # Единица current/target/remaining: "kg"/"lb" у весовых значков, null у
+        # счётных (тренировки, недели, упражнения…) — там это штуки.
+        "unit": unit if is_weight else None,
+        # Готовая фраза бота («ещё 88lb», «осталось 1.5 т», «ещё 3 тренировки»,
+        # «4 из 10») на языке атлета — ровно то, что бот пишет в «Ближайших»
+        # (formatting.badge_remaining_text). Клиенту незачем собирать её из
+        # чисел самому и угадывать семейство и единицу.
+        "remaining_text": formatting.badge_remaining_text(bp, unit),
+    }
+
+
 async def nearest_achievements(request: Request) -> JSONResponse:
     """Незаработанные значки, ближайшие к цели, с прогрессом — блок
     «Ближайшие», который на экране бота стоит первым.
 
-    current/target отдаём числами (как и вес/тоннаж в остальном /v1) — фраза
-    вида «ещё 15 кг» требует русского согласования
-    (formatting.format_badge_progress), а это уже текст для клиента, а не
-    транспорт; из title/description и голых чисел клиент строит свою фразу
-    средствами iOS-локализации.
+    current/target/remaining — числами для полоски прогресса (весовые — в
+    единицах атлета, см. `unit`), плюс `remaining_text` — фраза бота целиком
+    (formatting.badge_remaining_text): согласование «ещё 15 кг»/«ещё 3
+    тренировки» и перевод кг↔lb живут на сервере одни на бота и приложение.
     """
     user_id, user = await authed_user(request)
     limit = query_int(request, "limit", 3, minimum=1, maximum=20)
     earned = await db.list_achievement_codes(user_id)
     ctx = await achievement_sync.aggregate_context(user_id)
     nearest = achievements.nearest_progress(ctx, earned, limit=limit)
+    unit = "lb" if user["unit"] == "lb" else "kg"
     with i18n.use_lang(user["lang"]):
-        payload = [
-            {
-                "code": bp.code,
-                "emoji": achievements.BY_CODE[bp.code].emoji,
-                "title": achievements.BY_CODE[bp.code].title,
-                "description": achievements.BY_CODE[bp.code].description,
-                "current": bp.current,
-                "target": bp.target,
-                "remaining": bp.remaining,
-            }
-            for bp in nearest
-        ]
+        payload = [_nearest_json(bp, unit) for bp in nearest]
     return JSONResponse(payload)
 
 
