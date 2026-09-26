@@ -38,6 +38,7 @@ from seed_data import (
     EXERCISE_TEMPLATES,
     LEGACY_PROGRAM_TEXTS,
     MUSCLE_GROUP_PRESETS,
+    OTHER_GROUP_NAME,
     PROGRAM_BY_KEY,
     canonical_exercise_name,
     canonical_muscle_group_name,
@@ -1693,7 +1694,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 
 async def _run_one_shot_migrations() -> None:
@@ -1728,10 +1729,42 @@ async def _run_one_shot_migrations() -> None:
         # дополненной seed_data.LEGACY_PROGRAM_TEXTS. Идемпотентна — базе,
         # прошедшей v7, повтор ничего лишнего не перепишет.
         await _migrate_legacy_catalog_program_texts()
+    if version < 9:
+        await _move_ungrouped_exercises_to_other()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     await _conn.commit()
+
+
+async def _move_ungrouped_exercises_to_other() -> None:
+    """Упражнения без группы мышц — во встроенную «Другое».
+
+    Решение владельца: упражнения без группы быть не должно. Такое не видно в
+    «Моих упражнениях» (список идёт по группам), а в недельном объёме оно
+    стояло строкой «Без группы». Новые пути создания его больше не заводят
+    (`create_exercise` сам подставляет «Другое»), а эта миграция подбирает
+    то, что уже успело накопиться. Идемпотентна: повтор найдёт ноль строк.
+    """
+    other_id = await other_muscle_group_id()
+    if other_id is None:
+        return
+    await _conn.execute(
+        "UPDATE exercises SET primary_group_id = ? WHERE primary_group_id IS NULL",
+        (other_id,),
+    )
+    await _conn.commit()
+
+
+async def other_muscle_group_id() -> Optional[int]:
+    """Id встроенной группы «Другое» — куда падает упражнение без группы."""
+    cur = await conn().execute(
+        "SELECT id FROM muscle_groups WHERE user_id IS NULL AND name = ? "
+        "ORDER BY is_archived, id LIMIT 1",
+        (OTHER_GROUP_NAME,),
+    )
+    row = await cur.fetchone()
+    return row["id"] if row else None
 
 
 async def _move_default_abs_exercises() -> None:
@@ -3381,17 +3414,19 @@ async def create_exercise(
     A name collision (e.g. typing the same name twice, or forking the same template
     a second time) would otherwise hit the unique index and raise an unhandled
     IntegrityError, silently dropping whatever triggered the creation.
+
+    Упражнения без группы мышц не бывает (решение владельца): без группы оно
+    не видно в «Моих упражнениях», а в объёме стоит «Без группы». Поэтому
+    `group_id=None` здесь значит «Другое», а найденное по имени старое
+    упражнение без группы получает группу, с которой его сейчас заводят.
     """
+    if group_id is None:
+        group_id = await other_muscle_group_id()
     display_name = build_display_name(name, equipment, unilateral, attachment)
 
     existing = await find_exercise_by_display_name(user_id, display_name)
     if existing:
-        if existing["is_archived"]:
-            async with _write_lock:
-                await conn().execute(
-                    "UPDATE exercises SET is_archived = 0 WHERE id = ?", (existing["id"],)
-                )
-                await conn().commit()
+        await _revive_existing_exercise(existing, group_id)
         return existing["id"]
 
     async with _write_lock:
@@ -3421,6 +3456,26 @@ async def create_exercise(
             if existing:
                 return existing["id"]
             raise
+
+
+async def _revive_existing_exercise(existing: aiosqlite.Row, group_id: Optional[int]) -> None:
+    """Повторное «создание» уже существующего упражнения: вернуть из архива и,
+    если у него нет группы (осталось с тех пор, как так можно было), дать ту,
+    с которой его сейчас заводят."""
+    fixes: list[str] = []
+    params: list[Any] = []
+    if existing["is_archived"]:
+        fixes.append("is_archived = 0")
+    if existing["primary_group_id"] is None and group_id is not None:
+        fixes.append("primary_group_id = ?")
+        params.append(group_id)
+    if not fixes:
+        return
+    async with _write_lock:
+        await conn().execute(
+            f"UPDATE exercises SET {', '.join(fixes)} WHERE id = ?", (*params, existing["id"])
+        )
+        await conn().commit()
 
 
 async def fork_exercise_from_template(
@@ -3455,12 +3510,7 @@ async def fork_exercise_from_template(
         raise ValueError("template not found")
     existing = await find_exercise_by_original_name(user_id, template["name"])
     if existing is not None:
-        if existing["is_archived"]:
-            async with _write_lock:
-                await conn().execute(
-                    "UPDATE exercises SET is_archived = 0 WHERE id = ?", (existing["id"],)
-                )
-                await conn().commit()
+        await _revive_existing_exercise(existing, template["primary_group_id"])
         return existing["id"]
     final_equipment = equipment if equipment is not None else template["equipment"]
     final_unilateral = unilateral if unilateral is not None else bool(template["unilateral"])
@@ -3519,9 +3569,15 @@ async def update_exercise_name(exercise_id: int, name: str) -> bool:
         return True
 
 
-async def update_exercise_group(exercise_id: int, group_id: int) -> None:
+async def update_exercise_group(exercise_id: int, group_id: Optional[int]) -> None:
     """Move an exercise to another muscle group in place (same row/id) so its
-    sets and history stay attached to it."""
+    sets and history stay attached to it.
+
+    Снять группу нельзя: `None` значит «Другое» (см. `create_exercise`)."""
+    if group_id is None:
+        group_id = await other_muscle_group_id()
+        if group_id is None:
+            return
     async with _write_lock:
         await conn().execute(
             "UPDATE exercises SET primary_group_id = ? WHERE id = ?", (group_id, exercise_id)

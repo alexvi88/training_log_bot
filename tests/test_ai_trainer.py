@@ -202,13 +202,14 @@ async def test_overview_includes_each_exercises_muscle_group(fresh_db, user_id):
     assert bench["muscle_group"] == "Грудь"
 
 
-async def test_overview_reports_null_group_for_a_groupless_exercise(fresh_db, user_id):
+async def test_overview_puts_an_exercise_created_without_group_into_other(fresh_db, user_id):
+    # Упражнения без группы не бывает: create_exercise(None) кладёт его в «Другое».
     await fresh_db.create_exercise(user_id, "Разное упражнение", None)
 
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_training_overview", {}))
 
     ex = next(e for e in payload["exercises"] if e["name"] == "Разное упражнение")
-    assert ex["muscle_group"] is None
+    assert ex["muscle_group"] == "Другое"
 
 
 async def test_recent_workouts_lists_sets(fresh_db, user_id):

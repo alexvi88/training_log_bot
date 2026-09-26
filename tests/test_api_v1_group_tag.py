@@ -94,9 +94,10 @@ async def test_group_tag_present_on_backfill_workout(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
-async def test_group_tag_null_when_exercise_has_no_group(fresh_db, client_factory):
-    """Упражнение без группы (`group_id` не передан) — `group_tag` держит
-    `null`, а не падает и не подставляет пустую строку."""
+async def test_group_tag_other_when_exercise_created_without_group(fresh_db, client_factory):
+    """Упражнение, заведённое без `group_id` (старые сборки iOS), ложится в
+    «Другое» — и `group_tag` у него тот же, что у любого упражнения «Другое»,
+    а не `null`: упражнения без группы не бывает."""
     client = await _linked_client(fresh_db, client_factory)
     exercise_id = (await client.post("/exercises", json={"name": "Своё без группы"})).json()["id"]
 
@@ -105,7 +106,7 @@ async def test_group_tag_null_when_exercise_has_no_group(fresh_db, client_factor
 
     body = (await client.get(f"/workouts/{workout_id}")).json()
     entry = _exercise_entry(body, exercise_id)
-    assert entry["group_tag"] is None
+    assert entry["group_tag"] == "ДРУГОЕ"
 
 
 @pytest.mark.asyncio

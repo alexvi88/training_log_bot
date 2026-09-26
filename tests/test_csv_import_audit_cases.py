@@ -342,7 +342,8 @@ async def test_import_without_ai_consent_skips_the_model_silently(fresh_db, monk
         assert calls == []
         # Заведено как есть, под именем из файла, — тренировка не потеряна.
         assert bench is not None
-        assert bench["primary_group_id"] is None
+        # Без группы упражнения не бывает — ложится в «Другое».
+        assert bench["primary_group_id"] == await db.other_muscle_group_id()
 
 
 @pytest.mark.asyncio
