@@ -125,3 +125,42 @@ async def test_app_dashboard_has_no_tonnage_tile(fresh_db, client_factory, lang)
     labels = [tile["label"].lower() for tile in body["tiles"]]
     assert body["tiles"]
     assert not any("тонн" in label or "tonnage" in label for label in labels), labels
+
+
+async def _session(user_id: int, ex_id: int, days_ago: int, weight: float) -> None:
+    day = dt.datetime.now() - dt.timedelta(days=days_ago)
+    workout_id = await db.create_finished_workout(
+        user_id, day.isoformat(), (day + dt.timedelta(hours=1)).isoformat()
+    )
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    for _ in range(3):
+        await db.append_set(block_id, ex_id, 0, weight, 5, rpe=8.0)
+
+
+@pytest.mark.asyncio
+async def test_lift_tiles_carry_the_exercise_id(fresh_db, client_factory):
+    """По тапу на плитку роста приложение открывает прогресс упражнения — для
+    этого нужен его id: имя на плитке в верхнем регистре и может совпасть у
+    двух движений. Ключ добавочный: старые exercise/growth/detail на месте,
+    иначе прежние сборки приложения перестали бы декодировать сводку."""
+    client = await _linked_client(fresh_db, client_factory)
+    group_id = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    bench = await db.create_exercise(111, "Bench Press", group_id)
+    squat = await db.create_exercise(111, "Squat", group_id)
+    # База 10 недель назад, рост — внутри 8-недельного окна; у приседа сильнее.
+    await _session(111, bench, 70, 100.0)
+    await _session(111, squat, 70, 100.0)
+    for days_ago in (20, 5):
+        await _session(111, bench, days_ago, 110.0)
+        await _session(111, squat, days_ago, 130.0)
+
+    body = (await client.get("/dashboard")).json()
+    tiles = body["lifts"]["tiles"]
+
+    assert [t["exercise"] for t in tiles] == ["SQUAT", "BENCH PRESS"]
+    assert [t["exercise_id"] for t in tiles] == [squat, bench]
+    for tile in tiles:
+        assert set(tile) == {"exercise", "growth", "detail", "exercise_id"}
+        assert isinstance(tile["exercise_id"], int)
+        assert tile["growth"].startswith("+")

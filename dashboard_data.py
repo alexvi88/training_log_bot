@@ -46,8 +46,8 @@ class MenuDashboard:
     volume_title: str = ""
     #: (НАЗВАНИЕ ГРУППЫ, подходов, статус)
     volume_rows: list[tuple[str, int, str]] = field(default_factory=list)
-    #: (движение, «+12%», «227кг vs 220кг»)
-    lift_tiles: list[tuple[str, str, str]] = field(default_factory=list)
+    #: (движение, «+12%», «227кг vs 220кг», id упражнения)
+    lift_tiles: list[tuple[str, str, str, int]] = field(default_factory=list)
     lifts_title: str = ""
     lifts_note: str = ""
 
@@ -102,14 +102,14 @@ async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
         LIFT_FALLBACK_WINDOW_WEEKS if history_age_weeks < LIFT_WINDOW_WEEKS else LIFT_WINDOW_WEEKS
     )
     lift_start = today - dt.timedelta(weeks=lift_window_weeks)
-    growth: list[tuple[str, float, float]] = []
+    growth: list[tuple[str, float, float, int]] = []
     for row in await db.top_exercises_by_frequency(
         user_id, lift_start.isoformat(), today.isoformat(), limit=LIFT_CANDIDATES, tz_offset=tz
     ):
         before_max, window_max = await db.exercise_e1rm_growth(
             user_id, row["id"], lift_start.isoformat(), formula, tz_offset=tz
         )
-        growth.append((row["display_name"], before_max, window_max))
+        growth.append((row["display_name"], before_max, window_max, row["id"]))
 
     agg = await db.hall_of_fame_aggregates(user_id)
     rank = analytics.rank_for(

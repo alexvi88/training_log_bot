@@ -53,8 +53,11 @@ def _dashboard_json(data: dashboard_data.MenuDashboard) -> dict[str, Any]:
             "title": data.lifts_title,
             "note": data.lifts_note,
             "tiles": [
-                {"exercise": exercise, "growth": growth, "detail": detail}
-                for exercise, growth, detail in data.lift_tiles
+                # exercise_id — чтобы приложение по тапу на плитку открыло
+                # прогресс этого упражнения; ключ добавлен, старые не тронуты.
+                {"exercise": exercise, "growth": growth, "detail": detail,
+                 "exercise_id": exercise_id}
+                for exercise, growth, detail, exercise_id in data.lift_tiles
             ],
         },
     }
