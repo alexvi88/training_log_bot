@@ -138,6 +138,7 @@ SKIPPED: dict[str, str] = {
     "GET /media/exercises/{name:path}": "раздаёт файл картинки (не JSON, текста нет)",
     "GET /exercises/{exercise_id:int}/photo": "раздаёт байты фото (не JSON, текста нет)",
     "GET /ai/history/{turn_id:int}/image": "раздаёт байты картинки чата (не JSON)",
+    "GET /support/photos/{message_id:int}": "раздаёт байты фото из поддержки (не JSON)",
 }
 
 # Ответы не-JSON, которые сценарий зовёт, но языком не проверяет.
@@ -273,6 +274,9 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         return None
 
     monkeypatch.setattr(api_v1_feedback, "_send_feedback_to_admin", fake_send)
+    # Суточная квота писем разработчику — словарь в памяти процесса, и без
+    # сброса третий прогон сценария упирался бы в неё.
+    monkeypatch.setattr(api_v1_feedback, "_daily_counts", {})
 
     import apple_signin
 
@@ -558,6 +562,16 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("DELETE", "/ai/history", expect=200)
     await w.call("POST", "/feedback", json={"text": text["feedback"]}, expect=201)
     await w.call("POST", "/feedback", json={"text": ""}, expect=400)
+    # Поддержка: своя ветка — как атлет; ветки всех — только админу, атлету
+    # 403 с человеческим текстом на его языке.
+    await w.call("POST", "/support/messages", json={"text": text["feedback"]}, expect=201)
+    await w.call("POST", "/support/messages", json={"text": ""}, expect=400)
+    await w.call("GET", "/support/messages", expect=200)
+    await w.call("POST", "/support/read", expect=200)
+    await w.call("GET", "/support/threads", expect=403)
+    await w.call("GET", "/support/threads/111/messages", expect=403)
+    await w.call("POST", "/support/threads/111/messages", json={"text": text["feedback"]}, expect=403)
+    await w.call("POST", "/support/threads/111/read", expect=403)
     await w.call("POST", "/factcheck", json={"text": text["post"]}, expect=200)
     await w.call("POST", "/diagnostics", json={
         "kind": "crash", "payload": {"diagnosticMetaData": {"appVersion": "1.0", "signal": 11}},

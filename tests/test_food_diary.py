@@ -847,9 +847,17 @@ async def test_concurrent_food_messages_pay_the_model_only_once(user_id, monkeyp
         return message
 
     first_task = asyncio.ensure_future(fire())
-    await asyncio.sleep(0.05)
+    # Ждём, пока первая корутина реально дойдёт до модели и возьмёт замок, —
+    # не фиксированной паузой: на медленном раннере CI 50 мс не хватало, и
+    # вторая успевала прийти уже после того, как первая всё отпустила.
+    for _ in range(500):
+        if calls:
+            break
+        await asyncio.sleep(0.01)
     second_task = asyncio.ensure_future(fire())
-    await asyncio.sleep(0.05)
+    # Вторая должна упереться в замок и закончиться сама, пока первая ещё
+    # держит модель: только после этого отпускаем первую.
+    await asyncio.wait_for(asyncio.shield(second_task), timeout=5)
     release.set()
     first_message, second_message = await asyncio.gather(first_task, second_task)
 

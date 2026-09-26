@@ -889,6 +889,34 @@ CREATE TABLE IF NOT EXISTS oauth_consent_failures (
     client_ip TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_failures_at ON oauth_consent_failures (at);
+
+-- Переписка атлета с поддержкой (владельцем, config.ADMIN_ID) — одна ветка на
+-- человека, см. api_v1_support.py. До неё отзыв из приложения улетал админу в
+-- Telegram и там умирал: ответить человеку было некуда, у app-only аккаунта
+-- нет чата с ботом. sender — 'user' (атлет) или 'admin' (ответ поддержки).
+-- photo_path — имя файла в config.SUPPORT_MEDIA_DIR (тот же приём, что
+-- ai_conversation_turns.image_path: файл на диске, в базе только имя).
+-- admin_read_at/user_read_at — когда реплику прочитала другая сторона;
+-- непрочитанное — это реплики собеседника с NULL в своей колонке.
+-- tg_admin_message_id/tg_admin_photo_message_id — id сообщений, которыми
+-- реплика атлета ушла админу в Telegram: по ним реплай админа в Telegram
+-- находит, чья это ветка (handlers/admin.py). Строки уходят вместе с
+-- аккаунтом (колонка user_id — см. _user_scoped_tables).
+CREATE TABLE IF NOT EXISTS support_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    sender TEXT NOT NULL CHECK (sender IN ('user', 'admin')),
+    text TEXT NOT NULL,
+    photo_path TEXT,
+    created_at TEXT NOT NULL,
+    admin_read_at TEXT,
+    user_read_at TEXT,
+    tg_admin_message_id INTEGER,
+    tg_admin_photo_message_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_support_messages_user ON support_messages (user_id, id);
+CREATE INDEX IF NOT EXISTS idx_support_messages_tg ON support_messages (tg_admin_message_id);
+CREATE INDEX IF NOT EXISTS idx_support_messages_tg_photo ON support_messages (tg_admin_photo_message_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -2776,6 +2804,9 @@ async def wipe_user_account(telegram_id: int) -> None:
         (telegram_id,),
     )
     attachment_names = [row[0] for row in await cur.fetchall()]
+    # И фото из переписки с поддержкой (support_messages.photo_path) — тот же
+    # случай: файл на диске, в базе только имя.
+    support_photo_names = await support_photo_names_for(telegram_id)
     async with _write_lock:
         db = conn()
         try:
@@ -2797,6 +2828,11 @@ async def wipe_user_account(telegram_id: int) -> None:
 
         for name in attachment_names:
             chat_attachments.delete(name)
+    if support_photo_names:
+        import chat_attachments
+
+        for name in support_photo_names:
+            chat_attachments.delete(name, root=config.SUPPORT_MEDIA_DIR)
 
 
 # ---------- muscle groups ----------
@@ -10237,3 +10273,147 @@ async def donation_totals(days: int = 30, *, day: Optional[str] = None) -> tuple
     )
     stars, people = await cur.fetchone()
     return stars, people
+
+
+# ---------- переписка с поддержкой ----------
+#
+# Одна ветка на атлета (support_messages, см. схему и api_v1_support.py).
+# «Поддержка» — это config.ADMIN_ID; отдельной роли в базе нет.
+
+SUPPORT_SENDERS = ("user", "admin")
+
+
+async def add_support_message(
+    user_id: int, sender: str, text: str, *, photo_path: Optional[str] = None
+) -> aiosqlite.Row:
+    """Реплика в ветку `user_id`. Своя реплика сразу прочитана своей стороной
+    (атлет — user_read_at, админ — admin_read_at): непрочитанным бывает только
+    сказанное собеседником."""
+    if sender not in SUPPORT_SENDERS:
+        raise ValueError(f"unknown support sender: {sender!r}")
+    now = now_iso()
+    user_read_at = now if sender == "user" else None
+    admin_read_at = now if sender == "admin" else None
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO support_messages "
+            "(user_id, sender, text, photo_path, created_at, admin_read_at, user_read_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, sender, text, photo_path, now, admin_read_at, user_read_at),
+        )
+        await conn().commit()
+        message_id = cur.lastrowid
+    return await get_support_message(message_id)
+
+
+async def get_support_message(message_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM support_messages WHERE id = ?", (message_id,))
+    return await cur.fetchone()
+
+
+async def delete_support_message(message_id: int) -> None:
+    """Откат реплики, которая так и не доехала до админа (см.
+    api_v1_support.store_and_forward) — иначе повтор отправки задвоил бы её
+    в ветке."""
+    async with _write_lock:
+        await conn().execute("DELETE FROM support_messages WHERE id = ?", (message_id,))
+        await conn().commit()
+
+
+async def set_support_tg_message_ids(
+    message_id: int, tg_message_id: Optional[int], tg_photo_message_id: Optional[int] = None
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE support_messages SET tg_admin_message_id = ?, tg_admin_photo_message_id = ? "
+            "WHERE id = ?",
+            (tg_message_id, tg_photo_message_id, message_id),
+        )
+        await conn().commit()
+
+
+async def support_user_by_tg_message(tg_message_id: int) -> Optional[int]:
+    """Чья ветка у сообщения админу в Telegram — по его message_id (текст или
+    фото реплики). None — это сообщение не из поддержки приложения."""
+    cur = await conn().execute(
+        "SELECT user_id FROM support_messages "
+        "WHERE tg_admin_message_id = ? OR tg_admin_photo_message_id = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (tg_message_id, tg_message_id),
+    )
+    row = await cur.fetchone()
+    return int(row["user_id"]) if row is not None else None
+
+
+async def list_support_messages(user_id: int, limit: int = 500) -> list[aiosqlite.Row]:
+    """Последние `limit` реплик ветки — старые первыми."""
+    cur = await conn().execute(
+        "SELECT * FROM (SELECT * FROM support_messages WHERE user_id = ? "
+        "ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+        (user_id, limit),
+    )
+    return list(await cur.fetchall())
+
+
+async def mark_support_read(user_id: int, reader: str) -> int:
+    """Отметить прочитанными реплики собеседника в ветке `user_id`: reader
+    'user' — ответы поддержки, 'admin' — реплики атлета. Возвращает, сколько
+    строк отметилось."""
+    if reader == "user":
+        column, sender = "user_read_at", "admin"
+    elif reader == "admin":
+        column, sender = "admin_read_at", "user"
+    else:
+        raise ValueError(f"unknown support reader: {reader!r}")
+    async with _write_lock:
+        cur = await conn().execute(
+            f"UPDATE support_messages SET {column} = ? "
+            f"WHERE user_id = ? AND sender = ? AND {column} IS NULL",
+            (now_iso(), user_id, sender),
+        )
+        await conn().commit()
+        return cur.rowcount
+
+
+async def support_unread_for_user(user_id: int) -> int:
+    """Сколько ответов поддержки атлет ещё не видел."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM support_messages "
+        "WHERE user_id = ? AND sender = 'admin' AND user_read_at IS NULL",
+        (user_id,),
+    )
+    (count,) = await cur.fetchone()
+    return int(count)
+
+
+async def support_unread_for_admin() -> int:
+    """Сколько реплик атлетов во всех ветках админ ещё не видел."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM support_messages WHERE sender = 'user' AND admin_read_at IS NULL"
+    )
+    (count,) = await cur.fetchone()
+    return int(count)
+
+
+async def list_support_threads() -> list[aiosqlite.Row]:
+    """Все ветки для экрана поддержки: последняя реплика и сколько в ветке
+    непрочитанного админом. Ветки с непрочитанным — первыми, дальше свежие
+    сверху."""
+    cur = await conn().execute(
+        "SELECT m.user_id, u.username, m.text AS last_text, m.sender AS last_sender, "
+        "m.created_at AS last_at, "
+        "(SELECT COUNT(*) FROM support_messages x WHERE x.user_id = m.user_id "
+        " AND x.sender = 'user' AND x.admin_read_at IS NULL) AS unread "
+        "FROM support_messages m LEFT JOIN users u ON u.telegram_id = m.user_id "
+        "WHERE m.id = (SELECT MAX(y.id) FROM support_messages y WHERE y.user_id = m.user_id) "
+        "ORDER BY (unread > 0) DESC, m.created_at DESC, m.id DESC"
+    )
+    return list(await cur.fetchall())
+
+
+async def support_photo_names_for(user_id: int) -> list[str]:
+    cur = await conn().execute(
+        "SELECT photo_path FROM support_messages WHERE user_id = ? AND photo_path IS NOT NULL",
+        (user_id,),
+    )
+    return [row[0] for row in await cur.fetchall()]

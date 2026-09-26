@@ -129,6 +129,7 @@
   "api.error.name_empty": "The name's empty — write something.",
   "api.error.text_empty": "It's empty — write something.",
   "api.error.text_too_long": "That's too long — keep it under {max} characters.",
+  "api.error.forbidden": "Only support can open this.",
   "ai.comment.workout_not_found": "Can't find that workout — open your history and pick it again.",
   "ai.factcheck.empty": "Couldn't make it out — try forwarding it again.",
   "ai.language_tail": "Reply ONLY in English — never switch to Russian, Ukrainian, or any other language, not even one word inside an English sentence. Terms the user themselves used in another language (an exercise name from the catalog, a unit, a technique term) are normal gym vocabulary, not a violation — keep them as given.",
@@ -1807,5 +1808,7 @@
   "ios_link.merge_conflict": "This Telegram account and the app account both already have their own training history — I won't merge them myself, too easy to get it wrong. Message /feedback and we'll sort it out by hand.",
   "ios_link.merge_ok": "Linked! It's one account now — everything from the app is right here, phone and Telegram both lead to the same place.",
   "api.error.payload_too_large": "That file's too heavy — I didn't take it, nothing got saved. Send a smaller one: a lighter photo or a shorter video.",
-  "share.app_store_line": "📱 On iPhone — get the app: {url}"
+  "share.app_store_line": "📱 On iPhone — get the app: {url}",
+  "support.push.reply_title": "Support",
+  "support.push.reply_body": "Reply from support: {text}"
 }
