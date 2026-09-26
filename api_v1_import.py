@@ -272,10 +272,13 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
         unresolved = [n for n in unresolved if n not in resolved]
         # Модель не нашла шаблон каталога вовсе — в боте это идёт на ручное
         # разрешение (handlers/exercise_resolve.py), которого у REST нет;
-        # заводим упражнение как есть, под именем из файла, без группы мышц,
-        # чтобы create_missing_exercises=true не терял тренировки молча.
+        # заводим упражнение как есть, под именем из файла, в группу «Другое»
+        # (без группы упражнения не бывает — его не было бы видно в «Моих
+        # упражнениях»), чтобы create_missing_exercises=true не терял
+        # тренировки молча. Группу человек поменяет потом сам.
+        other_group_id = await db.other_muscle_group_id()
         for name in unresolved:
-            ex_id = await db.create_exercise(user_id, name, None)
+            ex_id = await db.create_exercise(user_id, name, other_group_id)
             resolved[name] = ex_id
         unresolved = []
 

@@ -66,6 +66,11 @@ MUSCLE_GROUP_PRESETS = [
 # неё завязана разовая миграция db._move_default_abs_exercises.
 ABS_GROUP_NAME = "Пресс"
 
+# Встроенная группа, куда падает упражнение, заведённое без группы (старый
+# iOS-клиент без group_id, импорт CSV, поиск в живой тренировке с экрана
+# групп). Упражнения без группы не бывает — см. db.create_exercise.
+OTHER_GROUP_NAME = "Другое"
+
 # Locale-catalog slug for each preset group's English name — English's own
 # small, hand-written table (only 8 entries, no risk of drifting the way 100
 # exercise names would) rather than a locale key derived from the Russian

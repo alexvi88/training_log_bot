@@ -2083,6 +2083,13 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     if not query:
         return
     user = await db.get_user(message.from_user.id)
+    if await state.get_state() == WorkoutFlow.picking_group.state:
+        # Поиск с экрана групп — группы нет, и «➕ Создать «…»» из выдачи
+        # заведёт упражнение в «Другое» (db.create_exercise). Без сброса тут
+        # осталась бы группа, которую человек открывал раньше и из которой ушёл
+        # «назад», — и упражнение молча легло бы туда. Поиск внутри открытой
+        # группы её сохраняет: создание из него кладёт упражнение в эту группу.
+        await state.update_data(pending_group_id=None)
     # Searching from the group screen jumps into exercise-picking so a tap on a
     # result (pick:ex:*) and the "back" button both resolve correctly.
     await state.set_state(WorkoutFlow.picking_exercise)

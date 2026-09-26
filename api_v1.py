@@ -548,6 +548,11 @@ async def create_exercise(request: Request) -> JSONResponse:
         # проверки чужое упражнение молча привязалось бы к чужому разбиению.
         if group is None or (group["user_id"] is not None and group["user_id"] != user_id):
             raise ApiError(404, "not_found", "muscle group not found")
+    else:
+        # Старые сборки iOS присылают упражнение без group_id. Отказать —
+        # сломать им создание; без группы завести нельзя (его не видно в «Моих
+        # упражнениях»), поэтому — во встроенную «Другое».
+        group_id = await db.other_muscle_group_id()
     exercise_id = await db.create_exercise(user_id, name, group_id)
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row), status_code=201)
