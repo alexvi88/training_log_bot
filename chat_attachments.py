@@ -68,7 +68,12 @@ def media_dir() -> str:
     return config.AI_CHAT_MEDIA_DIR
 
 
-def path_for(name: str | None) -> str | None:
+# `root` у функций ниже — другой каталог с тем же способом хранения: фото из
+# переписки с поддержкой (config.SUPPORT_MEDIA_DIR, api_v1_support.py) лежат
+# так же, но отдельно от чата с тренером. None — каталог чата (media_dir()).
+
+
+def path_for(name: str | None, root: str | None = None) -> str | None:
     """Имя файла из базы → полный путь, если файл на месте.
 
     Та же защита от выхода за каталог, что в exercise_photos.path_for: имя
@@ -76,21 +81,23 @@ def path_for(name: str | None) -> str | None:
     зависеть от того, как значение туда попало."""
     if not name:
         return None
-    root = os.path.realpath(media_dir())
-    candidate = os.path.realpath(os.path.join(media_dir(), name))
-    if candidate != root and not candidate.startswith(root + os.sep):
+    directory = root or media_dir()
+    real_root = os.path.realpath(directory)
+    candidate = os.path.realpath(os.path.join(directory, name))
+    if candidate != real_root and not candidate.startswith(real_root + os.sep):
         return None
     return candidate if os.path.isfile(candidate) else None
 
 
-def _write(raw: bytes, ext: str, prefix: str) -> str:
+def _write(raw: bytes, ext: str, prefix: str, root: str | None = None) -> str:
     """Общая запись байт в каталог вложений — через временный файл с
     переименованием, чтобы обрыв на середине не оставил в каталоге
     полуфайл, который потом отдастся как «вложение» (тот же приём, что
     exercise_photos.save)."""
-    os.makedirs(media_dir(), exist_ok=True)
+    directory = root or media_dir()
+    os.makedirs(directory, exist_ok=True)
     name = f"{prefix}_{uuid.uuid4().hex[:16]}.{ext}"
-    final_path = os.path.join(media_dir(), name)
+    final_path = os.path.join(directory, name)
     tmp_path = final_path + ".part"
     with open(tmp_path, "wb") as fh:
         fh.write(raw)
@@ -98,7 +105,7 @@ def _write(raw: bytes, ext: str, prefix: str) -> str:
     return name
 
 
-def save_photo(user_id: int, raw: bytes, ext: str) -> str:
+def save_photo(user_id: int, raw: bytes, ext: str, root: str | None = None) -> str:
     """Фото к вопросу тренеру → имя файла в каталоге вложений.
 
     Валидация формата — на совести вызывающего (api_v1_ai уже прогнала байты
@@ -110,7 +117,7 @@ def save_photo(user_id: int, raw: bytes, ext: str) -> str:
         raise ValueError(f"unsupported chat photo extension: {ext!r}")
     if not isinstance(raw, (bytes, bytearray)) or not raw:
         raise ValueError("chat photo payload must be non-empty bytes")
-    return _write(bytes(raw), ext, f"u{user_id}")
+    return _write(bytes(raw), ext, f"u{user_id}", root)
 
 
 def _ffmpeg_path() -> str:
@@ -177,11 +184,11 @@ def save_video_frame(user_id: int, video_bytes: bytes) -> str | None:
         return None
 
 
-def delete(name: str | None) -> None:
+def delete(name: str | None, root: str | None = None) -> None:
     """Снести файл по имени. Отсутствие файла — не ошибка (тот же приём,
     что exercise_photos.delete): сюда приходят и имена из базы, файл под
     которыми уже мог пропасть."""
-    path = path_for(name)
+    path = path_for(name, root)
     if path is None:
         return
     try:

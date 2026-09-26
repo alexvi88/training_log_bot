@@ -19,6 +19,10 @@ EXERCISE_PHOTO_DIR = os.getenv("EXERCISE_PHOTO_DIR", "/data/media/exercise_photo
 # EXERCISE_PHOTO_DIR, своя подпапка — свой каталог, а не общий с фото
 # упражнений, чтобы очистка/бэкап одного не задевал другой ненароком.
 AI_CHAT_MEDIA_DIR = os.getenv("AI_CHAT_MEDIA_DIR", "/data/media/ai_chat")
+# Фото из переписки с поддержкой (support_messages.photo_path,
+# api_v1_support.py) — тот же том и тот же способ хранения
+# (chat_attachments.py), своя подпапка.
+SUPPORT_MEDIA_DIR = os.getenv("SUPPORT_MEDIA_DIR", "/data/media/support")
 
 # Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None

@@ -22,6 +22,8 @@ import activity_log
 import ai_limits
 import announcements
 import api_v1_activity
+import api_v1_feedback
+import api_v1_support
 import apns
 import config
 import db
@@ -1063,3 +1065,57 @@ async def admin_wipe_go(callback: CallbackQuery, state: FSMContext):
         "/start там теперь пройдёт как у новичка.",
     )
     await callback.answer("Готово")
+
+
+# ---------- ответ в поддержку реплаем ----------
+#
+# Реплика атлета из приложения приходит админу в Telegram (api_v1_feedback.
+# _send_feedback_to_admin). Реплай админа на неё — ответ в ветку поддержки:
+# ложится в support_messages и уходит атлету пушем (api_v1_support.
+# send_admin_reply). Ветка находится по message_id пересланного сообщения
+# (support_messages.tg_admin_message_id), а у сообщений, отправленных до этой
+# колонки, — по id в шапке «📱 Фидбек из приложения от id N».
+#
+# Фильтр, а не ранний return в хендлере: реплай на что угодно другое (отзыв из
+# бота через copy_to, отчёт, бэкап) должен пройти мимо — дальше по роутерам,
+# как и до этого хендлера. Хендлер последний в роутере: состояния рассылки
+# выше по файлу забирают сообщение раньше.
+
+
+async def _support_reply_target(message: Message) -> dict | bool:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        return False
+    replied = message.reply_to_message
+    if replied is None:
+        return False
+    if (message.text or "").startswith("/"):
+        return False
+    user_id = await db.support_user_by_tg_message(replied.message_id)
+    if user_id is None:
+        match = api_v1_feedback.ADMIN_HEADER_RE.match(replied.text or "")
+        if match is None:
+            return False
+        user_id = int(match.group(1))
+    return {"support_user_id": user_id}
+
+
+@router.message(_support_reply_target)
+async def support_reply(message: Message, support_user_id: int):
+    text = (message.text or message.caption or "").strip()
+    if not text:
+        await message.reply("В приложение отвечаю только текстом — напиши словами.")
+        return
+    if len(text) > api_v1_support.MAX_REPLY_LENGTH:
+        await message.reply(f"Длинно: уложись в {api_v1_support.MAX_REPLY_LENGTH} символов.")
+        return
+    if await db.get_user(support_user_id) is None:
+        await message.reply(f"Пользователя {support_user_id} уже нет — ответить некому.")
+        return
+    try:
+        _row, pushed = await api_v1_support.send_admin_reply(support_user_id, text)
+    except Exception:
+        logger.exception("support: не смог записать ответ пользователю %s", support_user_id)
+        await message.reply("Не записал ответ — база не дала. Загляни в лог и попробуй ещё раз.")
+        return
+    push_note = f"пуш на {pushed} устр." if pushed else "пуша нет (нет iOS-токена или APNs)"
+    await message.reply(f"✅ Ответ в поддержку для id {support_user_id} записан, {push_note}.")
