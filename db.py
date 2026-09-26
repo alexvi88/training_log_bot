@@ -1693,7 +1693,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 async def _run_one_shot_migrations() -> None:
@@ -1722,7 +1722,11 @@ async def _run_one_shot_migrations() -> None:
         await _backfill_bodyweight_load()
     if version < 6:
         await _move_default_abs_exercises()
-    if version < 7:
+    if version < 8:
+        # v7 — первый заход («Верх / Низ — 4 дня» → «Верх / Низ»), v8 — эмодзи
+        # перед «Всё тело — 2 дня» и «Верх / Низ»: та же миграция по
+        # дополненной seed_data.LEGACY_PROGRAM_TEXTS. Идемпотентна — базе,
+        # прошедшей v7, повтор ничего лишнего не перепишет.
         await _migrate_legacy_catalog_program_texts()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
@@ -1816,7 +1820,8 @@ async def _migrate_legacy_catalog_program_texts() -> None:
     """Каталожные копии программ со старым текстом из каталога → текущий.
 
     Копия программы — снимок имени и описания на момент «➕ Добавить себе».
-    Когда каталог переименовал «Верх / Низ — 4 дня» в «Верх / Низ», старые
+    Когда каталог переименовал «Верх / Низ — 4 дня» в «Верх / Низ» (а потом
+    дописал эмодзи к ней и к «Всё тело — 2 дня»), старые
     копии остались под прежним именем, и проверка «уже есть такая программа»
     (find_program_by_name по текущему имени — в боте и в /v1) их больше не
     находила: второй тап заводил дубль. Переписываем только то, что всё ещё
