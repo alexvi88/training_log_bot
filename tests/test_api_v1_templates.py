@@ -88,6 +88,21 @@ async def test_browse_by_group_lists_templates(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_list_rows_carry_catalog_thumb(fresh_db, client_factory):
+    """Строка 📋 в подборе приложения рисует превью из `thumb` — и в поиске,
+    и в группе; это тот же первый кадр, что у превью шаблона."""
+    client = await _linked_client(fresh_db, client_factory)
+    template = await _bench_press_template(fresh_db)
+    detail = (await client.get(f"/exercise-templates/{template['id']}")).json()
+    first_frame = detail["media"]["images"][0]
+
+    for params in ({"query": "жим штанги лёжа"}, {"group_id": template["primary_group_id"]}):
+        rows = {t["id"]: t for t in (await client.get("/exercise-templates", params=params)).json()}
+        assert rows[template["id"]]["thumb"] == first_frame
+        assert all("thumb" in row for row in rows.values())
+
+
+@pytest.mark.asyncio
 async def test_search_requires_query_or_group(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     resp = await client.get("/exercise-templates")
