@@ -74,6 +74,11 @@ def _template_list_json(template, lang: str) -> dict[str, Any]:
         # db.search_exercise_templates) — то, что видит атлет, локализуется тут.
         "name": seed_data.localized_exercise_name(template["name"], lang),
         "group_id": template["primary_group_id"],
+        # Первый кадр каталога для превью в строке подбора — то же поле, что
+        # у своих упражнений в GET /exercises (api_v1_common.exercise_json).
+        # Без него приложение рисовало у всех 📋-строк плитку группы, хотя
+        # кадры у шаблона есть — их видно в превью (`media`) и у форка.
+        "thumb": exercise_media.thumb_url_for(template),
     }
 
 
