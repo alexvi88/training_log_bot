@@ -41,6 +41,9 @@ class MenuDashboard:
     headline: str
     rank_name: str
     rank_level: int
+    # Собственный эмодзи звания (`analytics.Rank.emoji`) — приложение ставит
+    # его на плашку звания вместо общей медали, как в лестнице званий.
+    rank_emoji: str = ""
     #: (подпись, число) или (подпись, число, приписка)
     tiles: list[tuple] = field(default_factory=list)
     volume_title: str = ""
@@ -122,6 +125,7 @@ async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
         headline=formatting.menu_headline(dashboard),
         rank_name=rank.name,
         rank_level=rank.level,
+        rank_emoji=rank.emoji,
         tiles=formatting.menu_tiles(
             dashboard, tonnage, records, user["unit"], total_workouts=len(dates)
         ),
