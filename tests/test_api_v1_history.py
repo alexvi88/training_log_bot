@@ -204,3 +204,23 @@ async def test_export_csv_requires_token(fresh_db, client_factory):
     resp = await client.get("/export/csv")
 
     assert resp.status_code == 401
+
+
+# ---------- карта посещений за год ----------
+
+async def test_visits_counts_days_in_last_53_weeks(fresh_db, client_factory):
+    import datetime as dt
+    client = await _linked_client(fresh_db, client_factory, 111)
+    today = dt.date.today()
+    recent = (today - dt.timedelta(days=3)).isoformat()
+    old = (today - dt.timedelta(days=400)).isoformat()
+    await _finished_workout_with_set(111, started_at=f"{recent}T10:00:00")
+    await _finished_workout_with_set(111, started_at=f"{recent}T18:00:00")
+    await _finished_workout_with_set(111, started_at=f"{old}T10:00:00")
+
+    resp = await client.get("/workouts/visits")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["today"]
+    assert body["days"] == {recent: 2}

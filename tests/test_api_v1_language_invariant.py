@@ -426,6 +426,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", "/workouts", expect=200)
     await w.call("GET", f"/workouts/{wid}", expect=200)
     await w.call("GET", "/workouts/calendar?year=2026&month=9", expect=200)
+    await w.call("GET", "/workouts/visits", expect=200)
     await w.call("GET", "/workouts/search?exercise=" + text["csv_exercise"][:3], expect=200)
     await w.call("GET", f"/workouts/{wid}/card", expect=200)
     await w.call("GET", f"/workouts/{wid}/ai-comment", expect=200)

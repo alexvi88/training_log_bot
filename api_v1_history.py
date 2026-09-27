@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 from starlette.requests import Request
@@ -26,6 +27,7 @@ from starlette.routing import Route
 import api_v1_common as common
 import csv_export
 import db
+import timeutil
 import workout_card
 
 ApiError = common.ApiError
@@ -96,6 +98,31 @@ async def get_history_calendar(request: Request) -> Any:
     return JSONResponse({"days": by_day})
 
 
+# ---------- карта посещений за год ----------
+
+# 53 недели — ровно столько столбцов у карты «Посещения · год» (как у
+# картинки сводки бота): текущая неделя плюс 52 прошлых.
+VISITS_DAYS = 53 * 7
+
+
+async def get_visits(request: Request) -> Any:
+    """Карта посещений «как у GitHub» для экрана истории в приложении: сколько
+    законченных тренировок было в каждый местный день за последние 53 недели.
+
+    Одним запросом, а не двенадцатью `/workouts/calendar`: карте нужны только
+    счётчики по дням. `today` — местная дата пользователя, от неё клиент
+    строит сетку (часы телефона и пояс аккаунта могут не совпадать)."""
+    user_id = await _authed_user_id(request)
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user)
+    since = (today - dt.timedelta(days=VISITS_DAYS - 1)).isoformat()
+    days: dict[str, int] = {}
+    for d in await db.list_finished_workout_dates(user_id):
+        if d >= since:
+            days[d] = days.get(d, 0) + 1
+    return JSONResponse({"today": today.isoformat(), "days": days})
+
+
 # ---------- экспорт CSV ----------
 
 async def export_csv(request: Request) -> Response:
@@ -113,5 +140,6 @@ async def export_csv(request: Request) -> Response:
 routes = [
     Route("/workouts/{workout_id:int}/card", get_workout_card, methods=["GET"]),
     Route("/workouts/calendar", get_history_calendar, methods=["GET"]),
+    Route("/workouts/visits", get_visits, methods=["GET"]),
     Route("/export/csv", export_csv, methods=["GET"]),
 ]
