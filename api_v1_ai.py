@@ -30,7 +30,9 @@
   докстринг `ask_video`, чем это отличается от двух платных шагов в боте).
   Упражнение — своим `exercise_id` (владение проверяется, как и везде в
   `/v1`) или угаданное из `caption` тем же `handlers.ai_trainer._exercise_from_caption`,
-  что и у бота.
+  что и у бота. Необязательный `pose_summary` — замеры позы, которые
+  приложение сняло на телефоне (Apple Vision): повторы, углы, темп; уходят и
+  в разбор видео, и тренеру (`video_analysis.pose_summary_block`).
 - `POST /ai/program/save` — забрать предложенный черновик программы
   (`program.draft_id` из ответа `/ai/ask`) точно так же, как кнопка «Забрать»
   в боте: запись идёт через ai_program_actions.finalize_program_save — тот же
@@ -1166,8 +1168,15 @@ async def ask_video(request: Request) -> JSONResponse:
 
         exercise_hint = await _resolve_video_exercise_hint(user_id, body)
         caption = common.optional_str(body, "caption") or ""
+        # Замеры позы с телефона (iOS, Apple Vision) — необязательны: без них
+        # разбор идёт как раньше. Передаём только когда есть, чтобы не менять
+        # сигнатуру вызова для всех остальных путей.
+        pose_summary = (common.optional_str(body, "pose_summary") or "").strip()
+        pose_kwargs = {"pose_summary": pose_summary} if pose_summary else {}
 
-        analysis = await video_analysis.analyze(raw, user_id, mime_type=mime, exercise_hint=exercise_hint)
+        analysis = await video_analysis.analyze(
+            raw, user_id, mime_type=mime, exercise_hint=exercise_hint, **pose_kwargs
+        )
         if analysis is None:
             with i18n.use_lang(lang):
                 raise ApiError(502, "video_analysis_failed", "video analysis failed", key="ai.screen.video_analysis_failed")
@@ -1194,6 +1203,8 @@ async def ask_video(request: Request) -> JSONResponse:
             # переводятся через i18n (video_analysis._localized_enum), и вне
             # with они уезжали бы модели по-русски даже англоязычному атлету.
             video_context = video_analysis.to_context_block(analysis)
+            if pose_summary:
+                video_context += "\n\n" + video_analysis.pose_summary_block(pose_summary)
 
         history = await db.get_ai_conversation_wire_history(user_id)
         turn = await _run_turn(

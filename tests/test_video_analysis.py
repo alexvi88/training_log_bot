@@ -500,3 +500,9 @@ async def test_client_disables_sdk_retries(monkeypatch):
     video_analysis._get_client()
 
     assert captured["max_retries"] == 0
+
+
+def test_pose_summary_block_is_capped_and_labelled():
+    block = video_analysis.pose_summary_block("x" * 5000)
+    assert "Apple Vision" in block
+    assert block.count("x") == video_analysis.POSE_SUMMARY_MAX_CHARS
