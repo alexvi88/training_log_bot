@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 from starlette.requests import Request
@@ -25,8 +26,6 @@ from starlette.routing import Route
 
 import api_v1_common as common
 import csv_export
-import datetime as dt
-
 import db
 import timeutil
 import workout_card
