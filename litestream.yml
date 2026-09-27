@@ -10,3 +10,11 @@ dbs:
         endpoint: ${AWS_ENDPOINT_URL_S3}
         region: auto
         force-path-style: true
+
+# Только предупреждения и ошибки самого Litestream. На info он пишет по две
+# строки на каждый сегмент WAL («write wal segment» / «wal segment written»)
+# несколько раз в секунду, и в журнале Fly за ними не было видно строк бота
+# — действий людей ([ios]/[tg]) и отказов. Уровень касается только
+# Litestream: логи бота (logging.basicConfig в main.py) остаются как были.
+logging:
+  level: warn
