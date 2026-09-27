@@ -19,8 +19,10 @@
 поправь обе языковые версии политики тем же PR.
 
 Язык: явный `?lang=ru|en` побеждает (так зовёт приложение — язык аккаунта, а
-не телефона), иначе `Accept-Language` (браузер ревьюера), иначе русский — как
-у всего продукта (`i18n.DEFAULT_LANG`).
+не телефона), иначе `Accept-Language` (браузер ревьюера), иначе английский.
+Не русский, как у остального продукта (`i18n.DEFAULT_LANG`): эти адреса стоят
+в App Store Connect, и без заголовка их открывают проверялки ссылок Apple и
+всякие краулеры, а не атлет из бота — ему язык подскажет браузер.
 """
 
 from __future__ import annotations
@@ -92,7 +94,10 @@ def page_lang(request: Request) -> str:
     explicit = (request.query_params.get("lang") or "").strip().lower()
     if explicit in LANGS:
         return explicit
-    return i18n.lang_from_accept_language(request.headers.get("accept-language"))
+    header = request.headers.get("accept-language")
+    if not (header or "").strip():
+        return "en"
+    return i18n.lang_from_accept_language(header)
 
 
 def render(page: str, lang: str) -> str:
