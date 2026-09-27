@@ -40,7 +40,7 @@ def _tile_json(tile: tuple) -> dict[str, Any]:
 def _dashboard_json(data: dashboard_data.MenuDashboard) -> dict[str, Any]:
     return {
         "headline": data.headline,
-        "rank": {"name": data.rank_name, "level": data.rank_level},
+        "rank": {"name": data.rank_name, "level": data.rank_level, "emoji": data.rank_emoji or None},
         "tiles": [_tile_json(t) for t in data.tiles],
         "volume": {
             "title": data.volume_title,

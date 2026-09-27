@@ -83,6 +83,7 @@ async def test_dashboard_has_headline_rank_and_tiles_after_a_workout(fresh_db, c
     assert body["headline"]
     assert body["rank"]["name"]
     assert isinstance(body["rank"]["level"], int)
+    assert body["rank"]["emoji"], "эмодзи звания — на плашку в приложении"
     assert body["tiles"]
     for tile in body["tiles"]:
         assert set(tile) == {"label", "value", "sub"}
