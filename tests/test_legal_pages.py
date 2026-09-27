@@ -27,11 +27,21 @@ async def _get(path: str, headers: dict[str, str] | None = None) -> httpx.Respon
 
 
 @pytest.mark.parametrize("page", legal_pages.PAGES)
-async def test_page_is_public_and_russian_by_default(page):
+async def test_page_is_public_and_english_without_accept_language(page):
+    """Без заголовка — английский: адрес стоит в App Store Connect, и так его
+    открывают проверялки ссылок и краулеры, а не атлет из бота."""
     resp = await _get(f"/{page}")
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
+    assert '<html lang=en>' in resp.text
+    assert "Effective September 25, 2026" in resp.text
+
+
+@pytest.mark.parametrize("page", legal_pages.PAGES)
+async def test_russian_browser_gets_russian(page):
+    resp = await _get(f"/{page}", headers={"Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"})
+
     assert '<html lang=ru>' in resp.text
     assert "Вступа" in resp.text  # «Вступает/Вступают в силу»
     assert "25 сентября 2026" in resp.text
@@ -66,9 +76,11 @@ async def test_explicit_lang_beats_accept_language():
     assert '<html lang=ru>' in resp.text
 
 
-async def test_unknown_lang_falls_back_to_header_then_russian():
+async def test_unknown_lang_falls_back_to_header_then_english():
     resp = await _get("/privacy?lang=de")
+    assert '<html lang=en>' in resp.text
 
+    resp = await _get("/privacy?lang=de", headers={"Accept-Language": "ru"})
     assert '<html lang=ru>' in resp.text
 
 
@@ -98,13 +110,13 @@ def test_every_page_links_to_the_other_and_the_other_language():
 
 
 async def test_support_page_is_public_in_both_languages():
-    ru = await _get("/support")
+    ru = await _get("/support?lang=ru")
     assert ru.status_code == 200
     assert '<html lang=ru>' in ru.text
     assert "«Поддержка и отзыв»" in ru.text
     assert "t.me" not in ru.text
 
-    en = await _get("/support?lang=en")
+    en = await _get("/support")
     assert '<html lang=en>' in en.text
     assert "Support &amp; feedback" in en.text
     assert "t.me" not in en.text
