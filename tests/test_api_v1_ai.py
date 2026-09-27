@@ -1289,6 +1289,57 @@ async def test_ask_video_full_scenario_with_own_exercise(fresh_db, client_factor
 
 
 @pytest.mark.asyncio
+async def test_ask_video_passes_pose_summary_to_both_models(fresh_db, client_factory, monkeypatch):
+    """Замеры позы с телефона (iOS, Apple Vision) уходят и глазам (Qwen), и
+    голосу (Grok): иначе тренер пересказывал бы разбор, не зная цифр."""
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    summary = "reps: 5; knee angle min per rep (deg): 78, 80, 85, 92, 96"
+    seen = {}
+
+    async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None, pose_summary=None):
+        seen["analyze"] = pose_summary
+        return _fake_analysis()
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        seen["context"] = kwargs["video_context"]
+        return "ok"
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url(), "pose_summary": summary})
+    assert resp.status_code == 200, resp.text
+    assert seen["analyze"] == summary
+    assert summary in seen["context"]
+
+
+@pytest.mark.asyncio
+async def test_ask_video_without_pose_summary_keeps_old_call(fresh_db, client_factory, monkeypatch):
+    """Без замеров вызов разбора тот же, что был: старые клиенты и бот
+    ничего не шлют, и лишний аргумент им не нужен."""
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        return _fake_analysis()
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        assert "Apple Vision" not in kwargs["video_context"]
+        return "ok"
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url(), "pose_summary": "  "})
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
 async def test_ask_video_resolves_exercise_from_caption(fresh_db, client_factory, monkeypatch):
     monkeypatch.setattr(config, "video_analysis_available", lambda: True)
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
