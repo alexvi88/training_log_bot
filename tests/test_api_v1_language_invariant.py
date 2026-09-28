@@ -431,6 +431,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/workouts/{wid}/card", expect=200)
     await w.call("GET", f"/workouts/{wid}/ai-comment", expect=200)
     await w.call("POST", f"/workouts/{wid}/ai-comment", expect=200)
+    await w.call("POST", "/ai/conversations/workout", json={"workout_id": wid}, expect=200)
     await w.call("PATCH", f"/workouts/{wid}/sets/{set1['id']}", json={"reps": 6}, expect=200)
     await w.call("POST", f"/workouts/{wid}/exercises/{own_id}/sets", json={"weight": 20, "reps": 10},
                  expect=201)

@@ -155,6 +155,7 @@ api_v1_food.py.parse_food: сорвавшийся у провайдера зап
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 import os
 import secrets
@@ -176,9 +177,11 @@ import chat_attachments
 import config
 import db
 import exercise_mentions
+import formatting
 import i18n
 import program_mentions
 import running_texts
+import timeutil
 import video_analysis
 from handlers import ai_trainer as ai_trainer_handlers
 from handlers.ai_trainer import MAX_IMAGE_BYTES
@@ -1404,6 +1407,55 @@ async def delete_history(request: Request) -> JSONResponse:
     return JSONResponse({"cleared": True})
 
 
+async def discuss_workout(request: Request) -> JSONResponse:
+    """«Обсудить с тренером» под комментарием AI-тренера к тренировке
+    (приложение: итоги и карточка тренировки). Тело `{"workout_id": N}`.
+
+    Заводит новый разговор — как «начать заново» (delete_history), прошлый
+    уезжает в архив — и кладёт в него первым ходом сам разбор: видимая
+    реплика человека «Обсудим тренировку 28 сентября», ответ тренера —
+    комментарий к ней. Модели в этом ходу уходит та же карточка тренировки,
+    по которой разбор писался (ai_trainer.workout_card_for_model), так что
+    следующий вопрос («а насколько сбросить верхний подход?») видит и
+    подходы, и сам разбор. Модель здесь не зовётся — ни квоты, ни денег, ни
+    согласия: наружу ничего не уходит, согласие проверит первый вопрос.
+
+    Ответ — `{"conversation_id": N}`; сам разговор приложение перечитывает
+    обычным GET /ai/history.
+
+    * чужая или несуществующая тренировка — 404 `not_found`;
+    * у тренировки нет комментария — 409 `no_ai_comment`: обсуждать нечего,
+      и кнопки под пустым блоком у клиента нет.
+    """
+    user_id, user = await common.authed_user(request)
+    body = await common.json_body(request)
+    workout_id = common.require(body, "workout_id", int)
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != user_id:
+        raise ApiError(404, "not_found", "workout not found")
+    comment = workout["ai_comment"]
+    if not comment:
+        raise ApiError(409, "no_ai_comment", "workout has no ai comment")
+
+    lang = user["lang"] or i18n.DEFAULT_LANG
+    with i18n.use_lang(lang):
+        started_at = dt.datetime.fromisoformat(workout["started_at"])
+        day = formatting.format_day_month_ru(started_at.date(), today=timeutil.user_today(user))
+        question = i18n.t("ai.discuss.question", date=day)
+        card_text = await ai_trainer.workout_card_for_model(user, workout)
+
+    conversation_id = await db.start_new_ai_conversation(user_id)
+    await db.clear_ai_program_draft(user_id)
+    await db.clear_ai_setup_state(user_id)
+    await db.clear_ai_undo_actions(user_id)
+    wire = [
+        {"role": "user", "content": f"{question}\n\n{card_text}"},
+        {"role": "assistant", "content": comment},
+    ]
+    await db.add_ai_conversation_turn(user_id, question, comment, wire)
+    return JSONResponse({"conversation_id": conversation_id})
+
+
 def _conversation_json(row: Any) -> dict[str, Any]:
     """Одна строка списка разговоров. `title` — первый вопрос человека,
     обрезанный: своего имени у разговора нет, а просить модель придумать его —
@@ -1502,6 +1554,7 @@ routes = [
     Route("/ai/undo", undo_action, methods=["POST"]),
     Route("/ai/pending", get_pending_state, methods=["GET"]),
     Route("/ai/conversations", list_conversations, methods=["GET"]),
+    Route("/ai/conversations/workout", discuss_workout, methods=["POST"]),
     Route("/ai/conversations/{conversation_id:int}", get_conversation, methods=["GET"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),

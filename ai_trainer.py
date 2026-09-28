@@ -1177,6 +1177,32 @@ async def fact_check_post(
     return text or i18n.t("ai.factcheck.empty")
 
 
+async def workout_card_for_model(user: Any, workout: Any) -> str:
+    """Тренировка текстом для модели — то, по чему пишется комментарий
+    (comment_on_workout), и то же самое в начале разговора «Обсудить с
+    тренером» (POST /ai/conversations/workout): вопросы по разбору должны
+    видеть ровно те подходы, по которым разбор написан. Язык выставляет
+    вызывающий (i18n.use_lang).
+    """
+    started_at = dt.datetime.fromisoformat(workout["started_at"])
+    # mark_records: та же карточка, что видит человек, — включая строки рекордов.
+    # Без них модель хвалила «хороший вес» там, где стоял личный рекорд.
+    blocks = await view_builder.build_block_views(
+        workout["id"], user["e1rm_formula"], previous_before=workout["started_at"],
+        mark_records=True,
+    )
+    duration_seconds = await view_builder.workout_duration_seconds(workout)
+    card_text = formatting.build_workout_summary(
+        started_at, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
+        duration_seconds=duration_seconds, unit=user["unit"],
+    )
+    # Недельный объём приезжает вместе с карточкой: без него модель судила о нём
+    # по одной тренировке и звала «добрать спину» ровно под диаграммой, где по
+    # спине уже перебор (см. _weekly_volume_lines).
+    card_text += await _weekly_volume_lines(user["telegram_id"])
+    return card_text
+
+
 async def comment_on_workout(user_id: int, workout_id: int) -> str:
     """Короткий комментарий тренера по одной конкретной завершённой тренировке.
 
@@ -1200,22 +1226,7 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         # api_v1._write_ai_comment), где контекст сам не выставлен.
         return i18n.t_in(lang, "ai.comment.workout_not_found")
     with i18n.use_lang(lang):
-        started_at = dt.datetime.fromisoformat(workout["started_at"])
-        # mark_records: та же карточка, что видит человек, — включая строки рекордов.
-        # Без них модель хвалила «хороший вес» там, где стоял личный рекорд.
-        blocks = await view_builder.build_block_views(
-            workout_id, user["e1rm_formula"], previous_before=workout["started_at"],
-            mark_records=True,
-        )
-        duration_seconds = await view_builder.workout_duration_seconds(workout)
-        card_text = formatting.build_workout_summary(
-            started_at, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
-            duration_seconds=duration_seconds, unit=user["unit"],
-        )
-        # Недельный объём приезжает вместе с карточкой: без него модель судила о нём
-        # по одной тренировке и звала «добрать спину» ровно под диаграммой, где по
-        # спине уже перебор (см. _weekly_volume_lines).
-        card_text += await _weekly_volume_lines(user_id)
+        card_text = await workout_card_for_model(user, workout)
 
         client = _get_client()
         response = await paid_call(
