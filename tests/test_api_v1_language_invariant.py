@@ -367,6 +367,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", "/push/register", json={"device_token": "abc"}, expect=201)
     await w.call("DELETE", "/push/register", expect=200)
     await w.call("POST", "/account/telegram-link-code", expect=(200, 409))
+    await w.call("POST", "/mcp/link-code", expect=503)  # адреса MCP в тесте нет
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    await w.call("POST", "/mcp/link-code", expect=200)
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "")
 
     # --- группы, каталог, упражнения ---
     groups = (await w.call("GET", "/muscle-groups", expect=200)).json()

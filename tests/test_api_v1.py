@@ -205,6 +205,57 @@ async def test_request_telegram_link_code_rejects_already_linked_account(fresh_d
 
 
 @pytest.mark.asyncio
+async def test_mcp_link_code_for_app_only_account_goes_through_consent(
+    fresh_db, client_factory, monkeypatch
+):
+    """Аккаунт без Telegram получает код MCP из приложения, и этот код гасится
+    тем же путём, что и код из бота: verify_oauth_link_code отдаёт его id."""
+    import apple_signin
+    import config
+    import mcp_oauth
+
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    monkeypatch.setattr(
+        apple_signin, "verify_identity_token",
+        lambda token: apple_signin.AppleIdentity(apple_user_id="apple-mcp", email=None),
+    )
+    client = client_factory()
+    signup = await client.post("/auth/apple", json={"identity_token": "t"})
+    client.headers["Authorization"] = f"Bearer {signup.json()['token']}"
+    user_id = signup.json()["user_id"]
+
+    resp = await client.post("/mcp/link-code")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ttl_minutes"] == mcp_oauth.LINK_CODE_TTL_MINUTES
+    assert body["code"].isdigit()
+
+    # действует один код на пользователя: последний выданный
+    again = (await client.post("/mcp/link-code")).json()["code"]
+    live = await fresh_db.conn().execute(
+        "SELECT user_id FROM oauth_link_codes WHERE code = ?", (again,)
+    )
+    assert (await live.fetchone())["user_id"] == user_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_link_code_unavailable_without_public_url(fresh_db, client_factory, monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "")
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/mcp/link-code")
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_mcp_link_code_requires_auth(fresh_db, client_factory):
+    resp = await client_factory().post("/mcp/link-code")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_me_returns_linked_user(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     resp = await client.get("/me")

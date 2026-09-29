@@ -344,6 +344,27 @@ async def request_telegram_link_code(request: Request) -> JSONResponse:
     return JSONResponse({"code": code, "ttl_minutes": mcp_oauth.LINK_CODE_TTL_MINUTES})
 
 
+async def request_mcp_link_code(request: Request) -> JSONResponse:
+    """Код для страницы согласия MCP (подключение дневника к Claude/ChatGPT).
+
+    Так у app-only аккаунта (Apple ID без Telegram) появляется то, что у
+    телеграмного даёт бот на экране /mcp: чата, куда бот прислал бы код, у него
+    нет. Страница согласия (`mcp_oauth.consent_route`) и погашение кода
+    (`db.verify_oauth_link_code`) от Telegram не зависят — им нужна только
+    строка в `users`, а `AccessToken.subject` у MCP — просто `users.id`.
+
+    Код всегда новый (`force_new`): человек нажал кнопку в приложении прямо
+    сейчас и сразу понесёт код в браузер. Хранилище общее с остальными кодами
+    связывания — у пользователя живёт один код, новый гасит прежний.
+    Без публичного адреса MCP-сервер не поднят, и код вёл бы в никуда — 503.
+    """
+    user_id = await _authed_user_id(request)
+    if not config.mcp_available():
+        raise ApiError(503, "not_configured", "mcp is not enabled on this server")
+    code = await mcp_oauth.link_code(user_id, force_new=True)
+    return JSONResponse({"code": code, "ttl_minutes": mcp_oauth.LINK_CODE_TTL_MINUTES})
+
+
 async def me(request: Request) -> JSONResponse:
     user_id, user = await common.authed_user(request)
     return JSONResponse(
@@ -1918,6 +1939,7 @@ routes = [
     Route("/auth/password", auth_password, methods=["POST"]),
     Route("/auth/logout", auth_logout, methods=["POST"]),
     Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
+    Route("/mcp/link-code", request_mcp_link_code, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/push/register", register_push_token, methods=["POST"]),
     Route("/push/register", unregister_push_token, methods=["DELETE"]),
