@@ -413,6 +413,15 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     # --- тренировка ---
     wid = (await w.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
     await w.call("POST", "/workouts/active", json={}, expect=(200, 201, 409))
+    # Офлайн-синхронизация: тексты новых ошибок — на языке атлета.
+    for bad in (
+        {"client_id": "not-a-uuid"},
+        {"started_at": "2020-01-01T10:00:00Z"},
+        {"client_id": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d5e", "started_at": "вчера"},
+        {"client_id": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d5e", "started_at": "2020-01-01T10:00:00Z"},
+        {"client_id": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d5e", "started_at": "2999-01-01T10:00:00Z"},
+    ):
+        await w.call("POST", "/workouts/active", json=bad, expect=400)
     set1 = (await w.call("POST", f"/workouts/{wid}/sets",
                          json={"exercise_id": forked_id, "weight": 100, "reps": 5}, expect=201)).json()
     await w.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": forked_id, "weight": -5, "reps": 5},

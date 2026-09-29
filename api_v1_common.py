@@ -15,6 +15,7 @@ import datetime as dt
 import logging
 import math
 import re
+import uuid
 from typing import Any, Optional
 
 from starlette.requests import Request
@@ -439,6 +440,60 @@ async def reject_future_date(date: dt.date, user_id: int, field: str = "date") -
     user = await db.get_user(user_id)
     if date > timeutil.user_today(user):
         raise ApiError(400, "bad_request", f"{field} is in the future", key="input.date_in_future")
+
+
+# ---------- офлайн-синхронизация ----------
+
+OFFLINE_MAX_AGE_DAYS = 7
+"""Насколько давно могла начаться тренировка, приехавшая из офлайн-очереди.
+Дальше — только ручное занесение задним числом (POST /workouts/backfill). В
+тексте `input.moment_too_old` это «неделя»: меняешь число — меняй и текст."""
+
+OFFLINE_FUTURE_SLACK = dt.timedelta(minutes=5)
+"""Запас на расхождение часов телефона и сервера."""
+
+
+def client_id(body: dict[str, Any], key: str = "client_id") -> str | None:
+    """Необязательная метка с телефона: UUID строкой. Возвращается в
+    нормальной форме (нижний регистр, с дефисами), чтобы `ABC…` и `abc…` были
+    одной меткой."""
+    raw = optional_str(body, key)
+    if raw is None:
+        return None
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError as exc:
+        raise ApiError(
+            400, "bad_request", f"field {key} must be a UUID", key="input.client_id_invalid"
+        ) from exc
+
+
+def client_moment(body: dict[str, Any], key: str) -> dt.datetime | None:
+    """Необязательный момент времени с телефона (ISO 8601) как наивный UTC —
+    так время лежит в базе. Со смещением («Z», «+03:00») переводится в UTC,
+    без смещения читается как UTC. Не из будущего (дальше запаса на часы) и не
+    старше OFFLINE_MAX_AGE_DAYS."""
+    raw = optional_str(body, key)
+    if raw is None:
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError as exc:
+        raise ApiError(
+            400, "bad_request", f"field {key} must be ISO 8601", key="input.moment_invalid"
+        ) from exc
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    moment = moment.replace(microsecond=0)
+    now = dt.datetime.now()
+    if moment > now + OFFLINE_FUTURE_SLACK:
+        raise ApiError(400, "bad_request", f"{key} is in the future", key="input.moment_in_future")
+    if moment < now - dt.timedelta(days=OFFLINE_MAX_AGE_DAYS):
+        raise ApiError(
+            400, "bad_request", f"{key} is older than {OFFLINE_MAX_AGE_DAYS} days",
+            key="input.moment_too_old",
+        )
+    return min(moment, now)
 
 
 # ---------- числа подхода ----------

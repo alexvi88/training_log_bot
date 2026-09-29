@@ -1247,6 +1247,16 @@ async def _migrate_schema() -> None:
             "(SELECT program_id FROM routines WHERE routines.id = workouts.routine_id) "
             "WHERE routine_id IS NOT NULL"
         )
+    if "client_id" not in workout_cols:
+        # Метка тренировки, заведённой на телефоне офлайн (POST /v1/workouts/active
+        # с client_id): повтор синхронизации после потерянного ответа находит по
+        # ней уже созданную тренировку, а не заводит вторую. У тренировок бота и
+        # старых сборок приложения — NULL.
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN client_id TEXT")
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_workouts_user_client "
+        "ON workouts (user_id, client_id) WHERE client_id IS NOT NULL"
+    )
     if "followup_due_at" in workout_cols:
         # Post-workout followup push was removed — drop the columns a DB that
         # already ran the earlier migration would have.
@@ -4038,6 +4048,59 @@ async def get_or_create_active_workout(
             "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id) "
             "VALUES (?, ?, 'active', ?, ?)",
             (user_id, now_iso(), routine_id, program_id),
+        )
+        await db.commit()
+        return cur.lastrowid, True
+
+
+async def get_or_create_workout_by_client_id(
+    user_id: int,
+    client_id: str,
+    started_at: Optional[str] = None,
+    routine_id: Optional[int] = None,
+) -> tuple[int, bool]:
+    """Тренировка, заведённая на телефоне офлайн, — идемпотентно по `client_id`.
+    Возвращает (workout_id, created).
+
+    Порядок под одним `_write_lock` (тот же довод, что у
+    get_or_create_active_workout: проверка и вставка не должны разъезжаться):
+
+    1. Тренировка с этим client_id у этого пользователя уже есть — любого
+       статуса, в том числе уже законченная, — отдаём её: это повтор после
+       потерянного ответа.
+    2. Идёт другая активная тренировка (начата в боте или на другом устройстве):
+       вторую активную не заводим — инвариант «одна активная на человека»
+       держится на этом. Если у неё нет своей метки, ставим ей эту, чтобы
+       повторы дальше находились по п. 1; `started_at` у неё не трогаем.
+       Подходы офлайн-тренировки клиент пишет в возвращённый id.
+    3. Иначе заводим новую с `started_at` с телефона (или «сейчас»).
+    """
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT id FROM workouts WHERE user_id = ? AND client_id = ?", (user_id, client_id)
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"], False
+        cur = await db.execute(
+            "SELECT id, client_id FROM workouts WHERE user_id = ? AND status = 'active' "
+            "ORDER BY id LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            if row["client_id"] is None:
+                await db.execute(
+                    "UPDATE workouts SET client_id = ? WHERE id = ?", (client_id, row["id"])
+                )
+                await db.commit()
+            return row["id"], False
+        program_id = await _program_id_for_routine(routine_id)
+        cur = await db.execute(
+            "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id, client_id) "
+            "VALUES (?, ?, 'active', ?, ?, ?)",
+            (user_id, started_at or now_iso(), routine_id, program_id, client_id),
         )
         await db.commit()
         return cur.lastrowid, True
