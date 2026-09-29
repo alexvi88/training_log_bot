@@ -37,6 +37,7 @@ import api_v1
 import api_v1_feedback
 import config
 import i18n
+import text_import
 
 pytestmark = pytest.mark.asyncio
 
@@ -82,6 +83,10 @@ MACHINE_KEYS = {
     "reason", "topic", "app_store_url",
     # Ник в Telegram — идентификатор, который человек выбрал сам, а не текст продукта.
     "username",
+    # Черновик CSV из /import/text/convert: машинные заголовки колонок и имена
+    # упражнений так, как их написал сам атлет, — вход для /import/csv, а не
+    # текст на экране.
+    "csv",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -269,6 +274,14 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         return model["comment"]
 
     monkeypatch.setattr(ai_trainer, "comment_on_workout", fake_comment)
+
+    async def fake_extract_sets(user_id, text, today):
+        return text_import.ExtractResult(rows=[{
+            "date": "2025-03-02", "exercise": USER_TEXT[lang]["csv_exercise"],
+            "weight": 100.0, "unit": None, "reps": 5,
+        }])
+
+    monkeypatch.setattr(text_import, "extract_sets", fake_extract_sets)
 
     async def fake_send(user_id, text, photo):
         return None
@@ -592,6 +605,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
                  expect=(200, 201))
     bad_csv = f"date,exercise,weight,reps\n2025-03-01,{text['csv_exercise']},-50,5\n"
     await w.call("POST", "/import/csv/preview", json={"csv": bad_csv}, expect=400)
+    await w.call("POST", "/import/text/convert", json={"text": f"{text['csv_exercise']} 100 5"}, expect=200)
+    await w.call("POST", "/import/text/convert", json={"text": " "}, expect=400)
 
     # --- слияние, удаление ---
     await w.call("POST", "/exercises/merge", json={"source_id": own2_id, "target_id": own_id}, expect=200)
