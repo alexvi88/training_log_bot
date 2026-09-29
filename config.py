@@ -793,6 +793,13 @@ SHARED_ITEMS_RETENTION_DAYS = int(os.getenv("SHARED_ITEMS_RETENTION_DAYS", "180"
 # про недавнее: «что человек делал на этой неделе». Месяца на это хватает.
 ACTIVITY_RETENTION_DAYS = int(os.getenv("ACTIVITY_RETENTION_DAYS", "30"))
 
+# Сколько живут продуктовые события (db.analytics_events, product_metrics.py) и
+# шаги воронки до входа (db.funnel_events). В них нет текста, который ввёл
+# человек, — только имена событий и экранов, — а вопросы к ним годовые:
+# «удержание сейчас против прошлой осени». 13 месяцев — год с запасом.
+# Суточная сводка (db.daily_metrics) — только агрегаты, она не чистится вовсе.
+ANALYTICS_RETENTION_DAYS = int(os.getenv("ANALYTICS_RETENTION_DAYS", "400"))
+
 # Сколько живут отчёты о сбоях iOS-приложения (db.diagnostics, MetricKit —
 # api_v1_diagnostics.py). Чинят свежие сборки; три месяца — с запасом на
 # «падает у одного человека раз в месяц», дальше сборки уже ни у кого нет.

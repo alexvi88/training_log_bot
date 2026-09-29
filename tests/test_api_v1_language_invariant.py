@@ -579,6 +579,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
         "kind": "crash", "payload": {"diagnosticMetaData": {"appVersion": "1.0", "signal": 11}},
     }, expect=201)
     await w.call("POST", "/diagnostics", json={"kind": "nope", "payload": {"a": 1}}, expect=400)
+    await w.call("POST", "/events", json={"events": [
+        {"name": "app_open"}, {"name": "screen_view", "props": {"screen": "progress"}},
+    ]}, expect=200)
+    await w.call("POST", "/events", json={"events": "nope"}, expect=400)
     await w.call("DELETE", "/profile", expect=200)
 
     # --- импорт ---

@@ -34,6 +34,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message
 
 import db
+import product_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -171,10 +172,28 @@ def _reply_button_label(message: Message) -> str | None:
     return None
 
 
+def message_props(message: Message, reply_button: bool) -> dict:
+    """Свойства события `tg_message` (product_metrics): вид сообщения и имя
+    команды — без текста, который человек набрал."""
+    if reply_button:
+        return {"type": "reply_button"}
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        command = text.split(maxsplit=1)[0].split("@", 1)[0][1:].lower()
+        return {"type": "command", "command": command[:32]}
+    return {"type": str(message.content_type or "unknown")[:32]}
+
+
 async def record_message(message: Message) -> None:
     if message.from_user is None:
         return
     label = _reply_button_label(message)
+    await product_metrics.track(
+        message.from_user.id,
+        "tg_message",
+        message_props(message, label is not None),
+        platform=product_metrics.PLATFORM_TG,
+    )
     if label is not None:
         await db.log_user_event(message.from_user.id, KIND_REPLY_BUTTON, label)
         return
@@ -186,6 +205,13 @@ async def record_callback(callback: CallbackQuery) -> None:
         return
     data = callback.data or ""
     label = button_label(callback)
+    await product_metrics.track(
+        callback.from_user.id,
+        "tg_callback",
+        # Без чисел: «hist:12» и «hist:13» — один экран, а не два.
+        {"screen": ":".join(p for p in callback_prefix(data).split(":") if not p.isdigit())},
+        platform=product_metrics.PLATFORM_TG,
+    )
     await db.log_user_event(
         callback.from_user.id, KIND_CALLBACK, _truncate(label or data or "(кнопка)"), data or None
     )
