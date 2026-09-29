@@ -307,7 +307,22 @@ async def _limits_json(user_id: int) -> dict[str, Any]:
     # Когда упрёмся в отказ — говорим про тот вид, что отказал (деньги идут по UTC,
     # вопросы по суткам атлета); иначе — про окно вопросов.
     reset = await ai_limits.resets_at(user_id, block.kind if block is not None else ai_limits.KIND_QUESTION)
+    video_used = await db.get_ai_video_count_today(user_id)
+    video_limit = config.AI_VIDEO_DAILY_LIMIT
+    # Сутки квоты — календарные у самого атлета (db._quota_day), поэтому и
+    # сброс — его ближайшая полночь, пересчитанная в UTC.
+    offset = await db.user_tz_offset(user_id)
+    local_now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) + dt.timedelta(hours=offset)
+    next_midnight = dt.datetime.combine(local_now.date() + dt.timedelta(days=1), dt.time())
+    resets_at = (next_midnight - dt.timedelta(hours=offset)).replace(tzinfo=dt.timezone.utc)
     return {
+        "video": {
+            "used": video_used,
+            # Как у question: лимит <= 0 значит «лимита нет» (null).
+            "limit": video_limit if video_limit > 0 else None,
+            "remaining": max(0, video_limit - video_used) if video_limit > 0 else None,
+            "resets_at": resets_at.isoformat().replace("+00:00", "Z"),
+        },
         "question": {
             "used": used,
             # 0 или отрицательное значение лимита в конфиге значит «лимита
