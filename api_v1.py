@@ -119,6 +119,7 @@ def _workout_json(row) -> dict[str, Any]:
         "finished_at": row["finished_at"],
         "note": row["note"],
         "routine_id": row["routine_id"],
+        "client_id": row["client_id"],
     }
 
 
@@ -844,13 +845,33 @@ async def start_workout(request: Request) -> JSONResponse:
     тело и получает тренировку «с нуля», как раньше. Без привязки к дню
     программы `db.next_program_day` не может продвинуться дальше первого
     дня — ровно то, что уже делает бот в _begin_routine_workout, здесь тот
-    же db.create_workout(routine_id=...) через get_or_create_active_workout."""
+    же db.create_workout(routine_id=...) через get_or_create_active_workout.
+
+    Офлайн: необязательные `client_id` и `started_at`, см. ниже и
+    db.get_or_create_workout_by_client_id."""
     user_id = await _authed_user_id(request)
     body = await _json_body(request) if await request.body() else {}
     routine_id = common.optional_int(body, "routine_id")
     if routine_id is not None:
         await api_v1_programs._owned_routine(routine_id, user_id)
-    workout_id, created = await db.get_or_create_active_workout(user_id, routine_id=routine_id)
+    # Офлайн-синхронизация: `client_id` (UUID с телефона) делает старт
+    # идемпотентным, `started_at` — реальным моментом старта на телефоне. Без
+    # client_id `started_at` не принимается: без метки повтор не отличить от
+    # новой тренировки, а пустую активную и так подхватывает обычный старт.
+    client_id = common.client_id(body)
+    started_at = common.client_moment(body, "started_at")
+    if started_at is not None and client_id is None:
+        raise ApiError(
+            400, "bad_request", "started_at requires client_id", key="input.client_id_required"
+        )
+    if client_id is None:
+        workout_id, created = await db.get_or_create_active_workout(user_id, routine_id=routine_id)
+    else:
+        workout_id, created = await db.get_or_create_workout_by_client_id(
+            user_id, client_id,
+            started_at.isoformat(timespec="seconds") if started_at else None,
+            routine_id=routine_id,
+        )
     workout = await db.get_workout(workout_id)
     return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
 
@@ -1427,8 +1448,19 @@ async def finish_workout(request: Request) -> JSONResponse:
     # У занесения задним числом конец — тот же момент, что и начало
     # (timeutil.backdated_moment): «дата started_at + полдень UTC» у UTC+13/+14
     # давала конец на других сутках, чем начало.
+    # `finished_at` — реальный конец офлайн-тренировки с телефона: без него
+    # тренировка, начатая вчера в зале без сети, закончилась бы в момент
+    # синхронизации и растянулась в истории на сутки.
+    client_finished = common.client_moment(body, "finished_at")
+    if client_finished is not None and client_finished < started_at:
+        raise ApiError(
+            400, "bad_request", "finished_at is before started_at",
+            key="input.finished_before_started",
+        )
     if workout["status"] == "backfill":
         finished_at = workout["started_at"]
+    elif client_finished is not None and not backdated:
+        finished_at = client_finished.isoformat(timespec="seconds")
     elif backdated:
         finished_at = db.backdated_finished_at(workout)
     else:
