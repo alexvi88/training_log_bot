@@ -216,11 +216,21 @@ async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, in
     if raw is None:
         return {}
     bad = ApiError(400, "invalid_exercise_mapping", "exercise_mapping has an unknown or foreign exercise id")
-    if not isinstance(raw, dict):
-        raise ApiError(400, "bad_request", "exercise_mapping must be an object")
+    # Тот же выбор списком пар [{"name", "exercise_id"}]: iOS-кодировщик
+    # переписывает ключи словаря в snake_case («Bench Press» → «bench _press»),
+    # а имена из файла трогать нельзя.
+    if isinstance(raw, list):
+        try:
+            pairs = [(item["name"], item["exercise_id"]) for item in raw]
+        except (TypeError, KeyError):
+            raise ApiError(400, "bad_request", "exercise_mapping items need name and exercise_id") from None
+    elif isinstance(raw, dict):
+        pairs = list(raw.items())
+    else:
+        raise ApiError(400, "bad_request", "exercise_mapping must be an object or a list")
     mapping: dict[str, int] = {}
-    for name, ex_id in raw.items():
-        if not isinstance(ex_id, int) or isinstance(ex_id, bool):
+    for name, ex_id in pairs:
+        if not isinstance(name, str) or not isinstance(ex_id, int) or isinstance(ex_id, bool):
             raise bad
         ex = await db.get_exercise(ex_id)
         if ex is None or ex["user_id"] != user_id or ex["is_template"] or ex["is_archived"]:

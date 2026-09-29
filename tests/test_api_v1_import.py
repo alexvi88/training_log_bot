@@ -292,3 +292,17 @@ async def test_commit_rejects_foreign_exercise_in_mapping(fresh_db, client_facto
     assert resp.json()["error"] == "invalid_exercise_mapping"
     assert not any(ord(c) > 1000 for c in resp.json()["detail"])
     assert await fresh_db.list_workouts(111, limit=10, offset=0, status="finished") == []
+
+
+async def test_commit_accepts_mapping_as_list_of_pairs(fresh_db, client_factory):
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    gid = await fresh_db.create_muscle_group(111, "Грудь")
+    mine = await fresh_db.create_exercise(111, "Мой жим", gid)
+    client = await _linked_client(fresh_db, client_factory, telegram_id=111)
+
+    resp = await client.post("/import/csv", json={
+        "csv": CSV_TWO_WORKOUTS, "exercise_mapping": [{"name": "Жим лёжа", "exercise_id": mine}],
+    })
+    assert resp.status_code == 200, resp.text
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM sets WHERE exercise_id = ?", (mine,))
+    assert (await cur.fetchone())[0] == 1
