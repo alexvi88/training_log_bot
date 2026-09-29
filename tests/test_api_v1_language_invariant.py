@@ -396,6 +396,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/exercises/{forked_id}/description", expect=200)
     await w.call("GET", f"/exercises/{own2_id}/description", expect=404)
     await w.call("GET", f"/exercises/{forked_id}/media", expect=200)
+    await w.call("GET", f"/exercises/{squat_id}/alternatives", expect=200)
+    await w.call("GET", f"/exercises/{own_id}/alternatives", expect=200)
     await w.call("POST", f"/exercises/{own_id}/photo",
                  json={"image_data_url": f"data:image/png;base64,{PNG_1PX}"}, expect=201)
     await w.call("DELETE", f"/exercises/{own_id}/photo", expect=200)

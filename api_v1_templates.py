@@ -29,6 +29,7 @@ from starlette.routing import Route
 import api_v1_common as common
 import api_v1_media
 import db
+import exercise_alternatives
 import exercise_descriptions
 import exercise_media
 import i18n
@@ -128,7 +129,26 @@ async def get_exercise_template(request: Request) -> JSONResponse:
     template = await _owned_template(template_id)
     lang = await _user_lang(user_id)
     with i18n.use_lang(lang):
-        return JSONResponse(_template_detail_json(template, lang))
+        data = _template_detail_json(template, lang)
+        data["alternatives"] = await exercise_alternatives.for_exercise(user_id, template, lang)
+        return JSONResponse(data)
+
+
+async def get_exercise_alternatives(request: Request) -> JSONResponse:
+    """«Альтернативные упражнения» в карточке упражнения приложения
+    (`exercise_alternatives.for_exercise`).
+    `exercise_id` в строке — уже своя копия (открывать её карточку), `null` —
+    ещё не заведено, открывать превью шаблона `template_id` с «Добавить».
+    Своё упражнение не из каталога получает пустой список, а не ошибку:
+    блок в карточке просто не рисуется."""
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    exercise = await db.get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != user_id:
+        raise ApiError(404, "not_found", "exercise not found")
+    lang = await _user_lang(user_id)
+    with i18n.use_lang(lang):
+        return JSONResponse(await exercise_alternatives.for_exercise(user_id, exercise, lang))
 
 
 # ---------- форк в свою копию ----------
@@ -152,4 +172,5 @@ routes = [
     Route("/exercise-templates", list_exercise_templates, methods=["GET"]),
     Route("/exercise-templates/{template_id:int}", get_exercise_template, methods=["GET"]),
     Route("/exercise-templates/{template_id:int}/add", add_exercise_template, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}/alternatives", get_exercise_alternatives, methods=["GET"]),
 ]
