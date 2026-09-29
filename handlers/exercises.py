@@ -21,6 +21,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 import db
+import exercise_alternatives
 import exercise_descriptions
 import exercise_media
 import exercise_photos
@@ -266,6 +267,51 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:alts:"))
+async def exm_alternatives(callback: CallbackQuery, state: FSMContext):
+    """«🔁 Чем заменить» из карточки: те же мышцы на другом снаряде
+    (`exercise_alternatives`). Уже своё упражнение открывается своей
+    карточкой — с историей и прогрессом; ещё не заведённое — превью шаблона
+    с «Добавить», как в каталоге."""
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await ui.alert_exercise_not_found(callback)
+        return
+    alternatives = await exercise_alternatives.for_exercise(callback.from_user.id, ex)
+    await _clear_exercise_media(callback.bot, callback.message.chat.id, state)
+    text = i18n.t("exercises.alts.title", name=escape(ex["display_name"]))
+    if any(a["exercise_id"] is None for a in alternatives):
+        text += "\n" + i18n.t("exercises.alts.catalog_hint")
+    kb = keyboards.alternatives_keyboard(alternatives, source_id=ex_id)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:altpv:"))
+async def exm_alternative_preview(callback: CallbackQuery, state: FSMContext):
+    """Превью шаблона-замены — тот же экран, что у шаблона в каталоге, только
+    «Назад» ведёт обратно к списку замен, а не к каталогу группы."""
+    _, _, template_id, source_id = callback.data.split(":")
+    template = await db.get_exercise(int(template_id))
+    if template is None or not template["is_template"]:
+        await callback.answer(i18n.t("exercises.template_not_found"), show_alert=True)
+        return
+    back_cb = f"exm:alts:{source_id}"
+    shown = _localized_template_row(template)
+    text = _exercise_info_text(shown, with_created=False)
+    kb = keyboards.template_preview_keyboard(template["id"], back_cb=back_cb)
+    confirm_kb = keyboards.template_preview_keyboard(template["id"], back_cb=back_cb, as_question=True)
+    images = exercise_media.get_images(template["name"])
+    await _clear_exercise_media(callback.bot, callback.message.chat.id, state)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    media_ids = await _send_template_preview(callback.message, shown, text, kb, images, confirm_kb)
+    if media_ids:
+        await state.update_data(exm_media_msg_ids=media_ids)
+    await callback.answer()
+
+
 @router.callback_query(
     StateFilter(ExerciseManage.creating_exercise_name, ExerciseManage.picking_exercise),
     F.data.startswith("exm:tpladd:"),
@@ -460,7 +506,7 @@ async def _exercise_group_name(ex) -> str | None:
 
 async def _send_template_preview(
     message, template, text: str, kb, images: list[str], confirm_kb=None
-) -> None:
+) -> list[int]:
     """Предпросмотр шаблона: ОБЕ позиции упражнения плюс кнопки.
 
     Раньше отправлялось images[0] — одна картинка из двух, вторая молча
@@ -473,7 +519,8 @@ async def _send_template_preview(
     Решение то же, каким уже сделана карточка упражнения (см.
     _send_exercise_images и _render_exercise_card): картинки уходят
     медиагруппой с описанием в подписи (она уже есть на первом кадре), а
-    кнопки — следующим сообщением. Там раньше дублировалось название
+    кнопки — следующим сообщением (id кадров медиагруппы возвращаются, чтобы
+    экран, куда ведёт «Назад», мог их убрать). Там раньше дублировалось название
     упражнения — читалось как вторая, не связанная карточка. Вместо этого
     короткий вопрос «Добавить?», и `confirm_kb` (см. keyboards.
     template_preview_keyboard(as_question=True)) отвечает ему кнопками
@@ -492,15 +539,15 @@ async def _send_template_preview(
         )
         animation = getattr(sent, "animation", None)
         exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
-        return
+        return []
     if not images:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        return
+        return []
     if len(images) == 1:
         await message.answer_photo(
             FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
         )
-        return
+        return []
     media = [
         InputMediaPhoto(
             media=FSInputFile(path),
@@ -509,10 +556,11 @@ async def _send_template_preview(
         )
         for i, path in enumerate(images)
     ]
-    await message.answer_media_group(media)
+    sent = await message.answer_media_group(media)
     await message.answer(
         i18n.t("workout.template_confirm_add"), reply_markup=confirm_kb or kb, parse_mode="HTML"
     )
+    return [m.message_id for m in sent]
 
 
 async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True):
@@ -543,8 +591,13 @@ def _exercise_detail_view(
     b.button(text=i18n.t("exercises.btn.edit"), callback_data=f"exm:editmenu:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.share"), callback_data=f"share:ex:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.archive_ex"), callback_data=f"exm:archiveask:{ex['id']}")
+    # Замены есть только у упражнения из каталога — про своё движение атлета
+    # мы не знаем ничего, и кнопка вела бы на пустой экран.
+    has_alternatives = bool(exercise_alternatives.alternatives_for(exercise_media.catalog_key(ex)))
+    if has_alternatives:
+        b.button(text=i18n.t("exercises.btn.alternatives"), callback_data=f"exm:alts:{ex['id']}")
     b.button(text=i18n.t("btn.back"), callback_data=back_cb)
-    b.adjust(2, 2, 1)
+    b.adjust(*((2, 2, 1, 1) if has_alternatives else (2, 2, 1)))
     # Even when the details went out as a photo caption, the button screen keeps
     # the name: the photo can scroll out of view, and a bare "Manage:" doesn't
     # say which exercise the buttons act on.

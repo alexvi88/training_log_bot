@@ -293,6 +293,20 @@ async def _screen_exercise_picker(db, user_id: int) -> str:
     return "\n".join(buttons)
 
 
+async def _screen_exercise_alternatives(db, user_id: int) -> str:
+    """Экран «🔁 Чем заменить» из карточки упражнения
+    (keyboards.alternatives_keyboard): своя копия и ещё не заведённый 📋-шаблон."""
+    kb = keyboards.alternatives_keyboard(
+        [
+            {"name": "Dumbbell Bench Press", "template_id": 2, "exercise_id": 5, "thumb": None},
+            {"name": "Machine Chest Press", "template_id": 3, "exercise_id": None, "thumb": None},
+        ],
+        source_id=1,
+    )
+    text = i18n.t("exercises.alts.title", name="Bench Press") + "\n" + i18n.t("exercises.alts.catalog_hint")
+    return text + "\n" + "\n".join(b.text for row in kb.inline_keyboard for b in row)
+
+
 async def _screen_programs(db, user_id: int) -> str:
     """Экран «🗂 Программы» (keyboards.routines_manage_keyboard): многодневки,
     одиночные программы, каталог готового и сборка с AI-тренером разом."""
@@ -754,6 +768,7 @@ SCREENS: list[tuple[str, object]] = [
     ("language_picker", _screen_language_picker),
     ("main_menu", _screen_main_menu),
     ("exercise_picker", _screen_exercise_picker),
+    ("exercise_alternatives", _screen_exercise_alternatives),
     ("programs", _screen_programs),
     ("food_diary", _screen_food_diary),
     ("history_list", _screen_history_list),

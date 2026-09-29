@@ -3411,6 +3411,19 @@ async def find_exercise_by_original_name(user_id: int, original_name: str) -> Op
     return None
 
 
+async def list_active_exercises_with_identity(user_id: int) -> list[aiosqlite.Row]:
+    """Живые (не в архиве) свои упражнения атлета, у которых есть
+    идентичность каталога (`original_name`) — одним чтением на экран
+    альтернатив (`exercise_alternatives.for_exercise`), а не по запросу на
+    каждую замену."""
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0 AND is_archived = 0 "
+        "AND original_name IS NOT NULL ORDER BY id",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
 async def find_exercise_by_display_name(user_id: int, display_name: str) -> Optional[aiosqlite.Row]:
     """Find a user's exercise by name, case-insensitively, archived or not.
 
