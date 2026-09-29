@@ -45,11 +45,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import ai_limits
+import ai_trainer
 import api_v1_ai
 import api_v1_common as common
 import config
 import db
 import i18n
+import text_import
 import timeutil
 from handlers import csv_import as bot_csv_import
 from handlers.csv_import import (
@@ -317,7 +320,73 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     )
 
 
+# Разбор текста — один на атлета за раз: второй тап по «Разобрать» (или
+# повтор после таймаута) иначе заплатил бы модели за тот же текст дважды.
+_converting: set[int] = set()
+
+
+async def convert_text(request: Request) -> JSONResponse:
+    """Произвольный текст (заметки, тетрадь, чат) → CSV для /import/csv.
+
+    Ничего не пишет: модель собирает только черновик строк «дата, упражнение,
+    вес, повторы» (text_import.py), а приложение отправляет полученный `csv`
+    в обычные /import/csv/preview и /import/csv — предпросмотр, дубли и
+    сопоставление с каталогом у текста те же, что у файла Hevy/Strong.
+
+    В отличие от CSV модель здесь не необязательный шаг, а весь разбор:
+    без согласия на передачу данных AI — 403 `ai_consent_required`, как у
+    ручек тренера. Личной квоты нет (разбор нужен раз при переезде, а не
+    каждый день), от расхода держат потолок длины текста и суточный
+    HARD-стоп по деньгам (ai_limits.hard_stop_block, как у комментария к
+    тренировке).
+
+    `undated_sets` — сколько подходов модель нашла, но не смогла привязать
+    к дню: в CSV без даты их не положить, и приложение говорит о них, а не
+    теряет молча.
+    """
+    user_id = await common.authed_user_id(request)
+    body = await common.json_body(request)
+    text = common.require(body, "text", str).strip()
+    if not text:
+        raise ApiError(400, "bad_request", "text must not be empty", key="import.text_empty")
+    if len(text) > text_import.MAX_TEXT_CHARS:
+        raise ApiError(
+            413, "text_too_large", f"text must be at most {text_import.MAX_TEXT_CHARS} characters",
+            key="import.text_too_large",
+        )
+    await api_v1_ai._require_ai_consent(request, user_id)
+    if not ai_trainer.is_configured():
+        raise ApiError(503, "not_configured", "ai trainer is not configured")
+    if user_id in _converting:
+        raise ApiError(409, "import_in_progress", "a text import for this account is already being parsed")
+    block = await ai_limits.hard_stop_block()
+    if block is not None:
+        raise ApiError(429, "spend_limit_exceeded", "daily AI spend limit reached", human=block.user_text)
+
+    user = await db.get_user(user_id)
+    _converting.add(user_id)
+    try:
+        result = await text_import.extract_sets(user_id, text, timeutil.user_today(user))
+    except Exception as e:
+        raise ApiError(502, "text_import_failed", "model failed to parse the text") from e
+    finally:
+        _converting.discard(user_id)
+
+    if not result.rows:
+        if result.undated:
+            raise ApiError(400, "no_sets_found", "sets found but none has a date", key="import.text_no_dates")
+        raise ApiError(400, "no_sets_found", "no set was found in the text", key="import.text_no_sets")
+    return JSONResponse(
+        {
+            "csv": text_import.rows_to_csv(result.rows, user["unit"]),
+            "set_count": len(result.rows),
+            "undated_sets": result.undated,
+        }
+    )
+
+
 routes = [
     Route("/import/csv/preview", preview_csv, methods=["POST"]),
     Route("/import/csv", import_csv, methods=["POST"]),
+    Route("/import/text/convert", convert_text, methods=["POST"]),
 ]
