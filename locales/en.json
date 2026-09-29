@@ -124,6 +124,7 @@
   "api.error.out_of_range": "That number's out of range — check it and try again.",
   "api.error.unsupported_media_type": "That file format won't work — send a regular photo, video or voice note.",
   "api.error.target_archived": "That exercise is archived — restore it first.",
+  "api.error.invalid_exercise_mapping": "Couldn't find that exercise among yours. Pick one of your own and send it again.",
   "api.error.active_workout": "One of those exercises is in your current workout — finish it first.",
   "api.error.own_card": "This is your own card — no need to add it.",
   "api.error.set_not_last": "I've already logged another set after that one — refresh and try again.",

@@ -246,6 +246,68 @@ async def test_concurrent_double_import_writes_the_file_once(fresh_db, client_fa
     assert again.json()["workouts_imported"] == 0
 
 
+async def test_preview_lists_unrecognized_names_with_suggestion(fresh_db, client_factory):
+    user_id = 111
+    await fresh_db.get_or_create_user(telegram_id=user_id, username="tester")
+    gid = await fresh_db.create_muscle_group(user_id, "Ноги")
+    mine = await fresh_db.create_exercise(user_id, "Присед", gid)
+    await fresh_db.create_exercise(user_id, "Совсем другое", gid)
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+
+    resp = await client.post("/import/csv/preview", json={"csv": CSV_TWO_WORKOUTS})
+    body = resp.json()
+    assert body["unrecognized_exercises"] == [{"name": "Жим лёжа", "suggested_exercise_id": None}]
+    assert mine  # известное имя в список не попадает
+
+
+async def test_commit_honours_exercise_mapping(fresh_db, client_factory):
+    user_id = 111
+    await fresh_db.get_or_create_user(telegram_id=user_id, username="tester")
+    gid = await fresh_db.create_muscle_group(user_id, "Грудь")
+    mine = await fresh_db.create_exercise(user_id, "Мой жим", gid)
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+
+    resp = await client.post("/import/csv", json={
+        "csv": CSV_TWO_WORKOUTS, "exercise_mapping": {"Жим лёжа": mine},
+    })
+    assert resp.status_code == 200, resp.text
+    cur = await fresh_db.conn().execute(
+        "SELECT COUNT(*) FROM exercises WHERE user_id = ? AND name = ?", (user_id, "Жим лёжа"))
+    assert (await cur.fetchone())[0] == 0
+    cur = await fresh_db.conn().execute(
+        "SELECT COUNT(*) FROM sets WHERE exercise_id = ?", (mine,))
+    assert (await cur.fetchone())[0] == 1
+
+
+async def test_commit_rejects_foreign_exercise_in_mapping(fresh_db, client_factory):
+    await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    gid = await fresh_db.create_muscle_group(222, "Грудь")
+    foreign = await fresh_db.create_exercise(222, "Чужой жим", gid)
+    client = await _linked_client(fresh_db, client_factory, telegram_id=111)
+
+    resp = await client.post("/import/csv", json={
+        "csv": CSV_TWO_WORKOUTS, "exercise_mapping": {"Жим лёжа": foreign},
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_exercise_mapping"
+    assert not any(ord(c) > 1000 for c in resp.json()["detail"])
+    assert await fresh_db.list_workouts(111, limit=10, offset=0, status="finished") == []
+
+
+async def test_commit_accepts_mapping_as_list_of_pairs(fresh_db, client_factory):
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    gid = await fresh_db.create_muscle_group(111, "Грудь")
+    mine = await fresh_db.create_exercise(111, "Мой жим", gid)
+    client = await _linked_client(fresh_db, client_factory, telegram_id=111)
+
+    resp = await client.post("/import/csv", json={
+        "csv": CSV_TWO_WORKOUTS, "exercise_mapping": [{"name": "Жим лёжа", "exercise_id": mine}],
+    })
+    assert resp.status_code == 200, resp.text
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM sets WHERE exercise_id = ?", (mine,))
+    assert (await cur.fetchone())[0] == 1
+
+
 STRONG_LB = (
     "Date,Workout Name,Exercise Name,Set Order,Weight (lbs),Reps\n"
     "2024-01-01 10:00:00,A,Bench Press,1,225,5\n"

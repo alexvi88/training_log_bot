@@ -270,6 +270,52 @@ def _date_range(workouts: list[dict]) -> dict[str, str] | None:
     return {"from": dates[0], "to": dates[-1]}
 
 
+async def _suggest_matches(user_id: int, names: list[str]) -> dict[str, int]:
+    """Очевидное совпадение для незнакомого имени из файла — по идентичности,
+    без модели: имя файла — это шаблон каталога (регистр, ё=е, английское
+    показанное имя), а у человека уже есть его форк под другим именем
+    (original_name). Так «Bench Press» из Hevy предлагается к «Жим лёжа»,
+    которое у него давно заведено. Ничего не пишет."""
+    templates = await db.find_global_templates_by_names(names)
+    out: dict[str, int] = {}
+    for name, row in templates.items():
+        ex = await db.find_exercise_by_original_name(user_id, row["name"])
+        if ex is not None and not ex["is_archived"]:
+            out[name] = ex["id"]
+    return out
+
+
+async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, int]:
+    """`exercise_mapping` коммита: имя из файла → id упражнения человека.
+    Чужой, шаблонный, архивный или несуществующий id — 400 целиком, до любой
+    записи: тихо пропущенная строка залила бы историю не в то упражнение."""
+    raw = body.get("exercise_mapping")
+    if raw is None:
+        return {}
+    bad = ApiError(400, "invalid_exercise_mapping", "exercise_mapping has an unknown or foreign exercise id")
+    # Тот же выбор списком пар [{"name", "exercise_id"}]: iOS-кодировщик
+    # переписывает ключи словаря в snake_case («Bench Press» → «bench _press»),
+    # а имена из файла трогать нельзя.
+    if isinstance(raw, list):
+        try:
+            pairs = [(item["name"], item["exercise_id"]) for item in raw]
+        except (TypeError, KeyError):
+            raise ApiError(400, "bad_request", "exercise_mapping items need name and exercise_id") from None
+    elif isinstance(raw, dict):
+        pairs = list(raw.items())
+    else:
+        raise ApiError(400, "bad_request", "exercise_mapping must be an object or a list")
+    mapping: dict[str, int] = {}
+    for name, ex_id in pairs:
+        if not isinstance(name, str) or not isinstance(ex_id, int) or isinstance(ex_id, bool):
+            raise bad
+        ex = await db.get_exercise(ex_id)
+        if ex is None or ex["user_id"] != user_id or ex["is_template"] or ex["is_archived"]:
+            raise bad
+        mapping[name] = ex_id
+    return mapping
+
+
 async def preview_csv(request: Request) -> JSONResponse:
     """Разобрать CSV и показать, что получится, БЕЗ записи в базу — заливать
     чужую историю вслепую нельзя. Упражнения размечены по точному совпадению
@@ -294,6 +340,7 @@ async def preview_csv(request: Request) -> JSONResponse:
     ]
     set_count = sum(len(entry["sets"]) for w in workouts for entry in w["entries"])
     dup = await _duplicate_dates(user_id, workouts, resolved)
+    suggested = await _suggest_matches(user_id, unresolved)
 
     return JSONResponse(
         {
@@ -301,6 +348,12 @@ async def preview_csv(request: Request) -> JSONResponse:
             "set_count": set_count,
             "date_range": _date_range(workouts),
             "exercises": exercises,
+            # Имена, которых нет у человека: клиент даёт выбрать своё
+            # упражнение (commit → exercise_mapping). suggested_exercise_id —
+            # очевидное совпадение или null.
+            "unrecognized_exercises": [
+                {"name": n, "suggested_exercise_id": suggested.get(n)} for n in unresolved
+            ],
             "duplicate_dates": sorted(dup),
             # Как прочитан вес: source — "strong" | "hevy" | "other";
             # file_unit_detected — что сказал заголовок ("kg"/"lb"/null);
@@ -356,12 +409,18 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     create_missing = body.get("create_missing_exercises", True)
     if not isinstance(create_missing, bool):
         raise ApiError(400, "bad_request", "create_missing_exercises must be a boolean")
+    mapping = await _validated_mapping(body, user_id)
     workouts, stats = _parse_workouts(
         text, timeutil.user_today(user), user["unit"], _body_file_unit(body),
     )
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
+    # Выбор человека сильнее и точного совпадения, и модели, и «завести новое».
+    for name in unresolved:
+        if name in mapping:
+            resolved[name] = mapping[name]
+    unresolved = [n for n in unresolved if n not in resolved]
     if unresolved and create_missing:
         # Без согласия на передачу данных стороннему AI названия модели не
         # уходят — только точное совпадение с каталогом (см. докстринг модуля).
