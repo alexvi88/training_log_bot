@@ -90,6 +90,44 @@ async def test_limits_reports_exhausted_quota(fresh_db, client_factory, monkeypa
     assert body["block_reason"] == ai_limits.KIND_QUESTION
 
 
+def _parse_z(value: str) -> dt.datetime:
+    return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_limits_resets_at_is_user_local_midnight(fresh_db, client_factory, monkeypatch):
+    """Квота вопросов живёт по суткам атлета (db._quota_day) — сброс в его полночь."""
+    monkeypatch.setattr(config, "AI_QUESTION_DAILY_LIMIT", 1)
+    ai_limits.reset_cache()
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.conn().execute("UPDATE users SET tz_offset = 3 WHERE telegram_id = 111")
+    await fresh_db.conn().commit()
+    await fresh_db.try_increment_ai_question_count(111, 1)
+
+    body = (await client.get("/ai/limits")).json()
+    assert body["blocked"] is True
+    reset = _parse_z(body["resets_at"])
+    now = dt.datetime.now(dt.timezone.utc)
+    assert now < reset <= now + dt.timedelta(hours=24)
+    assert reset.hour == 21 and reset.minute == 0  # 00:00 в UTC+3
+
+
+@pytest.mark.asyncio
+async def test_limits_resets_at_for_spend_block_is_utc_midnight(fresh_db, client_factory, monkeypatch):
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.conn().execute("UPDATE users SET tz_offset = 3 WHERE telegram_id = 111")
+    await fresh_db.conn().commit()
+
+    async def hard():
+        return ai_limits.KIND_SPEND_HARD
+
+    monkeypatch.setattr(ai_limits, "spend_level", hard)
+    body = (await client.get("/ai/limits")).json()
+    assert body["block_reason"] == ai_limits.KIND_SPEND_HARD
+    reset = _parse_z(body["resets_at"])
+    assert reset.hour == 0 and reset.minute == 0
+
+
 @pytest.mark.asyncio
 async def test_limits_reports_video_quota(fresh_db, client_factory, monkeypatch):
     """Квота видео видна до загрузки ролика: used/limit/remaining + resets_at (UTC)."""

@@ -33,6 +33,7 @@
 Точка входа одна — `check(user_id, kind)`. Вернула None — шаг разрешён.
 """
 
+import datetime as dt
 import logging
 import time
 from dataclasses import dataclass
@@ -263,6 +264,23 @@ async def ack_day(user_id: int, kind: str) -> str:
     if kind in (KIND_SEARCH_GLOBAL, KIND_SPEND_SOFT, KIND_SPEND_HARD):
         return db._utc_day()
     return await db._quota_day(user_id)
+
+
+async def resets_at(user_id: int, kind: str) -> dt.datetime:
+    """Когда счётчик этого вида обнулится: ближайшая полночь тех же суток, что и лимит.
+
+    Часы те же, что у `ack_day` и `db._quota_day`: общий потолок поисков и деньги —
+    полночь по UTC, остальное — полночь по смещению пользователя (`users.tz_offset`,
+    целые часы). Возвращает aware-UTC, чтобы клиент сам показал время в поясе телефона.
+    """
+    now = dt.datetime.now(dt.timezone.utc)
+    if kind in (KIND_SEARCH_GLOBAL, KIND_SPEND_SOFT, KIND_SPEND_HARD):
+        offset = 0
+    else:
+        offset = await db.user_tz_offset(user_id)
+    local_now = now + dt.timedelta(hours=offset)
+    next_midnight = (local_now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return next_midnight - dt.timedelta(hours=offset)
 
 
 async def check(user_id: int, kind: str) -> Optional[Block]:
