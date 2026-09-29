@@ -247,10 +247,10 @@ def test_there_is_no_tonnage_tile():
     assert not any("ТОННАЖ" in t[0] for t in tiles)
 
 
-def test_format_tonnage_counts_tonnes_in_kilograms():
-    """Тонна — тонна: тоннаж лежит в единицах пользователя, и 24 500 фунтов —
-    это 11.1 тонны, а не «24.5 т» (так же в зале славы и недельной сводке)."""
-    assert formatting.format_tonnage(24_500, "lb").startswith("11.1")
+def test_format_tonnage_shows_pounds_not_tonnes_for_lb():
+    """Фунтовому атлету метрическая тонна не показывается вовсе: 24 500 lb —
+    это «24 500 lb» (тем же числом, что в приложении), а не «11.1 тонны»."""
+    assert formatting.format_tonnage(24_500, "lb") == "24\u00a0500 lb"
 
 
 def test_the_records_tile_gives_its_place_away_when_there_are_none():

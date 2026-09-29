@@ -33,15 +33,15 @@ def test_declension_matches_count():
     assert formatting.format_tonnage_equivalent(125000, seed=1) == "Это как 25 слонов 🐘"
 
 
-def test_tonnage_in_pounds_is_converted_before_comparing_to_a_ton():
-    """Tonnage arrives in the user's own unit. A ton is a ton, so 20 000 lb is
-    9 tons — not 20, which is what counting pounds as kilograms produced."""
+def test_tonnage_in_pounds_never_becomes_tons():
+    """Tonnage arrives in the user's own unit; kg switches to tons at 1000 kg,
+    lb stays in grouped pounds at any size."""
     assert formatting.format_tonnage(20000, "kg").startswith("20 тонн")
-    assert formatting.format_tonnage(20000, "lb").startswith("9.1 тонны")
+    assert formatting.format_tonnage(20000, "lb") == "20\u00a0000 lb"
 
 
 def test_sub_ton_totals_stay_in_the_users_own_unit():
-    assert formatting.format_tonnage(800, "lb") == "800lb"
+    assert formatting.format_tonnage(800, "lb") == "800 lb"
     assert formatting.format_tonnage(800, "kg") == "800кг"
 
 

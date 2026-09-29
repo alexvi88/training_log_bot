@@ -241,10 +241,14 @@ def _workouts_phrase(count: int) -> str:
     return i18n.t("push.phrase.workouts", n=count)
 
 
-def format_tonnage(kg: float) -> str:
+def format_tonnage(kg: float, unit: str = "kg") -> str:
     # Суффикс — из каталога (push.tonnage.*), а не хардкод: "т"/"кг" на
     # русском, "t"/"kg" на английском, тот же ambient-язык, что и остальной
     # текст пуша.
+    # Аргумент лежит в единицах атлета (db.tonnage_since), несмотря на имя. Для
+    # lb — сгруппированные фунты без метрической тонны.
+    if unit == "lb":
+        return formatting.format_lb_tonnage(kg)
     if kg >= 1000:
         return f"{kg / 1000:.1f}{i18n.t('push.tonnage.ton_suffix')}"
     return f"{kg:.0f}{i18n.t('push.tonnage.kg_suffix')}"
@@ -345,13 +349,15 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         since = (today - dt.timedelta(days=DIGEST_LOOKBACK_DAYS)).isoformat()
         tonnage = await db.tonnage_since(telegram_id, since)
         if tonnage > 0:
+            digest_user = await db.get_user(telegram_id)
+            digest_unit = digest_user["unit"] if digest_user else "kg"
             # Общие для обеих веток ниже (AI и статической) — короткая iOS-версия
             # этого воскресного слота обходится без best_day/whale (см.
             # push_ios.py: у push.ios.weekly_digest.* нет таких плейсхолдеров
             # вовсе, ей хватает того, что есть всегда), так что считать их можно
             # один раз здесь, а не дублировать в каждой ветке.
             digest_ios_params = {
-                "tonnage": format_tonnage(tonnage), "week_count": _workouts_phrase(dashboard.this_week),
+                "tonnage": format_tonnage(tonnage, digest_unit), "week_count": _workouts_phrase(dashboard.this_week),
             }
             ai_text = await _ai_weekly_digest_text(telegram_id)
             if ai_text:
@@ -371,11 +377,10 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             # push_texts.WHALE_MIN_TONNAGE_KG. tonnage_since() returns the
             # user's own unit (kg or lb), same as _find_rank_near converts
             # before comparing against a kg threshold.
-            user = await db.get_user(telegram_id)
-            tonnage_kg = formatting.to_kg(tonnage, user["unit"] if user else "kg")
+            tonnage_kg = formatting.to_kg(tonnage, digest_unit)
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
-                tonnage=format_tonnage(tonnage), week_count=_workouts_phrase(dashboard.this_week),
+                tonnage=format_tonnage(tonnage, digest_unit), week_count=_workouts_phrase(dashboard.this_week),
                 best_day=(
                     i18n.t(f"push.weekday.{best_weekday}") if best_weekday is not None else None
                 ),

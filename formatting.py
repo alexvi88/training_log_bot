@@ -607,19 +607,36 @@ def to_kg(total: float, unit: str = "kg") -> float:
     return total / config.LB_PER_KG if unit == "lb" else total
 
 
+def group_thousands(value: float) -> str:
+    """Целое с разделителем разрядов языка: «7,050» по-английски, «7 050» (NBSP)
+    по-русски. Не через locale/babel: процесс один на всех, а язык — в ContextVar."""
+    sep = "\u00a0" if i18n.get_lang() == "ru" else ","
+    return f"{round(value):,}".replace(",", sep)
+
+
+def format_lb_tonnage(total_lb: float) -> str:
+    """Тоннаж атлета в фунтах — «7,050 lb». Метрическая тонна тут неуместна:
+    человек считает в фунтах, и «3.2 t» рядом с «lb» смешивает две системы."""
+    return f"{group_thousands(total_lb)} {unit_label('lb')}"
+
+
 def format_tonnage(total: float, unit: str = "kg") -> str:
     """Session/lifetime tonnage as a full word ("тонны"/"тонн"), never abbreviated.
 
     `total` is in the user's own unit. A ton is a ton, so the threshold and the
-    figure are computed in kilograms — a lb user lifting 20 000 lb has moved
-    9 tons, not 20. Below a ton there's nothing to convert: their own number in
-    their own unit is what they want to see.
+    figure are computed in kilograms. Below a ton there's nothing to convert:
+    their own number in their own unit is what they want to see.
+
+    For lb the tons never appear at all: the athlete counts in pounds, so any
+    size is shown as grouped pounds ("7,050 lb") instead of a metric ton.
 
     Russian grammar: a non-whole amount (e.g. "1.5 тонны") always takes the
     2-4 form regardless of the leading digit, so only a whole number of tons
     goes through the normal plural_ru rules.
     """
     u = unit_label(unit)
+    if unit == "lb":
+        return format_lb_tonnage(total)
     total_kg = to_kg(total, unit)
     if total_kg >= 1000:
         tons = round(total_kg / 1000, 1)
@@ -2008,6 +2025,8 @@ def badge_remaining_text(bp, unit: str = "kg") -> str:  # achievements.BadgeProg
         # Тот же порог округления, что у format_rank_gap: меньше центнера
         # остатка — "0.0 т" читалось бы как "уже всё", поэтому договариваем
         # килограммами; выше — тоннами с одним знаком после запятой.
+        if unit == "lb":
+            return i18n.t("achievements.nearest_tons_weight", w=format_lb_tonnage(bp.remaining * config.LB_PER_KG))
         if bp.remaining >= 100:
             tons = f"{round(bp.remaining / 1000, 1):g}"
             return i18n.t("achievements.nearest_tons", tons=tons)
@@ -2099,7 +2118,7 @@ def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, u
     return i18n.t("hall.reps_line", name=escape(name), reps=reps, n=reps)
 
 
-def format_rank_gap(gap) -> str:  # analytics.RankGap
+def format_rank_gap(gap, unit: str = "kg") -> str:  # analytics.RankGap
     """Недостача до следующего звания словами тренера, а не сокращениями системы.
 
     «ещё 12 тренировок», а не «ещё 12 трен.»: то же самое расстояние пуш уже
@@ -2110,6 +2129,8 @@ def format_rank_gap(gap) -> str:  # analytics.RankGap
         n = int(gap.value)
         return i18n.t("rank.gap_workouts", n=n)
     if gap.axis == "tonnage":
+        if unit == "lb":
+            return i18n.t("rank.gap_tonnage_lb", lb=format_lb_tonnage(gap.value * config.LB_PER_KG))
         tons = gap.value / 1000
         # Меньше сотни килограммов — «0.0 т» выглядело бы как «уже всё»,
         # поэтому остаток ниже центнера договариваем килограммами.
@@ -2126,15 +2147,22 @@ def format_rank_gap(gap) -> str:  # analytics.RankGap
     return i18n.t("rank.gap_frequency", per_week=f"{per_week:g}", n=plural_n)
 
 
-def format_rank_line(rank, gap=None) -> str:  # gap: analytics.RankGap | None
+def format_rank_line(rank, gap=None, unit: str = "kg") -> str:  # gap: analytics.RankGap | None
     """«⚙️ Станок» плюс, если есть куда расти, чего не хватает до следующего."""
     line = i18n.t("rank.line", emoji=rank.emoji, name=escape(rank.name))
-    return i18n.t("rank.line_with_gap", line=line, gap=format_rank_gap(gap)) if gap else line
+    return i18n.t("rank.line_with_gap", line=line, gap=format_rank_gap(gap, unit)) if gap else line
 
 
 def format_rank_promotion(rank) -> str:
     """Строка повышения на карточке завершения — объявляется один раз."""
     return i18n.t("rank.promotion", emoji=rank.emoji, name=escape(rank.name))
+
+
+def _rank_tonnage_stat(kg: float, unit: str, tons_fmt: str) -> str:
+    """Тоннажная ось лестницы: тонны для кг, фунты (без тонн) для lb."""
+    if unit == "lb":
+        return format_lb_tonnage(kg * config.LB_PER_KG)
+    return i18n.t("rank.stat_tonnage", tons=tons_fmt.format(kg / 1000))
 
 
 def build_rank_ladder(
@@ -2144,6 +2172,7 @@ def build_rank_ladder(
     total_workouts: int | None = None,
     tonnage_kg: float | None = None,
     per_week: float | None = None,
+    unit: str = "kg",
 ) -> str:
     """Вся лестница званий с порогами и отметкой, где человек сейчас.
 
@@ -2173,7 +2202,7 @@ def build_rank_ladder(
     if None not in (total_workouts, tonnage_kg, per_week):
         stats = " · ".join((
             i18n.t("rank.stat_workouts", n=total_workouts),
-            i18n.t("rank.stat_tonnage", tons=f"{tonnage_kg / 1000:.1f}"),
+            _rank_tonnage_stat(tonnage_kg, unit, "{:.1f}"),
             i18n.t("rank.stat_frequency", per_week=f"{per_week:.1f}"),
         ))
         lines.append(i18n.t("rank.current_stats", stats=stats))
@@ -2181,14 +2210,14 @@ def build_rank_ladder(
     for rank in ranks:
         thresholds = i18n.t("rank.threshold_from_start") if rank.level == 0 else " · ".join((
             i18n.t("rank.stat_workouts", n=rank.min_workouts),
-            i18n.t("rank.stat_tonnage", tons=f"{rank.min_tonnage_kg / 1000:g}"),
+            _rank_tonnage_stat(rank.min_tonnage_kg, unit, "{:g}"),
             i18n.t("rank.stat_frequency", per_week=f"{rank.min_per_week:g}"),
         ))
         row = f"{rank.emoji} <b>{escape(rank.name)}</b> — {thresholds}"
         if rank.level == current.level:
             row += i18n.t("rank.you_are_here")
         elif rank.level == current.level + 1 and gap:
-            row += f"  ← {format_rank_gap(gap)}"
+            row += f"  ← {format_rank_gap(gap, unit)}"
         lines.append(row)
     return "\n".join(lines)
 
@@ -2213,7 +2242,7 @@ def build_hall_of_fame(
 
     lines = []
     if rank is not None:
-        lines.append(format_rank_line(rank, rank_gap))
+        lines.append(format_rank_line(rank, rank_gap, unit))
     # Без слова после числа: подпись «Всего тренировок» его уже произнесла, и
     # строка читалась как «Всего тренировок: 20 тренировок».
     lines.append(i18n.t("hall.total_workouts", n=total_workouts))
@@ -2221,7 +2250,9 @@ def build_hall_of_fame(
     # `tonnage_kg` arrives in the user's own unit despite the name — a ton is a
     # ton, so convert before comparing against one (see format_tonnage).
     lifetime_kg = to_kg(tonnage_kg, unit)
-    if lifetime_kg >= 1000:
+    if unit == "lb":
+        tonnage_str = format_lb_tonnage(tonnage_kg)
+    elif lifetime_kg >= 1000:
         tons = round(lifetime_kg / 1000)
         tonnage_str = i18n.t("tonnage.total", tons=str(tons), n=tons)
     else:
