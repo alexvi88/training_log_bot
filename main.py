@@ -29,6 +29,7 @@ import exercise_photos
 import i18n
 import keyboards
 import ops_alerts
+import product_metrics
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -406,6 +407,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="growth", description="Воронка по источникам (админ)"),
                 BotCommand(command="crashes", description="Сбои iOS-приложения по версиям (админ)"),
+                BotCommand(command="metrics", description="Метрики по дням + CSV (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
                 BotCommand(command="announce", description="Релизный анонс: проверить и разослать (админ)"),
                 BotCommand(command="admin_wipe", description="Снести TEST_USER_ID для проверки онбординга (админ)"),
@@ -481,7 +483,12 @@ async def main() -> None:
     # admin_tasks.run_retention_cleanup_job) — та же причина, по которой
     # прополка OAuth ниже уже вынесена отдельно.
     retention_job = asyncio.create_task(admin_tasks.run_retention_cleanup_job())
-    background = [admin_job, backup_watch_job, engagement_job, retention_job, *alerts_background]
+    # Суточная сводка метрик (product_metrics.py): тоже не зависит от ADMIN_ID —
+    # сводка копится, даже когда отчёт слать некому.
+    metrics_job = asyncio.create_task(product_metrics.run_daily_metrics_job())
+    background = [
+        admin_job, backup_watch_job, engagement_job, retention_job, metrics_job, *alerts_background
+    ]
     background.append(asyncio.create_task(ops_alerts.run_heartbeat()))
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).

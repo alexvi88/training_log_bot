@@ -188,6 +188,11 @@ async def send_alert(
     payload: dict = {"aps": {"alert": {"title": title, "body": body}}}
     if route:
         payload["route"] = route
+    if category:
+        # Приложение возвращает её в событии push_open (product_metrics) —
+        # иначе не посчитать, какие пуши открывают. Рядом с `aps`, не внутри:
+        # `aps.category` у Apple — набор кнопок уведомления, а не наша метка.
+        payload["push_category"] = category
     url = f"{_host()}/3/device/{device_token}"
 
     try:

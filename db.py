@@ -252,6 +252,9 @@ CREATE TABLE IF NOT EXISTS sets (
 );
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
+-- По времени — для суточной сводки метрик (product_metrics): «кто записывал
+-- подходы в эти сутки» без прохода по всей таблице.
+CREATE INDEX IF NOT EXISTS idx_sets_created ON sets (created_at);
 
 -- Идемпотентность записи подхода по HTTP: клиент присылает свой ключ попытки
 -- (заведённый в момент нажатия кнопки, а не отправки — см. iOS PendingSet),
@@ -667,7 +670,7 @@ CREATE INDEX IF NOT EXISTS idx_user_events_created ON user_events (created_at);
 -- Строка на пару (установка, шаг) — первое касание, повтор игнорируется
 -- (UNIQUE ниже): так одна установка не может завести больше строк, чем
 -- шагов в белом списке, сколько бы раз ни прислала. Живёт столько же, сколько
--- лог действий (ACTIVITY_RETENTION_DAYS, prune_old_funnel_events).
+-- продуктовые события (ANALYTICS_RETENTION_DAYS, prune_old_funnel_events).
 CREATE TABLE IF NOT EXISTS funnel_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     install_id TEXT NOT NULL,
@@ -677,6 +680,36 @@ CREATE TABLE IF NOT EXISTS funnel_events (
     UNIQUE (install_id, step)
 );
 CREATE INDEX IF NOT EXISTS idx_funnel_events_created ON funnel_events (created_at);
+
+-- Продуктовая аналитика (analytics.py): события с постоянным машинным именем
+-- и свойствами — то, по чему строятся графики. Не user_events: там лента для
+-- чтения глазами (фраза, введённый текст), она меняется вместе с формулировками
+-- и живёт месяц. Здесь — ни текста, который ввёл человек, ни id записей: только
+-- имя события, короткие свойства из белого списка (экран, маршрут, категория
+-- пуша), клиент и его версия. Живёт ANALYTICS_RETENTION_DAYS (13 месяцев —
+-- год назад с запасом), при сносе аккаунта уходит вместе с ним (user_id).
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    event TEXT NOT NULL,
+    props TEXT,
+    platform TEXT NOT NULL,
+    app_version TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_created ON analytics_events (created_at);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_event ON analytics_events (event, created_at);
+
+-- Суточная сводка метрик (analytics.rollup_day): строка на (сутки, метрика).
+-- Только агрегаты, без людей — поэтому хранится всегда: сырые события уходят по
+-- сроку, а ряд «активных за день» за два года должен остаться. Сутки — по
+-- часам сервера (UTC), как created_at во всех таблицах.
+CREATE TABLE IF NOT EXISTS daily_metrics (
+    day TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value REAL NOT NULL,
+    PRIMARY KEY (day, metric)
+);
 
 -- Разборы поведения за сутки (admin_tasks._send_behaviour_digest) — память
 -- анализатора. Без неё каждое утро разбирается с чистого листа: одни и те же
@@ -8789,9 +8822,154 @@ async def app_funnel(days: int = 30, *, day: Optional[str] = None) -> list[aiosq
     return await cur.fetchall()
 
 
+# ---------- продуктовая аналитика (analytics.py) ----------
+
+
+async def log_analytics_events(rows: list[tuple]) -> None:
+    """rows — (user_id, event, props_json|None, platform, app_version|None,
+    created_at|None). created_at None — сейчас."""
+    if not rows:
+        return
+    now = now_iso()
+    async with _write_lock:
+        await conn().executemany(
+            "INSERT INTO analytics_events "
+            "(user_id, event, props, platform, app_version, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(*row[:5], row[5] or now) for row in rows],
+        )
+        await conn().commit()
+
+
+async def prune_old_analytics_events(retention_days: int) -> int:
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM analytics_events WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
+
+
+def _day_bounds(day: str) -> tuple[str, str]:
+    start = dt.date.fromisoformat(day)
+    return start.isoformat(), (start + dt.timedelta(days=1)).isoformat()
+
+
+async def active_users_by_platform(day: str) -> dict[int, set[str]]:
+    """Кто что-то делал за сутки — и с какого клиента ('tg'/'ios').
+
+    Три источника, потому что каждый в одиночку врёт: analytics_events — только
+    с того дня, как появились; user_events — живёт месяц; подходы — навсегда, и
+    на старых сутках (досчёт истории) это единственное, что осталось. Подход без
+    клиента в базе — пометка 'sets', в разбивку по клиентам не идёт."""
+    start, end = _day_bounds(day)
+    out: dict[int, set[str]] = {}
+    queries = (
+        "SELECT user_id, platform FROM analytics_events WHERE created_at >= ? AND created_at < ?",
+        "SELECT telegram_id, source FROM user_events WHERE created_at >= ? AND created_at < ?",
+        "SELECT w.user_id, 'sets' FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id WHERE s.created_at >= ? AND s.created_at < ?",
+    )
+    for sql in queries:
+        cur = await conn().execute(sql, (start, end))
+        for user_id, platform in await cur.fetchall():
+            out.setdefault(user_id, set()).add(platform)
+    return out
+
+
+async def users_created_on(day: str) -> set[int]:
+    start, end = _day_bounds(day)
+    cur = await conn().execute(
+        "SELECT telegram_id FROM users WHERE created_at >= ? AND created_at < ?", (start, end)
+    )
+    return {row[0] for row in await cur.fetchall()}
+
+
+async def earliest_user_day() -> Optional[str]:
+    cur = await conn().execute("SELECT MIN(created_at) FROM users")
+    row = await cur.fetchone()
+    return row[0][:10] if row and row[0] else None
+
+
+async def day_activity_counts(day: str, exclude: set[int]) -> dict[str, float]:
+    """Счётчики суток для daily_metrics, без своих аккаунтов (`exclude`)."""
+    start, end = _day_bounds(day)
+    skip = sorted(exclude) or [-1]
+    marks = ",".join("?" * len(skip))
+    sql = {
+        "trained_users": (
+            "SELECT COUNT(DISTINCT w.user_id) FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+            "JOIN workouts w ON w.id = b.workout_id "
+            f"WHERE s.created_at >= ? AND s.created_at < ? AND w.user_id NOT IN ({marks})"
+        ),
+        "sets_logged": (
+            "SELECT COUNT(*) FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+            "JOIN workouts w ON w.id = b.workout_id "
+            f"WHERE s.created_at >= ? AND s.created_at < ? AND w.user_id NOT IN ({marks})"
+        ),
+        "workouts_finished": (
+            "SELECT COUNT(*) FROM workouts WHERE status = 'finished' "
+            f"AND finished_at >= ? AND finished_at < ? AND user_id NOT IN ({marks})"
+        ),
+        "ai_calls": (
+            "SELECT COUNT(*) FROM cost_events WHERE created_at >= ? AND created_at < ? "
+            f"AND (user_id IS NULL OR user_id NOT IN ({marks}))"
+        ),
+        "pushes_sent": (
+            f"SELECT COUNT(*) FROM pushes WHERE sent_at >= ? AND sent_at < ? AND telegram_id NOT IN ({marks})"
+        ),
+        "app_opens": (
+            "SELECT COUNT(*) FROM analytics_events WHERE event = 'app_open' "
+            f"AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})"
+        ),
+        "push_opens": (
+            "SELECT COUNT(*) FROM analytics_events WHERE event = 'push_open' "
+            f"AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})"
+        ),
+        "app_session_seconds": (
+            "SELECT COALESCE(SUM(CAST(json_extract(props, '$.seconds') AS REAL)), 0) "
+            "FROM analytics_events WHERE event = 'app_background' "
+            f"AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})"
+        ),
+    }
+    out: dict[str, float] = {}
+    for metric, query in sql.items():
+        cur = await conn().execute(query, (start, end, *skip))
+        row = await cur.fetchone()
+        out[metric] = float(row[0] or 0)
+    cur = await conn().execute(
+        "SELECT step, COUNT(*) FROM funnel_events WHERE created_at >= ? AND created_at < ? GROUP BY step",
+        (start, end),
+    )
+    for step, n in await cur.fetchall():
+        out[f"funnel_{step}"] = float(n)
+    return out
+
+
+async def upsert_daily_metrics(day: str, metrics: dict[str, float]) -> None:
+    async with _write_lock:
+        await conn().executemany(
+            "INSERT INTO daily_metrics (day, metric, value) VALUES (?, ?, ?) "
+            "ON CONFLICT (day, metric) DO UPDATE SET value = excluded.value",
+            [(day, metric, float(value)) for metric, value in metrics.items()],
+        )
+        await conn().commit()
+
+
+async def daily_metrics_days() -> set[str]:
+    cur = await conn().execute("SELECT DISTINCT day FROM daily_metrics WHERE metric = 'active_users'")
+    return {row[0] for row in await cur.fetchall()}
+
+
+async def get_daily_metrics(since: Optional[str] = None) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT day, metric, value FROM daily_metrics WHERE (? IS NULL OR day >= ?) ORDER BY day, metric",
+        (since, since),
+    )
+    return await cur.fetchall()
+
+
 async def prune_old_funnel_events(retention_days: int) -> int:
-    """Выкинуть шаги воронки старше retention_days — тот же срок, что у лога
-    действий (config.ACTIVITY_RETENTION_DAYS)."""
+    """Выкинуть шаги воронки старше retention_days — тот же срок, что у
+    продуктовых событий (config.ANALYTICS_RETENTION_DAYS)."""
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
         cur = await conn().execute("DELETE FROM funnel_events WHERE date(created_at) < ?", (cutoff,))
