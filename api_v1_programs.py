@@ -343,12 +343,42 @@ async def update_routine(request: Request) -> JSONResponse:
     name = _optional_str(body, "name")
     if name is not None:
         await db.rename_routine(routine_id, _clean_name(name))
+    former: dict[str, Any] = {}
     if "program_id" in body:
         if body["program_id"] is not None:
             raise ApiError(400, "bad_request", "program_id can only be set to null")
         if routine["program_id"] is None:
             raise ApiError(400, "already_standalone", "day is already standalone")
+        former = {
+            "former_program_id": routine["program_id"],
+            "former_position": routine["day_order"],
+        }
         await db.move_routine_to_program(routine_id, None)
+    routine = await _owned_routine(routine_id, user_id)
+    data = await _routine_detail_json(routine)
+    # Откуда вынесли — для «Отменить» в приложении (POST /routines/{id}/attach).
+    data.update(former)  # пусто, если это было просто переименование
+    return JSONResponse(data)
+
+
+async def attach_routine(request: Request) -> JSONResponse:
+    """Обратное к «Вынести из программы»: вернуть самостоятельный день в
+    программу на прежнее место. `position` — day_order, который вернул вынос
+    (`former_position`); без него день встаёт последним. Ставит день только
+    в свою программу и только самостоятельный — это не способ перекинуть день
+    из одной программы в другую."""
+    user_id = await _authed_user_id(request)
+    routine_id = int(request.path_params["routine_id"])
+    routine = await _owned_routine(routine_id, user_id)
+    body = await _json_body(request)
+    program_id = _require(body, "program_id", int)
+    position = common.optional_int(body, "position")
+    if position is not None and position < 0:
+        raise ApiError(400, "bad_request", "position must be >= 0")
+    await _owned_program(program_id, user_id)
+    if routine["program_id"] is not None:
+        raise ApiError(400, "already_in_program", "day is already part of a program")
+    await db.attach_routine_to_program(routine_id, program_id, position)
     routine = await _owned_routine(routine_id, user_id)
     return JSONResponse(await _routine_detail_json(routine))
 
@@ -588,6 +618,7 @@ routes = [
     Route("/routines/{routine_id:int}", get_routine, methods=["GET"]),
     Route("/routines/{routine_id:int}", update_routine, methods=["PATCH"]),
     Route("/routines/{routine_id:int}", delete_routine, methods=["DELETE"]),
+    Route("/routines/{routine_id:int}/attach", attach_routine, methods=["POST"]),
     Route("/routines/{routine_id:int}/reorder", reorder_program_day, methods=["POST"]),
     Route("/routines/{routine_id:int}/exercises", add_routine_exercise, methods=["POST"]),
     Route("/routine-exercises/{item_id:int}", update_routine_exercise, methods=["PATCH"]),

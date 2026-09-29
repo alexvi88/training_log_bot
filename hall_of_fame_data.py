@@ -40,6 +40,11 @@ class HallOfFame:
     longest_workout_seconds: float
     #: (имя упражнения, вес лучшего подхода, повторы, e1RM); вес 0 — свой вес
     top_lifts: list[tuple[str, float, int, float]] = field(default_factory=list)
+    #: id упражнения пользователя для каждой строки top_lifts — тот же порядок и
+    #: та же длина; None, если строку не к чему привязать (так строят и тесты
+    #: форматтера, у которых только имена). Имя в top_lifts — показ, идентичность
+    #: строки — этот id.
+    top_lift_ids: list[Optional[int]] = field(default_factory=list)
     unit: str = "kg"
     rank: "analytics.Rank | None" = None
     rank_gap: "analytics.RankGap | None" = None
@@ -49,17 +54,20 @@ class HallOfFame:
     per_week: float = 0.0
 
 
-async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, float]]:
+async def _top_lifts(
+    user_id: int, formula: str
+) -> tuple[list[tuple[str, float, int, float]], list[Optional[int]]]:
     """Best working set per exercise, strongest first — for the Hall of Fame.
 
     Every exercise the user has ever logged gets a line, including bodyweight
     ones: those have no load to rank by, so their record is the best set of reps
     and they follow the weighted lifts (weight 0 marks them for the formatter).
     The list isn't capped here — the caller (formatter or JSON endpoint) trims
-    whatever doesn't fit.
+    whatever doesn't fit. Returns the lifts and, in the same order, each one's
+    exercise id.
     """
-    weighted: list[tuple[str, float, int, float]] = []
-    bodyweight: list[tuple[str, float, int, float]] = []
+    weighted: list[tuple[tuple[str, float, int, float], int]] = []
+    bodyweight: list[tuple[tuple[str, float, int, float], int]] = []
 
     # One query for every set the user owns, then grouped here — the per-exercise
     # version cost a round-trip per exercise ever created (see list_all_sets_by_exercise).
@@ -74,19 +82,22 @@ async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, 
             )
         )
 
-    for display_name, set_rows in by_exercise.values():
+    for exercise_id, (display_name, set_rows) in by_exercise.items():
         sessions = analytics.group_sets_by_session(set_rows)
         for s in sessions:
             s.formula = formula
         pr = analytics.compute_personal_records(sessions)
         if pr.max_e1rm > 0 and pr.best_e1rm_weight > 0:
-            weighted.append((display_name, pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
+            weighted.append(
+                ((display_name, pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm), exercise_id)
+            )
         elif pr.max_reps_at_weight:
             best_reps = max(pr.max_reps_at_weight.values())
-            bodyweight.append((display_name, 0.0, best_reps, 0.0))
-    weighted.sort(key=lambda t: t[3], reverse=True)
-    bodyweight.sort(key=lambda t: t[2], reverse=True)
-    return weighted + bodyweight
+            bodyweight.append(((display_name, 0.0, best_reps, 0.0), exercise_id))
+    weighted.sort(key=lambda t: t[0][3], reverse=True)
+    bodyweight.sort(key=lambda t: t[0][2], reverse=True)
+    ordered = weighted + bodyweight
+    return [lift for lift, _ in ordered], [ex_id for _, ex_id in ordered]
 
 
 async def collect(user_id: int) -> HallOfFame:
@@ -105,7 +116,7 @@ async def collect(user_id: int) -> HallOfFame:
     agg = await db.hall_of_fame_aggregates(user_id)
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     best_streak = analytics.max_week_streak(dates)
-    top = await _top_lifts(user_id, formula)
+    top, top_ids = await _top_lifts(user_id, formula)
     equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id, unit=unit)
     tonnage_kg = formatting.to_kg(agg["tonnage"], unit)
     per_week = analytics.workouts_per_week(dates, timeutil.user_today(user) if user else dt.date.today())
@@ -117,6 +128,7 @@ async def collect(user_id: int) -> HallOfFame:
         best_week_streak=best_streak,
         longest_workout_seconds=await view_builder.longest_workout_seconds(user_id),
         top_lifts=top,
+        top_lift_ids=top_ids,
         unit=unit,
         rank=rank,
         rank_gap=analytics.rank_gap(rank, total_workouts, tonnage_kg, per_week),

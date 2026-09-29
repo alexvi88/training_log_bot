@@ -90,6 +90,77 @@ async def test_limits_reports_exhausted_quota(fresh_db, client_factory, monkeypa
     assert body["block_reason"] == ai_limits.KIND_QUESTION
 
 
+def _parse_z(value: str) -> dt.datetime:
+    return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_limits_resets_at_is_user_local_midnight(fresh_db, client_factory, monkeypatch):
+    """Квота вопросов живёт по суткам атлета (db._quota_day) — сброс в его полночь."""
+    monkeypatch.setattr(config, "AI_QUESTION_DAILY_LIMIT", 1)
+    ai_limits.reset_cache()
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.conn().execute("UPDATE users SET tz_offset = 3 WHERE telegram_id = 111")
+    await fresh_db.conn().commit()
+    await fresh_db.try_increment_ai_question_count(111, 1)
+
+    body = (await client.get("/ai/limits")).json()
+    assert body["blocked"] is True
+    reset = _parse_z(body["resets_at"])
+    now = dt.datetime.now(dt.timezone.utc)
+    assert now < reset <= now + dt.timedelta(hours=24)
+    assert reset.hour == 21 and reset.minute == 0  # 00:00 в UTC+3
+
+
+@pytest.mark.asyncio
+async def test_limits_resets_at_for_spend_block_is_utc_midnight(fresh_db, client_factory, monkeypatch):
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.conn().execute("UPDATE users SET tz_offset = 3 WHERE telegram_id = 111")
+    await fresh_db.conn().commit()
+
+    async def hard():
+        return ai_limits.KIND_SPEND_HARD
+
+    monkeypatch.setattr(ai_limits, "spend_level", hard)
+    body = (await client.get("/ai/limits")).json()
+    assert body["block_reason"] == ai_limits.KIND_SPEND_HARD
+    reset = _parse_z(body["resets_at"])
+    assert reset.hour == 0 and reset.minute == 0
+
+
+@pytest.mark.asyncio
+async def test_limits_reports_video_quota(fresh_db, client_factory, monkeypatch):
+    """Квота видео видна до загрузки ролика: used/limit/remaining + resets_at (UTC)."""
+    import datetime as dt
+
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 2)
+    client = await _linked_client(fresh_db, client_factory)
+
+    body = (await client.get("/ai/limits")).json()
+    assert body["video"]["used"] == 0
+    assert body["video"]["limit"] == 2
+    assert body["video"]["remaining"] == 2
+
+    await fresh_db.increment_ai_video_count(111)
+    body = (await client.get("/ai/limits")).json()
+    assert body["video"]["used"] == 1
+    assert body["video"]["remaining"] == 1
+    assert body["question"]["used"] == 0  # прежние поля на месте
+
+    resets = dt.datetime.fromisoformat(body["video"]["resets_at"].replace("Z", "+00:00"))
+    now = dt.datetime.now(dt.timezone.utc)
+    assert now < resets <= now + dt.timedelta(hours=24, minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_limits_video_zero_config_means_unlimited(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 0)
+    client = await _linked_client(fresh_db, client_factory)
+    body = (await client.get("/ai/limits")).json()
+    assert body["video"]["limit"] is None
+    assert body["video"]["remaining"] is None
+
+
 @pytest.mark.asyncio
 async def test_limits_zero_config_means_unlimited(fresh_db, client_factory, monkeypatch):
     """limit <= 0 в конфиге значит «лимита нет» (см. ai_limits._exhausted) —
@@ -1925,6 +1996,86 @@ async def test_archive_survives_a_long_new_conversation(fresh_db, client_factory
     assert [m["text"] for m in archived] == ["старый разговор", "ответ на: старый разговор"]
     # А сам текущий разговор подрезан, как и был.
     assert len((await client.get("/ai/history")).json()["messages"]) == 2 * db.MAX_AI_CONVERSATION_TURNS
+
+
+@pytest.mark.asyncio
+async def test_activate_swaps_current_and_keeps_stored_history(fresh_db, client_factory, monkeypatch):
+    """«Продолжить разговор»: архивный становится текущим, прежний текущий
+    уезжает в архив, сохранённые ходы не переписываются, а модель получает
+    контекст возвращённого разговора."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    seen: list[list] = []
+
+    async def fake_ask(user_id, question, history, on_wire=None, **kwargs):
+        seen.append(history)
+        answer = f"ответ на: {question}"
+        if on_wire is not None:
+            await on_wire(
+                history
+                + [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+            )
+        return answer
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "старый"})
+    await client.delete("/ai/history")
+    await client.post("/ai/ask", json={"question": "новый"})
+
+    async def stored():
+        cur = await fresh_db.conn().execute(
+            "SELECT id, conversation_id, question, answer FROM ai_conversation_turns ORDER BY id"
+        )
+        return [tuple(r) for r in await cur.fetchall()]
+
+    before = await stored()
+    resp = await client.post("/ai/conversations/1/activate")
+    assert resp.status_code == 200
+    assert [m["text"] for m in resp.json()["messages"]] == ["старый", "ответ на: старый"]
+    assert resp.json() == (await client.get("/ai/history")).json()
+    assert await stored() == before
+
+    listing = (await client.get("/ai/conversations")).json()
+    assert listing["current"] == 1
+    assert {c["id"] for c in listing["conversations"]} == {1, 2}
+
+    await client.post("/ai/ask", json={"question": "продолжаем"})
+    assert seen[-1] == [
+        {"role": "user", "content": "старый"},
+        {"role": "assistant", "content": "ответ на: старый"},
+    ]
+    # Прежний текущий ушёл в архив и не течёт в модель.
+    assert all("новый" not in str(m) for m in seen[-1])
+
+    # Повторно — no-op; «начать заново» не наезжает на номер архивного.
+    assert (await client.post("/ai/conversations/1/activate")).status_code == 200
+    await client.delete("/ai/history")
+    assert (await client.get("/ai/conversations")).json()["current"] == 3
+    assert [m["text"] for m in (await client.get("/ai/conversations/2")).json()["messages"]] == [
+        "новый", "ответ на: новый",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_activate_unknown_foreign_and_unauthed(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    await client_a.post("/ai/ask", json={"question": "мой личный вопрос"})
+    await client_a.delete("/ai/history")
+
+    assert (await _activate_unauthed_status(client_factory)) == 401
+    assert (await client_a.post("/ai/conversations/999/activate")).status_code == 404
+    foreign = await client_b.post("/ai/conversations/1/activate")
+    assert foreign.status_code == 404
+    assert (await client_b.get("/ai/conversations")).json()["current"] == 1
+    assert (await client_a.get("/ai/conversations")).json()["current"] == 2
+
+
+async def _activate_unauthed_status(client_factory):
+    return (await client_factory().post("/ai/conversations/1/activate")).status_code
 
 
 @pytest.mark.asyncio

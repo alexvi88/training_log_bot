@@ -484,3 +484,56 @@ async def test_revoke_requires_auth(fresh_db, client_factory):
     client = client_factory()
     resp = await client.delete("/share/whatever")
     assert resp.status_code == 401
+
+
+# ---------- владелец: «Мои ссылки» ----------
+
+@pytest.mark.asyncio
+async def test_mine_lists_active_links_newest_first_without_revoked(fresh_db, client_factory, monkeypatch):
+    from handlers import sharing
+
+    monkeypatch.setattr(sharing, "_bot_username", "test_bot")
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    other = await _linked_client(fresh_db, client_factory, 222)
+    program_id, custom_id = await _program_with_one_day(111)
+    t_prog = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    t_ex = (await owner.post(f"/share/exercises/{custom_id}")).json()["token"]
+    t_gone = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    other_pid, _ = await _program_with_one_day(222)
+    await other.post(f"/share/programs/{other_pid}")
+    # created_at идёт с точностью до секунды — порядок задаём явно.
+    for i, t in enumerate((t_prog, t_ex, t_gone)):
+        await db.conn().execute(
+            "UPDATE shared_items SET created_at = ? WHERE token = ?", (f"2026-01-0{i + 1}T00:00:00+00:00", t)
+        )
+    await db.conn().commit()
+    assert (await owner.delete(f"/share/{t_gone}")).status_code == 200
+
+    resp = await owner.get("/share/mine")
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert [i["token"] for i in items] == [t_ex, t_prog]
+    ex = items[0]
+    assert ex["kind"] == "exercise" and ex["title"] == "Моя авторская тяга"
+    assert ex["url"] == f"https://t.me/test_bot?start=sh_{t_ex}"
+    assert ex["created_at"].startswith("2026-01-02")
+    assert ex["opens"] is None
+    assert items[1]["title"] == "PPL"
+
+
+@pytest.mark.asyncio
+async def test_mine_empty_and_url_null_when_username_unknown(fresh_db, client_factory, monkeypatch):
+    from handlers import sharing
+
+    monkeypatch.setattr(sharing, "_bot_username", None)
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    assert (await owner.get("/share/mine")).json() == {"items": []}
+    program_id, _ = await _program_with_one_day(111)
+    token = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    item = (await owner.get("/share/mine")).json()["items"][0]
+    assert item["url"] is None and item["start_param"] == f"sh_{token}"
+
+
+@pytest.mark.asyncio
+async def test_mine_requires_auth(fresh_db, client_factory):
+    assert (await client_factory().get("/share/mine")).status_code == 401

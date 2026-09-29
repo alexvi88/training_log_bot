@@ -431,6 +431,13 @@ async def main() -> None:
     bot.session.middleware(chat_bottom.TrackOutgoingMessages())
     await _setup_commands(bot)
     await bot_profile.sync_bot_profile(bot)
+    # Username бота нужен REST-у для ссылок «Мои ссылки» (у HTTP-запроса
+    # бота под рукой нет): греем кэш при старте, сбой не мешает запуску.
+    try:
+        from handlers import sharing as _sharing
+        await _sharing.get_bot_username(bot)
+    except Exception:
+        logging.exception("bot username warmup failed")
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     # Снос аккаунта из приложения (DELETE /v1/account) обязан стереть и
     # черновики диалога, а REST-слой живёт в этом же процессе, но до

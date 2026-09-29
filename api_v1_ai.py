@@ -65,8 +65,9 @@
   db.start_new_ai_conversation).
 - `GET /ai/conversations` и `GET /ai/conversations/{id}` — список прошлых
   разговоров (заголовок = первый вопрос, даты, число ходов) и один разговор
-  целиком, той же формой, что `GET /ai/history`. Только чтение: продолжить
-  архивный разговор нельзя, `POST /ai/ask` всегда пишет в текущий. Архив
+  целиком, той же формой, что `GET /ai/history`. Читать архив можно
+  без смены текущего; продолжить — `POST /ai/conversations/{id}/activate`,
+  `POST /ai/ask` всегда пишет в текущий. Архив
   живёт config.AI_CONVERSATION_RETENTION_DAYS (чистит ночной джоб
   admin_tasks._run_retention_cleanup), текущий разговор чистка не трогает.
 - `GET /ai/pending` — незавершённое состояние разговора: черновик программы
@@ -304,7 +305,25 @@ async def _limits_json(user_id: int) -> dict[str, Any]:
     limit = config.AI_QUESTION_DAILY_LIMIT
     remaining = max(0, limit - used) if limit > 0 else None
     block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    # Когда упрёмся в отказ — говорим про тот вид, что отказал (деньги идут по UTC,
+    # вопросы по суткам атлета); иначе — про окно вопросов.
+    reset = await ai_limits.resets_at(user_id, block.kind if block is not None else ai_limits.KIND_QUESTION)
+    video_used = await db.get_ai_video_count_today(user_id)
+    video_limit = config.AI_VIDEO_DAILY_LIMIT
+    # Сутки квоты — календарные у самого атлета (db._quota_day), поэтому и
+    # сброс — его ближайшая полночь, пересчитанная в UTC.
+    offset = await db.user_tz_offset(user_id)
+    local_now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) + dt.timedelta(hours=offset)
+    next_midnight = dt.datetime.combine(local_now.date() + dt.timedelta(days=1), dt.time())
+    resets_at = (next_midnight - dt.timedelta(hours=offset)).replace(tzinfo=dt.timezone.utc)
     return {
+        "video": {
+            "used": video_used,
+            # Как у question: лимит <= 0 значит «лимита нет» (null).
+            "limit": video_limit if video_limit > 0 else None,
+            "remaining": max(0, video_limit - video_used) if video_limit > 0 else None,
+            "resets_at": resets_at.isoformat().replace("+00:00", "Z"),
+        },
         "question": {
             "used": used,
             # 0 или отрицательное значение лимита в конфиге значит «лимита
@@ -315,6 +334,9 @@ async def _limits_json(user_id: int) -> dict[str, Any]:
         },
         "blocked": block is not None,
         "block_reason": block.kind if block is not None else None,
+        # ISO8601 UTC с «Z»: когда обнулится окно, которое сейчас держит (или
+        # будет держать) вопросы. Клиент показывает его в поясе телефона.
+        "resets_at": reset.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "configured": ai_trainer.is_configured(),
     }
 
@@ -1507,6 +1529,30 @@ async def get_conversation(request: Request) -> JSONResponse:
     return JSONResponse({"messages": _history_messages(turns)})
 
 
+async def activate_conversation(request: Request) -> JSONResponse:
+    """«Продолжить разговор» из архива: архивный разговор снова текущий, а
+    прежний текущий уезжает в архив (как в `DELETE /ai/history`, вместе с
+    черновиком программы, опросником и кнопками отката).
+
+    Ответ — `{"messages": [...]}`, та же форма, что у `GET /ai/history`. Чужой
+    или несуществующий номер — 404 `not_found` (в отличие от GET, здесь нельзя
+    молча вернуть пустое: клиент решил бы, что продолжил разговор). Уже
+    текущий — 200 без изменений. Сохранённая история не переписывается: см.
+    db.activate_ai_conversation.
+    """
+    user_id = await common.authed_user_id(request)
+    conversation_id = int(request.path_params["conversation_id"])
+    current = await db.current_ai_conversation_id(user_id)
+    if not await db.activate_ai_conversation(user_id, conversation_id):
+        raise ApiError(404, "not_found", "conversation not found")
+    if current != conversation_id:
+        await db.clear_ai_program_draft(user_id)
+        await db.clear_ai_setup_state(user_id)
+        await db.clear_ai_undo_actions(user_id)
+    turns = await db.get_ai_conversation_history(user_id)
+    return JSONResponse({"messages": _history_messages(turns)})
+
+
 async def get_thinking(request: Request) -> JSONResponse:
     """Фразы для плейсхолдера «тренер думает», пока клиент ждёт `/ai/ask`.
 
@@ -1556,6 +1602,7 @@ routes = [
     Route("/ai/conversations", list_conversations, methods=["GET"]),
     Route("/ai/conversations/workout", discuss_workout, methods=["POST"]),
     Route("/ai/conversations/{conversation_id:int}", get_conversation, methods=["GET"]),
+    Route("/ai/conversations/{conversation_id:int}/activate", activate_conversation, methods=["POST"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
     Route("/ai/history/{turn_id:int}/image", get_history_image, methods=["GET"]),

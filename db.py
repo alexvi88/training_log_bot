@@ -1247,6 +1247,16 @@ async def _migrate_schema() -> None:
             "(SELECT program_id FROM routines WHERE routines.id = workouts.routine_id) "
             "WHERE routine_id IS NOT NULL"
         )
+    if "client_id" not in workout_cols:
+        # Метка тренировки, заведённой на телефоне офлайн (POST /v1/workouts/active
+        # с client_id): повтор синхронизации после потерянного ответа находит по
+        # ней уже созданную тренировку, а не заводит вторую. У тренировок бота и
+        # старых сборок приложения — NULL.
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN client_id TEXT")
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_workouts_user_client "
+        "ON workouts (user_id, client_id) WHERE client_id IS NOT NULL"
+    )
     if "followup_due_at" in workout_cols:
         # Post-workout followup push was removed — drop the columns a DB that
         # already ran the earlier migration would have.
@@ -4043,6 +4053,59 @@ async def get_or_create_active_workout(
         return cur.lastrowid, True
 
 
+async def get_or_create_workout_by_client_id(
+    user_id: int,
+    client_id: str,
+    started_at: Optional[str] = None,
+    routine_id: Optional[int] = None,
+) -> tuple[int, bool]:
+    """Тренировка, заведённая на телефоне офлайн, — идемпотентно по `client_id`.
+    Возвращает (workout_id, created).
+
+    Порядок под одним `_write_lock` (тот же довод, что у
+    get_or_create_active_workout: проверка и вставка не должны разъезжаться):
+
+    1. Тренировка с этим client_id у этого пользователя уже есть — любого
+       статуса, в том числе уже законченная, — отдаём её: это повтор после
+       потерянного ответа.
+    2. Идёт другая активная тренировка (начата в боте или на другом устройстве):
+       вторую активную не заводим — инвариант «одна активная на человека»
+       держится на этом. Если у неё нет своей метки, ставим ей эту, чтобы
+       повторы дальше находились по п. 1; `started_at` у неё не трогаем.
+       Подходы офлайн-тренировки клиент пишет в возвращённый id.
+    3. Иначе заводим новую с `started_at` с телефона (или «сейчас»).
+    """
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT id FROM workouts WHERE user_id = ? AND client_id = ?", (user_id, client_id)
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"], False
+        cur = await db.execute(
+            "SELECT id, client_id FROM workouts WHERE user_id = ? AND status = 'active' "
+            "ORDER BY id LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            if row["client_id"] is None:
+                await db.execute(
+                    "UPDATE workouts SET client_id = ? WHERE id = ?", (client_id, row["id"])
+                )
+                await db.commit()
+            return row["id"], False
+        program_id = await _program_id_for_routine(routine_id)
+        cur = await db.execute(
+            "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id, client_id) "
+            "VALUES (?, ?, 'active', ?, ?, ?)",
+            (user_id, started_at or now_iso(), routine_id, program_id, client_id),
+        )
+        await db.commit()
+        return cur.lastrowid, True
+
+
 async def get_or_create_backfill_workout(user_id: int, started_at: str) -> tuple[int, bool]:
     """The user's open backfill workout, starting one if there isn't one.
     Returns (workout_id, created).
@@ -6128,6 +6191,16 @@ async def get_shared_item(token: str) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def list_shared_items_by_owner(owner_id: int) -> list[aiosqlite.Row]:
+    """Действующие визитки владельца, новые сверху. Отзыв — это удаление строки
+    (delete_shared_item), так что отозванных здесь нет по построению."""
+    cur = await conn().execute(
+        "SELECT * FROM shared_items WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC",
+        (owner_id,),
+    )
+    return await cur.fetchall()
+
+
 async def mark_shared_item_taken(token: str) -> None:
     async with _write_lock:
         await conn().execute(
@@ -7518,6 +7591,30 @@ async def move_routine_to_program(routine_id: int, program_id: Optional[int]) ->
                 "WHERE id = ?",
                 (program_id, program_id, routine_id),
             )
+        await db.commit()
+
+
+async def attach_routine_to_program(
+    routine_id: int, program_id: int, position: Optional[int] = None
+) -> None:
+    """Вернуть самостоятельный день в программу на место `position` (его
+    прежний day_order). Дни с day_order >= position сдвигаются на один вниз,
+    чтобы вернувшийся не делил место с тем, кто успел занять его номер.
+    Без `position` — последним, как move_routine_to_program."""
+    if position is None:
+        await move_routine_to_program(routine_id, program_id)
+        return
+    async with _write_lock:
+        db = conn()
+        await db.execute(
+            "UPDATE routines SET day_order = day_order + 1 "
+            "WHERE program_id = ? AND day_order >= ?",
+            (program_id, position),
+        )
+        await db.execute(
+            "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
+            (program_id, position, routine_id),
+        )
         await db.commit()
 
 
@@ -9596,12 +9693,27 @@ async def get_ai_conversation_wire_history(telegram_id: int) -> list[dict[str, A
     if row is None:
         return []
     try:
-        return json.loads(row["wire_json"])
+        wire = json.loads(row["wire_json"])
     except (TypeError, ValueError):
         # Битая строка (не должна случаться, но лучше пустая история, чем
         # 500 на каждом следующем вопросе).
         logger.exception("corrupt ai_conversation_turns.wire_json for user %s", telegram_id)
         return []
+    if wire:
+        return wire
+    # Ход есть, а wire пуст — разговор вернули из архива
+    # (activate_ai_conversation), где wire обнуляют. Собираем контекст из
+    # видимых реплик в памяти, в базу не пишем.
+    cur = await conn().execute(
+        "SELECT question, answer FROM ai_conversation_turns "
+        "WHERE telegram_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT ?",
+        (telegram_id, await current_ai_conversation_id(telegram_id), MAX_AI_CONVERSATION_TURNS),
+    )
+    rebuilt: list[dict[str, Any]] = []
+    for turn in reversed(list(await cur.fetchall())):
+        rebuilt.append({"role": "user", "content": turn["question"]})
+        rebuilt.append({"role": "assistant", "content": turn["answer"]})
+    return rebuilt
 
 
 async def get_ai_conversation_history(
@@ -9716,7 +9828,15 @@ async def start_new_ai_conversation(telegram_id: int) -> int:
         )
         row = await cur.fetchone()
         previous = int(row["ai_conversation_id"]) if row is not None else 1
-        new_id = previous + 1
+        # Не previous + 1, а после самого большого номера: после
+        # activate_ai_conversation текущим может быть старый разговор, и
+        # previous + 1 наехал бы на номер уже лежащего в архиве.
+        cur = await conn().execute(
+            "SELECT MAX(conversation_id) AS top FROM ai_conversation_turns WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        top = (await cur.fetchone())["top"] or 0
+        new_id = max(previous, int(top)) + 1
         await conn().execute(
             "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?",
             (new_id, telegram_id),
@@ -9728,6 +9848,46 @@ async def start_new_ai_conversation(telegram_id: int) -> int:
         )
         await conn().commit()
     return new_id
+
+
+async def activate_ai_conversation(telegram_id: int, conversation_id: int) -> bool:
+    """«Продолжить разговор» — POST /ai/conversations/{id}/activate: архивный
+    разговор снова становится текущим. False, если такого разговора у человека
+    нет (несуществующий и чужой неотличимы). Уже текущий — True без изменений.
+
+    Текущий разговор уезжает в архив тем же способом, что в
+    start_new_ai_conversation (номер меняется, wire_json обнуляется). Ходы
+    возвращаемого разговора НЕ переписываются: его wire_json остался пустым с
+    архивации, и контекст для модели собирает get_ai_conversation_wire_history
+    из видимых реплик на лету. Запись в базу изменила бы префикс, который xAI
+    держит в кэше, а первый же следующий ход и так сохранит полный wire."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT 1 FROM ai_conversation_turns WHERE telegram_id = ? AND conversation_id = ? LIMIT 1",
+            (telegram_id, conversation_id),
+        )
+        if await cur.fetchone() is None:
+            return False
+        cur = await conn().execute(
+            "SELECT ai_conversation_id FROM users WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        previous = int(row["ai_conversation_id"])
+        if previous == conversation_id:
+            return True
+        await conn().execute(
+            "UPDATE ai_conversation_turns SET wire_json = '[]' "
+            "WHERE telegram_id = ? AND conversation_id = ?",
+            (telegram_id, previous),
+        )
+        await conn().execute(
+            "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?",
+            (conversation_id, telegram_id),
+        )
+        await conn().commit()
+    return True
 
 
 async def list_ai_conversations(

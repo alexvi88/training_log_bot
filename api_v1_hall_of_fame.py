@@ -29,7 +29,9 @@ import i18n
 from api_v1_common import ApiError, authed_user_id
 
 
-def _lift_json(entry: tuple[str, float, int, float]) -> dict[str, Any]:
+def _lift_json(
+    entry: tuple[str, float, int, float], exercise_id: Optional[int] = None
+) -> dict[str, Any]:
     """(имя, вес лучшего подхода, повторы, e1RM) — вес 0 значит «свой вес»,
     тем же признаком, что и formatting._hall_of_fame_lift. `record` — готовая
     строка подхода/повторов, чтобы клиенту не пересобирать русское/английское
@@ -42,6 +44,9 @@ def _lift_json(entry: tuple[str, float, int, float]) -> dict[str, Any]:
         else formatting.format_set(weight, reps)
     )
     return {
+        # id упражнения пользователя — по нему приложение открывает его
+        # прогресс; `exercise` — только показ. null, если строку не к чему привязать.
+        "exercise_id": exercise_id,
         "exercise": name,
         "is_bodyweight": is_bodyweight,
         "weight": None if is_bodyweight else weight,
@@ -51,20 +56,22 @@ def _lift_json(entry: tuple[str, float, int, float]) -> dict[str, Any]:
     }
 
 
-def _rank_json(rank, gap) -> Optional[dict[str, Any]]:
+def _rank_json(rank, gap, unit: str = "kg") -> Optional[dict[str, Any]]:
     if rank is None:
         return None
     return {
         "name": rank.name,
         "level": rank.level,
-        "gap_text": formatting.format_rank_gap(gap) if gap else None,
+        "gap_text": formatting.format_rank_gap(gap, unit) if gap else None,
     }
 
 
 def _hall_of_fame_json(hof: "hall_of_fame_data.HallOfFame") -> dict[str, Any]:
+    # Недостающие id добиваем None, чтобы ни одна строка не потерялась в zip.
+    ids = hof.top_lift_ids + [None] * (len(hof.top_lifts) - len(hof.top_lift_ids))
     return {
         "total_workouts": hof.total_workouts,
-        "rank": _rank_json(hof.rank, hof.rank_gap),
+        "rank": _rank_json(hof.rank, hof.rank_gap, hof.unit),
         "tonnage": {
             # В единицах пользователя, как и остальные веса в /v1 — клиент уже
             # знает users.unit из /me и подписывает сам.
@@ -73,7 +80,7 @@ def _hall_of_fame_json(hof: "hall_of_fame_data.HallOfFame") -> dict[str, Any]:
         },
         "best_week_streak": hof.best_week_streak,
         "longest_workout_seconds": hof.longest_workout_seconds,
-        "top_lifts": [_lift_json(t) for t in hof.top_lifts],
+        "top_lifts": [_lift_json(t, i) for t, i in zip(hof.top_lifts, ids, strict=True)],
     }
 
 

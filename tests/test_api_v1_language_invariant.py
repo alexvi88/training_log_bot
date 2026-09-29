@@ -367,6 +367,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", "/push/register", json={"device_token": "abc"}, expect=201)
     await w.call("DELETE", "/push/register", expect=200)
     await w.call("POST", "/account/telegram-link-code", expect=(200, 409))
+    await w.call("POST", "/mcp/link-code", expect=503)  # адреса MCP в тесте нет
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    await w.call("POST", "/mcp/link-code", expect=200)
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "")
 
     # --- группы, каталог, упражнения ---
     groups = (await w.call("GET", "/muscle-groups", expect=200)).json()
@@ -409,6 +413,15 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     # --- тренировка ---
     wid = (await w.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
     await w.call("POST", "/workouts/active", json={}, expect=(200, 201, 409))
+    # Офлайн-синхронизация: тексты новых ошибок — на языке атлета.
+    for bad in (
+        {"client_id": "not-a-uuid"},
+        {"started_at": "2020-01-01T10:00:00Z"},
+        {"client_id": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d5e", "started_at": "вчера"},
+        {"client_id": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d5e", "started_at": "2020-01-01T10:00:00Z"},
+        {"client_id": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d5e", "started_at": "2999-01-01T10:00:00Z"},
+    ):
+        await w.call("POST", "/workouts/active", json=bad, expect=400)
     set1 = (await w.call("POST", f"/workouts/{wid}/sets",
                          json={"exercise_id": forked_id, "weight": 100, "reps": 5}, expect=201)).json()
     await w.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": forked_id, "weight": -5, "reps": 5},
@@ -527,6 +540,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("DELETE", f"/routine-exercises/{item_id}", expect=200)
     day_id = day["id"] if "id" in day else day["days"][-1]["id"]
     await w.call("POST", f"/routines/{day_id}/reorder", json={"direction": "up"}, expect=(200, 400))
+    detached = (await w.call("PATCH", f"/routines/{day_id}", json={"program_id": None}, expect=200)).json()
+    await w.call("POST", f"/routines/{day_id}/attach", json={"program_id": detached["former_program_id"],
+                                                             "position": detached["former_position"]}, expect=200)
+    await w.call("POST", f"/routines/{day_id}/attach", json={"program_id": pid}, expect=400)
     await w.call("POST", f"/routines/{rid}/reorder", json={"direction": "up"}, expect=(200, 400))
     await w.call("POST", "/programs", json={"name": ""}, expect=400)
 
@@ -538,6 +555,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/share/{share_prog['token']}", expect=200)
     share_rt = (await w.call("POST", f"/share/routines/{rid_from_workout}", expect=201)).json()
     await w.call("GET", f"/share/{share_rt['token']}", expect=200)
+    await w.call("GET", "/share/mine", expect=200)
     await w.call("DELETE", f"/share/{share_rt['token']}", expect=200)
     await w.call("GET", f"/share/{share_rt['token']}", expect=404)
 
@@ -551,7 +569,9 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     conv_items = conversations.get("conversations") or conversations.get("items") or []
     if conv_items:
         await w.call("GET", f"/ai/conversations/{conv_items[0]['id']}", expect=200)
-    else:
+        await w.call("POST", f"/ai/conversations/{conv_items[0]['id']}/activate", expect=200)
+    await w.call("POST", "/ai/conversations/999999/activate", expect=404)
+    if not conv_items:
         await w.call("GET", "/ai/conversations/999999", expect=404)
     await w.call("GET", "/ai/pending", expect=200)
     await w.call("GET", "/ai/thinking", expect=200)
@@ -603,6 +623,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     # --- импорт ---
     csv_text = f"date,exercise,weight,reps\n2025-03-01,{text['csv_exercise']},100,5\n"
     await w.call("POST", "/import/csv/preview", json={"csv": csv_text}, expect=200)
+    await w.call("POST", "/import/csv/preview", json={"csv": csv_text, "file_unit": "lb"}, expect=200)
+    await w.call("POST", "/import/csv/preview", json={"csv": csv_text, "file_unit": "x"}, expect=400)
     await w.call("POST", "/import/csv", json={"csv": csv_text, "create_missing_exercises": False},
                  expect=(200, 201))
     bad_csv = f"date,exercise,weight,reps\n2025-03-01,{text['csv_exercise']},-50,5\n"
