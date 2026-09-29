@@ -9596,12 +9596,27 @@ async def get_ai_conversation_wire_history(telegram_id: int) -> list[dict[str, A
     if row is None:
         return []
     try:
-        return json.loads(row["wire_json"])
+        wire = json.loads(row["wire_json"])
     except (TypeError, ValueError):
         # Битая строка (не должна случаться, но лучше пустая история, чем
         # 500 на каждом следующем вопросе).
         logger.exception("corrupt ai_conversation_turns.wire_json for user %s", telegram_id)
         return []
+    if wire:
+        return wire
+    # Ход есть, а wire пуст — разговор вернули из архива
+    # (activate_ai_conversation), где wire обнуляют. Собираем контекст из
+    # видимых реплик в памяти, в базу не пишем.
+    cur = await conn().execute(
+        "SELECT question, answer FROM ai_conversation_turns "
+        "WHERE telegram_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT ?",
+        (telegram_id, await current_ai_conversation_id(telegram_id), MAX_AI_CONVERSATION_TURNS),
+    )
+    rebuilt: list[dict[str, Any]] = []
+    for turn in reversed(list(await cur.fetchall())):
+        rebuilt.append({"role": "user", "content": turn["question"]})
+        rebuilt.append({"role": "assistant", "content": turn["answer"]})
+    return rebuilt
 
 
 async def get_ai_conversation_history(
@@ -9716,7 +9731,15 @@ async def start_new_ai_conversation(telegram_id: int) -> int:
         )
         row = await cur.fetchone()
         previous = int(row["ai_conversation_id"]) if row is not None else 1
-        new_id = previous + 1
+        # Не previous + 1, а после самого большого номера: после
+        # activate_ai_conversation текущим может быть старый разговор, и
+        # previous + 1 наехал бы на номер уже лежащего в архиве.
+        cur = await conn().execute(
+            "SELECT MAX(conversation_id) AS top FROM ai_conversation_turns WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        top = (await cur.fetchone())["top"] or 0
+        new_id = max(previous, int(top)) + 1
         await conn().execute(
             "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?",
             (new_id, telegram_id),
@@ -9728,6 +9751,46 @@ async def start_new_ai_conversation(telegram_id: int) -> int:
         )
         await conn().commit()
     return new_id
+
+
+async def activate_ai_conversation(telegram_id: int, conversation_id: int) -> bool:
+    """«Продолжить разговор» — POST /ai/conversations/{id}/activate: архивный
+    разговор снова становится текущим. False, если такого разговора у человека
+    нет (несуществующий и чужой неотличимы). Уже текущий — True без изменений.
+
+    Текущий разговор уезжает в архив тем же способом, что в
+    start_new_ai_conversation (номер меняется, wire_json обнуляется). Ходы
+    возвращаемого разговора НЕ переписываются: его wire_json остался пустым с
+    архивации, и контекст для модели собирает get_ai_conversation_wire_history
+    из видимых реплик на лету. Запись в базу изменила бы префикс, который xAI
+    держит в кэше, а первый же следующий ход и так сохранит полный wire."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT 1 FROM ai_conversation_turns WHERE telegram_id = ? AND conversation_id = ? LIMIT 1",
+            (telegram_id, conversation_id),
+        )
+        if await cur.fetchone() is None:
+            return False
+        cur = await conn().execute(
+            "SELECT ai_conversation_id FROM users WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        previous = int(row["ai_conversation_id"])
+        if previous == conversation_id:
+            return True
+        await conn().execute(
+            "UPDATE ai_conversation_turns SET wire_json = '[]' "
+            "WHERE telegram_id = ? AND conversation_id = ?",
+            (telegram_id, previous),
+        )
+        await conn().execute(
+            "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?",
+            (conversation_id, telegram_id),
+        )
+        await conn().commit()
+    return True
 
 
 async def list_ai_conversations(

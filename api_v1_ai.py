@@ -65,8 +65,9 @@
   db.start_new_ai_conversation).
 - `GET /ai/conversations` и `GET /ai/conversations/{id}` — список прошлых
   разговоров (заголовок = первый вопрос, даты, число ходов) и один разговор
-  целиком, той же формой, что `GET /ai/history`. Только чтение: продолжить
-  архивный разговор нельзя, `POST /ai/ask` всегда пишет в текущий. Архив
+  целиком, той же формой, что `GET /ai/history`. Читать архив можно
+  без смены текущего; продолжить — `POST /ai/conversations/{id}/activate`,
+  `POST /ai/ask` всегда пишет в текущий. Архив
   живёт config.AI_CONVERSATION_RETENTION_DAYS (чистит ночной джоб
   admin_tasks._run_retention_cleanup), текущий разговор чистка не трогает.
 - `GET /ai/pending` — незавершённое состояние разговора: черновик программы
@@ -1507,6 +1508,30 @@ async def get_conversation(request: Request) -> JSONResponse:
     return JSONResponse({"messages": _history_messages(turns)})
 
 
+async def activate_conversation(request: Request) -> JSONResponse:
+    """«Продолжить разговор» из архива: архивный разговор снова текущий, а
+    прежний текущий уезжает в архив (как в `DELETE /ai/history`, вместе с
+    черновиком программы, опросником и кнопками отката).
+
+    Ответ — `{"messages": [...]}`, та же форма, что у `GET /ai/history`. Чужой
+    или несуществующий номер — 404 `not_found` (в отличие от GET, здесь нельзя
+    молча вернуть пустое: клиент решил бы, что продолжил разговор). Уже
+    текущий — 200 без изменений. Сохранённая история не переписывается: см.
+    db.activate_ai_conversation.
+    """
+    user_id = await common.authed_user_id(request)
+    conversation_id = int(request.path_params["conversation_id"])
+    current = await db.current_ai_conversation_id(user_id)
+    if not await db.activate_ai_conversation(user_id, conversation_id):
+        raise ApiError(404, "not_found", "conversation not found")
+    if current != conversation_id:
+        await db.clear_ai_program_draft(user_id)
+        await db.clear_ai_setup_state(user_id)
+        await db.clear_ai_undo_actions(user_id)
+    turns = await db.get_ai_conversation_history(user_id)
+    return JSONResponse({"messages": _history_messages(turns)})
+
+
 async def get_thinking(request: Request) -> JSONResponse:
     """Фразы для плейсхолдера «тренер думает», пока клиент ждёт `/ai/ask`.
 
@@ -1556,6 +1581,7 @@ routes = [
     Route("/ai/conversations", list_conversations, methods=["GET"]),
     Route("/ai/conversations/workout", discuss_workout, methods=["POST"]),
     Route("/ai/conversations/{conversation_id:int}", get_conversation, methods=["GET"]),
+    Route("/ai/conversations/{conversation_id:int}/activate", activate_conversation, methods=["POST"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
     Route("/ai/history/{turn_id:int}/image", get_history_image, methods=["GET"]),
