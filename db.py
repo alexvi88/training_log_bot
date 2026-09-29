@@ -6128,6 +6128,16 @@ async def get_shared_item(token: str) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def list_shared_items_by_owner(owner_id: int) -> list[aiosqlite.Row]:
+    """Действующие визитки владельца, новые сверху. Отзыв — это удаление строки
+    (delete_shared_item), так что отозванных здесь нет по построению."""
+    cur = await conn().execute(
+        "SELECT * FROM shared_items WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC",
+        (owner_id,),
+    )
+    return await cur.fetchall()
+
+
 async def mark_shared_item_taken(token: str) -> None:
     async with _write_lock:
         await conn().execute(
