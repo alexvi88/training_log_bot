@@ -564,7 +564,9 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     conv_items = conversations.get("conversations") or conversations.get("items") or []
     if conv_items:
         await w.call("GET", f"/ai/conversations/{conv_items[0]['id']}", expect=200)
-    else:
+        await w.call("POST", f"/ai/conversations/{conv_items[0]['id']}/activate", expect=200)
+    await w.call("POST", "/ai/conversations/999999/activate", expect=404)
+    if not conv_items:
         await w.call("GET", "/ai/conversations/999999", expect=404)
     await w.call("GET", "/ai/pending", expect=200)
     await w.call("GET", "/ai/thinking", expect=200)

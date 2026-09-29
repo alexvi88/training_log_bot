@@ -1999,6 +1999,86 @@ async def test_archive_survives_a_long_new_conversation(fresh_db, client_factory
 
 
 @pytest.mark.asyncio
+async def test_activate_swaps_current_and_keeps_stored_history(fresh_db, client_factory, monkeypatch):
+    """«Продолжить разговор»: архивный становится текущим, прежний текущий
+    уезжает в архив, сохранённые ходы не переписываются, а модель получает
+    контекст возвращённого разговора."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    seen: list[list] = []
+
+    async def fake_ask(user_id, question, history, on_wire=None, **kwargs):
+        seen.append(history)
+        answer = f"ответ на: {question}"
+        if on_wire is not None:
+            await on_wire(
+                history
+                + [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+            )
+        return answer
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "старый"})
+    await client.delete("/ai/history")
+    await client.post("/ai/ask", json={"question": "новый"})
+
+    async def stored():
+        cur = await fresh_db.conn().execute(
+            "SELECT id, conversation_id, question, answer FROM ai_conversation_turns ORDER BY id"
+        )
+        return [tuple(r) for r in await cur.fetchall()]
+
+    before = await stored()
+    resp = await client.post("/ai/conversations/1/activate")
+    assert resp.status_code == 200
+    assert [m["text"] for m in resp.json()["messages"]] == ["старый", "ответ на: старый"]
+    assert resp.json() == (await client.get("/ai/history")).json()
+    assert await stored() == before
+
+    listing = (await client.get("/ai/conversations")).json()
+    assert listing["current"] == 1
+    assert {c["id"] for c in listing["conversations"]} == {1, 2}
+
+    await client.post("/ai/ask", json={"question": "продолжаем"})
+    assert seen[-1] == [
+        {"role": "user", "content": "старый"},
+        {"role": "assistant", "content": "ответ на: старый"},
+    ]
+    # Прежний текущий ушёл в архив и не течёт в модель.
+    assert all("новый" not in str(m) for m in seen[-1])
+
+    # Повторно — no-op; «начать заново» не наезжает на номер архивного.
+    assert (await client.post("/ai/conversations/1/activate")).status_code == 200
+    await client.delete("/ai/history")
+    assert (await client.get("/ai/conversations")).json()["current"] == 3
+    assert [m["text"] for m in (await client.get("/ai/conversations/2")).json()["messages"]] == [
+        "новый", "ответ на: новый",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_activate_unknown_foreign_and_unauthed(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    await client_a.post("/ai/ask", json={"question": "мой личный вопрос"})
+    await client_a.delete("/ai/history")
+
+    assert (await _activate_unauthed_status(client_factory)) == 401
+    assert (await client_a.post("/ai/conversations/999/activate")).status_code == 404
+    foreign = await client_b.post("/ai/conversations/1/activate")
+    assert foreign.status_code == 404
+    assert (await client_b.get("/ai/conversations")).json()["current"] == 1
+    assert (await client_a.get("/ai/conversations")).json()["current"] == 2
+
+
+async def _activate_unauthed_status(client_factory):
+    return (await client_factory().post("/ai/conversations/1/activate")).status_code
+
+
+@pytest.mark.asyncio
 async def test_archive_is_private_per_user(fresh_db, client_factory, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
