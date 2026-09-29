@@ -1134,6 +1134,7 @@
   "rank.current_stats": "📊 Сейчас у тебя: <b>{stats}</b>",
   "rank.gap_frequency": "держать {per_week} {n, plural, one{тренировку} few{тренировки} many{тренировок} other{тренировки}} в неделю",
   "rank.gap_tonnage_kg": "ещё {kg}кг",
+  "rank.gap_tonnage_lb": "ещё {lb}",
   "rank.gap_tonnage_tons": "ещё {tons} т",
   "rank.gap_workouts": "ещё {n} {n, plural, one{тренировка} few{тренировки} many{тренировок} other{тренировки}}",
   "rank.ladder_break_rule": "Перерыв стоит одной ступени, не больше: вернёшься к темпу — вернётся и звание.",

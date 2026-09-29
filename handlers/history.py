@@ -366,6 +366,7 @@ async def rank_ladder(callback: CallbackQuery, state: FSMContext):
         total_workouts=len(dates),
         tonnage_kg=tonnage_kg,
         per_week=per_week,
+        unit=user["unit"],
     )
     kb = InlineKeyboardBuilder()
     kb.button(

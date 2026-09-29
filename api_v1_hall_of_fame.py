@@ -56,13 +56,13 @@ def _lift_json(
     }
 
 
-def _rank_json(rank, gap) -> Optional[dict[str, Any]]:
+def _rank_json(rank, gap, unit: str = "kg") -> Optional[dict[str, Any]]:
     if rank is None:
         return None
     return {
         "name": rank.name,
         "level": rank.level,
-        "gap_text": formatting.format_rank_gap(gap) if gap else None,
+        "gap_text": formatting.format_rank_gap(gap, unit) if gap else None,
     }
 
 
@@ -71,7 +71,7 @@ def _hall_of_fame_json(hof: "hall_of_fame_data.HallOfFame") -> dict[str, Any]:
     ids = hof.top_lift_ids + [None] * (len(hof.top_lifts) - len(hof.top_lift_ids))
     return {
         "total_workouts": hof.total_workouts,
-        "rank": _rank_json(hof.rank, hof.rank_gap),
+        "rank": _rank_json(hof.rank, hof.rank_gap, hof.unit),
         "tonnage": {
             # В единицах пользователя, как и остальные веса в /v1 — клиент уже
             # знает users.unit из /me и подписывает сам.

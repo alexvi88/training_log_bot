@@ -1134,6 +1134,7 @@
   "rank.current_stats": "📊 Right now: <b>{stats}</b>",
   "rank.gap_frequency": "keep up {per_week} {n, plural, one{workout} other{workouts}} a week",
   "rank.gap_tonnage_kg": "{kg}kg to go",
+  "rank.gap_tonnage_lb": "{lb} to go",
   "rank.gap_tonnage_tons": "{tons}t to go",
   "rank.gap_workouts": "{n} more {n, plural, one{workout} other{workouts}} to go",
   "rank.ladder_break_rule": "A break costs one rank at most — get back to your pace and the rank comes back too.",
