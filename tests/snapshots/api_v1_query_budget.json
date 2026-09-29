@@ -3862,6 +3862,7 @@
    {
     "e1rm": 294.5,
     "exercise": "Подтягивания",
+    "exercise_id": 133,
     "is_bodyweight": false,
     "record": "188×15",
     "reps": 15,
@@ -3870,6 +3871,7 @@
    {
     "e1rm": 285.0,
     "exercise": "Отжимания",
+    "exercise_id": 134,
     "is_bodyweight": false,
     "record": "190×15",
     "reps": 15,
@@ -3878,6 +3880,7 @@
    {
     "e1rm": 182.5,
     "exercise": "Тяга",
+    "exercise_id": 131,
     "is_bodyweight": false,
     "record": "116.5×15",
     "reps": 15,
@@ -3886,6 +3889,7 @@
    {
     "e1rm": 179.4,
     "exercise": "Странное",
+    "exercise_id": 136,
     "is_bodyweight": false,
     "record": "114.5×15",
     "reps": 15,
@@ -3894,6 +3898,7 @@
    {
     "e1rm": 178.6,
     "exercise": "Скручивания",
+    "exercise_id": 135,
     "is_bodyweight": false,
     "record": "114×15",
     "reps": 15,
@@ -3902,6 +3907,7 @@
    {
     "e1rm": 177.8,
     "exercise": "Присед",
+    "exercise_id": 130,
     "is_bodyweight": false,
     "record": "113.5×15",
     "reps": 15,
@@ -3910,6 +3916,7 @@
    {
     "e1rm": 174.8,
     "exercise": "Жим лёжа",
+    "exercise_id": 129,
     "is_bodyweight": false,
     "record": "116.5×15",
     "reps": 15,
@@ -3918,6 +3925,7 @@
    {
     "e1rm": 172.9,
     "exercise": "Жим стоя",
+    "exercise_id": 132,
     "is_bodyweight": false,
     "record": "114×15",
     "reps": 15,

@@ -168,3 +168,20 @@ async def test_rank_ladder_reflects_current_level_and_frequency(fresh_db, client
     hof = await hall_of_fame_data.collect(user_id)
     assert body["current_level"] == hof.rank.level
     assert body["per_week"] == round(hof.per_week, 2)
+
+
+async def test_top_lifts_carry_exercise_id_of_each_row(fresh_db, client_factory):
+    """Каждая строка несёт id своего упражнения — по нему приложение открывает
+    прогресс; id не должны путаться между строками разного веса и своего веса."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    group_id = await db.create_muscle_group(user_id, "Тело")
+    bench_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    pullup_id = await db.create_exercise(user_id, "Подтягивания", group_id)
+    await _log_session(user_id, bench_id, day=1, sets=[(100.0, 5)])
+    await _log_session(user_id, pullup_id, day=2, sets=[(0.0, 10)])
+
+    body = (await client.get("/hall-of-fame")).json()
+    ids = {lift["exercise"]: lift["exercise_id"] for lift in body["top_lifts"]}
+    assert ids == {"Жим лёжа": bench_id, "Подтягивания": pullup_id}
+    assert bench_id != pullup_id
