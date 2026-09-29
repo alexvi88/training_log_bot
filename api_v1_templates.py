@@ -135,8 +135,8 @@ async def get_exercise_template(request: Request) -> JSONResponse:
 
 
 async def get_exercise_alternatives(request: Request) -> JSONResponse:
-    """«Чем заменить» в карточке своего упражнения — тот же список, что
-    кнопка «🔁 Чем заменить» в боте (`exercise_alternatives.for_exercise`).
+    """«Альтернативные упражнения» в карточке упражнения приложения
+    (`exercise_alternatives.for_exercise`).
     `exercise_id` в строке — уже своя копия (открывать её карточку), `null` —
     ещё не заведено, открывать превью шаблона `template_id` с «Добавить».
     Своё упражнение не из каталога получает пустой список, а не ошибку:

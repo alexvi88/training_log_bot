@@ -640,22 +640,6 @@ def template_preview_keyboard(
     return b.as_markup()
 
 
-def alternatives_keyboard(alternatives: list[dict], source_id: int) -> InlineKeyboardMarkup:
-    """Экран «🔁 Чем заменить» (handlers.exercises.exm_alternatives): своё
-    упражнение открывает свою карточку, ещё не заведённое (📋) — превью
-    шаблона с «Добавить». «Назад» — в карточку, откуда пришли."""
-    b = InlineKeyboardBuilder()
-    for alt in alternatives:
-        if alt["exercise_id"] is not None:
-            b.row(InlineKeyboardButton(text=alt["name"], callback_data=f"exm:ex:{alt['exercise_id']}"))
-        else:
-            b.row(InlineKeyboardButton(
-                text=f"📋 {alt['name']}", callback_data=f"exm:altpv:{alt['template_id']}:{source_id}"
-            ))
-    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"exm:ex:{source_id}"))
-    return b.as_markup()
-
-
 def yes_no_keyboard(
     yes_cb: str, no_cb: str, yes_text: str | None = None, no_text: str | None = None
 ) -> InlineKeyboardMarkup:
