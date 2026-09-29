@@ -829,3 +829,62 @@ async def test_concurrent_reorder_keeps_exercise_order_intact(fresh_db, client_f
     assert orders == list(range(len(item_ids))), (
         f"порядок упражнений разъехался: {[(i['id'], i['order_index']) for i in items]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_routine_attach_restores_former_place(fresh_db, client_factory):
+    """Вынос отдаёт откуда вынесли, attach ставит день ровно туда — «Отменить»."""
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "Сплит"})).json()["id"]
+    ids = []
+    for name in ("День 1", "День 2", "День 3"):
+        resp = await client.post(f"/programs/{program_id}/days", json={"name": name})
+        ids.append(resp.json()["id"])
+
+    out = await client.patch(f"/routines/{ids[1]}", json={"program_id": None})
+    body = out.json()
+    assert body["former_program_id"] == program_id
+    assert body["former_position"] == 1
+
+    back = await client.post(
+        f"/routines/{ids[1]}/attach",
+        json={"program_id": body["former_program_id"], "position": body["former_position"]},
+    )
+    assert back.status_code == 200, back.text
+    assert back.json()["program_id"] == program_id
+    days = (await client.get(f"/programs/{program_id}")).json()["days"]
+    assert [d["id"] for d in days] == ids
+    assert (await client.get("/routines")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_routine_attach_without_position_appends(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "Сплит"})).json()["id"]
+    first = (await client.post(f"/programs/{program_id}/days", json={"name": "А"})).json()["id"]
+    lone = (await client.post("/routines", json={"name": "Б"})).json()["id"]
+    resp = await client.post(f"/routines/{lone}/attach", json={"program_id": program_id})
+    assert resp.status_code == 200, resp.text
+    days = (await client.get(f"/programs/{program_id}")).json()["days"]
+    assert [d["id"] for d in days] == [first, lone]
+
+
+@pytest.mark.asyncio
+async def test_routine_attach_errors(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "Сплит"})).json()["id"]
+    day = (await client.post(f"/programs/{program_id}/days", json={"name": "А"})).json()["id"]
+    lone = (await client.post("/routines", json={"name": "Б"})).json()["id"]
+
+    resp = await client.post(f"/routines/{day}/attach", json={"program_id": program_id})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "already_in_program"
+
+    resp = await client.post(f"/routines/{lone}/attach", json={"program_id": 999999})
+    assert resp.status_code == 404
+    resp = await client.post("/routines/999999/attach", json={"program_id": program_id})
+    assert resp.status_code == 404
+    resp = await client.post(f"/routines/{lone}/attach", json={})
+    assert resp.status_code == 400
+    resp = await client.post(f"/routines/{lone}/attach", json={"program_id": program_id, "position": -1})
+    assert resp.status_code == 400

@@ -540,6 +540,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("DELETE", f"/routine-exercises/{item_id}", expect=200)
     day_id = day["id"] if "id" in day else day["days"][-1]["id"]
     await w.call("POST", f"/routines/{day_id}/reorder", json={"direction": "up"}, expect=(200, 400))
+    detached = (await w.call("PATCH", f"/routines/{day_id}", json={"program_id": None}, expect=200)).json()
+    await w.call("POST", f"/routines/{day_id}/attach", json={"program_id": detached["former_program_id"],
+                                                             "position": detached["former_position"]}, expect=200)
+    await w.call("POST", f"/routines/{day_id}/attach", json={"program_id": pid}, expect=400)
     await w.call("POST", f"/routines/{rid}/reorder", json={"direction": "up"}, expect=(200, 400))
     await w.call("POST", "/programs", json={"name": ""}, expect=400)
 

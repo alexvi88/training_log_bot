@@ -117,6 +117,7 @@
   "api.error.text_import_failed": "Couldn't parse the text — try again in a minute.",
   "api.error.not_in_program": "That day isn't part of any program.",
   "api.error.already_standalone": "That day's already on its own, outside any program.",
+  "api.error.already_in_program": "That day's already in a program.",
   "api.error.empty_program": "That program has no exercises — nothing to share yet.",
   "api.error.empty_routine": "That day has no exercises — nothing to share yet.",
   "api.error.exercise_exists": "You already have that exercise.",

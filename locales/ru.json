@@ -117,6 +117,7 @@
   "api.error.text_import_failed": "Не смог разобрать текст — попробуй ещё раз через минуту.",
   "api.error.not_in_program": "Этот день не входит ни в одну программу.",
   "api.error.already_standalone": "Этот день и так сам по себе, без программы.",
+  "api.error.already_in_program": "Этот день уже входит в программу.",
   "api.error.empty_program": "В программе нет упражнений — делиться пока нечем.",
   "api.error.empty_routine": "В этом дне нет упражнений — делиться пока нечем.",
   "api.error.exercise_exists": "Такое упражнение у тебя уже есть.",
