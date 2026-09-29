@@ -244,3 +244,59 @@ async def test_concurrent_double_import_writes_the_file_once(fresh_db, client_fa
     again = await first.post("/import/csv", json={"csv": csv})
     assert again.status_code == 200, again.text
     assert again.json()["workouts_imported"] == 0
+
+
+STRONG_LB = (
+    "Date,Workout Name,Exercise Name,Set Order,Weight (lbs),Reps\n"
+    "2024-01-01 10:00:00,A,Bench Press,1,225,5\n"
+    "2024-01-01 10:00:00,A,Bench Press,2,225,5\n"
+    "2024-01-03 10:00:00,A,Squat,1,315,3\n"
+)
+
+
+async def test_preview_reports_source_unit_and_weights(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    body = (await client.post("/import/csv/preview", json={"csv": STRONG_LB})).json()
+    assert body["source"] == "strong"
+    assert body["file_unit_detected"] == "lb"
+    assert body["file_unit"] == "lb"
+    assert body["account_unit"] == "kg"
+    assert body["weight_warning"] is None
+    newest, oldest = body["workouts"]
+    assert newest["date"] == "2024-01-03"
+    bench = oldest["entries"][0]
+    assert bench["sets"] == 2 and bench["top_reps"] == 5
+    assert bench["top_weight_kg"] == pytest.approx(102.1, abs=0.1)
+    assert bench["top_weight_lb"] == pytest.approx(225, abs=0.3)
+
+
+async def test_file_unit_override_changes_preview_and_commit(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    # Без единицы в заголовке файл читается в единице аккаунта (кг) — 225 кг.
+    csv_text = "date,exercise,weight,reps\n2024-01-01,Жим лёжа,225,5\n"
+    body = (await client.post("/import/csv/preview", json={"csv": csv_text})).json()
+    assert body["file_unit_detected"] is None and body["file_unit"] == "kg"
+    assert body["weight_warning"] == {
+        "kind": "maybe_lb", "exercise": "Жим лёжа", "weight": 225.0, "unit": "kg",
+    }
+    body = (await client.post(
+        "/import/csv/preview", json={"csv": csv_text, "file_unit": "lb"},
+    )).json()
+    assert body["file_unit"] == "lb" and body["weight_warning"] is None
+    assert body["workouts"][0]["entries"][0]["top_weight_kg"] == pytest.approx(102.1, abs=0.1)
+
+    resp = await client.post("/import/csv", json={"csv": csv_text, "file_unit": "lb"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["workouts_imported"] == 1
+
+
+async def test_kg_file_read_as_lb_is_flagged_and_bad_unit_rejected(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    csv_text = "date,exercise,weight,reps\n2024-01-01,Жим лёжа,20,5\n"
+    body = (await client.post(
+        "/import/csv/preview", json={"csv": csv_text, "file_unit": "lb"},
+    )).json()
+    assert body["weight_warning"]["kind"] == "maybe_kg"
+    for path in ("/import/csv/preview", "/import/csv"):
+        resp = await client.post(path, json={"csv": csv_text, "file_unit": "stone"})
+        assert resp.status_code == 400

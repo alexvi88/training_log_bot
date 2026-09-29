@@ -603,6 +603,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     # --- импорт ---
     csv_text = f"date,exercise,weight,reps\n2025-03-01,{text['csv_exercise']},100,5\n"
     await w.call("POST", "/import/csv/preview", json={"csv": csv_text}, expect=200)
+    await w.call("POST", "/import/csv/preview", json={"csv": csv_text, "file_unit": "lb"}, expect=200)
+    await w.call("POST", "/import/csv/preview", json={"csv": csv_text, "file_unit": "x"}, expect=400)
     await w.call("POST", "/import/csv", json={"csv": csv_text, "create_missing_exercises": False},
                  expect=(200, 201))
     bad_csv = f"date,exercise,weight,reps\n2025-03-01,{text['csv_exercise']},-50,5\n"

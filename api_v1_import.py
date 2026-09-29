@@ -51,6 +51,7 @@ import api_v1_ai
 import api_v1_common as common
 import config
 import db
+import formatting
 import i18n
 import text_import
 import timeutil
@@ -60,6 +61,8 @@ from handlers.csv_import import (
     _auto_detect,
     _build_workout_groups,
     _duplicate_dates,
+    _file_source,
+    _file_weight_unit,
     _read_table,
     _weight_factor,
     apply_import,
@@ -93,7 +96,20 @@ def _csv_text(body: dict[str, Any]) -> str:
     return text
 
 
-def _parse_workouts(text: str, today: dt.date | None, account_unit: str) -> tuple[list[dict], dict]:
+def _body_file_unit(body: dict[str, Any]) -> str | None:
+    """`file_unit` запроса: единица, в которой записан вес в файле ("kg"/"lb").
+    Нет поля или null — единица определяется по заголовку файла."""
+    value = body.get("file_unit")
+    if value is None:
+        return None
+    if value not in ("kg", "lb"):
+        raise ApiError(400, "bad_request", "file_unit must be 'kg' or 'lb'")
+    return value
+
+
+def _parse_workouts(
+    text: str, today: dt.date | None, account_unit: str, file_unit: str | None = None,
+) -> tuple[list[dict], dict]:
     """headers/rows/mapping/workouts — целиком через handlers.csv_import, в
     английской локали (см. докстринг модуля), чтобы ошибка при необходимости
     ушла клиенту не русской строкой. `today` — тот же смысл, что в боте
@@ -127,13 +143,16 @@ def _parse_workouts(text: str, today: dt.date | None, account_unit: str) -> tupl
                 400, "unrecognized_columns",
                 "could not auto-detect column(s): " + ", ".join(missing),
             )
-        stats: dict = {}
+        stats: dict = {
+            "source": _file_source(headers, has_header),
+            "file_unit_detected": _file_weight_unit(headers, mapping),
+        }
         try:
             workouts = _build_workout_groups(
                 data_rows, mapping,
                 first_line=2 if has_header else 1,
                 today=today,
-                weight_factor=_weight_factor(headers, mapping, account_unit),
+                weight_factor=_weight_factor(headers, mapping, account_unit, file_unit),
                 stats=stats,
                 account_unit=account_unit,
             )
@@ -144,11 +163,68 @@ def _parse_workouts(text: str, today: dt.date | None, account_unit: str) -> tupl
                 400, "invalid_csv", detail,
                 human=_localized_parse_error(
                     data_rows, mapping, headers, has_header, today, user_lang, account_unit,
+                    file_unit,
                 ),
             ) from e
         if not workouts:
             raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
         return workouts, stats
+
+
+# Порог правдоподобия веса. Просто и без справочника упражнений: рабочий вес
+# свыше 200 кг в файле «в килограммах» почти всегда фунты, принятые за кг
+# (225 lb — обычный жим); а файл «в фунтах», где самый тяжёлый вес меньше
+# 45 lb (≈20 кг, пустой гриф), почти всегда килограммы. Чип только предлагает
+# перепроверить — ничего не блокирует, штанга на 200+ кг бывает настоящей.
+PLAUSIBLE_MAX_KG = 200
+PLAUSIBLE_MIN_TOP_LB = 45
+
+
+def _weight_warning(workouts: list[dict], account_unit: str, file_unit: str) -> dict | None:
+    """Самый тяжёлый подход файла, если он выглядит нереалистично для
+    выбранной единицы: {"kind": "maybe_lb"|"maybe_kg", "exercise", "weight"
+    (в единице файла), "unit" (единица файла)}. Иначе None."""
+    top_name, top_stored = None, 0.0
+    for w in workouts:
+        for entry in w["entries"]:
+            for weight, _reps, _rpe in entry["sets"]:
+                if weight > top_stored:
+                    top_name, top_stored = entry["name"], weight
+    if top_name is None:
+        return None
+    kg = formatting.to_kg(top_stored, account_unit)
+    shown = round(kg if file_unit == "kg" else kg * config.LB_PER_KG, 1)
+    if file_unit == "kg" and kg > PLAUSIBLE_MAX_KG:
+        kind = "maybe_lb"
+    elif file_unit == "lb" and shown < PLAUSIBLE_MIN_TOP_LB:
+        kind = "maybe_kg"
+    else:
+        return None
+    return {"kind": kind, "exercise": top_name, "weight": shown, "unit": file_unit}
+
+
+MAX_PREVIEW_WORKOUTS = 500
+
+
+def _preview_workouts(workouts: list[dict], account_unit: str) -> list[dict]:
+    """Компактные строки предпросмотра: по упражнению — число подходов и
+    самый тяжёлый подход (вес в обеих единицах, чтобы приложение показало
+    «100 кг (220 lb)» без своей математики). Новые даты первыми."""
+    rows = []
+    for w in sorted(workouts, key=lambda x: x["date"], reverse=True)[:MAX_PREVIEW_WORKOUTS]:
+        entries = []
+        for entry in w["entries"]:
+            top = max(entry["sets"], key=lambda s: (s[0], s[1]))
+            kg = formatting.to_kg(top[0], account_unit)
+            entries.append({
+                "name": entry["name"],
+                "sets": len(entry["sets"]),
+                "top_weight_kg": round(kg, 1),
+                "top_weight_lb": round(kg * config.LB_PER_KG, 1),
+                "top_reps": top[1],
+            })
+        rows.append({"date": w["date"], "entries": entries})
+    return rows
 
 
 def _skipped_fields(stats: dict) -> dict[str, int]:
@@ -167,6 +243,7 @@ def _skipped_fields(stats: dict) -> dict[str, int]:
 
 def _localized_parse_error(
     data_rows, mapping, headers, has_header, today, lang: str, account_unit: str,
+    file_unit: str | None = None,
 ) -> str | None:
     """Та же ошибка разбора, но на языке человека: разбор уже упал в
     английской локали ради машинного `detail`, и повторить его под `lang` —
@@ -178,7 +255,7 @@ def _localized_parse_error(
                 data_rows, mapping,
                 first_line=2 if has_header else 1,
                 today=today,
-                weight_factor=_weight_factor(headers, mapping, account_unit),
+                weight_factor=_weight_factor(headers, mapping, account_unit, file_unit),
                 account_unit=account_unit,
             )
         except ParseError as e:
@@ -202,7 +279,12 @@ async def preview_csv(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     body = await common.json_body(request)
     text = _csv_text(body)
-    workouts, stats = _parse_workouts(text, timeutil.user_today(user), user["unit"])
+    requested_unit = _body_file_unit(body)
+    workouts, stats = _parse_workouts(
+        text, timeutil.user_today(user), user["unit"], requested_unit,
+    )
+    # Единица, которой файл прочитан: выбор человека → заголовок → единица аккаунта.
+    file_unit = requested_unit or stats["file_unit_detected"] or user["unit"]
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
@@ -220,6 +302,18 @@ async def preview_csv(request: Request) -> JSONResponse:
             "date_range": _date_range(workouts),
             "exercises": exercises,
             "duplicate_dates": sorted(dup),
+            # Как прочитан вес: source — "strong" | "hevy" | "other";
+            # file_unit_detected — что сказал заголовок ("kg"/"lb"/null);
+            # file_unit — единица, которой файл прочитан (выбор человека,
+            # иначе заголовок, иначе единица аккаунта); account_unit — в чём
+            # вес ляжет в историю. weight_warning — см. _weight_warning.
+            "source": stats["source"],
+            "file_unit_detected": stats["file_unit_detected"],
+            "file_unit": file_unit,
+            "account_unit": user["unit"],
+            "weight_warning": _weight_warning(workouts, user["unit"], file_unit),
+            "workouts": _preview_workouts(workouts, user["unit"]),
+            "workouts_truncated": len(workouts) > MAX_PREVIEW_WORKOUTS,
             **_skipped_fields(stats),
             # Как прочитаны даты вида «a/b/гггг»: "mdy" — колонка доказала
             # американский формат, "dmy" — европейский или (при
@@ -262,7 +356,9 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     create_missing = body.get("create_missing_exercises", True)
     if not isinstance(create_missing, bool):
         raise ApiError(400, "bad_request", "create_missing_exercises must be a boolean")
-    workouts, stats = _parse_workouts(text, timeutil.user_today(user), user["unit"])
+    workouts, stats = _parse_workouts(
+        text, timeutil.user_today(user), user["unit"], _body_file_unit(body),
+    )
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)

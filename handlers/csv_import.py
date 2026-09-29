@@ -520,7 +520,22 @@ def _file_weight_unit(headers: list[str], mapping: dict[str, int]) -> Optional[s
     return None
 
 
-def _weight_factor(headers: list[str], mapping: dict[str, int], account_unit: str) -> float:
+def _file_source(headers: list[str], has_header: bool) -> str:
+    """Откуда файл: "strong", "hevy" или "other" — по фирменным заголовкам."""
+    if not has_header:
+        return "other"
+    names = {_normalize_header(h) for h in headers}
+    if "exercise name" in names and "set order" in names:
+        return "strong"
+    if "exercise_title" in names or ("start_time" in names and "set_type" in names):
+        return "hevy"
+    return "other"
+
+
+def _weight_factor(
+    headers: list[str], mapping: dict[str, int], account_unit: str,
+    file_unit: Optional[str] = None,
+) -> float:
     """Множитель «единица файла → единица аккаунта».
 
     Вес подхода хранится в единице аккаунта (см. db.scale_user_set_weights,
@@ -530,7 +545,11 @@ def _weight_factor(headers: list[str], mapping: dict[str, int], account_unit: st
     ложились у него как фунты без пересчёта. Колонка без единицы считается
     записанной в единице аккаунта — так пишет наш собственный экспорт.
     """
-    file_unit = _file_weight_unit(headers, mapping)
+    # `file_unit` — явный выбор человека («кг | lb» в предпросмотре приложения):
+    # он сильнее заголовка, потому что автоопределение по заголовку может
+    # ошибиться (у Strong единица — настройка аккаунта, а не файла).
+    if file_unit is None:
+        file_unit = _file_weight_unit(headers, mapping)
     if file_unit is None or file_unit == account_unit:
         return 1.0
     if file_unit == "lb":
