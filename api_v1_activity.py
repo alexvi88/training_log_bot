@@ -38,6 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import activity_log
 import db
+import product_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,17 @@ class LogApiActions(BaseHTTPMiddleware):
         # следа — после «удалить всё» в базе оставалась user_events на него.
         if method == "DELETE" and template == "/account":
             return
+        # Пачка продуктовых событий (api_v1_events) — служебный запрос, а не
+        # действие человека: строкой в ленте он был бы после каждого экрана.
+        if template == "/events":
+            return
+        await product_metrics.track(
+            user_id,
+            "action",
+            {"route": f"{method} {template}"},
+            platform=product_metrics.PLATFORM_IOS,
+            app_version=request.headers.get("x-app-version"),
+        )
         action = describe(method, template)
         detail = await describe_detail(body or {}, dict(request.path_params))
         if detail:

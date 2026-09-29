@@ -13,7 +13,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import account_deletion
@@ -30,6 +30,7 @@ import db
 import formatting
 import i18n
 import keyboards
+import product_metrics
 import push_texts
 import ui
 import view_builder
@@ -660,6 +661,79 @@ async def cmd_crashes(message: Message, state: FSMContext):
     summary = await db.diagnostics_summary(days)
     recent = await db.recent_crashes(days, CRASHES_RECENT_LIMIT)
     await message.answer(format_crash_report(summary, recent, days), parse_mode="HTML")
+
+
+# Колонки таблицы /metrics — самое нужное, что влезает в экран телефона.
+# Остальные метрики — в CSV под таблицей.
+METRICS_TABLE_COLUMNS = (
+    ("active_users", "DAU"),
+    ("wau", "WAU"),
+    ("mau", "MAU"),
+    ("new_users", "нов"),
+    ("trained_users", "трен"),
+    ("active_ios", "iOS"),
+)
+METRICS_TABLE_DAYS = 14
+
+
+def _metric_cell(value) -> str:
+    if value is None:
+        return "·"
+    return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
+def format_metrics_table(rows: list[dict]) -> str:
+    """Последние сутки сводки (product_metrics) моноширинной таблицей и
+    удержание D1/D7/D30 по последним дозревшим когортам."""
+    if not rows:
+        return "📈 Сводка пока пустая — первые сутки лягут в первый час после полуночи UTC."
+    head = "день  " + " ".join(f"{title:>4}" for _, title in METRICS_TABLE_COLUMNS)
+    lines = [head]
+    for row in rows[-METRICS_TABLE_DAYS:]:
+        cells = " ".join(f"{_metric_cell(row.get(key)):>4}" for key, _ in METRICS_TABLE_COLUMNS)
+        lines.append(f"{row['day'][5:]} {cells}")
+    retention = []
+    for n in (1, 7, 30):
+        cohort = retained = 0
+        # Четыре недели дозревших когорт — одна-две регистрации в день дают
+        # шум, а не долю.
+        matured = [r for r in rows if r.get(f"cohort_d{n}")][-28:]
+        for r in matured:
+            cohort += r[f"cohort_d{n}"]
+            retained += r.get(f"retained_d{n}", 0)
+        if cohort:
+            retention.append(f"D{n} {retained / cohort:.0%} ({int(retained)}/{int(cohort)})")
+    text = "📈 <b>Метрики по дням</b> (без своих аккаунтов)\n<pre>" + escape("\n".join(lines)) + "</pre>"
+    if retention:
+        text += "\nУдержание, 4 нед. когорт: " + " · ".join(retention)
+    return text
+
+
+def metrics_csv(names: list[str], rows: list[dict]) -> bytes:
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["day", *names])
+    for row in rows:
+        writer.writerow([row["day"], *(row.get(name, "") for name in names)])
+    return buf.getvalue().encode("utf-8")
+
+
+@router.message(Command("metrics"))
+async def cmd_metrics(message: Message, state: FSMContext):
+    """Суточная сводка метрик (product_metrics): таблица за две недели и CSV
+    всей истории — для графиков где угодно."""
+    if not _is_admin(message.from_user.id):
+        return
+    await product_metrics.catch_up()
+    names, rows = await product_metrics.pivot()
+    await message.answer(format_metrics_table(rows), parse_mode="HTML")
+    if rows:
+        await message.answer_document(
+            BufferedInputFile(metrics_csv(names, rows), filename=f"metrics_{rows[-1]['day']}.csv")
+        )
 
 
 @router.message(Command("activity"))

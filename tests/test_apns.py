@@ -115,7 +115,10 @@ async def test_send_alert_success_returns_true(monkeypatch):
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["url"].endswith("/3/device/devtoken")
-    assert call["json"] == {"aps": {"alert": {"title": "Title", "body": "Body"}}}
+    # push_category — метка для события push_open в приложении (product_metrics).
+    assert call["json"] == {
+        "aps": {"alert": {"title": "Title", "body": "Body"}}, "push_category": "skip_3",
+    }
     assert call["headers"]["apns-topic"] == "com.trainingdiary.ios"
     assert call["headers"]["apns-push-type"] == "alert"
     assert call["headers"]["apns-collapse-id"] == "skip_3"
