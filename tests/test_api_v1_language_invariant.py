@@ -555,6 +555,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/share/{share_prog['token']}", expect=200)
     share_rt = (await w.call("POST", f"/share/routines/{rid_from_workout}", expect=201)).json()
     await w.call("GET", f"/share/{share_rt['token']}", expect=200)
+    await w.call("GET", "/share/mine", expect=200)
     await w.call("DELETE", f"/share/{share_rt['token']}", expect=200)
     await w.call("GET", f"/share/{share_rt['token']}", expect=404)
 

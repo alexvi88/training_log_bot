@@ -258,6 +258,45 @@ async def _do_import_share(request: Request, user_id: int) -> JSONResponse:
     return JSONResponse({"kind": "exercise", "exercise_id": ex_id, "name": payload["name"]}, status_code=201)
 
 
+# ---------- владелец: список выданных ссылок ----------
+
+def _share_title(kind: str, payload: dict[str, Any]) -> str:
+    """Название для строки списка: у программы и дня — имя владельца как есть,
+    у упражнения — на языке смотрящего, если это имя из каталога."""
+    name = payload.get("name") or ""
+    return sharing.shown_exercise_name(name) if kind == "exercise" else name
+
+
+async def list_my_shares(request: Request) -> JSONResponse:
+    """Ссылки, которые атлет выдал: «Мои ссылки» в приложении. До этого
+    приложение помнило токен только в момент создания — забытую ссылку нельзя
+    было ни найти, ни отозвать.
+
+    Отозванных в списке нет (отзыв удаляет строку). url собираем, только если
+    username бота уже известен процессу (sharing.get_bot_username кэширует его
+    при старте), иначе null — клиент соберёт сам из start_param, как и после
+    создания. opens всегда null: открытия превью нигде не считаем, считаем
+    только импорты (taken_count)."""
+    user_id = await _authed_user_id(request)
+    username = sharing._bot_username
+    items = []
+    for row in await db.list_shared_items_by_owner(user_id):
+        payload = json.loads(row["payload"])
+        items.append(
+            {
+                "token": row["token"],
+                "kind": row["kind"],
+                "title": _share_title(row["kind"], payload),
+                "url": sharing._deep_link(username, row["token"]) if username else None,
+                "start_param": f"{sharing.START_PREFIX}{row['token']}",
+                "created_at": row["created_at"],
+                "opens": None,
+                "taken_count": row["taken_count"],
+            }
+        )
+    return JSONResponse({"items": items})
+
+
 # ---------- владелец: отзыв визитки ----------
 
 async def revoke_share(request: Request) -> JSONResponse:
@@ -292,6 +331,7 @@ routes = [
     Route("/share/programs/{program_id:int}", share_program, methods=["POST"]),
     Route("/share/routines/{routine_id:int}", share_routine, methods=["POST"]),
     Route("/share/exercises/{exercise_id:int}", share_exercise, methods=["POST"]),
+    Route("/share/mine", list_my_shares, methods=["GET"]),
     Route("/share/{token}", get_share_preview, methods=["GET"]),
     Route("/share/{token}", revoke_share, methods=["DELETE"]),
     Route("/share/{token}/import", import_share, methods=["POST"]),
