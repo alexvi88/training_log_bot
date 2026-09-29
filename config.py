@@ -68,6 +68,16 @@ BACKUP_CATCHUP_HOURS = int(os.getenv("BACKUP_CATCHUP_HOURS", "24"))
 # оба ведут себя одинаково.
 TEST_USER_ID = int(os.getenv("TEST_USER_ID")) if os.getenv("TEST_USER_ID") else None
 
+# Тревоги админу в Telegram: ошибки из лога, новые сбои iOS, часовые проверки
+# (см. ops_alerts.py). Выключатель — на случай, если тревоги зашумят, а
+# выкатывать код ради тишины не хочется.
+OPS_ALERTS_ENABLED = os.getenv("OPS_ALERTS_ENABLED", "true").lower() not in ("false", "0", "no")
+
+# Адрес пульса для внешнего мониторинга (Healthchecks.io и т.п., см.
+# docs/ALERTS.md): процесс дёргает его раз в пять минут, перестал — сервис
+# пишет в Telegram, что бот лёг. Пусто — пульса нет.
+HEALTHCHECK_PING_URL = os.getenv("HEALTHCHECK_PING_URL", "").strip()
+
 
 def limit_preview_ids() -> set[int]:
     """Кому дневные лимиты показываются предупреждением, а не запирают дверь.

@@ -40,6 +40,7 @@ import jwt
 
 import config
 import db
+import ops_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +194,11 @@ async def send_alert(
         response = await client.post(url, json=payload, headers=headers)
     except httpx.HTTPError:
         logger.exception("APNs: сетевая ошибка при отправке пуша пользователю %s", user_id)
+        ops_alerts.record_apns_result(False)
         return False
 
     if response.status_code == 200:
+        ops_alerts.record_apns_result(True)
         return True
 
     if response.status_code in _DEAD_TOKEN_STATUSES and _reason(response) in _DEAD_TOKEN_REASONS:
@@ -210,6 +213,7 @@ async def send_alert(
         )
         return False
 
+    ops_alerts.record_apns_result(False)
     logger.warning(
         "APNs: пуш пользователю %s не доставлен, HTTP %s (%s)",
         user_id, response.status_code, _reason(response),
