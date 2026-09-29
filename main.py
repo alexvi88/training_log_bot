@@ -28,6 +28,7 @@ import engagement
 import exercise_photos
 import i18n
 import keyboards
+import ops_alerts
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -466,13 +467,22 @@ async def main() -> None:
             logger.error("Фоновая задача %s умерла", task.get_name(), exc_info=exc)
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
+    # Тревоги админу (ops_alerts.py): хендлер на корневом логгере вешается до
+    # старта фоновых задач, чтобы их падения тоже долетали.
+    alerts_background = []
+    if ops_alerts.install() is not None:
+        alerts_background = [
+            asyncio.create_task(ops_alerts.run_alert_sender(bot)),
+            asyncio.create_task(ops_alerts.run_hourly_checks()),
+        ]
     backup_watch_job = asyncio.create_task(admin_tasks.run_backup_staleness_check(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
     # Ретенш-чистка не зависит ни от ADMIN_ID, ни от того, дошёл ли отчёт (см.
     # admin_tasks.run_retention_cleanup_job) — та же причина, по которой
     # прополка OAuth ниже уже вынесена отдельно.
     retention_job = asyncio.create_task(admin_tasks.run_retention_cleanup_job())
-    background = [admin_job, backup_watch_job, engagement_job, retention_job]
+    background = [admin_job, backup_watch_job, engagement_job, retention_job, *alerts_background]
+    background.append(asyncio.create_task(ops_alerts.run_heartbeat()))
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))

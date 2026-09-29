@@ -8849,6 +8849,29 @@ async def log_diagnostic(
         return cur.lastrowid
 
 
+async def diagnostic_seen_before(
+    *,
+    diagnostic_id: int,
+    kind: str,
+    app_version: Optional[str],
+    build: Optional[str],
+    exception_type: Any,
+    signal: Any,
+) -> bool:
+    """Был ли до записи `diagnostic_id` такой же сбой в той же сборке: тот же
+    вид, тип исключения и сигнал из diagnosticMetaData (ops_alerts — тревога
+    только на первый). `IS`, а не `=`: отсутствующая версия или сигнал — тоже
+    признак, NULL с NULL должен совпасть."""
+    cur = await conn().execute(
+        "SELECT 1 FROM diagnostics WHERE id < ? AND kind = ? "
+        "AND app_version IS ? AND build IS ? "
+        "AND json_extract(payload, '$.diagnosticMetaData.exceptionType') IS ? "
+        "AND json_extract(payload, '$.diagnosticMetaData.signal') IS ? LIMIT 1",
+        (diagnostic_id, kind, app_version, build, exception_type, signal),
+    )
+    return await cur.fetchone() is not None
+
+
 async def diagnostics_summary(days: int) -> list[aiosqlite.Row]:
     """Сколько сбоев каждого вида за последние `days` суток — по версиям и
     сборкам, свежие версии первыми."""

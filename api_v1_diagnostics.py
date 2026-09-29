@@ -42,6 +42,9 @@ MetricKit отдаёт приложению те же диагностики (`M
 на окно с запасом покрывает честную пачку (MetricKit — раз в сутки, в пачке
 редко больше десятка), 429 клиент понимает как «дошлю в следующий запуск».
 
+Первое падение или зависание с новой причиной в сборке приходит админу в
+Telegram сразу (`ops_alerts.maybe_alert_new_diagnostic`), повторы — нет.
+
 Посмотреть — админская `/crashes` (handlers/admin.py) или SQL в
 db.py рядом с `log_diagnostic`.
 """
@@ -58,6 +61,7 @@ from starlette.routing import Route
 
 import api_v1_common as common
 import db
+import ops_alerts
 import review_demo
 
 ApiError = common.ApiError
@@ -141,15 +145,19 @@ async def submit_diagnostic(request: Request) -> JSONResponse:
     user_id = await _optional_user_id(request)
     meta = payload.get("diagnosticMetaData")
     meta = meta if isinstance(meta, dict) else {}
-    await db.log_diagnostic(
+    fields = dict(
         user_id=user_id,
         kind=kind,
-        payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         app_version=_meta(meta.get("appVersion")) or _meta(body.get("app_version")),
         build=_meta(meta.get("appBuildVersion")) or _meta(body.get("build")),
         os_version=_meta(meta.get("osVersion")) or _meta(body.get("os_version")),
         device=_meta(meta.get("deviceType")) or _meta(body.get("device")),
     )
+    diagnostic_id = await db.log_diagnostic(
+        payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")), **fields
+    )
+    # Первое такое падение в этой сборке — тревога админу (ops_alerts.py).
+    await ops_alerts.maybe_alert_new_diagnostic(diagnostic_id=diagnostic_id, meta=meta, **fields)
     return JSONResponse({"stored": True}, status_code=201)
 
 

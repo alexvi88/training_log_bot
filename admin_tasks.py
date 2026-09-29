@@ -190,6 +190,9 @@ async def run_backup_staleness_check(bot: Bot) -> None:
                 logger.error(
                     "DB backup is stale: last one is %.1f hours old (alert threshold %s)",
                     age, config.BACKUP_STALE_ALERT_HOURS,
+                    # Админу об этом пишет _repair_stale_backup — своим текстом
+                    # и с итогом починки; вторая тревога из лога — шум.
+                    extra={"ops_alert": False},
                 )
                 await _repair_stale_backup(bot, age)
         except Exception:
@@ -205,7 +208,7 @@ async def _repair_stale_backup(bot: Bot, age: float) -> None:
     try:
         await _rotate_disk_backup()
     except Exception as exc:
-        logger.exception("Stale-backup repair failed")
+        logger.exception("Stale-backup repair failed", extra={"ops_alert": False})
         error = f"{type(exc).__name__}: {exc}"
     if not config.ADMIN_ID:
         return
