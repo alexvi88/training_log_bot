@@ -7521,6 +7521,30 @@ async def move_routine_to_program(routine_id: int, program_id: Optional[int]) ->
         await db.commit()
 
 
+async def attach_routine_to_program(
+    routine_id: int, program_id: int, position: Optional[int] = None
+) -> None:
+    """Вернуть самостоятельный день в программу на место `position` (его
+    прежний day_order). Дни с day_order >= position сдвигаются на один вниз,
+    чтобы вернувшийся не делил место с тем, кто успел занять его номер.
+    Без `position` — последним, как move_routine_to_program."""
+    if position is None:
+        await move_routine_to_program(routine_id, program_id)
+        return
+    async with _write_lock:
+        db = conn()
+        await db.execute(
+            "UPDATE routines SET day_order = day_order + 1 "
+            "WHERE program_id = ? AND day_order >= ?",
+            (program_id, position),
+        )
+        await db.execute(
+            "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
+            (program_id, position, routine_id),
+        )
+        await db.commit()
+
+
 async def reorder_program_day(routine_id: int, direction: str) -> None:
     """Переставить день программы относительно соседа — по кругу.
 
