@@ -609,6 +609,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", "/import/csv/preview", json={"csv": bad_csv}, expect=400)
     await w.call("POST", "/import/text/convert", json={"text": f"{text['csv_exercise']} 100 5"}, expect=200)
     await w.call("POST", "/import/text/convert", json={"text": " "}, expect=400)
+    await w.call("POST", "/import/csv", json={"csv": csv_text, "exercise_mapping": {"x": 999999}}, expect=400)
 
     # --- слияние, удаление ---
     await w.call("POST", "/exercises/merge", json={"source_id": own2_id, "target_id": own_id}, expect=200)
