@@ -91,6 +91,39 @@ async def test_limits_reports_exhausted_quota(fresh_db, client_factory, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_limits_reports_video_quota(fresh_db, client_factory, monkeypatch):
+    """Квота видео видна до загрузки ролика: used/limit/remaining + resets_at (UTC)."""
+    import datetime as dt
+
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 2)
+    client = await _linked_client(fresh_db, client_factory)
+
+    body = (await client.get("/ai/limits")).json()
+    assert body["video"]["used"] == 0
+    assert body["video"]["limit"] == 2
+    assert body["video"]["remaining"] == 2
+
+    await fresh_db.increment_ai_video_count(111)
+    body = (await client.get("/ai/limits")).json()
+    assert body["video"]["used"] == 1
+    assert body["video"]["remaining"] == 1
+    assert body["question"]["used"] == 0  # прежние поля на месте
+
+    resets = dt.datetime.fromisoformat(body["video"]["resets_at"].replace("Z", "+00:00"))
+    now = dt.datetime.now(dt.timezone.utc)
+    assert now < resets <= now + dt.timedelta(hours=24, minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_limits_video_zero_config_means_unlimited(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 0)
+    client = await _linked_client(fresh_db, client_factory)
+    body = (await client.get("/ai/limits")).json()
+    assert body["video"]["limit"] is None
+    assert body["video"]["remaining"] is None
+
+
+@pytest.mark.asyncio
 async def test_limits_zero_config_means_unlimited(fresh_db, client_factory, monkeypatch):
     """limit <= 0 в конфиге значит «лимита нет» (см. ai_limits._exhausted) —
     отдаём тем же значением клиенту, а не отдельным флагом unlimited."""
