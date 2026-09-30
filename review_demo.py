@@ -4,8 +4,9 @@
 Зачем: Beta App Review отклонил сборку по Guideline 2.1(a) — ревьюеру нужен
 логин и пароль от аккаунта, в котором уже есть данные. Sign in with Apple
 заводит пустой аккаунт, а код из Telegram ревьюеру взять негде. Обычным
-пользователям вход по паролю не нужен и не предлагается: учётка одна, из
-секретов окружения (config.REVIEW_DEMO_*), и без них ручки нет вовсе.
+пользователям вход по паролю не нужен и не предлагается: учёток две, обе из
+секретов окружения — ревьюера (config.REVIEW_DEMO_*) и прогона скриншотов
+(config.WALK_DEMO_*), — и без них ручки нет вовсе.
 
 Аккаунт — обычный app-only (db.create_app_only_user, отрицательный
 синтетический telegram_id), а стабильность между входами держит та же таблица,
@@ -113,25 +114,28 @@ def reset_failures() -> None:
     _failures.clear()
 
 
-def check_credentials(username: str, password: str) -> bool:
-    """Сравнение за постоянное время, и логин, и пароль сравниваются всегда —
-    без короткого замыкания, чтобы по времени ответа нельзя было угадать
-    даже правильный логин."""
-    user_ok = hmac.compare_digest(
-        username.encode("utf-8"), config.REVIEW_DEMO_USERNAME.encode("utf-8")
-    )
-    pass_ok = hmac.compare_digest(
-        password.encode("utf-8"), config.REVIEW_DEMO_PASSWORD.encode("utf-8")
-    )
-    return user_ok & pass_ok
+def check_credentials(username: str, password: str) -> Optional[str]:
+    """Логин демо-аккаунта, к которому подошла пара, или None. Сравнение за
+    постоянное время: и логин, и пароль сравниваются всегда и со всеми
+    заданными парами — без короткого замыкания, чтобы по времени ответа нельзя
+    было угадать даже правильный логин."""
+    matched: Optional[str] = None
+    for demo_user, demo_password in config.demo_accounts():
+        user_ok = hmac.compare_digest(username.encode("utf-8"), demo_user.encode("utf-8"))
+        pass_ok = hmac.compare_digest(password.encode("utf-8"), demo_password.encode("utf-8"))
+        if user_ok & pass_ok:
+            matched = demo_user
+    return matched
 
 
-async def ensure_demo_user(lang: Optional[str] = None) -> int:
+async def ensure_demo_user(lang: Optional[str] = None, username: Optional[str] = None) -> int:
     """user_id демо-аккаунта: найти по auth_identities или завести, и
-    заполнить историей, если тренировок у него ещё нет. Язык — только для
-    НОВОГО аккаунта (дефолт английский: ревьюеры Apple читают по-английски);
-    существующему язык не переписываем — его могли переключить в настройках."""
-    username = config.REVIEW_DEMO_USERNAME
+    заполнить историей, если тренировок у него ещё нет. Аккаунт ключуется
+    логином, так что у App Review и у прогона скриншотов (config.WALK_DEMO_*)
+    аккаунты разные. Язык — только для НОВОГО аккаунта (дефолт английский:
+    ревьюеры Apple читают по-английски); существующему язык не переписываем —
+    его могли переключить в настройках."""
+    username = username or config.REVIEW_DEMO_USERNAME
     async with _get_lock():
         user_id = await db.resolve_auth_identity(PROVIDER, username)
         if user_id is not None and await db.get_user(user_id) is None:
