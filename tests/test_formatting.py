@@ -146,6 +146,22 @@ def test_build_workout_summary_shows_e1rm_delta_and_previous_date():
     assert "↑" in text
 
 
+def test_e1rm_comparison_date_follows_language():
+    """dd.mm англоязычный читатель принимает за mm.dd: «vs 05.09» по-английски
+    выглядит как 9 мая. По-английски — «Sep 5», по-русски — как было, «05.09»."""
+    block = ExerciseBlockView(
+        group_name="chest",
+        exercise_name="Bench press",
+        sets=[(100.0, 8)],
+        prev_sets=[(95.0, 8)],
+        prev_started_at=dt.datetime(2026, 9, 5, 18, 0),
+    )
+    with i18n.use_lang("en"):
+        assert "vs Sep 5)" in formatting.format_block_e1rm(block, "kg")
+    with i18n.use_lang("ru"):
+        assert "vs 05.09)" in formatting.format_block_e1rm(block, "kg")
+
+
 def test_build_workout_summary_e1rm_line_uses_unit():
     started = dt.datetime(2026, 6, 26, 18, 0)
     blocks = [ExerciseBlockView(group_name="грудь", exercise_name="Жим лёжа", sets=[(100.0, 8)])]

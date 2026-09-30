@@ -292,3 +292,11 @@ def test_bodyweight_list_keyboard_no_delete_row_when_empty():
     kb = keyboards.bodyweight_list_keyboard([], "kg", page=0, has_next=False)
     texts = _button_texts(kb)
     assert not any(t.startswith("🗑") for t in texts)
+
+
+def test_ai_button_still_matches_its_old_casing():
+    """Подпись «AI Coach» выровнена в «AI coach», но у кого клавиатура ещё
+    старая, нажатие обязано попадать в тот же обработчик."""
+    assert keyboards.BTN_AI == "AI coach"
+    assert keyboards.BTN_AI == "AI Coach"
+    assert keyboards.BTN_AI == "AI-тренер"
