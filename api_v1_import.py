@@ -620,7 +620,9 @@ async def convert_text(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     _converting.add(user_id)
     try:
-        result = await text_import.extract_sets(user_id, text, timeutil.user_today(user))
+        result = await text_import.extract_sets(
+            user_id, text, timeutil.user_today(user), lang=user["lang"]
+        )
     except Exception as e:
         raise ApiError(502, "text_import_failed", "model failed to parse the text") from e
     finally:

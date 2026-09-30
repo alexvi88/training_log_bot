@@ -266,3 +266,67 @@ async def test_convert_errors_speak_athletes_language(fresh_db, monkeypatch, lan
     message = r.json()["message"]
     has_cyrillic = any("а" <= ch.lower() <= "я" for ch in message)
     assert has_cyrillic == (lang == "ru")
+
+
+# ---------- порядок числовых дат по языку атлета ----------
+
+
+def _fake_reader(order_seen: list, prompts_seen: list):
+    """Подменённая модель, которая читает дату ровно по инструкции из входа:
+    «a/b», «a.b» — по numeric_date_order, «Mar 12» — по названию месяца.
+    Проверяется не модель, а то, что до неё доезжает язык атлета и что
+    системный промпт от языка не меняется."""
+    months = {"mar": 3}
+
+    async def create(**kwargs):
+        prompts_seen.append(kwargs["messages"][0]["content"])
+        payload = json.loads(kwargs["messages"][1]["content"])
+        order_seen.append(payload["numeric_date_order"])
+        head, _, rest = payload["notes"].partition(" ")
+        word = head.lower()
+        if word in months:
+            day, _, rest = rest.partition(" ")
+            month = months[word]
+            day = int(day)
+        else:
+            a, b = (int(x) for x in head.replace(".", "/").split("/"))
+            month, day = (a, b) if payload["numeric_date_order"] == "month/day" else (b, a)
+        date = dt.date(2026, month, day)
+        if date > dt.date.fromisoformat(payload["today"]):
+            date = date.replace(year=2025)
+        name, weight, reps = rest.split()
+        return _response([_set(date.isoformat(), name, float(weight), int(reps))])
+
+    return create
+
+
+def test_numeric_date_order_by_language():
+    assert text_import.numeric_date_order("en") == "month/day"
+    assert text_import.numeric_date_order("en-US") == "month/day"
+    assert text_import.numeric_date_order("ru") == "day.month"
+    assert text_import.numeric_date_order(None) == "day.month"
+
+
+@pytest.mark.parametrize(
+    "lang,notes,expected",
+    [
+        ("en", "03/12 Bench 100 5", "2026-03-12"),
+        ("ru", "03.12 Жим 100 5", "2025-12-03"),
+        ("en", "Mar 12 Bench 100 5", "2026-03-12"),
+        ("ru", "Mar 12 Жим 100 5", "2026-03-12"),
+    ],
+)
+async def test_convert_reads_numeric_dates_in_athlete_order(fresh_db, monkeypatch, lang, notes, expected):
+    uid = 950 + len(notes) + (0 if lang == "ru" else 20)
+    completions = _install(monkeypatch, [])
+    order_seen: list = []
+    prompts_seen: list = []
+    completions.create = _fake_reader(order_seen, prompts_seen)
+    c = await _client(fresh_db, uid)
+    await fresh_db.set_user_lang(uid, lang)
+    r = await c.post("/import/text/convert", json={"text": notes})
+    assert r.status_code == 200, r.text
+    assert r.json()["csv"].splitlines()[1].startswith(expected + ",")
+    assert order_seen == ["month/day" if lang == "en" else "day.month"]
+    # Системный промпт — общий кэшируемый префикс, язык в нём не живёт.
+    assert prompts_seen == [text_import._SYSTEM_PROMPT]

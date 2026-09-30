@@ -21,6 +21,12 @@
 
 Промпт — по-английски и без кириллицы намеренно: модуль в
 i18n_coverage.LOCALIZED, а заметки на любом языке модель читает и так.
+
+Порядок в числовой дате (`numeric_date_order`) зависит от языка атлета:
+«03/12» у американца — 12 марта, у нас — 3 декабря, и сама одна такая дата
+ничего не доказывает. Подсказка едет полем в сообщении пользователя, а не в
+системном промпте: промпт — общий для всех кэшируемый префикс, и две его
+версии по языку поделили бы кэш пополам.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from typing import Any, Optional
 
 import ai_trainer
 import config
+import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +101,7 @@ The notes can be in any language (very often Russian), copied from a phone notes
 Rules:
 - Output one item per set, in the order the sets appear. Expand "NxM" set counts into N separate items.
 - "date": ISO YYYY-MM-DD of the workout the set belongs to. A set inherits the most recent date above it. Sets that come before the first date in this piece get null: the piece may be cut out of longer notes, and their date is further up. Never invent a date that the notes do not imply.
-- Dates without a year: choose the year so that the date is not after "today" and the notes stay in chronological order (notes usually go oldest to newest or newest to oldest — keep whichever the text shows). Numeric dates like 03.04 are day.month unless the notes clearly use month/day.
+- Dates without a year: choose the year so that the date is not after "today" and the notes stay in chronological order (notes usually go oldest to newest or newest to oldest — keep whichever the text shows). Numeric dates without a month name (03.04, 03/04, 03-04) follow "numeric_date_order" from the input: "day.month" or "month/day". Read them the other way only when the notes prove it, e.g. a number above 12 in the position of the month. A month written as a word ("Mar 12", "12 March") is never ambiguous.
 - "exercise": the exercise name exactly as the lifter wrote it (fix only obvious typos and letter case), in the lifter's language. Do not translate, do not rename to a canonical name.
 - "weight": the load as a number. "unit": "kg" or "lb" if the notes say so (kg, lb, lbs or the same words in the notes' language), otherwise "unknown".
 - "reps": a positive integer.
@@ -109,6 +116,12 @@ class ExtractResult:
     # Подходы, для которых в тексте не нашлось даты: в CSV их не положить,
     # но человеку стоит сказать, что они были, а не терять их молча.
     undated: int = 0
+
+
+def numeric_date_order(lang: Optional[str]) -> str:
+    """Как по умолчанию читать «03/12» без названия месяца: по-английски —
+    месяц/день (американский порядок), по-русски — день.месяц."""
+    return "month/day" if i18n.normalize(lang) == "en" else "day.month"
 
 
 def _chunks(text: str, limit: Optional[int] = None) -> list[str]:
@@ -182,9 +195,11 @@ def _clean_rows(raw_sets: Any, today: dt.date) -> tuple[list[dict], int]:
     return rows, undated
 
 
-async def _extract_chunk(user_id: int, piece: str, today: dt.date) -> tuple[list[dict], int]:
+async def _extract_chunk(
+    user_id: int, piece: str, today: dt.date, date_order: str
+) -> tuple[list[dict], int]:
     client = ai_trainer._get_client()
-    payload = {"today": today.isoformat(), "notes": piece}
+    payload = {"today": today.isoformat(), "numeric_date_order": date_order, "notes": piece}
     response = await ai_trainer.paid_call(
         user_id,
         None,
@@ -196,6 +211,8 @@ async def _extract_chunk(user_id: int, piece: str, today: dt.date) -> tuple[list
             messages=[
                 # Промпт первым и неизменным: он одинаковый у всех кусков и
                 # всех людей, и такой префикс попадает в кэш провайдера.
+                # Всё, что зависит от атлета (сегодня, порядок дат), — только
+                # в сообщении пользователя ниже.
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
@@ -228,15 +245,20 @@ def _stitch_dates(rows: list[dict]) -> tuple[list[dict], int]:
     return stitched, undated
 
 
-async def extract_sets(user_id: int, text: str, today: dt.date) -> ExtractResult:
+async def extract_sets(
+    user_id: int, text: str, today: dt.date, lang: Optional[str] = None
+) -> ExtractResult:
     """Текст заметок → подходы с датами. Кусок, на котором модель ответила
     мусором, просто ничего не добавляет; исключение сети/провайдера летит
-    наверх — ручка отвечает на него 502, а не наполовину пустым импортом."""
+    наверх — ручка отвечает на него 502, а не наполовину пустым импортом.
+    `lang` — язык атлета (users.lang), от него порядок числовых дат; None —
+    язык текущего запроса (i18n.get_lang() в момент вызова)."""
     gate = asyncio.Semaphore(_PARALLEL)
+    date_order = numeric_date_order(lang if lang is not None else i18n.get_lang())
 
     async def one(piece: str) -> tuple[list[dict], int]:
         async with gate:
-            return await _extract_chunk(user_id, piece, today)
+            return await _extract_chunk(user_id, piece, today, date_order)
 
     answers = await asyncio.gather(*(one(piece) for piece in _chunks(text)))
     rows = [row for chunk_rows, _ in answers for row in chunk_rows]
