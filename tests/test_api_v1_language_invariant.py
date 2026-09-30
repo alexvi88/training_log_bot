@@ -515,8 +515,13 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
 
     # --- программы ---
     catalog = (await w.call("GET", "/programs/catalog", expect=200)).json()
+    # Упражнение в архиве — программа достаёт его обратно и называет в
+    # `unarchived`: это имя тоже обязано прийти на языке атлета.
+    await w.call("POST", f"/exercises/{squat_id}/archive", expect=200)
     catalog_program = (await w.call("POST", f"/programs/catalog/{catalog[0]['key']}", json={},
                                     expect=201)).json()
+    assert isinstance(catalog_program["unarchived"], list)
+    await w.call("POST", f"/exercises/{squat_id}/unarchive", expect=200)
     await w.call("POST", f"/programs/catalog/{catalog[0]['key']}", json={}, expect=409)
     await w.call("GET", "/programs", expect=200)
     await w.call("GET", f"/programs/{catalog_program['id']}", expect=200)

@@ -888,3 +888,57 @@ async def test_routine_attach_errors(fresh_db, client_factory):
     assert resp.status_code == 400
     resp = await client.post(f"/routines/{lone}/attach", json={"program_id": program_id, "position": -1})
     assert resp.status_code == 400
+
+
+# ---------- каталог: упражнение, лежащее в архиве ----------
+
+async def _archived_squat(fresh_db, telegram_id=111) -> int:
+    user = await fresh_db.get_or_create_user(telegram_id=telegram_id, username=f"user{telegram_id}")
+    ex_id = await fresh_db.get_or_create_user_exercise_by_name(user["telegram_id"], "Присед со штангой")
+    await fresh_db.archive_exercise(ex_id)
+    return ex_id
+
+
+@pytest.mark.asyncio
+async def test_catalog_add_brings_back_archived_exercise(fresh_db, client_factory):
+    """Раньше приседания из архива молча пропадали из дня: карточка говорила
+    «6 упражнений», в дне было пять."""
+    squat_id = await _archived_squat(fresh_db)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/programs/catalog/fullbody2")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    squat = await fresh_db.get_exercise(squat_id)
+    assert body["unarchived"] == [{"exercise_id": squat_id, "name": squat["display_name"]}]
+    assert not squat["is_archived"]
+
+    day_a = body["days"][0]
+    expected = len(seed_data.PROGRAM_BY_KEY["fullbody2"]["days"][0][1])
+    assert day_a["exercise_count"] == expected
+    detail = (await client.get(f"/routines/{day_a['id']}")).json()
+    assert detail["exercise_count"] == expected
+    assert squat_id in [e["exercise_id"] for e in detail["exercises"]]
+
+
+@pytest.mark.asyncio
+async def test_catalog_add_without_archived_reports_empty_list(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/programs/catalog/fullbody2")
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["unarchived"] == []
+
+
+@pytest.mark.asyncio
+async def test_day_counter_skips_exercise_archived_later(fresh_db, client_factory):
+    """Программа, добавленная раньше, а упражнение убрано в архив потом:
+    счётчик дня считает те же строки, что день показывает."""
+    client = await _linked_client(fresh_db, client_factory)
+    body = (await client.post("/programs/catalog/fullbody2")).json()
+    day_id = body["days"][0]["id"]
+    first = (await fresh_db.list_routine_exercises(day_id))[0]
+    await fresh_db.archive_exercise(first["exercise_id"])
+
+    shown = len(await fresh_db.list_routine_exercises(day_id))
+    program = (await client.get(f"/programs/{body['id']}")).json()
+    assert program["days"][0]["exercise_count"] == shown

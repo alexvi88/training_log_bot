@@ -7419,8 +7419,13 @@ _ROUTINE_COLUMNS = (
     "p.name AS program_name, p.source AS program_source, p.source_ref AS program_source_ref"
 )
 _ROUTINE_FROM = " FROM routines r LEFT JOIN programs p ON p.id = r.program_id "
+# Считает ровно те строки, что показывает list_routine_exercises: упражнение,
+# убранное в архив уже после того, как попало в день, из дня пропадает — и
+# счётчик обязан пропасть вместе с ним, иначе карточка говорит «6 упражнений»,
+# а в самом дне их пять.
 _EXERCISE_COUNT = (
-    ", (SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count"
+    ", (SELECT COUNT(*) FROM routine_exercises re JOIN exercises e ON e.id = re.exercise_id "
+    "WHERE re.routine_id = r.id AND e.is_archived = 0) AS exercise_count"
 )
 
 _ROUTINE_SELECT = "SELECT " + _ROUTINE_COLUMNS + _ROUTINE_FROM
@@ -8405,6 +8410,7 @@ async def create_routine_from_program(
     exercise_names: list[str | tuple[str, Optional[str]]],
     program_name: Optional[str] = None,
     program_id: Optional[int] = None,
+    revived: Optional[list[int]] = None,
 ) -> int:
     """Instantiate one ready-made program day as a routine.
 
@@ -8420,6 +8426,13 @@ async def create_routine_from_program(
 
     `program_id` (or the older `program_name`) groups the created day with the
     program's other days — see create_routine.
+
+    `revived` (list to fill, only the catalog passes it —
+    seed_data.instantiate_program): the resolver finds the athlete's copy
+    archived or not, but list_routine_exercises hides archived ones, so the
+    day used to lose that exercise without a word. When given, every archived
+    exercise the day uses is brought back from the archive and its id is
+    appended here, in day order, so the caller can say so.
     """
     routine_id = await create_routine(user_id, name, program_name, program_id=program_id)
     seen: set[int] = set()
@@ -8432,7 +8445,26 @@ async def create_routine_from_program(
         seen.add(ex_id)
         await add_routine_exercise(routine_id, ex_id, order, target)
         order += 1
+    if revived is not None and seen:
+        ordered = [row["exercise_id"] for row in await _archived_in_routine(routine_id)]
+        if ordered:
+            async with _write_lock:
+                await conn().executemany(
+                    "UPDATE exercises SET is_archived = 0 WHERE id = ?", [(i,) for i in ordered]
+                )
+                await conn().commit()
+            revived.extend(i for i in ordered if i not in revived)
     return routine_id
+
+
+async def _archived_in_routine(routine_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT re.exercise_id FROM routine_exercises re "
+        "JOIN exercises e ON e.id = re.exercise_id "
+        "WHERE re.routine_id = ? AND e.is_archived = 1 ORDER BY re.order_index",
+        (routine_id,),
+    )
+    return await cur.fetchall()
 
 
 

@@ -849,3 +849,55 @@ async def test_unfinished_workout_prompt_has_no_program_name_for_standalone_day(
 
     text = _last_text(callback)
     assert "программе «Фулбади»" in text
+
+
+# ---------- каталог: упражнение из архива ----------
+
+
+async def test_catalog_add_says_it_brought_an_exercise_back_from_archive(fresh_db, user_id):
+    """«Забрать» программу, где есть заархивированное упражнение: раньше день
+    терял его молча. Теперь тренер достаёт его и говорит об этом."""
+    import i18n
+
+    db = fresh_db
+    squat_id = await db.get_or_create_user_exercise_by_name(user_id, "Присед со штангой")
+    await db.archive_exercise(squat_id)
+    squat_name = (await db.get_exercise(squat_id))["display_name"]
+
+    callback = _make_callback(user_id, "rt:progadd:fullbody2")
+    await routines.rt_program_add(callback, await _state(user_id))
+
+    assert not (await db.get_exercise(squat_id))["is_archived"]
+    answer = callback.answer.await_args
+    assert answer.kwargs.get("show_alert") is True
+    notice = i18n.t("routine.program.unarchived", n=1, names=f"«{squat_name}»")
+    assert notice in answer.args[0]
+    assert "лежало в архиве" in answer.args[0]
+
+    program_id = (await db.list_programs(user_id))[0]["id"]
+    day = (await db.list_program_days_by_id(program_id))[0]
+    shown = await db.list_routine_exercises(day["id"])
+    assert day["exercise_count"] == len(shown) == len(PROGRAM_BY_KEY["fullbody2"]["days"][0][1])
+
+
+async def test_catalog_add_without_archive_is_a_plain_toast(fresh_db, user_id):
+    callback = _make_callback(user_id, "rt:progadd:fullbody2")
+    await routines.rt_program_add(callback, await _state(user_id))
+    answer = callback.answer.await_args
+    assert not answer.kwargs.get("show_alert")
+    assert "архив" not in answer.args[0]
+
+
+async def test_unarchived_notice_reads_in_both_languages():
+    import i18n
+
+    assert i18n.t_in("en", "routine.program.unarchived", n=1, names="Barbell Squat") == (
+        "Barbell Squat was in your archive — I brought it back so the day is whole"
+    )
+    assert i18n.t_in("en", "routine.program.unarchived", n=2, names="A, B").startswith("A, B were")
+    assert i18n.t_in("ru", "routine.program.unarchived", n=1, names="«Присед со штангой»") == (
+        "Упражнение «Присед со штангой» лежало в архиве — достал, чтобы день был целым"
+    )
+    assert i18n.t_in("ru", "routine.program.unarchived", n=2, names="«А», «Б»").startswith(
+        "Упражнения «А», «Б» лежали"
+    )
