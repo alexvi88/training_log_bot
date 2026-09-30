@@ -277,7 +277,7 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
 
     monkeypatch.setattr(ai_trainer, "comment_on_workout", fake_comment)
 
-    async def fake_extract_sets(user_id, text, today):
+    async def fake_extract_sets(user_id, text, today, lang=None):
         return text_import.ExtractResult(rows=[{
             "date": "2025-03-02", "exercise": USER_TEXT[lang]["csv_exercise"],
             "weight": 100.0, "unit": None, "reps": 5,
