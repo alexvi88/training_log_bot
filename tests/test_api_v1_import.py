@@ -256,7 +256,9 @@ async def test_preview_lists_unrecognized_names_with_suggestion(fresh_db, client
 
     resp = await client.post("/import/csv/preview", json={"csv": CSV_TWO_WORKOUTS})
     body = resp.json()
-    assert body["unrecognized_exercises"] == [{"name": "Жим лёжа", "suggested_exercise_id": None}]
+    assert body["unrecognized_exercises"] == [
+        {"name": "Жим лёжа", "suggested_exercise_id": None, "candidates": []}
+    ]
     assert mine  # известное имя в список не попадает
 
 

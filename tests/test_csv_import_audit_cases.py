@@ -304,11 +304,13 @@ async def _client(db, telegram_id=111, consent=False):
 
 
 CONSENT_HEADERS = {"X-AI-Consent-Flow": "1"}
+# «BP incl (Barbell)» — имя, которое без модели не узнать (ни точно, ни по
+# словам): только на нём и видно, зовётся модель или нет.
 HEVY_CSV = (
     "title,start_time,end_time,description,exercise_title,superset_id,exercise_notes,"
     "set_index,set_type,weight_kg,reps,distance_km,duration_seconds,rpe\n"
-    'A,"7 Aug 2026, 08:27",,,Bench Press (Barbell),,,0,warmup,40,12,,,\n'
-    'A,"7 Aug 2026, 08:27",,,Bench Press (Barbell),,,1,normal,100,5,,,\n'
+    'A,"7 Aug 2026, 08:27",,,BP incl (Barbell),,,0,warmup,40,12,,,\n'
+    'A,"7 Aug 2026, 08:27",,,BP incl (Barbell),,,1,normal,100,5,,,\n'
     'A,"7 Aug 2026, 08:27",,,Plank,,,0,normal,,,,60,\n'
     'A,"7 Aug 2026, 08:27",,,Жим штанги лёжа,,,0,normal,90,5,,,\n'
 )
@@ -322,7 +324,7 @@ async def test_import_without_ai_consent_skips_the_model_silently(fresh_db, monk
 
     async def fake_match(uid, names):
         calls.append(list(names))
-        return {"Bench Press (Barbell)": "Жим штанги лёжа"}
+        return {"BP incl (Barbell)": "Жим штанги на наклонной скамье"}
 
     monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
     client = await _client(db, consent=consent)
@@ -334,10 +336,10 @@ async def test_import_without_ai_consent_skips_the_model_silently(fresh_db, monk
     # Точное имя каталога — без модели в любом случае, и с группой мышц.
     catalog = await db.find_exercise_by_name(111, "Жим штанги лёжа")
     assert catalog["primary_group_id"] is not None
-    bench = await db.find_exercise_by_name(111, "Bench Press (Barbell)")
+    bench = await db.find_exercise_by_name(111, "BP incl (Barbell)")
     if consent:
-        assert calls == [["Bench Press (Barbell)"]]
-        assert bench["original_name"] == "Жим штанги лёжа"
+        assert calls == [["BP incl (Barbell)"]]
+        assert bench["original_name"] == "Жим штанги на наклонной скамье"
     else:
         assert calls == []
         # Заведено как есть, под именем из файла, — тренировка не потеряна.
