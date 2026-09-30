@@ -1962,13 +1962,13 @@ async def test_big_three_exception_reaches_the_methodology_too():
 async def test_prompt_requires_the_users_language_for_names_that_stay_forever():
     """Живой диалог с англоязычным атлетом: тренер отвечал по-английски, а два
     заведённых упражнения назвал по-русски («Приседания с собственным весом»), и
-    человек попросил «translate to english». Каталог отдаёт модели русские ключи
-    — значит правило про язык придуманных имён должно быть в промпте явно."""
+    человек попросил «translate to english». Правило про язык придуманных имён
+    должно быть в промпте явно."""
     prompt = ai_trainer.SYSTEM_PROMPT
     assert "create_exercise упражнения, — пиши на\n  языке ответа" in prompt
-    # И причина рядом: каталог отдаёт модели русские ключи, а человек видит их
-    # переведёнными — без этого правило выглядит произволом.
-    assert "внутренние ключи" in prompt
+    # И рядом — что имена из инструментов уже на языке атлета, а русские имена
+    # из прошлой истории разговора (до смены языка) повторять не надо.
+    assert "как они пришли из инструментов" in prompt
 
 
 async def test_bodyweight_can_be_logged_for_a_past_day(fresh_db, user_id, monkeypatch):
