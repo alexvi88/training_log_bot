@@ -2035,10 +2035,12 @@ def badge_remaining_text(bp, unit: str = "kg") -> str:  # achievements.BadgeProg
         return i18n.t("achievements.nearest_count", n=int(bp.remaining))
     # Все остальные счётные семейства (недельная серия, разные упражнения,
     # группы мышц, рекорды подходов/упражнений/повторов за раз, ранние
-    # тренировки, записи веса) — «X из Y»: существительное у каждого своё и
-    # уже стоит в названии/описании значка, а фраза без существительного не
-    # требует отдельной плюральной ветки на каждое семейство.
-    return i18n.t("achievements.nearest_of", current=int(bp.current), target=int(bp.target))
+    # тренировки, записи веса) — только остаток числом, «ещё 3» / «3 more».
+    # «X из Y» приложение уже рисует слева от полоски (там же current/target),
+    # и второе такое же слово справа было дублем. Существительное у каждого
+    # семейства своё и другого рода (недели, упражнения, группы, рекорды), так
+    # что «ещё одна/одно» не согласовать одной строкой — остаётся «ещё 1».
+    return i18n.t("achievements.nearest_more", n=int(bp.remaining))
 
 
 def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgeProgress

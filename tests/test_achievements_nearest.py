@@ -152,15 +152,15 @@ def test_weight_family_phrasing_ru_en():
         assert "15" in line and "kg" in line
 
 
-def test_weeks_family_phrasing_is_x_of_y_ru_en():
+def test_weeks_family_phrasing_is_remaining_count_ru_en():
     import formatting
     bp = _bp("streak12", current=4, target=12)
     with i18n.use_lang("ru"):
         line = formatting.format_badge_progress(bp)
-        assert "4" in line and "12" in line and "из" in line
+        assert line.endswith("ещё 8")
     with i18n.use_lang("en"):
         line = formatting.format_badge_progress(bp)
-        assert "4" in line and "12" in line and "of" in line
+        assert line.endswith("8 more")
 
 
 def test_tonnage_family_phrasing_tons_ru_en():
@@ -194,15 +194,16 @@ def test_count_family_phrasing_ru_en():
         assert "8" in line and "workouts" in line
 
 
-def test_variety_family_phrasing_is_x_of_y_ru_en():
+def test_variety_family_phrasing_is_remaining_count_ru_en():
     import formatting
     bp = _bp("variety50", current=42, target=50)
     with i18n.use_lang("ru"):
         line = formatting.format_badge_progress(bp)
         assert "Мастер на все руки" in line
-        assert "42 из 50" in line
+        assert "ещё 8" in line
+        assert "42 из 50" not in line
     with i18n.use_lang("en"):
-        assert "42 of 50" in formatting.format_badge_progress(bp)
+        assert formatting.format_badge_progress(bp).endswith("8 more")
 
 
 def test_session_tonnage_phrasing_matches_tonnage_ru_en():
@@ -225,7 +226,7 @@ def test_bot_screen_still_shows_three_nearest_with_new_families():
     assert len(nearest_progress(ctx, earned=set())) == 3
     with i18n.use_lang("ru"):
         text = formatting.build_achievements_screen(set(), ctx)
-    assert "45 из 50" in text
+    assert "ещё 5" in text and "45 из 50" not in text
 
 
 # ---------- экран целиком ----------
