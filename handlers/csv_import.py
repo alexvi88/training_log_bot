@@ -3,6 +3,7 @@
 import asyncio
 import csv
 import datetime as dt
+import functools
 import io
 import logging
 import re
@@ -22,6 +23,8 @@ import db
 import formatting
 import i18n
 import keyboards
+import search_terms
+import seed_data
 import timeutil
 import ui
 from fsm import ImportFlow
@@ -869,6 +872,180 @@ async def resolve_exercise_names_exact(
         else:
             unresolved.append(name)
     return resolved, unresolved
+
+
+class NameMatch:
+    """Куда ляжет одно имя из файла по решению match_exercise_names — без
+    модели и без записи. Ровно одно из трёх:
+
+      * exercise_id — своё упражнение атлета (точно или уверенно);
+      * template_name — своего нет, но имя однозначно указывает на шаблон
+        каталога (русская идентичность), которого у атлета ещё нет: заведётся
+        новое упражнение под именем из файла, привязанное к шаблону;
+      * ни того, ни другого — новое упражнение как есть.
+
+    candidates — свои упражнения, похожие на имя (лучшие первыми): при
+    неоднозначности их показывают на выбор, а не выбирают сами. exact — имя
+    совпало точно (по name/display_name): такое не переспрашивают вовсе.
+
+    Обычный класс, а не dataclass со строковыми полями по умолчанию, — чтобы
+    ничего не вычислялось при импорте (см. tests/test_no_frozen_language.py)."""
+
+    __slots__ = ("exercise_id", "template_name", "candidates", "exact")
+
+    def __init__(self, exercise_id=None, template_name=None, candidates=None, exact=False):
+        self.exercise_id: Optional[int] = exercise_id
+        self.template_name: Optional[str] = template_name
+        self.candidates: list[int] = list(candidates or [])
+        self.exact: bool = exact
+
+
+# Сколько похожих своих упражнений показывать на выбор при неоднозначности.
+MAX_MATCH_CANDIDATES = 5
+
+
+def _name_texts(row) -> list[str]:
+    """Все написания, под которыми атлет может узнать своё упражнение:
+    показанное имя, голое имя, идентичность каталога (original_name — русская
+    всегда, на любом языке) и её перевод на другой язык (а для своего
+    упражнения, названного ровно как шаблон, — перевод этого имени). Так
+    «Жим лёжа» находит англоязычный форк «Barbell Bench Press», а «Bench
+    Press» — русский «Жим штанги лёжа»."""
+    texts = [row["display_name"], row["name"]]
+    identities = [row["original_name"], row["display_name"], row["name"]]
+    for value in list(identities):
+        if value:
+            canonical = seed_data.canonical_exercise_name(value)
+            if canonical:
+                identities.append(canonical)
+    for value in identities:
+        if not value:
+            continue
+        texts.append(value)
+        for lang in i18n.SUPPORTED:
+            texts.append(seed_data.localized_exercise_name(value, lang))
+    return list(dict.fromkeys(t for t in texts if t))
+
+
+def _template_texts(template) -> list[str]:
+    return [
+        template["name"],
+        *(seed_data.localized_exercise_name(template["name"], lang) for lang in i18n.SUPPORTED),
+    ]
+
+
+def _covers(text: str, groups: list[tuple[str, ...]]) -> bool:
+    """Все слова запроса (группы вариантов search_terms.query_groups) есть в
+    text — та же проверка, что у поиска упражнений (db._stem_filter)."""
+    folded = search_terms.fold(text)
+    return bool(groups) and all(any(v in folded for v in variants) for variants in groups)
+
+
+@functools.lru_cache(maxsize=4096)
+def _profile(text: str) -> tuple[frozenset, tuple]:
+    """Основы слов и группы вариантов поиска для одного названия — чистая
+    функция текста (языка в ней нет), кэш только экономит повторы: каждое
+    имя файла сверяется с каждым своим упражнением."""
+    return frozenset(search_terms.query_stems(text)), tuple(search_terms.query_groups(text))
+
+
+def _same_words(a: str, b: str) -> bool:
+    """Те же слова с точностью до порядка, регистра, ё/е, пунктуации и
+    словоформы: «лёжа жим» = «Жим лёжа», «Приседания» = «Присед»."""
+    stems_a = _profile(a)[0]
+    return bool(stems_a) and stems_a == _profile(b)[0]
+
+
+def _pick(name: str, groups, rows, texts_of) -> tuple[Optional[object], list]:
+    """(уверенный выбор или None, похожие — лучшие первыми) среди rows.
+
+    Похожее «вперёд» — в названии есть все слова имени из файла («Жим лёжа» →
+    «Жим штанги лёжа»: пропущено слово-уточнение). Похожее «назад» — все
+    слова названия есть в имени из файла («Жим гантелей лёжа» при своём «Жим
+    лёжа»): только кандидат, никогда не уверенный выбор — лишнее слово в файле
+    чаще всего и есть другое упражнение.
+
+    Уверенно — когда ровно один кандидат совпал словами целиком, или когда
+    слов целиком не совпал никто, «вперёд» подошёл ровно один, а в имени хотя
+    бы два слова (одно «Жим» слишком широкое, чтобы угадывать)."""
+    same, forward, backward = [], [], []
+    for row in rows:
+        texts = texts_of(row)
+        if any(_same_words(name, t) for t in texts):
+            same.append(row)
+        elif any(_covers(t, groups) for t in texts):
+            forward.append(row)
+        elif any(_covers(name, _profile(t)[1]) for t in texts):
+            backward.append(row)
+    ordered = same + forward + backward
+    if len(same) == 1:
+        return same[0], ordered
+    if not same and len(forward) == 1 and len(groups) >= 2:
+        return forward[0], ordered
+    return None, ordered
+
+
+async def match_exercise_names(user_id: int, names: list[str]) -> dict[str, NameMatch]:
+    """Единственный резолв имён для REST-импорта: его зовут и предпросмотр,
+    и настоящий импорт, поэтому показанное в предпросмотре и записанное
+    совпадают. Без модели и без записи в базу.
+
+    Порядок: точное имя своего упражнения → точный шаблон каталога (регистр,
+    ё=е, английское имя) и форк атлета от него по идентичности → похожее
+    своё упражнение (порядок слов, пропущенные уточнения вроде «штанги»,
+    словоформы и синонимы поиска упражнений — search_terms) → однозначно
+    похожий шаблон, которого у атлета нет. Сверка — по идентичности и по
+    показанному имени (см. _name_texts), поэтому история не разъезжается на
+    два упражнения с одной идентичностью.
+    """
+    unique = list(dict.fromkeys(names))
+    exact, rest = await resolve_exercise_names_exact(user_id, unique)
+    out = {name: NameMatch(exercise_id=ex_id, exact=True) for name, ex_id in exact.items()}
+    if not rest:
+        return out
+
+    own = await db.list_user_exercises(user_id)
+    own_texts = {r["id"]: _name_texts(r) for r in own}
+    # Идентичности — по всем живым своим, включая скрытые остатки программ
+    # (их нет в list_user_exercises): второй форк того же шаблона — это дубль.
+    owned_identities = {
+        search_terms.fold(r["original_name"])
+        for r in await db.list_active_exercises_with_identity(user_id)
+    }
+    exact_templates = await db.find_global_templates_by_names(rest)
+    catalog = None
+
+    for name in rest:
+        template = exact_templates.get(name)
+        if template is not None:
+            fork = await db.find_exercise_by_original_name(user_id, template["name"])
+            if fork is not None and not fork["is_archived"]:
+                out[name] = NameMatch(exercise_id=fork["id"], candidates=[fork["id"]])
+            else:
+                out[name] = NameMatch(template_name=template["name"])
+            continue
+
+        groups = search_terms.query_groups(name)
+        if not groups:
+            out[name] = NameMatch()
+            continue
+        chosen, similar = _pick(name, groups, own, lambda r: own_texts[r["id"]])
+        candidates = [r["id"] for r in similar[:MAX_MATCH_CANDIDATES]]
+        if chosen is not None:
+            out[name] = NameMatch(exercise_id=chosen["id"], candidates=candidates)
+            continue
+        if similar:
+            out[name] = NameMatch(candidates=candidates)
+            continue
+
+        if catalog is None:
+            catalog = [
+                t for t in await db.list_all_exercise_templates()
+                if t["user_id"] is None and search_terms.fold(t["name"]) not in owned_identities
+            ]
+        chosen_t, _ = _pick(name, groups, catalog, _template_texts)
+        out[name] = NameMatch(template_name=chosen_t["name"] if chosen_t is not None else None)
+    return out
 
 
 async def resolve_exercise_names_via_ai(

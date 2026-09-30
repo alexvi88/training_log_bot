@@ -19,16 +19,21 @@
     английской локали (i18n.use_lang("en")) и номер строки вынимается из
     неё регуляркой — это тот же текст, что увидел бы англоязычный
     пользователь бота, а не отдельная русская строка;
-  * матчинг незнакомых названий упражнений через модель
-    (resolve_exercise_names_via_ai) — сетевой вызов с побочным эффектом
-    (создаёт упражнение в базе), поэтому препросмотр (`/import/csv/preview`)
-    его не зовёт вовсе: непопавшие в каталог по точному имени помечены
-    «будет создано» безусловно, без обращения к модели. Настоящий импорт
-    (`/import/csv`) зовёт его как и бот, если create_missing_exercises не
-    выключен явно. Без согласия атлета передавать данные стороннему AI
-    (api_v1_ai.has_ai_consent) модель не зовётся вовсе — 403 тут не нужен:
-    названия сопоставляются с каталогом только точным совпадением, а
-    остальные заводятся как есть.
+  * имена упражнений предпросмотр и настоящий импорт резолвят ОДНОЙ
+    функцией, handlers.csv_import.match_exercise_names, — без модели и без
+    записи: точное имя → шаблон каталога и форк атлета от него по
+    идентичности → похожее своё упражнение (порядок слов, пропущенное
+    «штанги», словоформы, синонимы поиска) → однозначный шаблон. Раньше
+    предпросмотр сверял только точные имена, а импорт — через модель или
+    никак, и «Жим лёжа» при своём «Жим штанги лёжа» обещал «Завести новое»,
+    а потом либо уезжал не туда, либо раскалывал историю на два упражнения.
+    Что предпросмотр показал (или что атлет выбрал в exercise_mapping) —
+    то импорт и делает. Модель (resolve через
+    ai_trainer.match_exercise_names_to_catalog, с согласием атлета —
+    api_v1_ai.has_ai_consent) зовётся только на коммите и только для имён,
+    которые предпросмотр честно назвал новыми: она подбирает новому
+    упражнению группу мышц и фото из каталога, но не сливает его со своим
+    упражнением атлета — туда, куда предпросмотр не обещал.
 
 AI-обзор истории после импорта (ai_trainer.import_history_overview) сюда
 нарочно не подключён: в боте это отдельное сообщение, отправляемое в чат
@@ -53,6 +58,8 @@ import config
 import db
 import formatting
 import i18n
+import search_terms
+import seed_data
 import text_import
 import timeutil
 from handlers import csv_import as bot_csv_import
@@ -66,8 +73,7 @@ from handlers.csv_import import (
     _read_table,
     _weight_factor,
     apply_import,
-    resolve_exercise_names_exact,
-    resolve_exercise_names_via_ai,
+    match_exercise_names,
 )
 from parser import ParseError
 
@@ -270,44 +276,48 @@ def _date_range(workouts: list[dict]) -> dict[str, str] | None:
     return {"from": dates[0], "to": dates[-1]}
 
 
-async def _suggest_matches(user_id: int, names: list[str]) -> dict[str, int]:
-    """Очевидное совпадение для незнакомого имени из файла — по идентичности,
-    без модели: имя файла — это шаблон каталога (регистр, ё=е, английское
-    показанное имя), а у человека уже есть его форк под другим именем
-    (original_name). Так «Bench Press» из Hevy предлагается к «Жим лёжа»,
-    которое у него давно заведено. Ничего не пишет."""
-    templates = await db.find_global_templates_by_names(names)
-    out: dict[str, int] = {}
-    for name, row in templates.items():
-        ex = await db.find_exercise_by_original_name(user_id, row["name"])
-        if ex is not None and not ex["is_archived"]:
-            out[name] = ex["id"]
-    return out
+async def _candidate_rows(matches: dict) -> dict[int, Any]:
+    """id → строка упражнения для всех кандидатов предпросмотра — одним
+    проходом, чтобы отдать клиенту их показанные имена."""
+    ids = {i for m in matches.values() for i in m.candidates}
+    rows = {}
+    for ex_id in sorted(ids):
+        row = await db.get_exercise(ex_id)
+        if row is not None:
+            rows[ex_id] = row
+    return rows
 
 
-async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, int]:
-    """`exercise_mapping` коммита: имя из файла → id упражнения человека.
-    Чужой, шаблонный, архивный или несуществующий id — 400 целиком, до любой
-    записи: тихо пропущенная строка залила бы историю не в то упражнение."""
+async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, int | None] | None:
+    """`exercise_mapping` коммита: имя из файла → id упражнения человека, или
+    null — «заведи новое, даже если нашлось похожее». Нет поля — None: тогда
+    импорт делает ровно то, что показал предпросмотр. Чужой, шаблонный,
+    архивный или несуществующий id — 400 целиком, до любой записи: тихо
+    пропущенная строка залила бы историю не в то упражнение."""
     raw = body.get("exercise_mapping")
     if raw is None:
-        return {}
+        return None
     bad = ApiError(400, "invalid_exercise_mapping", "exercise_mapping has an unknown or foreign exercise id")
     # Тот же выбор списком пар [{"name", "exercise_id"}]: iOS-кодировщик
     # переписывает ключи словаря в snake_case («Bench Press» → «bench _press»),
     # а имена из файла трогать нельзя.
     if isinstance(raw, list):
         try:
-            pairs = [(item["name"], item["exercise_id"]) for item in raw]
-        except (TypeError, KeyError):
+            pairs = [(item["name"], item.get("exercise_id")) for item in raw]
+        except (TypeError, KeyError, AttributeError):
             raise ApiError(400, "bad_request", "exercise_mapping items need name and exercise_id") from None
     elif isinstance(raw, dict):
         pairs = list(raw.items())
     else:
         raise ApiError(400, "bad_request", "exercise_mapping must be an object or a list")
-    mapping: dict[str, int] = {}
+    mapping: dict[str, int | None] = {}
     for name, ex_id in pairs:
-        if not isinstance(name, str) or not isinstance(ex_id, int) or isinstance(ex_id, bool):
+        if not isinstance(name, str):
+            raise bad
+        if ex_id is None:
+            mapping[name] = None
+            continue
+        if not isinstance(ex_id, int) or isinstance(ex_id, bool):
             raise bad
         ex = await db.get_exercise(ex_id)
         if ex is None or ex["user_id"] != user_id or ex["is_template"] or ex["is_archived"]:
@@ -316,11 +326,31 @@ async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, in
     return mapping
 
 
+def _resolved_by_choice(matches: dict, mapping: dict[str, int | None] | None) -> dict[str, int]:
+    """Имя → упражнение: решение предпросмотра, поверх которого — выбор
+    человека. Точное совпадение имени не переспрашивается (предпросмотр его
+    на выбор не выносит). Если клиент прислал exercise_mapping, он показал
+    выбор по каждому неточному имени: имя, которого в нём нет, человек
+    оставил на «Завести новое» (так кодирует выбор приложение — пустой пункт
+    просто не отправляется), и подсказку за него не подставляем."""
+    resolved = {n: m.exercise_id for n, m in matches.items() if m.exercise_id is not None}
+    if mapping is None:
+        return resolved
+    for name, match in matches.items():
+        if match.exact:
+            continue
+        chosen = mapping.get(name)
+        if chosen is None:
+            resolved.pop(name, None)
+        else:
+            resolved[name] = chosen
+    return resolved
+
+
 async def preview_csv(request: Request) -> JSONResponse:
     """Разобрать CSV и показать, что получится, БЕЗ записи в базу — заливать
-    чужую историю вслепую нельзя. Упражнения размечены по точному совпадению
-    имени с каталогом пользователя (см. докстринг модуля про
-    resolve_exercise_names_exact vs _via_ai)."""
+    чужую историю вслепую нельзя. Упражнения размечены тем же резолвом, что у
+    настоящего импорта (match_exercise_names, см. докстринг модуля)."""
     user_id = await common.authed_user_id(request)
     user = await db.get_user(user_id)
     body = await common.json_body(request)
@@ -333,14 +363,19 @@ async def preview_csv(request: Request) -> JSONResponse:
     file_unit = requested_unit or stats["file_unit_detected"] or user["unit"]
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
-    resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
+    matches = await match_exercise_names(user_id, all_names)
+    resolved = _resolved_by_choice(matches, None)
     exercises = [
-        {"name": name, "status": "existing" if name in resolved else "new_will_create"}
-        for name in dict.fromkeys(all_names)
+        {
+            "name": name,
+            "status": "existing" if name in resolved else "new_will_create",
+            "exercise_id": resolved.get(name),
+        }
+        for name in matches
     ]
     set_count = sum(len(entry["sets"]) for w in workouts for entry in w["entries"])
     dup = await _duplicate_dates(user_id, workouts, resolved)
-    suggested = await _suggest_matches(user_id, unresolved)
+    rows = await _candidate_rows(matches)
 
     return JSONResponse(
         {
@@ -348,11 +383,22 @@ async def preview_csv(request: Request) -> JSONResponse:
             "set_count": set_count,
             "date_range": _date_range(workouts),
             "exercises": exercises,
-            # Имена, которых нет у человека: клиент даёт выбрать своё
+            # Имена без точного совпадения: клиент даёт выбрать своё
             # упражнение (commit → exercise_mapping). suggested_exercise_id —
-            # очевидное совпадение или null.
+            # уверенное совпадение (импорт без exercise_mapping положит
+            # подходы именно туда) или null — тогда заведётся новое;
+            # candidates — похожие свои упражнения, лучшие первыми, для
+            # выбора при неоднозначности.
             "unrecognized_exercises": [
-                {"name": n, "suggested_exercise_id": suggested.get(n)} for n in unresolved
+                {
+                    "name": n,
+                    "suggested_exercise_id": m.exercise_id,
+                    "candidates": [
+                        {"exercise_id": i, "name": rows[i]["display_name"]}
+                        for i in m.candidates if i in rows
+                    ],
+                }
+                for n, m in matches.items() if not m.exact
             ],
             "duplicate_dates": sorted(dup),
             # Как прочитан вес: source — "strong" | "hevy" | "other";
@@ -377,6 +423,76 @@ async def preview_csv(request: Request) -> JSONResponse:
             "date_order": stats.get("date_order"),
             "date_order_ambiguous": stats.get("date_order_ambiguous", False),
         }
+    )
+
+
+async def _create_new_exercises(
+    request: Request, user_id: int, names: list[str], matches: dict, resolved: dict[str, int],
+) -> None:
+    """Завести упражнения, которые предпросмотр назвал новыми, — под именем
+    из файла, дописывая их в resolved.
+
+    Однозначный шаблон каталога (match.template_name) решён ещё
+    предпросмотром — новое упражнение привязывается к нему (группа, фото,
+    техника) без модели. Остальные — модели, если атлет согласен передавать
+    данные AI: она подбирает шаблон по смыслу. Шаблон, чья идентичность у
+    атлета уже есть (или только что заведена этим же импортом), второй раз
+    не привязывается — два упражнения с одной идентичностью и есть дубль,
+    который раскалывает историю; вместо этого имя ложится в уже заведённое
+    этим импортом, а своё давнее — только если его выбрал человек или
+    предпросмотр. Кого не узнал никто — в группу «Другое» (без группы
+    упражнения не бывает — его не было бы видно в «Моих упражнениях»),
+    чтобы create_missing_exercises=true не терял тренировки молча."""
+    owned = {
+        search_terms.fold(r["original_name"]) for r in await db.list_active_exercises_with_identity(user_id)
+    }
+    created: dict[str, int] = {}
+
+    async def link(name: str, template_name: str) -> bool:
+        key = search_terms.fold(template_name)
+        if key in created:
+            resolved[name] = created[key]
+            return True
+        if key in owned:
+            return False
+        ex_id = await db.create_exercise_matching_catalog_name(user_id, name, template_name)
+        if ex_id is None:
+            return False
+        created[key] = ex_id
+        resolved[name] = ex_id
+        return True
+
+    # Несколько имён файла на один новый шаблон — одно упражнение; первым
+    # заводится то, что написано ровно как шаблон, — его имя и останется.
+    ordered = sorted(names, key=lambda n: not _spelled_as(n, matches[n].template_name))
+    rest = []
+    for name in ordered:
+        template_name = matches[name].template_name
+        if not (template_name and await link(name, template_name)):
+            rest.append(name)
+    if rest and await api_v1_ai.has_ai_consent(request, user_id):
+        aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, rest)
+        templates = await db.find_global_templates_by_names(list(set(aliases.values())))
+        for name, catalog_name in aliases.items():
+            template = templates.get(catalog_name)
+            if template is not None:
+                await link(name, template["name"])
+    other_group_id = None
+    for name in rest:
+        if name in resolved:
+            continue
+        if other_group_id is None:
+            other_group_id = await db.other_muscle_group_id()
+        resolved[name] = await db.create_exercise(user_id, name, other_group_id)
+
+
+def _spelled_as(name: str, template_name: str | None) -> bool:
+    if not template_name:
+        return False
+    folded = search_terms.fold(name.strip())
+    return folded == search_terms.fold(template_name) or any(
+        folded == search_terms.fold(seed_data.localized_exercise_name(template_name, lang))
+        for lang in i18n.SUPPORTED
     )
 
 
@@ -415,29 +531,12 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
     )
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
-    resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
-    # Выбор человека сильнее и точного совпадения, и модели, и «завести новое».
-    for name in unresolved:
-        if name in mapping:
-            resolved[name] = mapping[name]
-    unresolved = [n for n in unresolved if n not in resolved]
+    # Тот же резолв, что показал предпросмотр, и выбор человека поверх него.
+    matches = await match_exercise_names(user_id, all_names)
+    resolved = _resolved_by_choice(matches, mapping)
+    unresolved = [n for n in matches if n not in resolved]
     if unresolved and create_missing:
-        # Без согласия на передачу данных стороннему AI названия модели не
-        # уходят — только точное совпадение с каталогом (см. докстринг модуля).
-        use_model = await api_v1_ai.has_ai_consent(request, user_id)
-        ai_resolved = await resolve_exercise_names_via_ai(user_id, unresolved, use_model=use_model)
-        resolved.update(ai_resolved)
-        unresolved = [n for n in unresolved if n not in resolved]
-        # Модель не нашла шаблон каталога вовсе — в боте это идёт на ручное
-        # разрешение (handlers/exercise_resolve.py), которого у REST нет;
-        # заводим упражнение как есть, под именем из файла, в группу «Другое»
-        # (без группы упражнения не бывает — его не было бы видно в «Моих
-        # упражнениях»), чтобы create_missing_exercises=true не терял
-        # тренировки молча. Группу человек поменяет потом сам.
-        other_group_id = await db.other_muscle_group_id()
-        for name in unresolved:
-            ex_id = await db.create_exercise(user_id, name, other_group_id)
-            resolved[name] = ex_id
+        await _create_new_exercises(request, user_id, unresolved, matches, resolved)
         unresolved = []
 
     # Тренировки, в которых есть хоть одно неразрешённое имя (только при
