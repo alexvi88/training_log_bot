@@ -553,9 +553,41 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    program_id = await seed_data.instantiate_program(user_id, key, program_name)
-    await callback.answer(i18n.t("routine.program.added", days=i18n.t("btn.program_days", n=len(program["days"]))))
+    revived: list[int] = []
+    program_id = await seed_data.instantiate_program(user_id, key, program_name, revived)
+    await _answer_program_added(
+        callback,
+        i18n.t("routine.program.added", days=i18n.t("btn.program_days", n=len(program["days"]))),
+        revived,
+    )
     await _show_program(callback, state, program_id)
+
+
+# Потолок Bot API на текст answerCallbackQuery (и тоста, и алерта).
+_CALLBACK_ANSWER_LIMIT = 200
+
+
+async def _answer_program_added(callback: CallbackQuery, text: str, revived: list[int]) -> None:
+    """Подтверждение «Добавил программу» — и, если программа достала что-то из
+    архива (seed_data.instantiate_program), сказать об этом, а не вернуть
+    упражнение в список молча. Тогда это алерт, а не тост: его надо прочитать.
+    Длинный список имён в алерт не влезет — тогда отдельным сообщением."""
+    if not revived:
+        await callback.answer(text)
+        return
+    names = []
+    for ex_id in revived:
+        ex = await db.get_exercise(ex_id)
+        if ex is not None:
+            names.append(i18n.t("routine.program.unarchived_item", name=ex["display_name"]))
+    notice = i18n.t("routine.program.unarchived", n=len(names), names=", ".join(names))
+    full = f"{text}\n\n{notice}"
+    if len(full) <= _CALLBACK_ANSWER_LIMIT:
+        await callback.answer(full, show_alert=True)
+        return
+    await callback.answer(text)
+    if callback.message is not None:
+        await callback.message.answer(notice)
 
 
 @router.callback_query(F.data.startswith("rt:progadd2:"))
@@ -577,8 +609,9 @@ async def rt_program_add_copy(callback: CallbackQuery, state: FSMContext):
     name = await db.unique_program_name(
         user_id, seed_data.localized_program_name(key, i18n.get_lang())
     )
-    program_id = await seed_data.instantiate_program(user_id, key, name)
-    await callback.answer(i18n.t("routine.program.added_as", name=name))
+    revived: list[int] = []
+    program_id = await seed_data.instantiate_program(user_id, key, name, revived)
+    await _answer_program_added(callback, i18n.t("routine.program.added_as", name=name), revived)
     await _show_program(callback, state, program_id)
 
 

@@ -1205,6 +1205,8 @@
   "routine.naming.prompt": "Как назвать {kind, select, day{день} program{программу} other{}}? (например «День груди» или «Тяни»)",
   "routine.program.added": "Добавил программу: {days}",
   "routine.program.added_as": "Добавил как «{name}»",
+  "routine.program.unarchived": "{n, plural, one{Упражнение {names} лежало в архиве — достал, чтобы день был целым} few{Упражнения {names} лежали в архиве — достал, чтобы дни были целыми} many{Упражнения {names} лежали в архиве — достал, чтобы дни были целыми} other{Упражнения {names} лежали в архиве — достал, чтобы дни были целыми}}",
+  "routine.program.unarchived_item": "«{name}»",
   "routine.program.already_have": "У тебя уже есть программа «{name}».\nОткрыть её или добавить вторую копию?",
   "routine.program.copied_as": "Скопировал как «{name}»",
   "routine.program.delete_confirm": "Удалить программу «{name}» целиком — все {days}? История тренировок не пострадает.",

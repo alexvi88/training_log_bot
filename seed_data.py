@@ -744,7 +744,9 @@ def localized_target(target: str | None, lang: str) -> str | None:
     return target
 
 
-async def instantiate_program(user_id: int, key: str, name: str) -> int:
+async def instantiate_program(
+    user_id: int, key: str, name: str, revived: list[int] | None = None
+) -> int:
     """Каталожная программа → своя копия в аккаунте пользователя.
 
     Общая для бота (handlers/routines.py, «➕ Добавить себе») и REST `/v1`
@@ -759,8 +761,14 @@ async def instantiate_program(user_id: int, key: str, name: str) -> int:
     Состав дней передаётся КАНОНИЧЕСКИМИ именами шаблонов, а не переведёнными:
     db.create_routine_from_program по ним ищет упражнение и форкает шаблон, и
     английское имя он бы не нашёл.
+
+    `revived` — куда сложить id упражнений, которые программа достала из
+    архива (см. db.create_routine_from_program): и бот, и `/v1` говорят о
+    них атлету, а не теряют упражнение из дня молча.
     """
     lang = i18n.get_lang()
+    if revived is None:
+        revived = []  # из архива достаём всегда; список нужен только тому, кто о нём скажет
     program_id = await db.create_program(
         user_id, name, source="catalog", source_ref=key,
         description=localized_program_description(key, lang),
@@ -774,5 +782,6 @@ async def instantiate_program(user_id: int, key: str, name: str) -> int:
             localized_program_day_name(key, i, lang),
             localized_exercises,
             program_id=program_id,
+            revived=revived,
         )
     return program_id

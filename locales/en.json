@@ -1205,6 +1205,8 @@
   "routine.naming.prompt": "What should the {kind, select, day{day} program{program} other{}} be called? (e.g. \"Chest day\" or \"Pull\")",
   "routine.program.added": "Added the program: {days}",
   "routine.program.added_as": "Added as \"{name}\"",
+  "routine.program.unarchived": "{n, plural, one{{names} was in your archive — I brought it back so the day is whole} other{{names} were in your archive — I brought them back so the days are whole}}",
+  "routine.program.unarchived_item": "{name}",
   "routine.program.already_have": "You already have a program called \"{name}\".\nOpen it, or add a second copy?",
   "routine.program.copied_as": "Copied as \"{name}\"",
   "routine.program.delete_confirm": "Delete the whole \"{name}\" program — all {days}? Workout history is unaffected.",

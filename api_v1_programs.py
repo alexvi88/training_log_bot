@@ -572,10 +572,20 @@ async def add_catalog_program(request: Request) -> JSONResponse:
         existing = await db.find_program_by_name(user_id, name)
         if existing is not None:
             raise ApiError(409, "name_taken", "a program with this name already exists")
-        program_id = await seed_data.instantiate_program(user_id, program["key"], name)
+        revived: list[int] = []
+        program_id = await seed_data.instantiate_program(user_id, program["key"], name, revived)
     days = await db.list_program_days_by_id(program_id)
     result = await _owned_program(program_id, user_id)
-    return JSONResponse(_program_detail_json(result, days), status_code=201)
+    payload = _program_detail_json(result, days)
+    # Что программа достала из архива, чтобы дни были целыми (см.
+    # db.create_routine_from_program): приложение говорит об этом тостом с
+    # «Убрать». Пустой список — ничего не доставали.
+    payload["unarchived"] = []
+    for ex_id in revived:
+        ex = await db.get_exercise(ex_id)
+        if ex is not None:
+            payload["unarchived"].append({"exercise_id": ex_id, "name": ex["display_name"]})
+    return JSONResponse(payload, status_code=201)
 
 
 # ---------- программа/день из уже сделанной тренировки ----------
