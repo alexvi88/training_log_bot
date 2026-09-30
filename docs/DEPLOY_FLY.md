@@ -94,6 +94,19 @@ Information → Sign-In Information. На первом входе сервер �
 Выключить вход — `fly secrets unset -a training-log-bot REVIEW_DEMO_USERNAME
 REVIEW_DEMO_PASSWORD`.
 
+Прогон скриншотов (`screenshots.yml` в iOS-репо) ходит под **своим**
+демо-аккаунтом, не под ревьюерским: он начинает и удаляет тренировки и на
+общем аккаунте мог бы снести ту, что ревьюер только что начал. Вторая пара —
+тот же вход и та же история, но отдельный аккаунт:
+
+```sh
+PW="$(openssl rand -base64 18)"; echo "$PW"
+fly secrets set -a training-log-bot WALK_DEMO_USERNAME=screenshots WALK_DEMO_PASSWORD="$PW"
+```
+
+Эти же значения — в секреты iOS-репо `WALK_DEMO_USERNAME` и
+`WALK_DEMO_PASSWORD` (Settings → Secrets and variables → Actions).
+
 ## 3. База
 
 1. **Остановить бота на Amvera** (кнопка паузы вверху справа) — иначе после

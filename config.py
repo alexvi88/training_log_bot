@@ -868,6 +868,14 @@ APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "com.trainingdiary.ios")
 REVIEW_DEMO_USERNAME = os.getenv("REVIEW_DEMO_USERNAME", "")
 REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
 
+# Второй демо-аккаунт — для прогона скриншотов (screenshots.yml в iOS-репо).
+# Тот же вход и та же демо-история, но отдельный аккаунт: прогон начинает и
+# удаляет тренировки, и на общем с ревьюером аккаунте он мог бы снести
+# тренировку, которую ревьюер только что начал. Пара задаётся так же, обе
+# переменные или ни одной; логин не должен совпадать с REVIEW_DEMO_USERNAME.
+WALK_DEMO_USERNAME = os.getenv("WALK_DEMO_USERNAME", "")
+WALK_DEMO_PASSWORD = os.getenv("WALK_DEMO_PASSWORD", "")
+
 
 # --- Sign in with Apple: отзыв токенов при удалении аккаунта ---------------
 #
@@ -894,9 +902,16 @@ APPLE_SIWA_PRIVATE_KEY = os.getenv("APPLE_SIWA_PRIVATE_KEY", "")
 APPLE_SIWA_TEAM_ID = os.getenv("APPLE_SIWA_TEAM_ID", "").strip()
 
 
+def demo_accounts() -> list[tuple[str, str]]:
+    """Заданные пары логин/пароль демо-аккаунтов: App Review и прогона
+    скриншотов. Пара с пустой половиной не считается."""
+    pairs = ((REVIEW_DEMO_USERNAME, REVIEW_DEMO_PASSWORD), (WALK_DEMO_USERNAME, WALK_DEMO_PASSWORD))
+    return [(user, pw) for user, pw in pairs if user and pw]
+
+
 def review_demo_available() -> bool:
-    """Включён ли вход по паролю для демо-аккаунта App Review."""
-    return bool(REVIEW_DEMO_USERNAME) and bool(REVIEW_DEMO_PASSWORD)
+    """Включён ли вход по паролю хотя бы для одного демо-аккаунта."""
+    return bool(demo_accounts())
 
 
 # --- Общий чат сообщества --------------------------------------------------

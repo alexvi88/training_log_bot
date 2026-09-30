@@ -278,13 +278,14 @@ async def auth_apple(request: Request) -> JSONResponse:
 
 
 async def auth_password(request: Request) -> JSONResponse:
-    """Вход по логину и паролю — только для демо-аккаунта App Review
-    (Guideline 2.1(a): ревьюеру нужен логин и пароль от аккаунта с данными).
+    """Вход по логину и паролю — только для демо-аккаунтов: App Review
+    (Guideline 2.1(a): ревьюеру нужен логин и пароль от аккаунта с данными) и
+    прогона скриншотов (config.WALK_DEMO_*, свой аккаунт, чтобы не мешать ревью).
     Вся логика — в review_demo.py.
 
     Тело: {"username": str, "password": str, "lang"?: str}. Ответ — тот же, что
     у /auth/apple и /auth/link (_issue_token_response), новый токен на каждый
-    вход. Без обоих секретов REVIEW_DEMO_* маршрут отвечает тем же голым 404,
+    вход. Без хотя бы одной полной пары секретов маршрут отвечает тем же голым 404,
     что и несуществующий путь: в проде без явной настройки входа по паролю нет.
 
     Неудачи считаются по адресу клиента, и после
@@ -300,12 +301,13 @@ async def auth_password(request: Request) -> JSONResponse:
     ip = review_demo.client_ip(request)
     if review_demo.is_rate_limited(ip):
         raise ApiError(429, "rate_limited", "too many attempts, try again later")
-    if not review_demo.check_credentials(username, password):
+    demo_username = review_demo.check_credentials(username, password)
+    if demo_username is None:
         review_demo.record_failure(ip)
         raise ApiError(401, "invalid_credentials", "wrong username or password")
     raw_lang = body.get("lang")
     lang = raw_lang.strip() if isinstance(raw_lang, str) and raw_lang.strip() else None
-    user_id = await review_demo.ensure_demo_user(lang)
+    user_id = await review_demo.ensure_demo_user(lang, demo_username)
     return await _issue_token_response(user_id)
 
 

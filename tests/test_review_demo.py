@@ -19,6 +19,8 @@ PASSWORD = "correct horse battery staple"
 def demo_config(monkeypatch):
     monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", USERNAME)
     monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", PASSWORD)
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
     review_demo.reset_failures()
     yield
     review_demo.reset_failures()
@@ -214,3 +216,43 @@ async def test_deleted_demo_account_is_recreated_and_reseeded(fresh_db):
     second = await review_demo.ensure_demo_user()
     assert await fresh_db.get_user(second) is not None
     assert await fresh_db.count_workouts(second) == review_demo.TOTAL_WORKOUTS
+
+
+WALK_USERNAME = "screenshots"
+WALK_PASSWORD = "tr0ubador and a long tail"
+
+
+@pytest.mark.asyncio
+async def test_walk_account_is_separate_from_reviewer(fresh_db, monkeypatch):
+    """Прогон скриншотов начинает и удаляет тренировки — на аккаунте ревьюера
+    он мог бы снести чужую. Поэтому у второй пары свой аккаунт со своей
+    историей, а пароль одной пары к логину другой не подходит."""
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", WALK_USERNAME)
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", WALK_PASSWORD)
+    client = _client()
+    reviewer = await _login(client)
+    walk = await client.post("/auth/password", json={"username": WALK_USERNAME, "password": WALK_PASSWORD})
+    assert reviewer.status_code == 200 and walk.status_code == 200
+    reviewer_id, walk_id = reviewer.json()["user_id"], walk.json()["user_id"]
+    assert reviewer_id != walk_id
+    assert await fresh_db.count_workouts(walk_id) == review_demo.TOTAL_WORKOUTS
+    assert await fresh_db.count_workouts(reviewer_id) == review_demo.TOTAL_WORKOUTS
+
+    again = await client.post("/auth/password", json={"username": WALK_USERNAME, "password": WALK_PASSWORD})
+    assert again.json()["user_id"] == walk_id
+
+    crossed = await client.post("/auth/password", json={"username": WALK_USERNAME, "password": PASSWORD})
+    assert crossed.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_walk_pair_alone_enables_login(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", WALK_USERNAME)
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", WALK_PASSWORD)
+    client = _client()
+    walk = await client.post("/auth/password", json={"username": WALK_USERNAME, "password": WALK_PASSWORD})
+    assert walk.status_code == 200
+    # пустой логин ревьюера с пустым паролем не впускает
+    empty = await client.post("/auth/password", json={"username": "", "password": ""})
+    assert empty.status_code == 401
