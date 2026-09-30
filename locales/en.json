@@ -79,7 +79,7 @@
   "achievements.nearest_count": "{n} more {n, plural, one{workout} other{workouts}} to go",
   "achievements.nearest_header": "<b>Up next:</b>",
   "achievements.nearest_weight": "{w} to go",
-  "achievements.nearest_of": "{current} of {target}",
+  "achievements.nearest_more": "{n} more",
   "achievements.nearest_tons": "{tons}t to go",
   "achievements.nearest_tons_weight": "{w} to go",
   "achievements.screen_header": "🏆 <b>ACHIEVEMENTS</b> — {got}/{total}",

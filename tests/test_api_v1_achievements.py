@@ -229,6 +229,12 @@ async def test_nearest_weight_badge_for_lb_account_is_in_pounds(fresh_db, client
     assert workouts["unit"] is None
     assert workouts["current"] == 9 and workouts["remaining"] == 1
     assert workouts["remaining_text"] == "ещё 1 тренировка"
+    # Остальные счётные значки — остаток числом без существительного: «X из Y»
+    # приложение рисует слева от полоски, и справа то же самое было дублем.
+    for code, item in by_code.items():
+        if item["unit"] is None and achievements.FAMILY_BY_CODE[code] != "workouts":
+            assert item["remaining_text"] == f"ещё {item['remaining']:.0f}"
+            assert " из " not in item["remaining_text"]
 
 
 @pytest.mark.asyncio
