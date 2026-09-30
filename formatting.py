@@ -615,9 +615,10 @@ def group_thousands(value: float) -> str:
 
 
 def format_lb_tonnage(total_lb: float) -> str:
-    """Тоннаж атлета в фунтах — «7,050 lb». Метрическая тонна тут неуместна:
-    человек считает в фунтах, и «3.2 t» рядом с «lb» смешивает две системы."""
-    return f"{group_thousands(total_lb)} {unit_label('lb')}"
+    """Тоннаж атлета в фунтах — «7,050lb». Метрическая тонна тут неуместна:
+    человек считает в фунтах, и «3.2t» рядом с «lb» смешивает две системы.
+    Единица вплотную к числу, как везде в продукте («40kg», «80кг», «10.9т»)."""
+    return f"{group_thousands(total_lb)}{unit_label('lb')}"
 
 
 def format_tonnage(total: float, unit: str = "kg") -> str:
@@ -628,7 +629,7 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
     their own number in their own unit is what they want to see.
 
     For lb the tons never appear at all: the athlete counts in pounds, so any
-    size is shown as grouped pounds ("7,050 lb") instead of a metric ton.
+    size is shown as grouped pounds ("7,050lb") instead of a metric ton.
 
     Russian grammar: a non-whole amount (e.g. "1.5 тонны") always takes the
     2-4 form regardless of the leading digit, so only a whole number of tons
@@ -1732,7 +1733,7 @@ def menu_tiles(
     # конвертировать нечего — там его собственное число в его же единицах.
     total_kg = to_kg(tonnage, unit)
     tonnes = f"{total_kg / 1000:.1f}"
-    weight = f"{tonnes} {i18n.t('unit.ton_short')}" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
+    weight = f"{tonnes}{i18n.t('unit.ton_short')}" if total_kg >= 1000 else f"{tonnage:.0f}{u}"
     if total_workouts is not None:
         # Тройка: подпись, крупное число, мелкая приписка справа от числа.
         # «ТРЕНИРОВОК ВСЕГО / ЗА 30 ДНЕЙ» одной строкой не влезало в плитку —
@@ -2021,7 +2022,7 @@ def badge_remaining_text(bp, unit: str = "kg") -> str:  # achievements.BadgeProg
         return i18n.t("achievements.nearest_weight", w=_remaining_in_unit(bp.remaining, unit))
     if family in ("tonnage", "session_tonnage"):
         # «Пятитонник» (рекорд тоннажа за одну тренировку) — та же ось в кг,
-        # что и пожизненный тоннаж, и та же фраза «осталось N т».
+        # что и пожизненный тоннаж, и та же фраза «осталось Nт».
         # Тот же порог округления, что у format_rank_gap: меньше центнера
         # остатка — "0.0 т" читалось бы как "уже всё", поэтому договариваем
         # килограммами; выше — тоннами с одним знаком после запятой.

@@ -37,11 +37,11 @@ def test_tonnage_in_pounds_never_becomes_tons():
     """Tonnage arrives in the user's own unit; kg switches to tons at 1000 kg,
     lb stays in grouped pounds at any size."""
     assert formatting.format_tonnage(20000, "kg").startswith("20 тонн")
-    assert formatting.format_tonnage(20000, "lb") == "20\u00a0000 lb"
+    assert formatting.format_tonnage(20000, "lb") == "20\u00a0000lb"
 
 
 def test_sub_ton_totals_stay_in_the_users_own_unit():
-    assert formatting.format_tonnage(800, "lb") == "800 lb"
+    assert formatting.format_tonnage(800, "lb") == "800lb"
     assert formatting.format_tonnage(800, "kg") == "800кг"
 
 

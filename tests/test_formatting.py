@@ -1154,7 +1154,7 @@ def test_every_rank_is_listed_with_its_thresholds():
     for rank in analytics.RANKS:
         assert rank.name in text
     assert "300 трен." in text          # порог верхней ступени
-    assert "1000 т" in text
+    assert "1000т" in text
 
 
 def test_the_weakest_axis_rule_is_spelled_out():
@@ -1176,12 +1176,12 @@ def test_the_top_rank_has_nothing_next():
 
 
 def test_the_first_rank_needs_nothing():
-    """«Новичок» с порогами 0/0/0 выглядел бы как «0 трен. · 0 т · 0 трен./нед» —
+    """«Новичок» с порогами 0/0/0 выглядел бы как «0 трен. · 0т · 0 трен./нед» —
     строка, которая ничего не сообщает."""
     text = formatting.build_rank_ladder(analytics.RANKS, analytics.RANKS[0])
 
     assert "с самого начала" in text
-    assert "0 трен. · 0 т" not in text
+    assert "0 трен. · 0т" not in text
 
 
 # ---------- подпись к фото ----------

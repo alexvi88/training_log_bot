@@ -248,9 +248,9 @@ def test_there_is_no_tonnage_tile():
 
 
 def test_format_tonnage_shows_pounds_not_tonnes_for_lb():
-    """Фунтовому атлету метрическая тонна не показывается вовсе: 24 500 lb —
+    """Фунтовому атлету метрическая тонна не показывается вовсе: 24 500lb —
     это «24 500 lb» (тем же числом, что в приложении), а не «11.1 тонны»."""
-    assert formatting.format_tonnage(24_500, "lb") == "24\u00a0500 lb"
+    assert formatting.format_tonnage(24_500, "lb") == "24\u00a0500lb"
 
 
 def test_the_records_tile_gives_its_place_away_when_there_are_none():
@@ -352,7 +352,7 @@ def test_menu_lifts_title_names_the_actual_window():
 def _render(**kwargs):
     base = dict(
         headline="9 недель подряд", badge="ТЯЖЕЛОВЕС",
-        tiles=[("ТРЕНИРОВОК ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т"), ("РЕКОРДОВ 7 Д", "3")],
+        tiles=[("ТРЕНИРОВОК ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5т"), ("РЕКОРДОВ 7 Д", "3")],
         volume_rows=[("СПИНА", 14, "high"), ("ГРУДЬ", 9, "in_range"), ("НОГИ", 0, "none")],
         volume_title="ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА",
         lift_tiles=[("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг")],

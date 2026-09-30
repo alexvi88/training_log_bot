@@ -89,8 +89,8 @@ async def test_gap_speaks_full_words_not_system_abbreviations():
     assert formatting.format_rank_gap(analytics.RankGap("workouts", 2)) == "ещё 2 тренировки"
     assert formatting.format_rank_gap(analytics.RankGap("workouts", 12)) == "ещё 12 тренировок"
     assert formatting.format_rank_gap(analytics.RankGap("workouts", 1)) == "ещё 1 тренировка"
-    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_000)) == "ещё 12 т"
-    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_500)) == "ещё 12.5 т"
+    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_000)) == "ещё 12т"
+    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_500)) == "ещё 12.5т"
     # Остаток меньше центнера не округляем до «0.0 т» — это читалось бы как «всё».
     assert formatting.format_rank_gap(analytics.RankGap("tonnage", 40)) == "ещё 40кг"
     assert "в неделю" in formatting.format_rank_gap(analytics.RankGap("frequency", 1.5))
@@ -113,7 +113,7 @@ async def test_top_rank_has_no_gap():
 async def test_rank_lines_render():
     rank = analytics.rank_for(60, 80_000, 2.0)
     line = formatting.format_rank_line(rank, analytics.RankGap("tonnage", 120_000))
-    assert "Станок" in line and "до следующего" in line and "ещё 120 т" in line
+    assert "Станок" in line and "до следующего" in line and "ещё 120т" in line
     assert "до следующего" not in formatting.format_rank_line(rank)
     assert "Новое звание" in formatting.format_rank_promotion(rank)
 
@@ -128,7 +128,7 @@ async def test_ladder_shows_where_you_stand_next_to_the_thresholds():
     )
 
     assert "Сейчас у тебя" in text
-    assert "60 трен." in text and "80.0 т" in text and "2.0 трен./нед" in text
+    assert "60 трен." in text and "80.0т" in text and "2.0 трен./нед" in text
     assert "ты здесь" in text
     # Без своих чисел строка просто не появляется — экран остаётся валидным.
     assert "Сейчас у тебя" not in formatting.build_rank_ladder(analytics.RANKS, rank)
