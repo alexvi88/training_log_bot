@@ -75,9 +75,12 @@ class _ReplyButtonMatch:
 
     __slots__ = ("_key", "_variants")
 
-    def __init__(self, key: str):
+    def __init__(self, key: str, legacy: tuple[str, ...] = ()):
         self._key = key
-        self._variants = frozenset(i18n.t_in(lang, key) for lang in i18n.SUPPORTED)
+        # `legacy` — прежние подписи той же кнопки: клавиатура у человека
+        # обновляется только со следующим носителем, и до тех пор старая
+        # надпись должна попадать в тот же обработчик.
+        self._variants = frozenset(i18n.t_in(lang, key) for lang in i18n.SUPPORTED) | frozenset(legacy)
 
     def __eq__(self, other: object) -> bool:
         return other in self._variants
@@ -95,7 +98,7 @@ class _ReplyButtonMatch:
 # Persistent reply-keyboard buttons, always visible under the input field.
 BTN_WORKOUT = _ReplyButtonMatch("btn.persistent.workout")
 BTN_MENU = _ReplyButtonMatch("btn.persistent.menu")
-BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
+BTN_AI = _ReplyButtonMatch("btn.persistent.ai", legacy=("AI Coach",))  # до выравнивания регистра
 
 # Bump whenever persistent_menu()'s button set changes so every user gets the
 # new layout next time cmd_start runs (see users.reply_keyboard_version). Also

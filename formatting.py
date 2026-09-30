@@ -500,10 +500,14 @@ BlockView = ExerciseBlockView
 
 
 def format_date_short(d: dt.datetime) -> str:
-    """Compact dd.mm for the inline e1RM-delta annotation — the year and weekday
+    """Compact date for the inline e1RM-delta annotation — the year and weekday
     only add width there, since the comparison is always to the most recent prior
-    session."""
-    return d.strftime("%d.%m")
+    session. По-русски «25.09», по-английски «Sep 25»: dd.mm англоязычный
+    читатель легко принимает за mm.dd."""
+    if i18n.get_lang() == "ru":
+        return d.strftime("%d.%m")
+    month = i18n.t("date.month_short", m=_MONTH_KEYS[d.month - 1])
+    return i18n.t("date.day_month", day=d.day, month=month)
 
 
 HISTORY_MAX_NAMES = 3
