@@ -36,6 +36,8 @@ import re
 from typing import Any, Optional, Sequence
 
 import db
+import i18n
+import seed_data
 
 # Столько кнопок максимум вешаем под ответ: тренер может упомянуть пять
 # упражнений в одном абзаце, но клавиатура на пять строк перекрывает сам ответ.
@@ -58,7 +60,11 @@ _MIN_STEM_WORD = 4
 # в разговоре не было вовсе. Список нарочно короткий и растёт по фактам, а не
 # по догадке — угадывать заранее, какое ещё название совпадёт с обычным
 # словом, значит резать заодно и настоящие упоминания.
-_AMBIGUOUS_SINGLE_WORDS = {"планка"}
+#
+# «plank» — английская сторона того же: каталожные шаблоны сверяются теперь и
+# по английскому имени, а «plan» — едва ли не самое частое слово в ответе
+# тренера («here's the plan»), и на стеммере «plan»/«plank» сходятся.
+_AMBIGUOUS_SINGLE_WORDS = {"планка", "plank"}
 
 
 def _tokens(text: str) -> list[str]:
@@ -90,6 +96,27 @@ def _matches_at(haystack: list[str], start: int, needle: list[str]) -> bool:
     return all(_same_word(haystack[start + i], word) for i, word in enumerate(needle))
 
 
+# Идентичности каталога — русские имена шаблонов, не показ: язык в них не
+# замерзает (см. tests/test_no_frozen_language.py), они одни на всех.
+_TEMPLATE_NAMES = frozenset(name for _group, name in seed_data.EXERCISE_TEMPLATES)
+
+
+def _aliases(ex: Any) -> Sequence[str]:
+    """Другие написания того же упражнения (см. find_in_text) — у строки из
+    базы их нет, у словаря из find_in_text бывают."""
+    try:
+        return ex["aliases"] or ()
+    except (KeyError, IndexError):
+        return ()
+
+
+def _catalog_spellings(canonical: Optional[str]) -> list[str]:
+    """Каталожное имя на всех языках — пусто для своего, не каталожного."""
+    if not canonical or canonical not in _TEMPLATE_NAMES:
+        return []
+    return sorted({seed_data.localized_exercise_name(canonical, lang) for lang in i18n.SUPPORTED})
+
+
 def find_mentions(
     text: str, exercises: Sequence[Any], limit: int = MAX_MENTIONS
 ) -> list[Any]:
@@ -105,7 +132,8 @@ def find_mentions(
         # display_name — это name плюс оснастка/хват («Жим лёжа · гантели»):
         # если тренер назвал упражнение полностью, совпадение длиннее и кнопка
         # встанет выше более общего однофамильца.
-        for needle in sorted((_tokens(ex["display_name"]), _tokens(ex["name"])), key=len, reverse=True):
+        spellings = (ex["display_name"], ex["name"], *_aliases(ex))
+        for needle in sorted((_tokens(s) for s in spellings), key=len, reverse=True):
             # Название из одних коротких слов («Пресс») дало бы слишком много
             # ложных срабатываний на обычной прозе.
             if not needle or max(len(w) for w in needle) < _MIN_STEM_WORD:
@@ -176,13 +204,36 @@ def find_mentions(
 
 async def find_in_text(
     user_id: int, text: Optional[str], limit: int = MAX_MENTIONS
-) -> list[Any]:
+) -> list[dict[str, Any]]:
+    """Свои упражнения и каталожные шаблоны, названные в `text`.
+
+    Сверка — по идентичности, показ — на языке атлета. У своего упражнения из
+    каталога ищем и его каталожное имя на любом языке (`original_name`): после
+    смены языка тренер ещё видит в истории разговора старые, русские имена и
+    повторяет их, и «Жим штанги лёжа» в английском ответе должен вести на
+    «Barbell Bench Press» атлета, а не на русский шаблон рядом. Шаблон, который
+    у атлета уже есть под любым именем, вторым не предлагаем, а показываем
+    оставшиеся шаблоны на языке атлета — в базе их имя русское навсегда.
+    """
     if not text:
         return []
-    own = await db.list_user_exercises(user_id)
+    lang = i18n.get_lang()
+    own = []
+    for row in await db.list_user_exercises(user_id):
+        ex = dict(row)
+        ex["aliases"] = _catalog_spellings(ex.get("original_name"))
+        own.append(ex)
     owned_names = {ex["display_name"].strip().lower() for ex in own}
-    templates = [
-        t for t in await db.list_all_exercise_templates()
-        if t["display_name"].strip().lower() not in owned_names
-    ]
-    return find_mentions(text, list(own) + templates, limit=limit)
+    owned_identities = {ex["original_name"] for ex in own if ex.get("original_name")}
+    templates = []
+    for row in await db.list_all_exercise_templates():
+        if row["name"] in owned_identities or row["display_name"].strip().lower() in owned_names:
+            continue
+        template = dict(row)
+        template["display_name"] = seed_data.localized_exercise_name(row["display_name"], lang)
+        template["name"] = seed_data.localized_exercise_name(row["name"], lang)
+        template["aliases"] = _catalog_spellings(row["name"])
+        if template["display_name"].strip().lower() in owned_names:
+            continue
+        templates.append(template)
+    return find_mentions(text, own + templates, limit=limit)

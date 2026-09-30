@@ -652,10 +652,11 @@ save_athlete_profile идёт только сказанное человеком
   инструмент ещё раз, либо честно скажи, что такого упражнения в боте нет).
 - Всё, что ты придумываешь сам и что остаётся у человека НАВСЕГДА — имя программы,
   названия дней, название заведённого через create_exercise упражнения, — пиши на
-  языке ответа, а не по-русски по умолчанию. list_exercise_catalog отдаёт русские
-  внутренние ключи, человеку бот показывает их на его языке сам; русское имя,
-  придуманное тобой, так и останется русским в его английском списке — за этим и
-  приходит «translate to english».
+  языке ответа, а не по-русски по умолчанию. list_exercise_catalog и
+  get_training_overview уже отдают названия на языке атлета — называй упражнения
+  и группы так, как они пришли из инструментов, а не как они звучали раньше в
+  истории разговора; русское имя, придуманное тобой, так и останется русским в
+  его английском списке — за этим и приходит «translate to english».
 - Ставь подходы и повторы по своей методике: рабочий диапазон 5-12 повторений,
   недельный объём на группу 6-12 подходов. Сам объём в уме не считай: инструмент
   вернёт weekly_sets_by_group — фактические подходы на каждую группу по всем дням
@@ -1584,7 +1585,7 @@ async def import_history_overview(user_id: int) -> Optional[str]:
         "Упражнения по числу тренировок, где встречались:",
     ]
     for row in spans[:_IMPORT_OVERVIEW_TOP_EXERCISES]:
-        group = f" [{row['group_name']}]" if row["group_name"] else ""
+        group = f" [{_shown_group(row['group_name'])}]" if row["group_name"] else ""
         lines.append(
             f"- {row['display_name']}{group}: {row['sessions']} раз, "
             f"с {row['first_at']} по {row['last_at']}"
@@ -2960,6 +2961,21 @@ _CATALOG_BY_GROUP: dict[str, list[str]] = {}
 for _group, _name in EXERCISE_TEMPLATES:
     _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
 
+
+def _localized_catalog(lang: str) -> dict[str, list[str]]:
+    """list_exercise_catalog на языке атлета. _CATALOG_BY_GROUP — идентичности
+    (русские навсегда); отдай их модели как есть — и англоязычный получал
+    «Жим штанги стоя» прямо в английском ответе: тренер называет то, что
+    прочитал. Обратно показанное имя резолвится на любом языке
+    (db._find_global_template_by_name, _resolve_group_id)."""
+    return {
+        seed_data.localized_muscle_group_name(group, lang): [
+            seed_data.localized_exercise_name(name, lang) for name in names
+        ]
+        for group, names in _CATALOG_BY_GROUP.items()
+    }
+
+
 _EXERCISE_ALIAS_SYSTEM_PROMPT = (
     # Без _with_language_tail нарочно: это классификатор, а не разговор с
     # человеком — ответ строго JSON-пара import_name/catalog_name (см.
@@ -3103,6 +3119,17 @@ def _fmt_set(row: Any) -> str:
 
 # ---------- tool executors (все данные строго по user_id) ----------
 
+def _shown_group(name: Optional[str]) -> Optional[str]:
+    """Имя группы мышц так, как его видит атлет. В базе оно русское навсегда
+    (группы глобальные, не форкаются — seed_data.localized_muscle_group_name),
+    а тренер повторяет в ответе то, что получил из инструмента: сырое имя
+    давало «Грудь» в английском ответе. Обратно имя принимает _resolve_group_id
+    на любом языке, так что сверка по идентичности от этого не страдает."""
+    if not name:
+        return name
+    return seed_data.localized_muscle_group_name(name, i18n.get_lang())
+
+
 async def _training_overview(user_id: int) -> dict[str, Any]:
     user = await db.get_user(user_id)
     if user is None:
@@ -3111,7 +3138,7 @@ async def _training_overview(user_id: int) -> dict[str, Any]:
     dash = analytics.compute_dashboard(dates, timeutil.user_today(user))
     exercises = await db.list_user_exercises(user_id)
     groups = await db.list_muscle_groups(user_id)
-    group_name_by_id = {g["id"]: g["name"] for g in groups}
+    group_name_by_id = {g["id"]: _shown_group(g["name"]) for g in groups}
     bodyweight = await db.get_latest_bodyweight(user_id)
     equipment = None
     if user["equipment"]:
@@ -3434,12 +3461,12 @@ async def _muscle_recovery(user_id: int) -> dict[str, Any]:
     for group in groups:
         entry = last.get(group["id"])
         if entry is None:
-            never.append(group["name"])
+            never.append(_shown_group(group["name"]))
             continue
         day, sets_done = entry
         rows.append(
             {
-                "group": group["name"],
+                "group": _shown_group(group["name"]),
                 "recovery_percent": analytics.recovery_percent(
                     dt.date.fromisoformat(day), sets_done, today
                 ),
@@ -3541,7 +3568,7 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
     group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
     return {
         "exercise": ex["display_name"],
-        "muscle_group": group["name"] if group else None,
+        "muscle_group": _shown_group(group["name"]) if group else None,
         "total_sessions": len(sessions),
         "sessions": [
             {
@@ -4268,7 +4295,7 @@ async def _create_exercise(
     if group_id is None:
         return {
             "error": f"группы «{group_name}» нет" if group_name else "нужна группа мышц",
-            "muscle_groups": [g["name"] for g in groups],
+            "muscle_groups": [_shown_group(g["name"]) for g in groups],
             "note": "Выбери группу из этого списка и вызови ещё раз.",
         }, None
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
@@ -4345,11 +4372,11 @@ async def _move_exercise(
     if group_id is None:
         return {
             "error": f"группы «{group_name}» нет",
-            "muscle_groups": [g["name"] for g in await db.list_muscle_groups(user_id)],
+            "muscle_groups": [_shown_group(g["name"]) for g in await db.list_muscle_groups(user_id)],
         }, None
     was_group_id = exercise["primary_group_id"]
     was_group = next(
-        (g["name"] for g in await db.list_muscle_groups(user_id) if g["id"] == was_group_id),
+        (_shown_group(g["name"]) for g in await db.list_muscle_groups(user_id) if g["id"] == was_group_id),
         None,
     )
     await db.update_exercise_group(exercise["id"], group_id)
@@ -4740,7 +4767,7 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
         by_exercise.setdefault(r["exercise_id"], []).append(
             analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         )
-        names[r["exercise_id"]] = (r["display_name"], r["group_name"])
+        names[r["exercise_id"]] = (r["display_name"], _shown_group(r["group_name"]))
 
     order = {"dead_end": 0, "regressing": 1, "double_progression": 2, "growing": 3}
     found = []
@@ -5437,7 +5464,7 @@ async def execute_tool(
     elif name == "get_exercise_progress":
         payload = await _exercise_progress(user_id, tool_input.get("exercise_name", ""))
     elif name == "list_exercise_catalog":
-        payload = {"catalog": _CATALOG_BY_GROUP}
+        payload = {"catalog": _localized_catalog(i18n.get_lang())}
     elif name == "get_bodyweight_history":
         payload = await _bodyweight_history(user_id)
     elif name == "get_food_diary":

@@ -194,10 +194,12 @@ USER_TEXT = {
 }
 
 MODEL_TEXT = {
-    "en": {"answer": "Solid work — keep adding weight.", "question": "How many days a week can you train?",
+    # Ответ называет упражнения — своё и каталожное: карточки-ссылки под ним
+    # (`mentions`) проходят ту же проверку языка, что и сам текст.
+    "en": {"answer": "Solid work on the Barbell Bench Press — add Dumbbell Bench Press, keep adding weight.", "question": "How many days a week can you train?",
            "program": "Full body", "day": "Day 1", "program_description": "A simple full-body base.",
            "food": "Rice", "verdict": "Mostly myth.", "comment": "Strong session."},
-    "ru": {"answer": "Хорошая работа — добавляй вес.", "question": "Сколько дней в неделю можешь тренироваться?",
+    "ru": {"answer": "Жим штанги лёжа идёт хорошо — добавь жим гантелей лёжа и прибавляй вес.", "question": "Сколько дней в неделю можешь тренироваться?",
            "program": "Фуллбоди", "day": "День 1", "program_description": "Простая база на всё тело.",
            "food": "Рис", "verdict": "Скорее миф.", "comment": "Сильная тренировка."},
 }
@@ -568,6 +570,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", "/ai/limits", expect=200)
     asked = (await w.call("POST", "/ai/ask", json={"question": text["question"]}, expect=200)).json()
     assert asked["actions"], "тренер завёл упражнение — кнопка отката обязана прийти"
+    assert len(asked["mentions"]["exercises"]) >= 2, "ответ назвал два упражнения — чипы обязаны прийти"
     await w.call("POST", "/ai/ask", json={"question": ""}, expect=400)
     await w.call("GET", "/ai/history", expect=200)
     conversations = (await w.call("GET", "/ai/conversations", expect=200)).json()
