@@ -2117,7 +2117,7 @@ def build_achievements_screen(
         lines.append(i18n.t("achievements.locked_header", n=len(locked)))
         lines.append(
             collapsible(
-                "\n".join(f"🔒 {escape(a.title)} — {escape(a.description)}" for a in locked)
+                "\n".join(f"🔒 {escape(a.title)} — {escape(a.goal)}" for a in locked)
             )
         )
     return "\n".join(lines)

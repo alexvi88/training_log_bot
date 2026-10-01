@@ -184,3 +184,115 @@ async def test_readding_after_migration_is_name_taken_not_duplicate(fresh_db, us
         "SELECT COUNT(*) FROM programs WHERE user_id = ? AND source_ref = 'upperlower'", (user_id,)
     )
     assert (await cur.fetchone())[0] == 1
+
+
+# ---------- «Толкай / Тяни / Ноги» → «Push/Pull/Legs (жим, тяга, ноги)» (B-12) ----------
+
+_OLD_PPL = "🔁 Толкай / Тяни / Ноги"
+_OLD_PPL_DAYS = ("Толкай", "Тяни", "Ноги")
+
+
+async def _old_ppl_copy(db, user_id):
+    """Копия PPL, снятая до B-12: старое имя программы и старые имена дней."""
+    with i18n.use_lang("ru"):
+        program_id = await seed_data.instantiate_program(user_id, "ppl", _OLD_PPL)
+    for day, old in zip(await db.list_program_days_by_id(program_id), _OLD_PPL_DAYS, strict=True):
+        await db.rename_routine(day["id"], old)
+    return program_id
+
+
+async def _rerun_from_v9(db):
+    await db.conn().execute("PRAGMA user_version = 9")
+    await db.conn().commit()
+    await db._run_one_shot_migrations()
+
+
+def test_ppl_catalog_text_is_not_a_calque():
+    assert seed_data.localized_program_name("ppl", "ru") == "🔁 Push/Pull/Legs (жим, тяга, ноги)"
+    assert [seed_data.localized_program_day_name("ppl", i, "ru") for i in range(3)] == [
+        "Жим", "Тяга", "Ноги",
+    ]
+    assert [seed_data.localized_program_day_name("ppl", i, "en") for i in range(3)] == [
+        "Push", "Pull", "Legs",
+    ]
+    # Русский текст каталога и ru.json не разъехались.
+    assert i18n.t_in("ru", "program.ppl.name") == seed_data.localized_program_name("ppl", "ru")
+    for i in range(3):
+        assert i18n.t_in("ru", f"program.ppl.day.{i}.name") == seed_data.PROGRAM_BY_KEY["ppl"]["days"][i][0]
+
+
+async def test_migration_renames_old_ppl_copy_and_keeps_history(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _old_ppl_copy(db, user_id)
+    days_before = await db.list_program_days_by_id(program_id)
+    push_id = days_before[0]["id"]
+    workout_id = await db.create_workout(user_id, routine_id=push_id)
+    await db.finish_workout(workout_id)
+
+    await _rerun_from_v9(db)
+
+    assert (await db.get_program(program_id))["name"] == "🔁 Push/Pull/Legs (жим, тяга, ноги)"
+    days_after = await db.list_program_days_by_id(program_id)
+    assert [d["id"] for d in days_after] == [d["id"] for d in days_before]
+    assert [d["name"] for d in days_after] == ["Жим", "Тяга", "Ноги"]
+    # История держится за тот же день: следующим идёт «Тяга», а не «Жим».
+    cur = await db.conn().execute("SELECT routine_id FROM workouts WHERE id = ?", (workout_id,))
+    assert (await cur.fetchone())["routine_id"] == push_id
+    assert (await db.next_program_day(program_id))["name"] == "Тяга"
+    # «Уже есть у тебя» находит её по новому имени.
+    found = await db.find_program_by_name(user_id, seed_data.localized_program_name("ppl", "ru"))
+    assert found is not None and found["id"] == program_id
+
+    # Повторный прогон ничего не меняет.
+    await _rerun_from_v9(db)
+    assert [d["name"] for d in await db.list_program_days_by_id(program_id)] == ["Жим", "Тяга", "Ноги"]
+
+
+async def test_migration_leaves_own_ppl_names_alone(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _old_ppl_copy(db, user_id)
+    await db.rename_program_by_id(program_id, "Мой сплит")
+    days = await db.list_program_days_by_id(program_id)
+    await db.rename_routine(days[1]["id"], "Спина и бицепс")
+    # Своя программа с такими же именами — не каталожная копия.
+    own_id = await db.create_program(user_id, _OLD_PPL)
+    own_day = await db.create_routine(user_id, "Толкай", program_id=own_id)
+
+    await _rerun_from_v9(db)
+
+    assert (await db.get_program(program_id))["name"] == "Мой сплит"
+    # Нетронутые дни переименованной программы всё равно доезжают до нового имени.
+    assert [d["name"] for d in await db.list_program_days_by_id(program_id)] == [
+        "Жим", "Спина и бицепс", "Ноги",
+    ]
+    assert (await db.get_program(own_id))["name"] == _OLD_PPL
+    assert (await db.get_routine(own_day))["name"] == "Толкай"
+
+
+async def test_relocalize_translates_old_ppl_day_names(fresh_db, user_id):
+    """Копия, которую миграция не застала (или новое имя было занято), всё
+    равно считается нетронутой: смена языка переводит и имя, и дни."""
+    db = fresh_db
+    program_id = await _old_ppl_copy(db, user_id)
+    await db.set_user_lang(user_id, "en")
+    assert (await db.get_program(program_id))["name"] == seed_data.localized_program_name("ppl", "en")
+    assert [d["name"] for d in await db.list_program_days_by_id(program_id)] == ["Push", "Pull", "Legs"]
+
+
+async def test_readding_ppl_after_migration_is_name_taken(fresh_db, user_id):
+    db = fresh_db
+    await _old_ppl_copy(db, user_id)
+    await _rerun_from_v9(db)
+
+    code = await db.issue_oauth_link_code(user_id, ttl_seconds=600, digits=8)
+    transport = httpx.ASGITransport(app=api_v1.build_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/auth/link", json={"code": code})
+        assert resp.status_code == 200, resp.text
+        client.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+        again = await client.post("/programs/catalog/ppl")
+        assert again.status_code == 409, again.text
+    cur = await db.conn().execute(
+        "SELECT COUNT(*) FROM programs WHERE user_id = ? AND source_ref = 'ppl'", (user_id,)
+    )
+    assert (await cur.fetchone())[0] == 1
