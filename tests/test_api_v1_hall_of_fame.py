@@ -12,6 +12,7 @@ import analytics
 import api_v1
 import db
 import hall_of_fame_data
+import i18n
 
 pytestmark = pytest.mark.asyncio
 
@@ -116,6 +117,12 @@ async def test_rank_and_tonnage_equivalent_are_present_and_localized(fresh_db, c
     body = resp.json()
     assert body["rank"]["name"]
     assert isinstance(body["rank"]["level"], int)
+    # Одна тренировка — до следующего звания далеко: недостача и имя
+    # следующей ступени приходят вместе.
+    assert body["rank"]["gap_text"]
+    nxt = analytics.RANKS[body["rank"]["level"] + 1]
+    with i18n.use_lang("ru"):
+        assert body["rank"]["next_name"] == nxt.name
     assert body["tonnage"]["value"] > 0
     # Может быть None на очень маленьком тоннаже — эквивалент подбирается по
     # порогам, но само поле обязано присутствовать, а не отсутствовать.
