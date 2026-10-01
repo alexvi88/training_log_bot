@@ -1178,7 +1178,7 @@ def test_the_weakest_axis_rule_is_spelled_out():
     большим тоннажем после месяца простоя считает, что бот сломался."""
     text = formatting.build_rank_ladder(analytics.RANKS, analytics.RANKS[1])
 
-    assert "самая слабая" in text
+    assert "самую слабую" in text
     assert "Перерыв стоит одной ступени" in text
 
 
