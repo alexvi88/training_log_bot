@@ -59,10 +59,16 @@ def _lift_json(
 def _rank_json(rank, gap, unit: str = "kg") -> Optional[dict[str, Any]]:
     if rank is None:
         return None
+    # Имя следующего звания — чтобы недостача читалась целиком: «до звания
+    # «Работяга» — ещё 3 тренировки», а не «до следующего: …» без
+    # существительного (разбор UI A-14). Только вместе с недостачей: на
+    # верхнем звании расти некуда, и имени нет.
+    nxt = analytics.next_rank(rank) if gap else None
     return {
         "name": rank.name,
         "level": rank.level,
         "gap_text": formatting.format_rank_gap(gap, unit) if gap else None,
+        "next_name": nxt.name if nxt else None,
     }
 
 
