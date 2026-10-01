@@ -25,7 +25,7 @@ from starlette.routing import Route
 
 import dashboard_data
 import i18n
-from api_v1_common import authed_user
+from api_v1_common import authed_user, query_excluded_workouts
 
 
 def _tile_json(tile: tuple) -> dict[str, Any]:
@@ -37,8 +37,10 @@ def _tile_json(tile: tuple) -> dict[str, Any]:
     return {"label": label, "value": value, "sub": sub}
 
 
-def _dashboard_json(data: dashboard_data.MenuDashboard) -> dict[str, Any]:
-    return {
+def _dashboard_json(
+    data: dashboard_data.MenuDashboard, excluded: tuple[int, ...] = ()
+) -> dict[str, Any]:
+    payload = {
         "headline": data.headline,
         "rank": {"name": data.rank_name, "level": data.rank_level, "emoji": data.rank_emoji or None},
         "tiles": [_tile_json(t) for t in data.tiles],
@@ -61,6 +63,12 @@ def _dashboard_json(data: dashboard_data.MenuDashboard) -> dict[str, Any]:
             ],
         },
     }
+    # Эхо `?exclude_workout=`: по нему приложение отличает сводку без
+    # удаляемой тренировки от ответа старого сервера, который параметр молча
+    # пропустил бы. Без параметра ключа нет — ответ прежний байт в байт.
+    if excluded:
+        payload["excluded_workout_ids"] = list(excluded)
+    return payload
 
 
 async def get_dashboard(request: Request) -> JSONResponse:
@@ -76,13 +84,18 @@ async def get_dashboard(request: Request) -> JSONResponse:
     готовыми строками: у сводки он человеческий (заголовки окон, согласование
     «9 недель подряд»), и собирать его второй раз средствами iOS значило бы
     держать два источника истины — см. те же доводы в api_v1_achievements.
+
+    `?exclude_workout=<id>` (можно несколько) — посчитать без этих тренировок:
+    приложение так перечитывает главную, пока висит «Удалил тренировку ·
+    Вернуть». Применённые id возвращаются в `excluded_workout_ids`.
     """
     user_id, user = await authed_user(request)
+    excluded = query_excluded_workouts(request)
     with i18n.use_lang(user["lang"]):
-        data = await dashboard_data.collect(user_id, user)
+        data = await dashboard_data.collect(user_id, user, exclude_workout_ids=excluded)
         if data is None:
             return JSONResponse(None)
-        return JSONResponse(_dashboard_json(data))
+        return JSONResponse(_dashboard_json(data, excluded))
 
 
 routes = [

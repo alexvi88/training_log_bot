@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import analytics
 import db
@@ -55,13 +55,21 @@ class MenuDashboard:
     lifts_note: str = ""
 
 
-async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
+async def collect(
+    user_id: int, user: Any = None, *, exclude_workout_ids: Iterable[int] = ()
+) -> Optional[MenuDashboard]:
     """Сводка пользователя или `None`, если законченных тренировок ещё нет.
 
     `None`, а не пустая сводка: у новичка все до единого виджета пусты, и
     карточка из нулей сообщала бы только то, что она пустая. И бот, и
     приложение в этом случае показывают приглашение начать, а не таблицу.
+
+    `exclude_workout_ids` — тренировки, которых для сводки уже нет: приложение
+    удаляет с окном «Вернуть», и пока `DELETE` ждёт, главная не должна
+    считать удаляемую (было 12 тренировок — после удаления 13). Исключение
+    проходит через КАЖДЫЙ агрегат ниже, иначе плитки разошлись бы между собой.
     """
+    excluded = tuple(exclude_workout_ids)
     if user is None:
         user = await db.get_user(user_id)
     if user is None:
@@ -72,7 +80,9 @@ async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
     tz = timeutil.offset_hours(user)
     dates = [
         dt.date.fromisoformat(d)
-        for d in await db.list_finished_workout_dates(user_id, tz_offset=tz)
+        for d in await db.list_finished_workout_dates(
+            user_id, tz_offset=tz, exclude_workout_ids=excluded
+        )
     ]
     if not dates:
         return None
@@ -80,7 +90,8 @@ async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
     window_start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
     volume_title, volume_rows = formatting.weekly_volume_panel(
         await db.weekly_volume_by_group(
-            user_id, window_start.isoformat(), today.isoformat(), tz_offset=tz
+            user_id, window_start.isoformat(), today.isoformat(), tz_offset=tz,
+            exclude_workout_ids=excluded,
         ),
         await db.list_muscle_groups(user_id),
     )
@@ -88,12 +99,13 @@ async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
     tonnage = sum(
         (
             await db.daily_tonnage(
-                user_id, window_start.isoformat(), today.isoformat(), tz_offset=tz
+                user_id, window_start.isoformat(), today.isoformat(), tz_offset=tz,
+                exclude_workout_ids=excluded,
             )
         ).values()
     )
     records = await db.e1rm_record_count(
-        user_id, window_start.isoformat(), formula, tz_offset=tz
+        user_id, window_start.isoformat(), formula, tz_offset=tz, exclude_workout_ids=excluded
     )
     dashboard = analytics.compute_dashboard(dates, today)
 
@@ -107,14 +119,16 @@ async def collect(user_id: int, user: Any = None) -> Optional[MenuDashboard]:
     lift_start = today - dt.timedelta(weeks=lift_window_weeks)
     growth: list[tuple[str, float, float, int]] = []
     for row in await db.top_exercises_by_frequency(
-        user_id, lift_start.isoformat(), today.isoformat(), limit=LIFT_CANDIDATES, tz_offset=tz
+        user_id, lift_start.isoformat(), today.isoformat(), limit=LIFT_CANDIDATES, tz_offset=tz,
+        exclude_workout_ids=excluded,
     ):
         before_max, window_max = await db.exercise_e1rm_growth(
-            user_id, row["id"], lift_start.isoformat(), formula, tz_offset=tz
+            user_id, row["id"], lift_start.isoformat(), formula, tz_offset=tz,
+            exclude_workout_ids=excluded,
         )
         growth.append((row["display_name"], before_max, window_max, row["id"]))
 
-    agg = await db.hall_of_fame_aggregates(user_id)
+    agg = await db.hall_of_fame_aggregates(user_id, exclude_workout_ids=excluded)
     rank = analytics.rank_for(
         len(dates),
         formatting.to_kg(agg["tonnage"], user["unit"]),
