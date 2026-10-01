@@ -48,6 +48,7 @@ from seed_data import (
     localized_program_description,
     localized_program_name,
     localized_target,
+    progression_kind,
 )
 
 logger = logging.getLogger(__name__)
@@ -8318,12 +8319,20 @@ async def exercise_template_identity(user_id: int, name: str) -> Optional[str]:
 
 
 async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str], Optional[str]]:
+    """См. resolve_exercise_identity — то же без идентичности."""
+    source, display_name, _identity = await resolve_exercise_identity(user_id, name)
+    return source, display_name
+
+
+async def resolve_exercise_identity(
+    user_id: int, name: str
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Куда ляжет название упражнения, ничего при этом не создавая.
 
     Read-only двойник get_or_create_user_exercise_by_name: тем же порядком
     (сначала своё, потом глобальный шаблон) проверяет, резолвится ли имя
-    вообще, и возвращает ("own"|"template", каноничное display_name) либо
-    (None, None). Нужен AI-тренеру, чтобы показать состав предлагаемой
+    вообще, и возвращает ("own"|"template", каноничное display_name,
+    идентичность — original_name/имя шаблона) либо (None, None, None). Нужен AI-тренеру, чтобы показать состав предлагаемой
     программы до того, как пользователь согласился её сохранить, — предложение
     не должно форкать пользователю упражнения (см. ai_trainer.propose_program).
 
@@ -8341,16 +8350,16 @@ async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str],
     """
     existing = await find_exercise_by_name(user_id, name)
     if existing is not None:
-        return "own", existing["display_name"]
+        return "own", existing["display_name"], existing["original_name"]
     template = await _find_global_template_by_name(name)
     if template is not None:
         existing = await find_exercise_by_original_name(user_id, template["name"])
         if existing is not None:
-            return "own", existing["display_name"]
+            return "own", existing["display_name"], existing["original_name"]
         user = await get_user(user_id)
         lang = user["lang"] if user is not None else "ru"
-        return "template", localized_exercise_name(template["display_name"], lang)
-    return None, None
+        return "template", localized_exercise_name(template["display_name"], lang), template["name"]
+    return None, None, None
 
 
 async def count_routines(user_id: int) -> int:
@@ -8417,6 +8426,17 @@ async def set_routine_exercise_progression(
             (progression, routine_exercise_id),
         )
         await conn().commit()
+
+
+async def exercise_progression_kind(exercise_id: int) -> str:
+    """Вид нагрузки упражнения для подсказки «🎯 Цель» (seed_data.progression_kind):
+    по идентичности — original_name, а не показанному имени, так что
+    английское «Plank» и переименованная своя «Планка» считаются одинаково."""
+    cur = await conn().execute(
+        "SELECT original_name FROM exercises WHERE id = ?", (exercise_id,)
+    )
+    row = await cur.fetchone()
+    return progression_kind(row["original_name"] if row else None)
 
 
 async def progression_rule_for_workout(workout_id: int, exercise_id: int) -> Optional[dict]:
@@ -10567,6 +10587,8 @@ async def scale_progression_steps(user_id: int, factor: float) -> None:
         step = rule.get("step") if isinstance(rule, dict) else None
         if not isinstance(step, (int, float)) or isinstance(step, bool):
             continue
+        if rule.get("step_unit") == "sec":
+            continue  # шаг в секундах (планка) от кг/lb не зависит
         rule["step"] = round(step * factor, 2)
         updates.append((json.dumps(rule, ensure_ascii=False), row["id"]))
     if not updates:
@@ -10606,6 +10628,8 @@ def scale_draft_progression_steps(draft: Any, factor: float) -> bool:
                 step = rule.get("step") if isinstance(rule, dict) else None
                 if not isinstance(step, (int, float)) or isinstance(step, bool):
                     continue
+                if rule.get("step_unit") == "sec":
+                    continue  # шаг в секундах (планка) от кг/lb не зависит
                 rule["step"] = round(step * factor, 2)
                 changed = True
 

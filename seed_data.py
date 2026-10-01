@@ -134,6 +134,80 @@ BODYWEIGHT_TEMPLATES: dict[str, tuple[str, float]] = {
     "Обратные отжимания от скамьи": ("full", 0.5),
 }
 
+# Чем у упражнения растёт нагрузка — для правила прогрессии в программе
+# (ai_trainer._clean_program_item) и для подсказки «🎯 Цель» на экране подхода
+# (analytics.suggest_progression). Модель ставила шаг в кг на всё подряд:
+# «Подтягивания» +2.5 кг двухмесячному новичку, «Скручивания» +2.5 кг,
+# «Планка» +5 — при том что планку она же писала как 30–45 «повторов», то есть
+# секунд.
+#
+# - "weight" — по умолчанию: штанга, гантели, блоки, тренажёры. Шаг в кг/lb.
+# - "bodyweight" — вес тела (BODYWEIGHT_TEMPLATES): прогресс повторами, потом
+#   вариант потяжелее или пояс с блином — но не «+2.5 кг» от программы.
+# - "no_load" — скручивания, подъёмы ног и коленей: вес тела почти не едет по
+#   вертикали и навесить блин толком некуда, прогресс — повторами.
+# - "timed" — удержание на время: «повторы» — это секунды, и шаг тоже секунды.
+#
+# Ключ — идентичность шаблона (русское каноничное имя, оно же
+# exercises.original_name), а не показанное имя: англоязычному «Pull-Ups»
+# достаётся тот же вид, что и «Подтягиваниям» (progression_kind_for_name).
+# Своё упражнение атлета вне каталога остаётся "weight" — как и было.
+# Скручивания на блоке и «Пресс в тренажёре» — с весом стека, это "weight".
+# «Русские повороты» тоже "weight": их обычно крутят с блином или мячом.
+NO_LOAD_TEMPLATES: frozenset[str] = frozenset({
+    "Скручивания",
+    "Скручивания на наклонной скамье",
+    "Подъём ног в висе",
+    "Подъём коленей в висе",
+    "Подъём ног лёжа",
+    "Велосипедные скручивания",
+    "Колесо для пресса",
+    "Обратные скручивания",
+    "Мёртвый жук",
+    "Подъём корпуса из положения лёжа",
+    "Перекрёстные скручивания",
+    "Скручивания на косые мышцы на полу",
+    "Скручивания на косые на наклонной скамье",
+    "Подтягивание коленей к груди лёжа",
+    "Ягодичный мостик",
+    "Ягодичный мостик на одной ноге",
+})
+
+TIMED_TEMPLATES: frozenset[str] = frozenset({
+    "Планка",
+    "Боковая планка",
+})
+
+PROGRESSION_KINDS = ("weight", "bodyweight", "no_load", "timed")
+
+
+def _fold_identity(name: str) -> str:
+    return (name or "").strip().casefold().replace("ё", "е")
+
+
+_KIND_BY_IDENTITY: dict[str, str] = {
+    **{_fold_identity(n): "bodyweight" for n in BODYWEIGHT_TEMPLATES},
+    **{_fold_identity(n): "no_load" for n in NO_LOAD_TEMPLATES},
+    **{_fold_identity(n): "timed" for n in TIMED_TEMPLATES},
+}
+
+
+def progression_kind(identity: str | None) -> str:
+    """Вид нагрузки по идентичности шаблона (original_name). Не из каталога —
+    "weight": своё упражнение атлета ведёт себя как раньше."""
+    return _KIND_BY_IDENTITY.get(_fold_identity(identity or ""), "weight")
+
+
+def progression_kind_for_name(name: str | None) -> str:
+    """То же по имени, как его прислала модель: каноничное русское или
+    показанное на языке атлета («Pull-Ups» → «Подтягивания»)."""
+    kind = progression_kind(name)
+    if kind != "weight":
+        return kind
+    canonical = canonical_exercise_name(name or "")
+    return progression_kind(canonical) if canonical else "weight"
+
+
 # (group_name, exercise_name) — group_name must match a MUSCLE_GROUP_PRESETS name.
 EXERCISE_TEMPLATES = [
     # ---------- Грудь ----------
