@@ -174,7 +174,7 @@
   "api.error.forbidden": "Only support can open this.",
   "ai.comment.workout_not_found": "Can't find that workout — open your history and pick it again.",
   "ai.factcheck.empty": "Couldn't make it out — try forwarding it again.",
-  "ai.language_tail": "Reply ONLY in English — never switch to Russian, Ukrainian, or any other language, not even one word inside an English sentence. Terms the user themselves used in another language (an exercise name from the catalog, a unit, a technique term) are normal gym vocabulary, not a violation — keep them as given.",
+  "ai.language_tail": "Reply ONLY in English — never switch to Russian, Ukrainian, or any other language, not even one word inside an English sentence. Earlier turns of this chat may be in another language — that's old history, so never copy names or phrases from it. Name exercises and muscle groups exactly as the tools return them now. The only foreign words you keep as given are the ones the user typed in their current message.",
   "ai.video.confidence_high": "high",
   "ai.video.confidence_low": "low",
   "ai.video.confidence_medium": "medium",
