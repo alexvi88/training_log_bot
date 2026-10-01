@@ -51,7 +51,11 @@ _GATE_NO_SEARCH = '{"search": false, "data": true}'
 #   методика, а для отстающей мышцы и минимумов внутри групп правила другие;
 # - оговорка у propose_program.progression.step: модель ставила шаг в кг на
 #   подтягивания, скручивания и планку (остальное чинит _fit_progression_to_kind).
-_TOOL_SCHEMA_CHAR_BUDGET = 22_500
+# Поднят с 22_500 под top_set_backoff и deload_every_weeks у propose_program
+# (~530 символов): живой прогон — силовику (присед 180) досталось 5×3–5 с
+# «+2.5, когда возьмёшь 5×5» на ~89 %, а «топ-сет + бэкоффы» из текста тренера
+# схема выразить не могла; разгрузки не было ни в одной из девяти программ.
+_TOOL_SCHEMA_CHAR_BUDGET = 23_050
 
 
 async def test_tool_schemas_stay_within_their_character_budget():

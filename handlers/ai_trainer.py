@@ -1390,6 +1390,7 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
         draft["name"], draft["days"], replaces=replaces, notes=draft.get("notes"),
         unit=user["unit"] if user else None,
         weekly_sets=await ai_trainer.program_weekly_sets(callback.from_user.id, draft["days"]),
+        deload_every_weeks=draft.get("deload_every_weeks"),
     )
     await callback.message.answer(
         text,

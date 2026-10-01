@@ -502,6 +502,13 @@ class ProgressionSuggestion:
     from_rule: bool = False
     # Упражнение на время (seed_data.TIMED_TEMPLATES): target_reps — секунды.
     is_timed: bool = False
+    # top_set_backoff: "top" — цель тяжёлого топ-сета, "backoff" — подходов
+    # после него (вес — backoff_pct % от сегодняшнего топа). None — все прочие
+    # правила, где подходы друг от друга не отличаются.
+    role: Optional[str] = None
+    backoff_pct: Optional[int] = None
+    # backoff: сколько бэкофф-подходов программа просит после топа.
+    backoff_sets: Optional[int] = None
 
 
 # Fallback increment per unit, used when the exercise's own history says nothing
@@ -634,6 +641,8 @@ def suggest_progression(
     rule: Optional[dict] = None,
     planned_reps: Optional[tuple[int, int]] = None,
     kind: str = "weight",
+    today_sets: Optional[list[tuple[float, int]]] = None,
+    last_rpes: Optional[list[Optional[float]]] = None,
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
@@ -667,6 +676,10 @@ def suggest_progression(
     в кг из правила программы и linear_load не действуют — их могла записать
     модель до того, как их стали снимать; без отягощения цель и так в
     повторах, а с поясом и блином — обычная двойная прогрессия по истории.
+
+    `today_sets`/`last_rpes` нужны только правилу top_set_backoff (см.
+    suggest_top_set_backoff): там первый подход дня и следующие — разные
+    цели, а прибавка к топу зависит от записанного RPE.
     """
     working = [(w, r) for w, r in last_sets if r > 0]
     if not working:
@@ -684,7 +697,7 @@ def suggest_progression(
         )
     if kind in ("bodyweight", "no_load") and rule:
         rule = (
-            None if rule.get("rule") == "linear_load"
+            None if rule.get("rule") in ("linear_load", "top_set_backoff")
             else {k: v for k, v in rule.items() if k != "step"}
         )
     if all(w == 0 for w, _ in working):
@@ -697,6 +710,12 @@ def suggest_progression(
     reps_at_top = max(r for w, r in working if w == top_weight)
 
     rule_name = (rule or {}).get("rule")
+    if rule_name == "top_set_backoff":
+        rpes = list(last_rpes or [])
+        return suggest_top_set_backoff(
+            [(w, r, rpes[i] if i < len(rpes) else None) for i, (w, r) in enumerate(last_sets)],
+            today_sets or [], rule, unit=unit, inferred_step=inferred_step,
+        )
     rule_step = _positive_number((rule or {}).get("step"))
     if rule_step is not None:
         rule_step = max(PROGRESSION_MIN_STEP, min(rule_step, progression_max_step(unit)))
@@ -740,6 +759,129 @@ def suggest_progression(
     return ProgressionSuggestion(
         "add_reps", top_weight, reps_at_top + 1,
         from_weight=top_weight, from_reps=reps_at_top, from_rule=from_rule,
+    )
+
+
+# top_set_backoff (ai_trainer._clean_progression): топ-сет — 1–8 повторов,
+# бэкоффов 1–5, их вес — 70–95 % от топа. Прибавка к топу — только когда верх
+# диапазона взят с запасом: RPE не выше этого порога, если его записали.
+TOP_SET_REPS_MIN, TOP_SET_REPS_MAX = 1, 8
+BACKOFF_SETS_MIN, BACKOFF_SETS_MAX = 1, 5
+BACKOFF_PCT_MIN, BACKOFF_PCT_MAX = 70, 95
+TOP_SET_RESERVE_RPE = 8.0
+
+
+def plate_step(unit: str = "kg", inferred_step: Optional[float] = None) -> float:
+    """Шаг, до которого округляется посчитанный процентом вес — чтобы цель
+    была весом, который можно собрать на штанге, а не «144.0»."""
+    base = DEFAULT_WEIGHT_STEP.get(unit, 2.5)
+    if inferred_step is not None and 0 < inferred_step < base:
+        return inferred_step
+    return base
+
+
+def round_to_plate(weight: float, unit: str = "kg", inferred_step: Optional[float] = None) -> float:
+    step = plate_step(unit, inferred_step)
+    return round(round(weight / step) * step, 2)
+
+
+def suggest_top_set_backoff(
+    last_sets: list[tuple[float, int, Optional[float]]],
+    today_sets: list[tuple[float, int]],
+    rule: dict,
+    *,
+    unit: str = "kg",
+    inferred_step: Optional[float] = None,
+) -> Optional[ProgressionSuggestion]:
+    """Цель по схеме «топ-сет + бэкоффы»: один тяжёлый подход в диапазоне
+    top_reps_min..max, потом backoff_sets подходов по backoff_pct % его веса на
+    те же повторы.
+
+    Сегодня ещё нет подходов — цель топ-сета: прошлый топ (самый тяжёлый
+    подход) плюс step, если верх диапазона взят с запасом (записанный RPE не
+    выше TOP_SET_RESERVE_RPE; без RPE хватает самих повторов), и тогда снова с
+    низа диапазона; иначе тот же вес на повтор больше. Подходы сегодня есть —
+    цель бэкоффа от СЕГОДНЯШНЕГО топа: прибавка или неудачный день уже в нём.
+    """
+    working = [(w, r, rpe) for w, r, rpe in last_sets if r > 0 and w > 0]
+    today = [(w, r) for w, r in (today_sets or []) if r > 0 and w > 0]
+    low = _positive_int(rule.get("top_reps_min")) or TOP_SET_REPS_MIN
+    high = _positive_int(rule.get("top_reps_max")) or low
+    low, high = sorted((
+        max(TOP_SET_REPS_MIN, min(low, TOP_SET_REPS_MAX)),
+        max(TOP_SET_REPS_MIN, min(high, TOP_SET_REPS_MAX)),
+    ))
+    pct = _positive_int(rule.get("backoff_pct")) or 85
+    pct = max(BACKOFF_PCT_MIN, min(pct, BACKOFF_PCT_MAX))
+    backoff_sets = _positive_int(rule.get("backoff_sets"))
+    if today:
+        top_weight, top_reps = max(today)
+        return ProgressionSuggestion(
+            "backoff", round_to_plate(top_weight * pct / 100, unit, inferred_step), top_reps,
+            from_weight=top_weight, from_reps=top_reps, from_rule=True,
+            role="backoff", backoff_pct=pct,
+            backoff_sets=min(backoff_sets, BACKOFF_SETS_MAX) if backoff_sets else None,
+        )
+    if not working:
+        return None
+    top_weight = max(w for w, _, _ in working)
+    reps_at_top, rpe_at_top = max(
+        ((r, rpe) for w, r, rpe in working if w == top_weight), key=lambda x: x[0]
+    )
+    with_reserve = rpe_at_top is None or rpe_at_top <= TOP_SET_RESERVE_RPE
+    if reps_at_top >= high and with_reserve:
+        step = _positive_number(rule.get("step"))
+        if step is not None:
+            step = max(PROGRESSION_MIN_STEP, min(step, progression_max_step(unit)))
+        else:
+            step = weight_step_for(top_weight, unit, inferred_step)
+        return ProgressionSuggestion(
+            "add_weight", round(top_weight + step, 2), low,
+            from_weight=top_weight, from_reps=reps_at_top, from_rule=True, role="top",
+        )
+    return ProgressionSuggestion(
+        "add_reps", top_weight, max(low, min(reps_at_top + 1, high)),
+        from_weight=top_weight, from_reps=reps_at_top, from_rule=True, role="top",
+    )
+
+
+# Неделя разгрузки: примерно 60 % подходов на примерно 90 % веса.
+DELOAD_WEIGHT_PCT = 90
+DELOAD_SETS_PCT = 60
+
+
+def is_deload_week(program_start: dt.date, day: dt.date, every_weeks: Optional[int]) -> bool:
+    """Каждая N-я календарная неделя (с понедельника), считая неделю, в которую
+    программу сохранили, первой: при N=4 разгрузка на 4-й, 8-й, 12-й неделе.
+    Правило нарочно простое — человек должен уметь пересчитать его сам."""
+    if not every_weeks or every_weeks <= 0 or day < program_start:
+        return False
+    week = (_week_monday(day) - _week_monday(program_start)).days // 7 + 1
+    return week % every_weeks == 0
+
+
+def deload_suggestion(
+    suggestion: ProgressionSuggestion, *, unit: str = "kg", inferred_step: Optional[float] = None
+) -> ProgressionSuggestion:
+    """Цель на неделю разгрузки: без прибавки, от прошлого подхода на
+    DELOAD_WEIGHT_PCT % веса и те же повторы. Бэкофф уже считается от
+    сегодняшнего (облегчённого) топа — второй раз его не режем. Вес тела и
+    подходы на время держат свои повторы: там нечего снимать в процентах."""
+    if suggestion.role == "backoff":
+        return suggestion
+    if suggestion.is_bodyweight or suggestion.is_timed or suggestion.from_weight <= 0:
+        reps = suggestion.from_reps or suggestion.target_reps
+        return ProgressionSuggestion(
+            "deload", suggestion.from_weight if suggestion.is_timed else suggestion.target_weight,
+            reps, is_bodyweight=suggestion.is_bodyweight, from_weight=suggestion.from_weight,
+            from_reps=suggestion.from_reps, is_timed=suggestion.is_timed, role=suggestion.role,
+        )
+    return ProgressionSuggestion(
+        "deload",
+        round_to_plate(suggestion.from_weight * DELOAD_WEIGHT_PCT / 100, unit, inferred_step),
+        suggestion.from_reps or suggestion.target_reps,
+        from_weight=suggestion.from_weight, from_reps=suggestion.from_reps,
+        from_rule=suggestion.from_rule, role=suggestion.role,
     )
 
 

@@ -514,6 +514,7 @@ def _logging_hint(
     target: str | None = None,
     progression_rule: dict | None = None,
     progression_kind: str = "weight",
+    is_deload: bool = False,
     reps_row: tuple[float, int] | None = None,
     show_format_hint: bool = False,
     reps_row_hint: str = "",
@@ -617,6 +618,7 @@ def _logging_hint(
                 rule=progression_rule,
                 target=target,
                 kind=progression_kind,
+                is_deload=is_deload,
             )
             if nudge is not None:
                 lines.append(nudge["text"])
@@ -768,6 +770,12 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         progression_kind=(
             await db.exercise_progression_kind(active)
             if active is not None and last_session and not is_backfill else "weight"
+        ),
+        # Неделя разгрузки программы — цель на ~90 % без прибавки и строка
+        # срезать подходы (db.deload_week_for_workout).
+        is_deload=(
+            await db.deload_week_for_workout(data["workout_id"])
+            if last_session and not is_backfill else False
         ),
     )
     kb = keyboards.logging_keyboard(

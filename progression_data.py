@@ -32,8 +32,16 @@ def hint(
     rule: Optional[dict] = None,
     target: Optional[str] = None,
     kind: str = "weight",
+    is_deload: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Что предложить в следующем подходе, готовой строкой и числами.
+
+    `is_deload` — тренировка идёт в неделю разгрузки своей программы
+    (db.deload_week_for_workout): цель без прибавки, на ~90 % веса, и строка
+    говорит срезать подходы.
+
+    `role` в ответе — "top"/"backoff" у схемы «топ-сет + бэкоффы»
+    (analytics.suggest_top_set_backoff), иначе None.
 
     `kind` — вид нагрузки упражнения (db.exercise_progression_kind): у планки
     цель в секундах, у подтягиваний и скручиваний — без шага в кг из программы.
@@ -55,16 +63,29 @@ def hint(
         rule=rule,
         planned_reps=formatting.planned_rep_range(target),
         kind=kind,
+        today_sets=today_sets,
+        last_rpes=[rpe for _weight, _reps, rpe in last_session],
     )
     if suggestion is None:
         return None
-    achieved = any(
-        weight >= suggestion.target_weight and reps >= suggestion.target_reps
-        for weight, reps in (today_sets or [])
+    if is_deload:
+        suggestion = analytics.deload_suggestion(suggestion, unit=unit, inferred_step=inferred_step)
+    meeting = [
+        (weight, reps) for weight, reps in (today_sets or [])
+        if weight >= suggestion.target_weight and reps >= suggestion.target_reps
+    ]
+    # У бэкоффа сам топ-сет тяжелее цели и проходит по числам — он не в счёт:
+    # бэкоффы взяты, когда после него набралось столько подходов, сколько
+    # просит программа (без числа в правиле — хотя бы один).
+    achieved = (
+        len(meeting) - 1 >= (suggestion.backoff_sets or 1)
+        if suggestion.role == "backoff" else bool(meeting)
     )
     return {
-        "text": formatting.format_progression_hint(suggestion, achieved),
+        "text": formatting.format_progression_hint(suggestion, achieved, deload=is_deload),
         "achieved": achieved,
+        "role": suggestion.role,
+        "is_deload": bool(is_deload),
         "target_weight": round(suggestion.target_weight, 2),
         "target_reps": suggestion.target_reps,
         "is_bodyweight": suggestion.is_bodyweight,
@@ -114,6 +135,7 @@ async def hint_for_workout(
     targets = await db.workout_exercise_targets(workout_id)
     rule = await db.progression_rule_for_workout(workout_id, exercise_id)
     kind = await db.exercise_progression_kind(exercise_id)
+    is_deload = await db.deload_week_for_workout(workout_id)
 
     with i18n.use_lang(user["lang"]):
         return hint(
@@ -125,4 +147,5 @@ async def hint_for_workout(
             rule=rule,
             target=targets.get(exercise_id),
             kind=kind,
+            is_deload=is_deload,
         )

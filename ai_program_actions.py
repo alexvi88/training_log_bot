@@ -77,6 +77,9 @@ async def save_into_existing_program(
         target_name = draft["name"]
     if draft.get("description"):
         await db.set_program_description(program["id"], draft["description"])
+    # Правка — программа целиком (propose_program), и разгрузка тоже: не
+    # прислал — её больше нет, ровно как с правилами прогрессии упражнений.
+    await db.set_program_deload(program["id"], draft.get("deload_every_weeks"))
 
     # Сначала новые дни, потом удаление старых: падение посередине оставляет
     # лишние новые дни рядом со старой программой — хуже, чем идеально, но
@@ -114,7 +117,8 @@ async def save_as_new_program(
         return {"error": "budget", "message": budget_msg}
 
     program_id = await db.create_program(
-        user_id, draft["name"], source="ai", description=draft.get("description")
+        user_id, draft["name"], source="ai", description=draft.get("description"),
+        deload_every_weeks=draft.get("deload_every_weeks"),
     )
     if program_id is None:
         return {"error": "name_conflict", "name": draft["name"]}
