@@ -43,7 +43,7 @@ import keyboards
 import progress_data
 import progression_data
 import timeutil
-from api_v1_common import ApiError, authed_user, authed_user_id, query_int
+from api_v1_common import ApiError, authed_user, authed_user_id, query_excluded_workouts, query_int
 
 # Потолок `limit`. Бот под кнопкой «все» шлёт 9999 (keyboards.progress_chart_keyboard),
 # так что потолок обязан быть выше — иначе «все» молча превратилось бы в «часть».
@@ -167,7 +167,12 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
     limit = query_int(
         request, "limit", keyboards.DEFAULT_PROGRESS_LIMIT, minimum=1, maximum=MAX_LIMIT
     )
+    excluded = query_excluded_workouts(request)
     sessions = await progress_data.load_sessions(exercise_id, user["e1rm_formula"])
+    # Тренировка, ждущая окна «Вернуть», выпадает до всех расчётов — из точек,
+    # тренда, рекордов и сравнения разом (см. query_excluded_workouts).
+    if excluded:
+        sessions = [s for s in sessions if s.workout_id not in excluded]
     series = progress_data.chart_series(sessions)
     notes = await db.list_workout_notes_for_exercise(exercise_id)
     # По ВСЕЙ истории упражнения, а не по показанному окну: RPE — не то, что
@@ -225,6 +230,8 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
             ),
             "has_rpe": has_rpe,
         }
+    if excluded:
+        payload["excluded_workout_ids"] = list(excluded)
     return JSONResponse(payload)
 
 

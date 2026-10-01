@@ -113,14 +113,20 @@ async def get_visits(request: Request) -> Any:
     счётчики по дням. `today` — местная дата пользователя, от неё клиент
     строит сетку (часы телефона и пояс аккаунта могут не совпадать)."""
     user_id = await _authed_user_id(request)
+    # Тренировка, ждущая окна «Вернуть», для столбиков «по месяцам» уже
+    # удалена — см. common.query_excluded_workouts; эхо — как у /dashboard.
+    excluded = common.query_excluded_workouts(request)
     user = await db.get_user(user_id)
     today = timeutil.user_today(user)
     since = (today - dt.timedelta(days=VISITS_DAYS - 1)).isoformat()
     days: dict[str, int] = {}
-    for d in await db.list_finished_workout_dates(user_id):
+    for d in await db.list_finished_workout_dates(user_id, exclude_workout_ids=excluded):
         if d >= since:
             days[d] = days.get(d, 0) + 1
-    return JSONResponse({"today": today.isoformat(), "days": days})
+    payload: dict[str, Any] = {"today": today.isoformat(), "days": days}
+    if excluded:
+        payload["excluded_workout_ids"] = list(excluded)
+    return JSONResponse(payload)
 
 
 # ---------- экспорт CSV ----------

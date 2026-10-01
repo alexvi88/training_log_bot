@@ -24,7 +24,7 @@ import os
 import secrets
 import sqlite3
 import time
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import aiosqlite
 
@@ -981,6 +981,18 @@ def now_iso() -> str:
 def _local_day(column: str, tz_offset: int) -> str:
     """SQL-выражение «календарный день по часам пользователя» для UTC-столбца."""
     return f"date({column}, '{int(tz_offset):+d} hours')"
+
+
+def _without_workouts(ids: Iterable[int], column: str = "w.id") -> tuple[str, tuple[int, ...]]:
+    """Кусок WHERE «кроме этих тренировок» и его параметры — для сводки, у
+    которой приложение просит не считать тренировку, ждущую окна «Вернуть»
+    (`exclude_workout` у GET /v1/dashboard): сама строка удалится через
+    несколько секунд, а числа на главной должны разойтись с ней уже сейчас.
+    Пустой набор — пустая строка, запрос не меняется."""
+    ids = tuple(int(i) for i in ids)
+    if not ids:
+        return "", ()
+    return f" AND {column} NOT IN ({', '.join('?' * len(ids))})", ids
 
 
 def _local_hour(column: str, tz_offset: int) -> str:
@@ -4674,7 +4686,7 @@ async def has_manual_set(user_id: int) -> bool:
 
 
 async def list_finished_workout_dates(
-    user_id: int, *, tz_offset: Optional[int] = None
+    user_id: int, *, tz_offset: Optional[int] = None, exclude_workout_ids: Iterable[int] = ()
 ) -> list[str]:
     """Calendar date (YYYY-MM-DD) of each finished workout, ascending — for the dashboard.
 
@@ -4686,10 +4698,11 @@ async def list_finished_workout_dates(
     экраны, ради которых функция и существует — сводку, звание, стрик.
     """
     day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    without, without_params = _without_workouts(exclude_workout_ids, "id")
     cur = await conn().execute(
         f"SELECT {day} AS d FROM workouts "
-        "WHERE user_id = ? AND status = 'finished' ORDER BY d",
-        (user_id,),
+        f"WHERE user_id = ? AND status = 'finished'{without} ORDER BY d",
+        (user_id, *without_params),
     )
     return [r["d"] for r in await cur.fetchall()]
 
@@ -4987,7 +5000,9 @@ async def list_finished_workouts_meta(user_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
-async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
+async def hall_of_fame_aggregates(
+    user_id: int, *, exclude_workout_ids: Iterable[int] = ()
+) -> dict[str, float]:
     """Lifetime totals for the Hall of Fame: tonnage moved and total working
     sets, over all finished workouts.
 
@@ -5001,13 +5016,14 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
     не срабатывал — прямая нестыковка на одном экране. Теперь оба числа
     считает один и тот же view_builder.longest_workout_seconds.
     """
+    without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
         "SELECT COALESCE(SUM(COALESCE(s.load_weight, s.weight) * s.reps), 0) AS tonnage, COUNT(s.id) AS sets_count "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
-        "WHERE w.user_id = ? AND w.status = 'finished'",
-        (user_id,),
+        f"WHERE w.user_id = ? AND w.status = 'finished'{without}",
+        (user_id, *without_params),
     )
     row = await cur.fetchone()
     return {
@@ -5061,7 +5077,12 @@ async def last_session_by_group(
 
 
 async def weekly_volume_by_group(
-    user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    *,
+    tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
 ) -> dict[Optional[int], int]:
     """Count of working sets per muscle group across finished workouts in [start_date, end_date].
 
@@ -5072,16 +5093,17 @@ async def weekly_volume_by_group(
     вечерняя тренировка выпадала из окна, которое заканчивается «сегодня».
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
         "SELECT e.primary_group_id AS gid, COUNT(s.id) AS cnt "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "JOIN exercises e ON e.id = s.exercise_id "
-        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"WHERE w.user_id = ? AND w.status = 'finished'{without} "
         f"AND {day} BETWEEN ? AND ? "
         "GROUP BY e.primary_group_id",
-        (user_id, start_date, end_date),
+        (user_id, *without_params, start_date, end_date),
     )
     return {row["gid"]: row["cnt"] for row in await cur.fetchall()}
 
@@ -5102,6 +5124,7 @@ async def top_exercises_by_frequency(
     min_sessions: int = 2,
     *,
     tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
 ) -> list[aiosqlite.Row]:
     """Упражнения, которые человек делает чаще всего, — по числу тренировок, а не
     подходов.
@@ -5118,6 +5141,7 @@ async def top_exercises_by_frequency(
     Границы окна — местные календарные дни (как их и считает вызывающая сторона).
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
         "SELECT e.id, e.display_name, COUNT(DISTINCT w.id) AS sessions, "
         "       COUNT(s.id) AS sets_count "
@@ -5125,13 +5149,13 @@ async def top_exercises_by_frequency(
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "JOIN exercises e ON e.id = s.exercise_id "
-        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"WHERE w.user_id = ? AND w.status = 'finished'{without} "
         f"AND {day} BETWEEN ? AND ? AND s.reps > 0 "
         "GROUP BY e.id "
         "HAVING sessions >= ? "
         "ORDER BY sessions DESC, sets_count DESC, e.display_name "
         "LIMIT ?",
-        (user_id, start_date, end_date, min_sessions, limit),
+        (user_id, *without_params, start_date, end_date, min_sessions, limit),
     )
     return await cur.fetchall()
 
@@ -5143,6 +5167,7 @@ async def exercise_e1rm_growth(
     formula: str = "epley",
     *,
     tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
 ) -> tuple[float, float]:
     """(лучший e1RM ДО окна, лучший e1RM ВНУТРИ окна) — база и результат для
     плитки роста.
@@ -5155,6 +5180,7 @@ async def exercise_e1rm_growth(
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     e1rm = _e1rm_sql(formula)
+    without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
         f"SELECT COALESCE(MAX(CASE WHEN {day} < ? THEN {e1rm} END), 0) AS before_max, "
         f"       COALESCE(MAX(CASE WHEN {day} >= ? THEN {e1rm} END), 0) AS window_max "
@@ -5162,15 +5188,20 @@ async def exercise_e1rm_growth(
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        "AND s.exercise_id = ? AND s.reps > 0",
-        (window_start_date, window_start_date, user_id, exercise_id),
+        f"AND s.exercise_id = ? AND s.reps > 0{without}",
+        (window_start_date, window_start_date, user_id, exercise_id, *without_params),
     )
     row = await cur.fetchone()
     return row["before_max"], row["window_max"]
 
 
 async def daily_tonnage(
-    user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    *,
+    tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
 ) -> dict[str, float]:
     """Тоннаж по календарным дням в окне. По неделям сворачивает вызывающая
     сторона: у SQLite %W начинает неделю с воскресенья и ломается на границе
@@ -5181,21 +5212,27 @@ async def daily_tonnage(
     раскладывает тоннаж по своим датам, посчитанным от timeutil.user_today.
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
         f"SELECT {day} AS d, SUM({LOAD_WEIGHT_SQL} * s.reps) AS t "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
-        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"WHERE w.user_id = ? AND w.status = 'finished'{without} "
         f"AND {day} BETWEEN ? AND ? "
         f"GROUP BY {day}",
-        (user_id, start_date, end_date),
+        (user_id, *without_params, start_date, end_date),
     )
     return {row["d"]: row["t"] or 0.0 for row in await cur.fetchall()}
 
 
 async def e1rm_record_count(
-    user_id: int, since_date: str, formula: str = "epley", *, tz_offset: Optional[int] = None
+    user_id: int,
+    since_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
 ) -> int:
     """Сколько упражнений с `since_date` перебили свой прежний лучший e1RM.
 
@@ -5208,6 +5245,7 @@ async def e1rm_record_count(
     """
     e1rm = _e1rm_sql(formula)
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
         "SELECT COUNT(*) AS n FROM ("
         f"  SELECT s.exercise_id,"
@@ -5216,10 +5254,10 @@ async def e1rm_record_count(
         "   FROM sets s"
         "   JOIN workout_blocks b ON b.id = s.block_id"
         "   JOIN workouts w ON w.id = b.workout_id"
-        "   WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
+        f"   WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0{without}"
         "   GROUP BY s.exercise_id"
         ") WHERE earlier IS NOT NULL AND inside IS NOT NULL AND inside > earlier",
-        (since_date, since_date, user_id),
+        (since_date, since_date, user_id, *without_params),
     )
     return (await cur.fetchone())["n"]
 

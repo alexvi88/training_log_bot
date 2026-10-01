@@ -421,6 +421,35 @@ def query_int(request: Request, key: str, default: int, *, minimum: int = 0, max
     return value
 
 
+# Больше этого id в `?exclude_workout=` не бывает: у приложения одно окно
+# «Вернуть» на всё, и в нём одна тренировка плюс, может быть, прежняя, чей
+# `DELETE` ещё летит. Потолок — чтобы строка запроса не превращалась в
+# `NOT IN` на тысячу параметров.
+MAX_EXCLUDED_WORKOUTS = 10
+
+
+def query_excluded_workouts(request: Request) -> tuple[int, ...]:
+    """`?exclude_workout=17&exclude_workout=18` — тренировки, которых для
+    этого ответа уже нет: приложение удаляет с окном «Вернуть», и пока
+    `DELETE` ждёт, сводки (главная, посещения, прогресс упражнения) не должны
+    считать удаляемую. Чужой или несуществующий id ничего не меняет — фильтр
+    в запросах и так по своему `user_id`. Порядок сохранён, повторы сняты."""
+    values = request.query_params.getlist("exclude_workout")
+    ids: list[int] = []
+    for raw in values:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ApiError(400, "bad_request", "exclude_workout must be int") from exc
+        if value not in ids:
+            ids.append(value)
+    if len(ids) > MAX_EXCLUDED_WORKOUTS:
+        raise ApiError(
+            400, "bad_request", f"exclude_workout: at most {MAX_EXCLUDED_WORKOUTS} ids"
+        )
+    return tuple(ids)
+
+
 # ---------- даты ----------
 
 def parse_date(raw: Any, field: str = "date") -> dt.date:
