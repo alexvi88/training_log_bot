@@ -46,15 +46,16 @@ _GATE_NO_SEARCH = '{"search": false, "data": true}'
 # вызов на упражнение, а раундов шесть) и путала настоящий тупик с работающей
 # двойной прогрессией. Описание длинное потому, что в нём и лежит вся польза:
 # четыре вердикта и чтение RPE — то, чего из одних чисел не вывести.
-# Поднят с 22_400 под оговорку у propose_program.progression.step (~50
-# символов сверх ужатой старой прозы): модель ставила шаг в кг на подтягивания,
-# скручивания и планку. Остальное чинит _fit_progression_to_kind, но без
-# строки в схеме модель узнавала бы об этом только из clamped — раундом позже.
-# Поднят с 22_450 под top_set_backoff и deload_every_weeks у propose_program
+# Поднят с 22_400 двумя правками (~35 + ~50 символов):
+# - оговорка у get_weekly_volume_by_group: цель 6-12 без неё читалась как вся
+#   методика, а для отстающей мышцы и минимумов внутри групп правила другие;
+# - оговорка у propose_program.progression.step: модель ставила шаг в кг на
+#   подтягивания, скручивания и планку (остальное чинит _fit_progression_to_kind).
+# Поднят с 22_500 под top_set_backoff и deload_every_weeks у propose_program
 # (~530 символов): живой прогон — силовику (присед 180) досталось 5×3–5 с
 # «+2.5, когда возьмёшь 5×5» на ~89 %, а «топ-сет + бэкоффы» из текста тренера
 # схема выразить не могла; разгрузки не было ни в одной из девяти программ.
-_TOOL_SCHEMA_CHAR_BUDGET = 23_000
+_TOOL_SCHEMA_CHAR_BUDGET = 23_050
 
 
 async def test_tool_schemas_stay_within_their_character_budget():
@@ -2112,3 +2113,41 @@ async def test_stalled_lifts_skips_what_there_is_too_little_data_about(
 
     assert payload["lifts"] == []
     assert payload["skipped_too_few_sessions"] == 1  # заброшенное вне окна выборки вовсе
+
+
+async def test_prompt_names_stored_limitation_used_for_program():
+    """Живой прогон: «правое колено» из профиля молча перетекло в программу, и
+    тренер написал англоязычному атлету «easier on cranky knees», хотя про колени
+    в этой просьбе речи не было. Ограничение из памяти называется вслух — откуда
+    оно и что его можно стереть."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Травму или ограничение из profile" in prompt
+    assert "из его прежних слов" in prompt
+    assert "Учёл колено, про которое ты говорил раньше" in prompt
+    assert "на языке ответа" in prompt
+
+
+async def test_prompt_keeps_program_answer_short():
+    """Ответ на собранную программу занимал 400–700 слов: разделы, таблицы
+    объёма, питание, добавки — три экрана текста на телефоне под программой.
+    Теперь рамка из четырёх частей и ориентир 150–200 слов."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Рамка ответа — четыре части" in prompt
+    assert "150–200 слов" in prompt
+    assert "без таблиц" in prompt
+    assert "состав и подходы видны в превью программы" in prompt
+    assert "только если цель масса или сушка" in prompt
+
+
+async def test_prompt_replaces_pullups_for_beginners():
+    """Новичку ставились подтягивания 3×5–10, хотя многие не сделают и пяти, а
+    замены не было. Замена — тяга верхнего блока, и она есть в каталоге."""
+    import seed_data
+
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "лучший подход меньше 5 повторов" in prompt
+    assert "«Тяга верхнего блока»" in prompt
+    assert "как цель на будущее" in prompt
+    assert "Дома без блока" in prompt
+    catalog = {name for _, name in seed_data.EXERCISE_TEMPLATES}
+    assert "Тяга верхнего блока" in catalog

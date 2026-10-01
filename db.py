@@ -8340,6 +8340,22 @@ async def exercise_group_name(user_id: int, name: str) -> Optional[str]:
     return group["name"] if group else None
 
 
+async def exercise_template_identity(user_id: int, name: str) -> Optional[str]:
+    """Каноническое русское имя шаблона, стоящего за названием, — тем же
+    порядком, что exercise_group_name (сначала своё, потом глобальный шаблон).
+
+    Своё упражнение отдаёт `original_name` (форк шаблона помнит его на любом
+    языке), шаблон — своё `name`. Своё упражнение без шаблона — None. Нужна
+    для подсчёта объёма программы по мишеням внутри группы
+    (`seed_data.EXERCISE_MUSCLE_TARGET` ключуется идентичностью, а не показом).
+    """
+    own = await find_exercise_by_name(user_id, name)
+    if own is not None:
+        return own["original_name"] or None
+    template = await _find_global_template_by_name(name)
+    return template["name"] if template is not None else None
+
+
 async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str], Optional[str]]:
     """См. resolve_exercise_identity — то же без идентичности."""
     source, display_name, _identity = await resolve_exercise_identity(user_id, name)
