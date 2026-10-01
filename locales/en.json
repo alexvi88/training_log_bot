@@ -1919,5 +1919,10 @@
   "finish.summary.plain.text_same": "Same as last time. Holding the weight is work too.",
   "finish.summary.week.count": "{count} {n, plural, one{workout} other{workouts}} this week",
   "finish.summary.week.streak": "{weeks} {n, plural, one{week} other{weeks}} straight",
-  "finish.summary.next": "{exercise}: next time, {goal}."
+  "finish.summary.next": "{exercise}: next time, {goal}.",
+  "menu.line.progress": "{exercise} {growth} in {weeks} {weeks, plural, one{week} other{weeks}}",
+  "menu.line.exercises": "{n} in your list",
+  "menu.line.programs_catalog": "Ready-made — one tap to start",
+  "menu.line.rank_gap": "{name}: {gap}",
+  "menu.line.rank": "Rank: {name}"
 }

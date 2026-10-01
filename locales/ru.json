@@ -1920,5 +1920,10 @@
   "finish.summary.plain.text_same": "Ровно как в прошлый раз. Удержать вес — тоже работа.",
   "finish.summary.week.count": "{count} {n, plural, one{тренировка} few{тренировки} many{тренировок} other{тренировки}} на этой неделе",
   "finish.summary.week.streak": "{weeks} {n, plural, one{неделя} few{недели} many{недель} other{недели}} подряд",
-  "finish.summary.next": "{exercise}: в следующий раз {goal}."
+  "finish.summary.next": "{exercise}: в следующий раз {goal}.",
+  "menu.line.progress": "{exercise} {growth} за {weeks} {weeks, plural, one{неделю} few{недели} many{недель} other{недели}}",
+  "menu.line.exercises": "{n} в твоём списке",
+  "menu.line.programs_catalog": "Готовые — старт в один тап",
+  "menu.line.rank_gap": "«{name}» — {gap}",
+  "menu.line.rank": "Звание — {name}"
 }
