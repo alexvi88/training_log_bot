@@ -714,7 +714,7 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 150.3кг (↓1.3кг к 6 янв)",
+       "e1rm_text": "↳ e1RM 150.3кг (↓1.3кг vs 06.01)",
        "exercise_id": 131,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -827,7 +827,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 119.6кг (↓25.6кг к 6 янв)",
+       "e1rm_text": "↳ e1RM 119.6кг (↓25.6кг vs 06.01)",
        "exercise_id": 135,
        "group_tag": null,
        "has_record": false,
@@ -889,7 +889,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 116.7кг (↑5кг к 6 янв)",
+       "e1rm_text": "↳ e1RM 116.7кг (↑5кг vs 06.01)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -1064,7 +1064,7 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 106.7кг (↑4.2кг к 9 янв)",
+       "e1rm_text": "↳ e1RM 106.7кг (↑4.2кг vs 09.01)",
        "exercise_id": 131,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -1104,7 +1104,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 140кг (↓1.7кг к 9 янв)",
+       "e1rm_text": "↳ e1RM 140кг (↓1.7кг vs 09.01)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -1144,7 +1144,7 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 160кг (↓26.7кг к 9 янв)",
+       "e1rm_text": "↳ e1RM 160кг (↓26.7кг vs 09.01)",
        "exercise_id": 134,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -1195,7 +1195,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 120кг (↓23.5кг к 9 янв)",
+       "e1rm_text": "↳ e1RM 120кг (↓23.5кг vs 09.01)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -1325,7 +1325,7 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 120кг (↑0.4кг к 9 янв)",
+       "e1rm_text": "↳ e1RM 120кг (↑0.4кг vs 09.01)",
        "exercise_id": 136,
        "group_tag": "СВОЯ",
        "has_record": false,
@@ -1387,7 +1387,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 126.4кг (↑6.4кг к 12 янв)",
+       "e1rm_text": "↳ e1RM 126.4кг (↑6.4кг vs 12.01)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -1427,7 +1427,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 150кг (↑35.5кг к 6 янв)",
+       "e1rm_text": "↳ e1RM 150кг (↑35.5кг vs 06.01)",
        "exercise_id": 129,
        "group_tag": "ГРУДЬ",
        "has_record": true,
@@ -1478,7 +1478,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 135кг (↓5кг к 12 янв)",
+       "e1rm_text": "↳ e1RM 135кг (↓5кг vs 12.01)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -1518,7 +1518,7 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 153.8кг (↑47.1кг к 12 янв)",
+       "e1rm_text": "↳ e1RM 153.8кг (↑47.1кг vs 12.01)",
        "exercise_id": 131,
        "group_tag": "БИЦЕПС",
        "has_record": true,
@@ -1569,7 +1569,7 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 210кг (↓30кг к 12 янв)",
+       "e1rm_text": "↳ e1RM 210кг (↓30кг vs 12.01)",
        "exercise_id": 133,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -1631,7 +1631,7 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 88кг (↓41.8кг к 19 янв)",
+       "e1rm_text": "↳ e1RM 88кг (↓41.8кг vs 19.01)",
        "exercise_id": 131,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -1682,7 +1682,7 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 186.7кг (↓2.3кг к 19 янв)",
+       "e1rm_text": "↳ e1RM 186.7кг (↓2.3кг vs 19.01)",
        "exercise_id": 134,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -1733,7 +1733,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 126.7кг (↑16.7кг к 19 янв)",
+       "e1rm_text": "↳ e1RM 126.7кг (↑16.7кг vs 19.01)",
        "exercise_id": 135,
        "group_tag": null,
        "has_record": false,
@@ -1773,7 +1773,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 153.8кг (↑10.2кг к 19 янв)",
+       "e1rm_text": "↳ e1RM 153.8кг (↑10.2кг vs 19.01)",
        "exercise_id": 129,
        "group_tag": "ГРУДЬ",
        "has_record": true,
@@ -1813,7 +1813,7 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 133.3кг (↑43.3кг к 15 янв)",
+       "e1rm_text": "↳ e1RM 133.3кг (↑43.3кг vs 15.01)",
        "exercise_id": 136,
        "group_tag": "СВОЯ",
        "has_record": false,
@@ -1926,7 +1926,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 151.5кг (↑127кг к 30 янв)",
+       "e1rm_text": "↳ e1RM 151.5кг (↑127кг vs 30.01)",
        "exercise_id": 135,
        "group_tag": null,
        "has_record": true,
@@ -1977,7 +1977,7 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 144.9кг (↑24.1кг к 30 янв)",
+       "e1rm_text": "↳ e1RM 144.9кг (↑24.1кг vs 30.01)",
        "exercise_id": 136,
        "group_tag": "СВОЯ",
        "has_record": false,
@@ -2011,7 +2011,7 @@
       },
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 138кг (↑13.4кг к 30 янв)",
+       "e1rm_text": "↳ e1RM 138кг (↑13.4кг vs 30.01)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -2051,7 +2051,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 138кг (↑13.4кг к 30 янв)",
+       "e1rm_text": "↳ e1RM 138кг (↑13.4кг vs 30.01)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -2102,7 +2102,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 157кг (↑34.1кг к 27 янв)",
+       "e1rm_text": "↳ e1RM 157кг (↑34.1кг vs 27.01)",
        "exercise_id": 129,
        "group_tag": "ГРУДЬ",
        "has_record": true,
@@ -2153,7 +2153,7 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 187.8кг (↓53.5кг к 30 янв)",
+       "e1rm_text": "↳ e1RM 187.8кг (↓53.5кг vs 30.01)",
        "exercise_id": 134,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -2193,7 +2193,7 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 157.5кг (↓99.4кг к 30 янв)",
+       "e1rm_text": "↳ e1RM 157.5кг (↓99.4кг vs 30.01)",
        "exercise_id": 133,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -2244,7 +2244,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 156.9кг (↑63.1кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 156.9кг (↑63.1кг vs 23.05)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -2284,7 +2284,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 164.2кг (↑128.2кг к 21 мая)",
+       "e1rm_text": "↳ e1RM 164.2кг (↑128.2кг vs 21.05)",
        "exercise_id": 135,
        "group_tag": null,
        "has_record": false,
@@ -2335,7 +2335,7 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 249.3кг (↓12.5кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 249.3кг (↓12.5кг vs 23.05)",
        "exercise_id": 134,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -2386,7 +2386,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 129.6кг (↑7.8кг к 22 мая)",
+       "e1rm_text": "↳ e1RM 129.6кг (↑7.8кг vs 22.05)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -2437,7 +2437,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 121.8кг (↓40.5кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 121.8кг (↓40.5кг vs 23.05)",
        "exercise_id": 129,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -2477,7 +2477,7 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 156.6кг (↑55.3кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 156.6кг (↑55.3кг vs 23.05)",
        "exercise_id": 133,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -2590,7 +2590,7 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 208.5кг (↑107.1кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 208.5кг (↑107.1кг vs 23.05)",
        "exercise_id": 133,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -2641,7 +2641,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 101.5кг (↓20.3кг к 22 мая)",
+       "e1rm_text": "↳ e1RM 101.5кг (↓20.3кг vs 22.05)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -2703,7 +2703,7 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 84.9кг (↓42.9кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 84.9кг (↓42.9кг vs 23.05)",
        "exercise_id": 136,
        "group_tag": "СВОЯ",
        "has_record": false,
@@ -2754,7 +2754,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 146кг (↑52.2кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 146кг (↑52.2кг vs 23.05)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -2805,7 +2805,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 131.9кг (↑95.9кг к 21 мая)",
+       "e1rm_text": "↳ e1RM 131.9кг (↑95.9кг vs 21.05)",
        "exercise_id": 135,
        "group_tag": null,
        "has_record": false,
@@ -2878,7 +2878,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 153.3кг (↑7.3кг к 24 мая)",
+       "e1rm_text": "↳ e1RM 153.3кг (↑7.3кг vs 24.05)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -2929,7 +2929,7 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 284.2кг (↑164.2кг к 24 мая)",
+       "e1rm_text": "↳ e1RM 284.2кг (↑164.2кг vs 24.05)",
        "exercise_id": 134,
        "group_tag": "ГРУДЬ",
        "has_record": true,
@@ -2991,7 +2991,7 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 144.5кг (↓64кг к 24 мая)",
+       "e1rm_text": "↳ e1RM 144.5кг (↓64кг vs 24.05)",
        "exercise_id": 133,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -3031,7 +3031,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 127.8кг (↑26.3кг к 24 мая)",
+       "e1rm_text": "↳ e1RM 127.8кг (↑26.3кг vs 24.05)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -3093,7 +3093,7 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 101.5кг (↑14.5кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 101.5кг (↑14.5кг vs 23.05)",
        "exercise_id": 131,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -3144,7 +3144,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 146кг (↑24.2кг к 24 мая)",
+       "e1rm_text": "↳ e1RM 146кг (↑24.2кг vs 24.05)",
        "exercise_id": 129,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -3195,7 +3195,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 167.2кг (↓3.7кг к 30 сен)",
+       "e1rm_text": "↳ e1RM 167.2кг (↓3.7кг vs 30.09)",
        "exercise_id": 129,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -3246,7 +3246,7 @@
      "exercises": [
       {
        "display_name": "Жим стоя",
-       "e1rm_text": "↳ e1RM 93.7кг (↓69.4кг к 25 сен)",
+       "e1rm_text": "↳ e1RM 93.7кг (↓69.4кг vs 25.09)",
        "exercise_id": 132,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
@@ -3297,7 +3297,7 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 167.2кг (↓3.8кг к 30 сен)",
+       "e1rm_text": "↳ e1RM 167.2кг (↓3.8кг vs 30.09)",
        "exercise_id": 131,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -3359,7 +3359,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 141кг (↓14.3кг к 30 сен)",
+       "e1rm_text": "↳ e1RM 141кг (↓14.3кг vs 30.09)",
        "exercise_id": 130,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -3421,7 +3421,7 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 278.4кг (↑43.5кг к 26 сен)",
+       "e1rm_text": "↳ e1RM 278.4кг (↑43.5кг vs 26.09)",
        "exercise_id": 133,
        "group_tag": "БИЦЕПС",
        "has_record": false,
@@ -3472,7 +3472,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 174.8кг (↓1.9кг к 30 сен)",
+       "e1rm_text": "↳ e1RM 174.8кг (↓1.9кг vs 30.09)",
        "exercise_id": 135,
        "group_tag": null,
        "has_record": false,

@@ -155,15 +155,13 @@ def test_build_workout_summary_shows_e1rm_delta_and_previous_date():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "к 19 июн)" in text
-    assert "vs" not in text
+    assert "vs 19.06" in text
     assert "↑" in text
 
 
 def test_e1rm_comparison_date_follows_language():
     """dd.mm англоязычный читатель принимает за mm.dd: «vs 05.09» по-английски
-    выглядит как 9 мая. По-английски — «Sep 5», по-русски — тоже словом,
-    «5 сен», и связка «к», а не латинское «vs» (разбор UI, A-27)."""
+    выглядит как 9 мая. По-английски — «Sep 5», по-русски — как было, «05.09»."""
     block = ExerciseBlockView(
         group_name="chest",
         exercise_name="Bench press",
@@ -174,7 +172,7 @@ def test_e1rm_comparison_date_follows_language():
     with i18n.use_lang("en"):
         assert "vs Sep 5)" in formatting.format_block_e1rm(block, "kg")
     with i18n.use_lang("ru"):
-        assert "к 5 сен)" in formatting.format_block_e1rm(block, "kg")
+        assert "vs 05.09)" in formatting.format_block_e1rm(block, "kg")
 
 
 def test_build_workout_summary_e1rm_line_uses_unit():
@@ -620,7 +618,7 @@ def test_record_older_than_the_previous_session_keeps_both_numbers():
         record_e1rm_delta=4.0,
     )
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
-    assert "к 3 авг)" in text
+    assert "vs 03.08" in text
     assert "🔥 +4кг к рекорду" in text
 
 
@@ -642,7 +640,7 @@ def test_render_block_puts_record_right_under_its_sets():
     assert lines[-4:] == [
         "  100×5",
         "  🔥 +9.1кг к рекорду",
-        "  ↳ e1RM 116.7кг (↑11.7кг к 3 авг)",
+        "  ↳ e1RM 116.7кг (↑11.7кг vs 03.08)",
         "<i>  [прошлая: 90×5]</i>",
     ]
 

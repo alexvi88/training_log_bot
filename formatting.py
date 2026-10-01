@@ -502,10 +502,10 @@ BlockView = ExerciseBlockView
 def format_date_short(d: dt.datetime) -> str:
     """Compact date for the inline e1RM-delta annotation — the year and weekday
     only add width there, since the comparison is always to the most recent prior
-    session. «25 сен» / «Sep 25» — словом, а не «25.09»: dd.mm англоязычный
-    читатель легко принимает за mm.dd, а в русской карточке рядом стоит дата
-    шапки «1 окт. 2026 г.», и два формата даты в одной карточке читались
-    как два разных источника (разбор UI, A-27)."""
+    session. По-русски «25.09», по-английски «Sep 25»: dd.mm англоязычный
+    читатель легко принимает за mm.dd."""
+    if i18n.get_lang() == "ru":
+        return d.strftime("%d.%m")
     month = i18n.t("date.month_short", m=_MONTH_KEYS[d.month - 1])
     return i18n.t("date.day_month", day=d.day, month=month)
 
@@ -707,7 +707,7 @@ def _block_record_text(
 
 
 def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = True) -> str | None:
-    """Строка e1RM блока — «↳ e1RM {вес}{ед} ({Δ} к {дате})», как в карточке
+    """Строка e1RM блока — «↳ e1RM {вес}{ед} ({Δ} vs {дата})», как в карточке
     завершения. Молчит без доп. цифр (формула/порог зависят от настроек
     аккаунта — считать их на клиенте нельзя) и для подходов в собственном весе
     тела, где e1RM не считается вовсе.
@@ -729,9 +729,7 @@ def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = Tr
     if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
         when = format_date_short(block.prev_started_at)
         delta = block.top_e1rm - block.prev_top_e1rm
-        # Связка «к»/«vs» — из каталога: латинское «vs», зашитое в код,
-        # попадало в русский текст (разбор UI, A-27).
-        vs_prev = " " + i18n.t("card.e1rm_vs_prev", delta=format_delta(delta, unit), when=when)
+        vs_prev = f" ({format_delta(delta, unit)} vs {when})"
     return f"↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}"
 
 

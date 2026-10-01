@@ -367,7 +367,6 @@
   "card.new_achievements_many": "🏅 <b>New badges!</b>",
   "card.no_sets": "no sets",
   "card.no_sets_dash": "— no sets",
-  "card.e1rm_vs_prev": "({delta} vs {when})",
   "card.previous_sets": "  [prev: {sets}]",
   "card.record_e1rm": "+{delta}{u} PR",
   "card.record_reps": "Record — {reps} {n, plural, one{rep} other{reps}} in one set",

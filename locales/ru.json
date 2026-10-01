@@ -367,7 +367,6 @@
   "card.new_achievements_many": "🏅 <b>Новые достижения!</b>",
   "card.no_sets": "подходов нет",
   "card.no_sets_dash": "— без подходов",
-  "card.e1rm_vs_prev": "({delta} к {when})",
   "card.previous_sets": "  [прошлая: {sets}]",
   "card.record_e1rm": "+{delta}{u} к рекорду",
   "card.record_reps": "Рекорд — {reps} {n, plural, one{повтор} few{повтора} many{повторов} other{повтора}} в подходе",
