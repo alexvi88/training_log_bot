@@ -38,8 +38,8 @@ def _facts(
     return cg.Facts(now, dates, analytics.compute_dashboard(dates, now.date()), record, rank_up)
 
 
-def _kind(facts: cg.Facts, kept: str | None = None) -> str | None:
-    choice = cg.pick(facts, kept)
+def _kind(facts: cg.Facts, kept: str | None = None, yesterday: str | None = None) -> str | None:
+    choice = cg.pick(facts, kept, yesterday)
     return choice[0].code if choice else None
 
 
@@ -155,6 +155,15 @@ def test_kept_phrase_survives_while_it_is_true():
     assert _kind(_facts(days_ago=(0, 3, 10)), kept="skip_3") != "skip_3"
 
 
+def test_yesterdays_phrase_is_not_repeated_when_another_is_true():
+    friday = dt.datetime(2026, 9, 18, 12, 0)
+    facts = _facts(friday, (1, 8))  # «вчера» и «пятница» — обе правда
+    assert _kind(facts) == "yesterday"
+    assert _kind(facts, yesterday="yesterday") == "friday"
+    # Правда только она — говорим её и второй день.
+    assert _kind(_facts(days_ago=(1, 8)), yesterday="yesterday") == "yesterday"
+
+
 # ---------- тексты на обоих языках ----------
 
 def _every_kind_facts() -> list[cg.Facts]:
@@ -201,20 +210,25 @@ def test_approved_russian_wording():
             return cg.render(cg.pick(facts), facts, 0)
 
         streak = say(_facts(days_ago=(1, 7, 14, 21, 28, 35)))
-        assert streak["title"] == "ШЕСТЬ НЕДЕЛЬ ПОДРЯД"
-        assert streak["text"] == "Это уже не мотивация. Это привычка."
-        assert say(_facts(days_ago=(1, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70)))["title"] == "11 НЕДЕЛЬ ПОДРЯД"
+        assert streak["title"] == "6 НЕДЕЛЬ ПОДРЯД!"
+        assert streak["text"] == "6 недель без пропуска. Это уже не настрой — режим."
+        assert say(_facts(days_ago=(1, 7, 14)))["title"] == "3 НЕДЕЛИ ПОДРЯД!"
+        assert say(_facts(days_ago=(1, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70)))["title"] == "11 НЕДЕЛЬ ПОДРЯД!"
         assert say(_facts(days_ago=(1, 2, 30)))["text"] == "Два из трёх. Третья на этой неделе — за тобой."
         closed = say(_facts(days_ago=(0, 1, 2, 30)))
         assert (closed["title"], closed["text"]) == ("НЕДЕЛЯ ЗАКРЫТА!", "Три из трёх. Можно и отдохнуть, я разрешаю.")
         rank = say(_facts(days_ago=(1, 5), rank_up=4))
-        assert rank["text"] == "Теперь ты Тяжеловес. Я сразу понял, что дойдёшь."
+        assert rank["text"] == "Звание — Тяжеловес. Я сразу понял, что дойдёшь."
+        first_rank = say(_facts(days_ago=(1, 5), rank_up=1))
+        assert first_rank["text"] == "Втянулся. Я так и думал."
         hundred = say(_facts(days_ago=tuple([1] + [10 + i for i in range(99)])))
         assert (hundred["title"], hundred["text"]) == ("СОТАЯ!", "Сто тренировок. Записал золотом.")
         skip5 = say(_facts(days_ago=(5, 30)))
-        assert (skip5["title"], skip5["text"]) == ("ПРИВЕТ АТЛЕТ.", "Пять дней без зала. Я не ругаюсь. Я записываю.")
+        assert (skip5["title"], skip5["text"]) == ("ПРИВЕТ АТЛЕТ.", "Почти неделя без зала. Я не ругаюсь. Я записываю.")
         long_break = say(_facts(days_ago=(20, 30)))
-        assert long_break["title"] == "ПРОДОЛЖИТЬ?"
+        assert (long_break["title"], long_break["text"]) == (
+            "ПРИВЕТ АТЛЕТ!", "Пришёл — уже полдела. Начнём с лёгкого."
+        )
         assert say(_facts(dates=(dt.date(2025, 9, 16), dt.date(2026, 9, 15))))["text"] == (
             "Год с первой записи. Торт не дам, дам штангу."
         )
@@ -284,7 +298,7 @@ async def test_dashboard_carries_the_greeting(fresh_db, monkeypatch):
     assert body["coach_greeting"] == {
         "kind": "yesterday",
         "title": "HEY ATHLETE!",
-        "text": "You put in the work yesterday. A rest day today counts too.",
+        "text": "You put in work yesterday. Rest today counts too.",
         "until": "2026-09-17T00:00:00Z",
     }
     # Прежние ключи на месте — старые клиенты не ломаются.
@@ -344,7 +358,7 @@ async def test_new_rank_and_record_from_the_last_workout(fresh_db, monkeypatch):
     await _train_at(111, now - dt.timedelta(days=1), weight=650.0)
     greeting = (await client.get("/dashboard")).json()["coach_greeting"]
     assert greeting["kind"] == "new_rank"
-    assert greeting["text"] == "Теперь ты Втянулся. Я сразу понял, что дойдёшь."
+    assert greeting["text"] == "Втянулся. Я так и думал."
 
     record, rank_up = await cg._last_workout_events(
         111, await db.get_user(111),

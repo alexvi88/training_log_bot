@@ -18,7 +18,8 @@
 тренировкой) — выбирается заново: правда важнее постоянства.
 
 Подколки — только за пропуски; перерыв в две недели и больше — уже поддержка
-(«ПРОДОЛЖИТЬ?»), как у пушей win-back.
+(«Пришёл — уже полдела»), как у пушей win-back. Вчерашнюю фразу два дня
+подряд не повторяем, если правдой оказалась другая.
 
 Пасхалку «лампа коротит» сервер не выбирает: она случайная, раз в 50
 запусков, и живёт в приложении целиком — вместе с текстом. Фразу новичка без
@@ -222,7 +223,7 @@ KINDS: tuple[Kind, ...] = (
     Kind("record", _HEY, _record),
     Kind("first_workout", _HEY, _first_workout),
     Kind("year_end", _HEY, _year_end),
-    Kind("long_break", "coach_greeting.long_break.title", _break(14, None)),
+    Kind("long_break", _HEY, _break(14, None)),
     Kind("skip_7", _HEY_CALM, _break(7, 13)),
     Kind("skip_5", _HEY_CALM, _break(5, 6)),
     Kind("skip_3", _HEY, _break(3, 4)),
@@ -238,18 +239,29 @@ KINDS: tuple[Kind, ...] = (
 _BY_CODE = {k.code: k for k in KINDS}
 
 
-def pick(facts: Facts, kept: Optional[str] = None) -> Optional[tuple[Kind, dict[str, Any]]]:
+def pick(
+    facts: Facts, kept: Optional[str] = None, yesterday: Optional[str] = None
+) -> Optional[tuple[Kind, dict[str, Any]]]:
     """Фраза для этих фактов: `kept` (выбранная сегодня раньше), если она всё
-    ещё правда, иначе первая подходящая по приоритету; None — ничего."""
+    ещё правда, иначе первая подходящая по приоритету; None — ничего.
+
+    `yesterday` — фраза вчерашнего дня: её не повторяем два дня подряд, если
+    правдой оказалась ещё хоть одна («Вчера отработал» у того, кто ходит
+    каждый день, иначе висела бы неделями). Подошла только она — говорим её."""
     if kept in _BY_CODE:
         params = _BY_CODE[kept].check(facts)
         if params is not None:
             return _BY_CODE[kept], params
+    repeat: Optional[tuple[Kind, dict[str, Any]]] = None
     for kind in KINDS:
         params = kind.check(facts)
-        if params is not None:
-            return kind, params
-    return None
+        if params is None:
+            continue
+        if kind.code == yesterday:
+            repeat = repeat or (kind, params)
+            continue
+        return kind, params
+    return repeat
 
 
 def _utc_iso(local: dt.datetime, tz: int) -> str:
@@ -273,7 +285,7 @@ def render(choice: Optional[tuple[Kind, dict[str, Any]]], facts: Facts, tz: int)
     kind, params = choice
     text_params = dict(params)
     if kind.code == "new_rank":
-        text_params = {"rank": analytics.RANKS[params["level"]].name}
+        text_params = {"level": params["level"], "rank": analytics.RANKS[params["level"]].name}
     until = kind.until(facts) if kind.until else _end_of_day(facts)
     return {
         "kind": kind.code,
@@ -356,8 +368,12 @@ async def for_user(
         record, rank_up = await _last_workout_events(user_id, user, dates, tz, excluded)
     facts = Facts(now, tuple(dates), dashboard, record, rank_up)
 
-    kept = user["coach_greeting_kind"] if user["coach_greeting_day"] == today.isoformat() else None
-    choice = pick(facts, kept)
+    stored_day, stored_kind = user["coach_greeting_day"], user["coach_greeting_kind"]
+    kept = stored_kind if stored_day == today.isoformat() else None
+    yesterday = (
+        stored_kind if stored_day == (today - dt.timedelta(days=1)).isoformat() else None
+    )
+    choice = pick(facts, kept, yesterday)
     code = choice[0].code if choice else None
     if user["coach_greeting_day"] != today.isoformat() or user["coach_greeting_kind"] != code:
         await db.update_user(
