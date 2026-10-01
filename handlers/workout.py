@@ -513,6 +513,7 @@ def _logging_hint(
     formula: str = config.DEFAULT_E1RM_FORMULA,
     target: str | None = None,
     progression_rule: dict | None = None,
+    progression_kind: str = "weight",
     reps_row: tuple[float, int] | None = None,
     show_format_hint: bool = False,
     reps_row_hint: str = "",
@@ -615,6 +616,7 @@ def _logging_hint(
                 inferred_step=inferred_step,
                 rule=progression_rule,
                 target=target,
+                kind=progression_kind,
             )
             if nudge is not None:
                 lines.append(nudge["text"])
@@ -761,6 +763,11 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         progression_rule=(
             await db.progression_rule_for_workout(data["workout_id"], active)
             if active is not None and not is_backfill else None
+        ),
+        # Планка — цель в секундах, подтягивания — без «+кг» из программы.
+        progression_kind=(
+            await db.exercise_progression_kind(active)
+            if active is not None and last_session and not is_backfill else "weight"
         ),
     )
     kb = keyboards.logging_keyboard(

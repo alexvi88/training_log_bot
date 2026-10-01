@@ -494,9 +494,16 @@ SYSTEM_PROMPT = """\
 - Тренировки тяжёлые: RPE 8-9-10 (близко к отказу или до отказа). Исключение —
   новичок: первые недели назначай RPE 6-7 с упором на технику, к отказу подводи
   постепенно.
-- Недельный объём на одну мышечную группу — обычно 6-12 рабочих подходов, не больше.
+- Недельный объём на одну мышечную группу — база 6-12 рабочих подходов.
   Для ног планка мягче: там несколько крупных мышц и обычно больше упражнений, так
   что объём выше диапазона 6-12 — норма, а не перебор.
+- Минимумы внутри групп в неделю: средняя дельта, квадрицепс и бицепс бедра — не
+  меньше 6 рабочих подходов; бицепс и трицепс — не меньше 4; ягодицы — не меньше 4,
+  а если цель атлета — ягодицы, то больше.
+- Отстающей мышце, которую назвал атлет, — плюс 30-50% к её объёму, до 16 подходов
+  в неделю.
+- При 4 и больше тренировочных днях в неделю каждая мышца работает дважды в неделю,
+  если атлет сам не попросил сплит.
 - Прогрессия двойная: пока вес держится в диапазоне 5-12 повторений — сначала
   добавляешь повторы на том же весе; как только дошёл до верхней границы
   (сделал 12 повторов и больше) — повышаешь вес и снова начинаешь с нижней
@@ -554,7 +561,8 @@ list_recent_workouts отдаёт максимум 10 последних тре�
 Для вопросов про недельный объём и баланс нагрузки есть get_weekly_volume_by_group —
 сколько рабочих подходов на каждую группу мышц набрано на текущей неделе и попадает ли
 это в целевой диапазон (6-12 подходов на группу). Опирайся на него, когда советуешь, что
-на этой неделе добрать или, наоборот, где перебор.
+на этой неделе добрать или, наоборот, где перебор. Для отстающей мышцы и минимумов
+внутри групп действуют правила методики выше.
 
 В подходах может стоять RPE в формате «100x8@9» — это субъективная тяжесть подхода
 (9 = почти отказ). Если RPE есть, учитывай его: низкий RPE при застое веса значит, что
@@ -661,6 +669,11 @@ save_athlete_profile идёт только сказанное человеком
   недельный объём на группу 6-12 подходов. Сам объём в уме не считай: инструмент
   вернёт weekly_sets_by_group — фактические подходы на каждую группу по всем дням
   сразу. Если хочешь назвать объём в ответе, бери числа оттуда; увидел перебор —
+  собери программу заново и вызови инструмент ещё раз.
+  Для плеч и ног он вернёт ещё weekly_sets_by_target — подходы по мишеням
+  (передняя, средняя, задняя дельта; квадрицепс, бицепс бедра, ягодицы, икры).
+  Сверь их с минимумами и правилом про отстающую мышцу из методики выше: жимы
+  закрывают переднюю дельту, отдельный минимум ей и икрам не нужен. Нарушено —
   собери программу заново и вызови инструмент ещё раз.
 - Учитывай, чем он уже занимается: если у него в истории есть любимые упражнения,
   которые подходят под задачу, — включай их, а не заменяй всё подряд каталогом.
@@ -2074,7 +2087,8 @@ TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Объём по группам мышц за последние 7 дней — те же числа, что у человека "
                 "на диаграмме в меню: подходов на группу и статус относительно цели "
-                "(low/in_range/high; цель 6-12 в неделю). Про недельный объём и баланс "
+                "(low/in_range/high; цель 6-12 в неделю; отстающие и минимумы — по "
+                "методике). Про недельный объём и баланс "
                 "нагрузки отвечай только по ним, что бы ни спросили."
             ),
             "parameters": {"type": "object", "properties": {}},
@@ -2357,9 +2371,10 @@ TOOLS: list[dict[str, Any]] = [
                                                         "minimum": PROGRESSION_MIN_STEP,
                                                         "maximum": PROGRESSION_SCHEMA_MAX_STEP,
                                                         "description": (
-                                                            "Прибавка веса в единицах пользователя "
-                                                            "(unit из get_training_overview): типично "
-                                                            "2.5 для kg, 5 для lb"
+                                                            "Прибавка веса в unit пользователя: "
+                                                            "типично 2.5 kg / 5 lb. Не ставь на вес "
+                                                            "тела, скручивания, подъёмы ног. Планка и "
+                                                            "прочее на время: reps и step — секунды"
                                                         ),
                                                     },
                                                 },
@@ -3751,7 +3766,63 @@ def _clean_progression(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
     return out
 
 
-def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
+def _fit_progression_to_kind(
+    progression: Optional[dict[str, Any]], kind: str, reps_max: Optional[int]
+) -> tuple[Optional[dict[str, Any]], list[str]]:
+    """Правило прогрессии под вид нагрузки упражнения (seed_data.progression_kind).
+
+    Живой прогон тренера: шаг в кг стоял на каждом упражнении — «Подтягивания»
+    +2.5 кг двухмесячному новичку, «Скручивания» +2.5, «Планка» +5 при
+    «повторах» 30–45 (то есть секундах). В домашних программах так было 7
+    упражнений из 19. Здесь это чинится до сохранения, а пометки уходят модели
+    в `clamped` — чтобы она узнала, почему правило стало другим.
+
+    - bodyweight / no_load — шага в кг нет: прогресс повторами до reps_top.
+      linear_load на них превращается в double_progression (если есть
+      диапазон, верх которого станет reps_top) или отбрасывается.
+    - timed — повторы это секунды, и шаг тоже секунды: зажат в
+      analytics.TIMED_STEP_MIN..MAX, по умолчанию TIMED_STEP_DEFAULT, а
+      `step_unit: "sec"` говорит всем, кто правило читает, что это не кг.
+    - weight — как было.
+    """
+    notes: list[str] = []
+    if progression is None or kind == "weight":
+        return progression, notes
+    if kind in ("bodyweight", "no_load"):
+        why = (
+            "упражнение с весом тела — прогресс повторами до reps_top, дальше вариант "
+            "потяжелее или отягощение"
+            if kind == "bodyweight"
+            else "вес тут не прибавляют — прогресс повторами до reps_top"
+        )
+        if progression["rule"] == "linear_load":
+            if reps_max is None:
+                notes.append(f"progression linear_load отброшена: {why}")
+                return None, notes
+            notes.append(f"linear_load→double_progression (reps_top {reps_max}): {why}")
+            return {"rule": "double_progression", "reps_top": reps_max}, notes
+        if "step" in progression:
+            progression = {k: v for k, v in progression.items() if k != "step"}
+            notes.append(f"step снят: {why}; шаг в кг сюда не ставь")
+        return progression, notes
+    if kind == "timed":
+        raw_step = progression.get("step")
+        step = analytics.TIMED_STEP_DEFAULT if raw_step is None else int(round(max(
+            analytics.TIMED_STEP_MIN, min(raw_step, analytics.TIMED_STEP_MAX)
+        )))
+        progression = {**progression, "step": step, "step_unit": "sec"}
+        note = "упражнение на время: reps_min/reps_max/reps_top — секунды, step — секунды, не кг"
+        if raw_step is None:
+            note += f" (step не задан → {step:g} сек)"
+        elif raw_step != step:
+            note += f" (step {raw_step:g}→{step:g} сек)"
+        notes.append(note)
+    return progression, notes
+
+
+def _clean_program_item(
+    raw: Any, unit: str = "kg", kind: Optional[str] = None
+) -> Optional[dict[str, Any]]:
     """Одно упражнение из предложенной программы: имя плюс схема подходов.
 
     Схема необязательна — тренер может задать только подходы или только
@@ -3822,6 +3893,14 @@ def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
             progression = None
             clamped.append("progression linear_load без step — отброшена")
 
+    # Вид нагрузки — по идентичности: `kind` передаёт _propose_program, уже
+    # срезолвив имя в каталог (в т.ч. своё переименованное упражнение по
+    # original_name); без него — по имени, каноничному или показанному.
+    if kind is None:
+        kind = seed_data.progression_kind_for_name(name)
+    progression, kind_notes = _fit_progression_to_kind(progression, kind, reps_max)
+    clamped += kind_notes
+
     return {
         "name": name,
         "sets": sets,
@@ -3829,6 +3908,7 @@ def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
         "reps_max": reps_max,
         "clamped": clamped,
         "progression": progression,
+        "kind": kind,
     }
 
 
@@ -4937,6 +5017,59 @@ async def _weekly_sets_by_group(user_id: int, days: list[dict[str, Any]]) -> dic
     return totals
 
 
+async def _weekly_sets_by_target(
+    user_id: int, days: list[dict[str, Any]]
+) -> dict[str, dict[str, int]]:
+    """Недельные подходы программы по мишеням внутри «Плеч» и «Ног».
+
+    {группа: {мишень: подходы}} — обе на языке атлета. «Плечи 16» прятали три
+    подхода на среднюю дельту, «ноги 13» — пять на квадрицепс; групповой
+    суммы для этих двух групп мало, чтобы проверить программу.
+
+    Тот же порядок резолва, что у _weekly_sets_by_group (сначала своё, потом
+    шаблон), только сверяем идентичность — каноническое имя шаблона
+    (`seed_data.EXERCISE_MUSCLE_TARGET`). Своё упражнение без шаблона в
+    мишени не попадает (в группу — да). Упражнение, которое атлет перенёс в
+    другую группу, мишень своей прежней группы не набирает. У группы, где
+    хоть одно упражнение попало в мишень, показываются все её мишени — и с
+    нулём: ноль на средней дельте и есть то, ради чего эта разбивка.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    cache: dict[str, Optional[str]] = {}
+    for day in days:
+        for item in day["items"]:
+            if item.get("sets") is None:
+                continue
+            name = item["name"]
+            if name not in cache:
+                identity = await db.exercise_template_identity(user_id, name)
+                target = seed_data.EXERCISE_MUSCLE_TARGET.get(identity or "")
+                if target is not None:
+                    group = await db.exercise_group_name(user_id, name)
+                    if group != seed_data.muscle_target_group(target):
+                        target = None
+                cache[name] = target
+            target = cache[name]
+            if target is None:
+                continue
+            group = seed_data.muscle_target_group(target)
+            bucket = counts.setdefault(group, {})
+            bucket[target] = bucket.get(target, 0) + int(item["sets"])
+    lang = i18n.get_lang()
+    result: dict[str, dict[str, int]] = {}
+    for group, targets in seed_data.MUSCLE_TARGETS_BY_GROUP.items():
+        if group not in counts:
+            continue
+        shown_targets: dict[str, int] = {}
+        for target in targets:
+            sets = counts[group].get(target, 0)
+            if sets == 0 and target in seed_data.OPTIONAL_MUSCLE_TARGETS:
+                continue
+            shown_targets[seed_data.localized_muscle_target_name(target, lang)] = sets
+        result[seed_data.localized_muscle_group_name(group, lang)] = shown_targets
+    return result
+
+
 async def _ask_setup_questions(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[list[dict[str, Any]]]]:
@@ -5090,10 +5223,18 @@ async def _propose_program(
             item = _clean_program_item(raw_item, unit)
             if item is None:
                 continue
-            source, display_name = await db.resolve_exercise_name(user_id, item["name"])
+            source, display_name, identity = await db.resolve_exercise_identity(
+                user_id, item["name"]
+            )
             if source is None:
                 unresolved.append(item["name"])
                 continue
+            # Вид нагрузки — по идентичности каталога, а не по присланному имени:
+            # своё переименованное «Подтягивания» остаётся подтягиваниями.
+            kind = seed_data.progression_kind(identity)
+            if kind != item["kind"]:
+                item = _clean_program_item(raw_item, unit, kind=kind)
+            item.pop("kind", None)
             key = display_name.lower()
             if key in seen:
                 continue
@@ -5157,11 +5298,15 @@ async def _propose_program(
         # ошибалась — обещала «~12 подходов на грудь» в программе, где их 19,
         # при том что бот в других экранах меряет норму теми же 6-12.
         "weekly_sets_by_group": await _weekly_sets_by_group(user_id, days),
+        # Плечи и ноги — ещё и по мишеням: сумма по группе прятала три подхода
+        # на среднюю дельту в «плечах 16».
+        "weekly_sets_by_target": await _weekly_sets_by_target(user_id, days),
         "note": (
             "Программа показана пользователю кнопкой под твоим ответом. Он ещё "
             "НЕ сохранил её — не пиши, что программа уже добавлена, скажи, что "
             "она ждёт его подтверждения под сообщением. Объём по группам называй "
-            "только числами из weekly_sets_by_group — своих не считай."
+            "только числами из weekly_sets_by_group, по мишеням плеч и ног — "
+            "из weekly_sets_by_target; своих не считай."
         ),
     }
     if replaces is not None:

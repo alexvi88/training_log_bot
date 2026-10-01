@@ -500,6 +500,8 @@ class ProgressionSuggestion:
     # истории — подсказка это проговаривает, чтобы число не выглядело взятым
     # с потолка (см. formatting.format_progression_hint).
     from_rule: bool = False
+    # Упражнение на время (seed_data.TIMED_TEMPLATES): target_reps — секунды.
+    is_timed: bool = False
 
 
 # Fallback increment per unit, used when the exercise's own history says nothing
@@ -609,6 +611,14 @@ def progression_max_step(unit: str) -> float:
     if unit == "lb":
         return round(PROGRESSION_MAX_STEP * config.LB_PER_KG, 2)
     return PROGRESSION_MAX_STEP
+# Упражнения на время (планка): «повторы» — секунды, и шаг правила тоже в
+# секундах (`step_unit: "sec"`, см. ai_trainer._fit_progression_to_kind).
+# 5 секунд — заметно, но не скачок; больше 15 за раз — уже не прибавка, а
+# другое упражнение.
+TIMED_STEP_DEFAULT = 5
+TIMED_STEP_MIN = 5
+TIMED_STEP_MAX = 15
+
 # Верх диапазона повторов у явного правила — тот же потолок, что у схемы
 # подходов программы (ai_trainer.PROGRAM_MAX_REPS): невалидный reps_top не
 # должен требовать от человека забега на сотни повторов в одном подходе.
@@ -623,6 +633,7 @@ def suggest_progression(
     formula: str = "epley",
     rule: Optional[dict] = None,
     planned_reps: Optional[tuple[int, int]] = None,
+    kind: str = "weight",
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
@@ -649,10 +660,33 @@ def suggest_progression(
     «доходишь до 8 повторов — прибавляй 2.5», the hint has no business
     proposing anything else. Unknown or malformed rules fall through to the
     default, so a rule the model invented can never break the hint.
+
+    `kind` — вид нагрузки упражнения (seed_data.progression_kind по
+    идентичности). "timed": повторы — это секунды, цель — те же секунды плюс
+    шаг в секундах при том же весе, никаких «+кг». "bodyweight"/"no_load": шаг
+    в кг из правила программы и linear_load не действуют — их могла записать
+    модель до того, как их стали снимать; без отягощения цель и так в
+    повторах, а с поясом и блином — обычная двойная прогрессия по истории.
     """
     working = [(w, r) for w, r in last_sets if r > 0]
     if not working:
         return None
+    if kind == "timed":
+        top_weight = max(w for w, _ in working)
+        best = max(r for w, r in working if w == top_weight)
+        step = None
+        if (rule or {}).get("step_unit") == "sec":
+            step = _positive_number((rule or {}).get("step"))
+        step = int(round(max(TIMED_STEP_MIN, min(step or TIMED_STEP_DEFAULT, TIMED_STEP_MAX))))
+        return ProgressionSuggestion(
+            "add_reps", top_weight, best + step, is_bodyweight=top_weight == 0,
+            from_weight=top_weight, from_reps=best, is_timed=True,
+        )
+    if kind in ("bodyweight", "no_load") and rule:
+        rule = (
+            None if rule.get("rule") == "linear_load"
+            else {k: v for k, v in rule.items() if k != "step"}
+        )
     if all(w == 0 for w, _ in working):
         best_reps = max(r for _, r in working)
         return ProgressionSuggestion(
