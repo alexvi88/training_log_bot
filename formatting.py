@@ -625,12 +625,20 @@ def format_lb_tonnage(total_lb: float) -> str:
     return f"{group_thousands(total_lb)}{unit_label('lb')}"
 
 
-def format_tonnage(total: float, unit: str = "kg") -> str:
+# С какой массы тоннаж переходит в тонны. До десяти тонн тонна с одним знаком
+# врала заметнее, чем сокращала: 1020 кг превращались в «1 тонну», и
+# человек видел круглую цифру там, где поднял больше (разбор UI, A-05).
+# Килограммами с разрядами («1 020кг») видно ровно то, что записано.
+TONNAGE_TONS_FROM_KG = 10_000
+
+
+def format_tonnage(total: float, unit: str = "kg", *, grouped: bool = True) -> str:
     """Session/lifetime tonnage as a full word ("тонны"/"тонн"), never abbreviated.
 
-    `total` is in the user's own unit. A ton is a ton, so the threshold and the
-    figure are computed in kilograms. Below a ton there's nothing to convert:
-    their own number in their own unit is what they want to see.
+    `total` is in the user's own unit. A ton is a ton, so the threshold
+    (TONNAGE_TONS_FROM_KG) and the figure are computed in kilograms. Below it
+    there's nothing to convert: their own number in their own unit, grouped
+    by thousands ("1 020кг"), is what they want to see.
 
     For lb the tons never appear at all: the athlete counts in pounds, so any
     size is shown as grouped pounds ("7,050lb") instead of a metric ton.
@@ -643,7 +651,7 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
     if unit == "lb":
         return format_lb_tonnage(total)
     total_kg = to_kg(total, unit)
-    if total_kg >= 1000:
+    if total_kg >= TONNAGE_TONS_FROM_KG:
         tons = round(total_kg / 1000, 1)
         tons_str = format_weight(tons)
         # Дробное количество тонн всегда берёт форму «тонны» независимо от
@@ -652,6 +660,11 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
         # выбирает только слово, число на экране печатает {tons} отдельно.
         plural_n = int(tons) if tons == int(tons) else 2
         return i18n.t("tonnage.total", tons=tons_str, n=plural_n)
+    # `grouped=False` — для поля `rewards.tonnage` в /v1: старые сборки
+    # приложения разбирают его своим TonnageParser, и разделитель разрядов
+    # он ждёт только перед «lb» — «1 020кг» прочитался бы как 1 кг.
+    if grouped and total >= 1000:
+        return f"{group_thousands(total)}{u}"
     return f"{total:.0f}{u}"
 
 
