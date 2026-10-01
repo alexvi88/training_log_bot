@@ -192,7 +192,7 @@ EXERCISE_IMAGE_SLUGS = {
     'Тяга гантелей в наклоне нейтральным хватом': 'bent_over_two_dumbbell_row_with_palms_in',
     'Тяга штанги лёжа на наклонной скамье': 'incline_bench_pull',
     'Подтягивания параллельным хватом': 'v_bar_pullup',
-    'Тяга штанги в наклоне на скамье': 'straight_bar_bench_mid_rows',
+    'Тяга штанги лёжа на скамье': 'straight_bar_bench_mid_rows',
     'Становая тяга с дефицитом': 'deficit_deadlift',
     'Присед в полную амплитуду со штангой': 'barbell_full_squat',
     'Присед на ящик со штангой': 'box_squat',
