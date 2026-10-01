@@ -165,3 +165,19 @@ async def test_lift_tiles_carry_the_exercise_id(fresh_db, client_factory):
         assert set(tile) == {"exercise", "growth", "detail", "exercise_id"}
         assert isinstance(tile["exercise_id"], int)
         assert tile["growth"].startswith("+")
+
+
+@pytest.mark.asyncio
+async def test_app_total_tile_drops_the_30_day_note_when_it_repeats_the_total(fresh_db, client_factory):
+    """Приложение получает плитки из того же formatting.menu_tiles, что и бот:
+    все тренировки внутри 30 дней — `sub` null (не «1  1 за 30 дней»); как
+    только есть тренировка старше окна — приписка возвращается."""
+    client = await _linked_client(fresh_db, client_factory)
+    await _train(111, "Bench Press", days_ago=1)
+
+    first = (await client.get("/dashboard")).json()["tiles"][0]
+    assert (first["value"], first["sub"]) == ("1", None)
+
+    await _train(111, "Squat", days_ago=40)
+    first = (await client.get("/dashboard")).json()["tiles"][0]
+    assert (first["value"], first["sub"]) == ("2", "1 за 30 дней")

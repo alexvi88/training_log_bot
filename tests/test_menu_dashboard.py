@@ -628,3 +628,14 @@ def test_the_total_merges_into_the_30_day_tile():
     assert with_total[0] == ("ТРЕНИРОВОК", "148", "14 за 30 дней")
     assert with_total[1:] == without[1:]
     assert len(with_total) == len(without) == 2
+
+
+def test_the_30_day_note_is_dropped_when_it_repeats_the_total():
+    """Все тренировки уложились в 30 дней (у новичка — всегда): «12  12 за 30
+    дней» — одно число дважды. Приписки нет, плитка — пара; как только итог
+    больше окна, приписка возвращается."""
+    same = formatting.menu_tiles(_dashboard(last_30_days=12), 5000, 2, total_workouts=12)
+    fewer = formatting.menu_tiles(_dashboard(last_30_days=11), 5000, 2, total_workouts=12)
+
+    assert same[0] == ("ТРЕНИРОВОК", "12")
+    assert fewer[0] == ("ТРЕНИРОВОК", "12", "11 за 30 дней")

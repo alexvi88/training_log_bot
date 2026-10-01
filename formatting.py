@@ -1742,11 +1742,13 @@ def menu_tiles(
         # Тройка: подпись, крупное число, мелкая приписка справа от числа.
         # «ТРЕНИРОВОК ВСЕГО / ЗА 30 ДНЕЙ» одной строкой не влезало в плитку —
         # окно ушло в приписку («14 за 30 дней»), подпись осталась одним словом.
-        workouts_tile = (
-            i18n.t("dashboard.tile_total"),
-            str(total_workouts),
-            i18n.t("dashboard.tile_total_sub", n=dashboard.last_30_days),
-        )
+        workouts_tile: tuple = (i18n.t("dashboard.tile_total"), str(total_workouts))
+        # Приписка — только когда окно что-то добавляет к итогу. Если все
+        # тренировки уложились в 30 дней (у новичка — всегда), «12  12 за 30
+        # дней» — одно число дважды, как «ЗА НЕДЕЛЮ 1» рядом с «ЗА 30 ДНЕЙ 1»
+        # ниже. Без приписки плитка остаётся парой, и /v1 отдаёт `sub: null`.
+        if dashboard.last_30_days != total_workouts:
+            workouts_tile += (i18n.t("dashboard.tile_total_sub", n=dashboard.last_30_days),)
     else:
         workouts_tile = (i18n.t("dashboard.tile_workouts", window=days_window_label(30)), str(dashboard.last_30_days))
     # Плитки тоннажа больше нет — ни в приложении, ни на картинке бота:
