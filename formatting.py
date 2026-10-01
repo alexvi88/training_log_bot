@@ -502,10 +502,10 @@ BlockView = ExerciseBlockView
 def format_date_short(d: dt.datetime) -> str:
     """Compact date for the inline e1RM-delta annotation — the year and weekday
     only add width there, since the comparison is always to the most recent prior
-    session. По-русски «25.09», по-английски «Sep 25»: dd.mm англоязычный
-    читатель легко принимает за mm.dd."""
-    if i18n.get_lang() == "ru":
-        return d.strftime("%d.%m")
+    session. «25 сен» / «Sep 25» — словом, а не «25.09»: dd.mm англоязычный
+    читатель легко принимает за mm.dd, а в русской карточке рядом стоит дата
+    шапки «1 окт. 2026 г.», и два формата даты в одной карточке читались
+    как два разных источника (разбор UI, A-27)."""
     month = i18n.t("date.month_short", m=_MONTH_KEYS[d.month - 1])
     return i18n.t("date.day_month", day=d.day, month=month)
 
@@ -625,12 +625,20 @@ def format_lb_tonnage(total_lb: float) -> str:
     return f"{group_thousands(total_lb)}{unit_label('lb')}"
 
 
-def format_tonnage(total: float, unit: str = "kg") -> str:
+# С какой массы тоннаж переходит в тонны. До десяти тонн тонна с одним знаком
+# врала заметнее, чем сокращала: 1020 кг превращались в «1 тонну», и
+# человек видел круглую цифру там, где поднял больше (разбор UI, A-05).
+# Килограммами с разрядами («1 020кг») видно ровно то, что записано.
+TONNAGE_TONS_FROM_KG = 10_000
+
+
+def format_tonnage(total: float, unit: str = "kg", *, grouped: bool = True) -> str:
     """Session/lifetime tonnage as a full word ("тонны"/"тонн"), never abbreviated.
 
-    `total` is in the user's own unit. A ton is a ton, so the threshold and the
-    figure are computed in kilograms. Below a ton there's nothing to convert:
-    their own number in their own unit is what they want to see.
+    `total` is in the user's own unit. A ton is a ton, so the threshold
+    (TONNAGE_TONS_FROM_KG) and the figure are computed in kilograms. Below it
+    there's nothing to convert: their own number in their own unit, grouped
+    by thousands ("1 020кг"), is what they want to see.
 
     For lb the tons never appear at all: the athlete counts in pounds, so any
     size is shown as grouped pounds ("7,050lb") instead of a metric ton.
@@ -643,7 +651,7 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
     if unit == "lb":
         return format_lb_tonnage(total)
     total_kg = to_kg(total, unit)
-    if total_kg >= 1000:
+    if total_kg >= TONNAGE_TONS_FROM_KG:
         tons = round(total_kg / 1000, 1)
         tons_str = format_weight(tons)
         # Дробное количество тонн всегда берёт форму «тонны» независимо от
@@ -652,6 +660,11 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
         # выбирает только слово, число на экране печатает {tons} отдельно.
         plural_n = int(tons) if tons == int(tons) else 2
         return i18n.t("tonnage.total", tons=tons_str, n=plural_n)
+    # `grouped=False` — для поля `rewards.tonnage` в /v1: старые сборки
+    # приложения разбирают его своим TonnageParser, и разделитель разрядов
+    # он ждёт только перед «lb» — «1 020кг» прочитался бы как 1 кг.
+    if grouped and total >= 1000:
+        return f"{group_thousands(total)}{u}"
     return f"{total:.0f}{u}"
 
 
@@ -694,7 +707,7 @@ def _block_record_text(
 
 
 def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = True) -> str | None:
-    """Строка e1RM блока — «↳ e1RM {вес}{ед} ({Δ} vs {дата})», как в карточке
+    """Строка e1RM блока — «↳ e1RM {вес}{ед} ({Δ} к {дате})», как в карточке
     завершения. Молчит без доп. цифр (формула/порог зависят от настроек
     аккаунта — считать их на клиенте нельзя) и для подходов в собственном весе
     тела, где e1RM не считается вовсе.
@@ -716,7 +729,9 @@ def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = Tr
     if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
         when = format_date_short(block.prev_started_at)
         delta = block.top_e1rm - block.prev_top_e1rm
-        vs_prev = f" ({format_delta(delta, unit)} vs {when})"
+        # Связка «к»/«vs» — из каталога: латинское «vs», зашитое в код,
+        # попадало в русский текст (разбор UI, A-27).
+        vs_prev = " " + i18n.t("card.e1rm_vs_prev", delta=format_delta(delta, unit), when=when)
     return f"↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}"
 
 

@@ -24,10 +24,11 @@ def test_lb_tonnage_is_grouped_pounds_in_russian():
 
 def test_kg_tonnage_still_switches_to_tons():
     with i18n.use_lang("en"):
-        assert formatting.format_tonnage(3200, "kg") == "3.2 tons"
+        assert formatting.format_tonnage(13200, "kg") == "13.2 tons"
+        assert formatting.format_tonnage(3200, "kg") == "3,200kg"
         assert formatting.format_tonnage(800, "kg") == "800kg"
     with i18n.use_lang("ru"):
-        assert formatting.format_tonnage(3200, "kg").startswith("3.2 тонны")
+        assert formatting.format_tonnage(13200, "kg").startswith("13.2 тонны")
 
 
 def test_hall_of_fame_lifetime_line_in_lb_has_no_tons():
