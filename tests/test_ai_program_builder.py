@@ -677,7 +677,7 @@ def test_program_button_appears_only_when_a_program_was_proposed():
     # 5.1: подпись — предложение забрать программу, а не голое название (иначе
     # неотличимо от кнопки навигации «открыть программу»).
     assert "Верх/низ" in top.text
-    assert "Взять себе" in top.text
+    assert "Забрать" in top.text
     assert "🗂" in top.text
 
 

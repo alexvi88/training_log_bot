@@ -522,10 +522,6 @@ def _catalog_program_json(program: dict, lang: str) -> dict[str, Any]:
         "key": key,
         "name": seed_data.localized_program_name(key, lang),
         "meta": seed_data.localized_program_meta(key, lang),
-        # Уровень 1–3 (новичкам → средний–продвинутый) — приложение рисует его
-        # значком у названия. Раньше уровень жил эмодзи прямо в имени (🌿/🌱),
-        # и оно утекало в тосты и шаринг (разбор UI, B-11). Ключ добавочный.
-        "level": program.get("level"),
         "description": seed_data.localized_program_description(key, lang),
         "days": [
             {

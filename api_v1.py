@@ -1405,7 +1405,7 @@ async def _finish_rewards_json(
         return {
             "sets": sum(len(block.sets) for block in blocks),
             "exercises": len(blocks),
-            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"], grouped=False)),
+            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"])),
             "tonnage_equivalent": _plain(
                 formatting.format_tonnage_equivalent(
                     tonnage, seed=workout["id"], unit=user["unit"]

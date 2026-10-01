@@ -93,34 +93,50 @@ async def test_relocalize_recognizes_legacy_english_description(fresh_db, user_i
     )
 
 
-# ---------- эмодзи-эпоха: «🌿 Всё тело — 2 дня», «↕️ Верх / Низ» ----------
-#
-# Второй заход дописал эмодзи этим двум программам, четвёртый (B-11) убрал
-# эмодзи у всех. Копии, снятые в любую из эпох, приходят к имени без эмодзи.
+# ---------- эмодзи перед «Всё тело — 2 дня» и «Верх / Низ» ----------
 
-_EMOJI_ERA_NAMES = {
-    ("fullbody2", "ru"): "🌿 Всё тело — 2 дня",
-    ("fullbody2", "en"): "🌿 Full Body — 2 Days",
-    ("upperlower", "ru"): "↕️ Верх / Низ",
-    ("upperlower", "en"): "↕️ Upper / Lower",
+_PRE_EMOJI_NAMES = {
+    ("fullbody2", "ru"): "Всё тело — 2 дня",
+    ("fullbody2", "en"): "Full Body — 2 Days",
+    ("upperlower", "ru"): "Верх / Низ",
+    ("upperlower", "en"): "Upper / Lower",
 }
 
 
-def test_emoji_era_names_are_listed_as_legacy():
-    for (key, lang), old in _EMOJI_ERA_NAMES.items():
+def _lead(name: str) -> str:
+    return name.split(" ", 1)[0]
+
+
+def test_every_catalog_program_leads_with_its_own_emoji():
+    """Заголовки в ленте каталога выстраиваются в колонку только если эмодзи
+    есть у всех; один и тот же у двух программ читался бы как одна."""
+    for lang in ("ru", "en"):
+        leads = [
+            _lead(seed_data.localized_program_name(p["key"], lang)) for p in seed_data.WORKOUT_PROGRAMS
+        ]
+        assert all(not re.match(r"\w", lead) for lead in leads), leads
+        assert len(set(leads)) == len(leads), leads
+    for p in seed_data.WORKOUT_PROGRAMS:
+        assert _lead(seed_data.localized_program_name(p["key"], "ru")) == _lead(
+            seed_data.localized_program_name(p["key"], "en")
+        )
+
+
+def test_pre_emoji_names_are_listed_as_legacy():
+    for (key, lang), old in _PRE_EMOJI_NAMES.items():
         assert old in seed_data.LEGACY_PROGRAM_TEXTS[(key, lang)]["name"]
-        assert old.endswith(" " + seed_data.localized_program_name(key, lang))
+        assert seed_data.localized_program_name(key, lang).endswith(" " + old)
 
 
-async def _emoji_era_copy(db, user_id, key, lang):
+async def _pre_emoji_copy(db, user_id, key, lang):
     with i18n.use_lang(lang):
-        return await seed_data.instantiate_program(user_id, key, _EMOJI_ERA_NAMES[(key, lang)])
+        return await seed_data.instantiate_program(user_id, key, _PRE_EMOJI_NAMES[(key, lang)])
 
 
-async def test_migration_strips_emoji_era_copies(fresh_db, user_id):
+async def test_migration_adds_emoji_to_pre_emoji_copies(fresh_db, user_id):
     db = fresh_db
-    ids = {k: await _emoji_era_copy(db, user_id, *k) for k in _EMOJI_ERA_NAMES}
-    # База, уже прошедшая первые заходы (v7), тоже должна получить последний.
+    ids = {k: await _pre_emoji_copy(db, user_id, *k) for k in _PRE_EMOJI_NAMES}
+    # База, уже прошедшая первый заход (v7), тоже должна получить второй.
     await db.conn().execute("PRAGMA user_version = 7")
     await db.conn().commit()
     await db._run_one_shot_migrations()
@@ -139,11 +155,11 @@ async def test_migration_leaves_own_program_with_old_name_alone(fresh_db, user_i
     assert (await db.get_program(manual_id))["name"] == "Верх / Низ"
 
 
-async def test_relocalize_translates_emoji_era_copy(fresh_db, user_id):
+async def test_relocalize_translates_pre_emoji_copy(fresh_db, user_id):
     """Копия, миграцией не тронутая (новое имя было занято), всё равно
     считается нетронутой — смена языка её переводит."""
     db = fresh_db
-    program_id = await _emoji_era_copy(db, user_id, "fullbody2", "ru")
+    program_id = await _pre_emoji_copy(db, user_id, "fullbody2", "ru")
     await db.set_user_lang(user_id, "en")
     assert (await db.get_program(program_id))["name"] == seed_data.localized_program_name("fullbody2", "en")
 
@@ -152,7 +168,7 @@ async def test_readding_after_migration_is_name_taken_not_duplicate(fresh_db, us
     """Сквозь /v1: копия до эмодзи → миграция → «➕ Добавить себе» отвечает
     409, а не заводит вторую программу под новым именем."""
     db = fresh_db
-    await _emoji_era_copy(db, user_id, "upperlower", "ru")
+    await _pre_emoji_copy(db, user_id, "upperlower", "ru")
     await _rerun_migration(db)
 
     code = await db.issue_oauth_link_code(user_id, ttl_seconds=600, digits=8)
@@ -192,7 +208,7 @@ async def _rerun_from_v9(db):
 
 
 def test_ppl_catalog_text_is_not_a_calque():
-    assert seed_data.localized_program_name("ppl", "ru") == "Push/Pull/Legs (жим, тяга, ноги)"
+    assert seed_data.localized_program_name("ppl", "ru") == "🔁 Push/Pull/Legs (жим, тяга, ноги)"
     assert [seed_data.localized_program_day_name("ppl", i, "ru") for i in range(3)] == [
         "Жим", "Тяга", "Ноги",
     ]
@@ -215,7 +231,7 @@ async def test_migration_renames_old_ppl_copy_and_keeps_history(fresh_db, user_i
 
     await _rerun_from_v9(db)
 
-    assert (await db.get_program(program_id))["name"] == "Push/Pull/Legs (жим, тяга, ноги)"
+    assert (await db.get_program(program_id))["name"] == "🔁 Push/Pull/Legs (жим, тяга, ноги)"
     days_after = await db.list_program_days_by_id(program_id)
     assert [d["id"] for d in days_after] == [d["id"] for d in days_before]
     assert [d["name"] for d in days_after] == ["Жим", "Тяга", "Ноги"]
@@ -280,46 +296,3 @@ async def test_readding_ppl_after_migration_is_name_taken(fresh_db, user_id):
         "SELECT COUNT(*) FROM programs WHERE user_id = ? AND source_ref = 'ppl'", (user_id,)
     )
     assert (await cur.fetchone())[0] == 1
-
-
-# ---------- эмодзи из имён каталога убраны (B-11) ----------
-
-_EMOJI = re.compile(r"[\U0001F300-\U0001FAFF←-⇿☀-➿️]")
-
-
-def test_catalog_names_have_no_emoji_and_carry_a_level():
-    """Уровень — полем `level`, а не ростком в имени: эмодзи утекал в тосты,
-    заголовки и шаринг, а 🌿 и 🌱 было не отличить."""
-    for program in seed_data.WORKOUT_PROGRAMS:
-        key = program["key"]
-        for lang in ("ru", "en"):
-            name = seed_data.localized_program_name(key, lang)
-            assert not _EMOJI.search(name), (key, lang, name)
-        assert program["level"] in (1, 2, 3), key
-
-
-async def test_migration_strips_emoji_from_untouched_copies(fresh_db, user_id):
-    db = fresh_db
-    with i18n.use_lang("ru"):
-        untouched = await seed_data.instantiate_program(user_id, "fullbody3", "🌱 Всё тело — 3 дня")
-        renamed = await seed_data.instantiate_program(user_id, "split3", "🌱 Мой сплит")
-    await db.conn().execute("PRAGMA user_version = 10")
-    await db.conn().commit()
-    await db._run_one_shot_migrations()
-
-    assert (await db.get_program(untouched))["name"] == "Всё тело — 3 дня"
-    # Своё имя атлета миграция не трогает, даже с эмодзи.
-    assert (await db.get_program(renamed))["name"] == "🌱 Мой сплит"
-
-
-async def test_catalog_json_has_level(fresh_db, user_id):
-    db = fresh_db
-    code = await db.issue_oauth_link_code(user_id, ttl_seconds=600, digits=8)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api_v1.build_app()), base_url="http://test"
-    ) as client:
-        token = (await client.post("/auth/link", json={"code": code})).json()["token"]
-        client.headers["Authorization"] = f"Bearer {token}"
-        catalog = (await client.get("/programs/catalog")).json()
-    assert {p["key"]: p["level"] for p in catalog}["fullbody2"] == 1
-    assert all(not _EMOJI.search(p["name"]) for p in catalog)
