@@ -364,8 +364,7 @@ def localized_exercise_name(canonical_name: str, lang: str) -> str:
 WORKOUT_PROGRAMS = [
     {
         "key": "fullbody2",
-        "name": "Всё тело — 2 дня",
-        "level": 1,
+        "name": "🌿 Всё тело — 2 дня",
         "meta": "новичкам · 2 тренировки в неделю",
         "description": (
             "Для тех, у кого на зал два вечера в неделю. Каждая тренировка "
@@ -394,8 +393,7 @@ WORKOUT_PROGRAMS = [
     },
     {
         "key": "fullbody3",
-        "name": "Всё тело — 3 дня",
-        "level": 1,
+        "name": "🌱 Всё тело — 3 дня",
         "meta": "новичкам · 3 тренировки в неделю",
         "description": (
             "Классика для старта. Три похожие тренировки на всё тело за неделю "
@@ -431,8 +429,7 @@ WORKOUT_PROGRAMS = [
     },
     {
         "key": "strength5x5",
-        "name": "Сила 5×5 — A/B",
-        "level": 1,
+        "name": "🏋️ Сила 5×5 — A/B",
         "meta": "новичкам на силу · 3 тренировки в неделю",
         "description": (
             "Пять подходов по пять, три больших движения за тренировку, "
@@ -457,8 +454,7 @@ WORKOUT_PROGRAMS = [
     },
     {
         "key": "upperlower",
-        "name": "Верх / Низ",
-        "level": 2,
+        "name": "↕️ Верх / Низ",
         "meta": "средний уровень · 2–4 тренировки в неделю",
         "description": (
             "Тело делится на верх и низ, каждый прорабатывается дважды в неделю. "
@@ -487,8 +483,7 @@ WORKOUT_PROGRAMS = [
     },
     {
         "key": "ppl",
-        "name": "Push/Pull/Legs (жим, тяга, ноги)",
-        "level": 3,
+        "name": "🔁 Push/Pull/Legs (жим, тяга, ноги)",
         "meta": "средний–продвинутый · 3–6 тренировок в неделю",
         "description": (
             "Тренировки бьются по функции: жимовые мышцы, "
@@ -524,8 +519,7 @@ WORKOUT_PROGRAMS = [
     },
     {
         "key": "split3",
-        "name": "Сплит на 3 дня",
-        "level": 2,
+        "name": "💪 Сплит на 3 дня",
         "meta": "средний уровень · 3 тренировки в неделю",
         "description": (
             "Бро-сплит: каждая тренировка — своя пара групп. Грудь с трицепсом, "
@@ -558,8 +552,7 @@ WORKOUT_PROGRAMS = [
     },
     {
         "key": "glutes3",
-        "name": "Ягодицы и ноги — 3 дня",
-        "level": 2,
+        "name": "🦵 Ягодицы и ноги — 3 дня",
         "meta": "низ тела в приоритете · 3 тренировки в неделю",
         "description": (
             "Низ тела получает три дня, верх — минимум, чтобы не отставал. "
@@ -666,39 +659,16 @@ def localized_program_day_name(key: str, day_index: int, lang: str) -> str:
 # базе ещё раз (она идемпотентна).
 # Второй заход — эмодзи перед «Всё тело — 2 дня» и «Верх / Низ»: только у этих
 # двух программ каталога его не было, и заголовки в ленте каталога приложения
-# не выстраивались в колонку. Четвёртый — эмодзи убраны у всех (см. ниже).
+# не выстраивались в колонку.
 LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
-    # Четвёртый заход (разбор UI, B-11): эмодзи из имён убраны совсем. 🌿 и 🌱
-    # для «2 дня» и «3 дня» были почти неотличимы, ни одного из семи не было
-    # в словаре эмодзи (TONE_OF_VOICE.md), а раз эмодзи — часть имени, он
-    # утекал в «Удалил программу «🌿 …»», заголовки и шаринг. Уровень теперь —
-    # отдельное поле `level` каталога, приложение рисует его значком.
-    ("split3", "ru"): {
-        "name": ("💪 Сплит на 3 дня",),
-    },
-    ("glutes3", "ru"): {
-        "name": ("🦵 Ягодицы и ноги — 3 дня",),
-    },
-    ("fullbody3", "en"): {
-        "name": ("🌱 Full Body — 3 Days",),
-    },
-    ("split3", "en"): {
-        "name": ("💪 3-Day Split",),
-    },
-    ("glutes3", "en"): {
-        "name": ("🦵 Glutes & Legs — 3 Days",),
-    },
-    ("ppl", "en"): {
-        "name": ("🔁 Push / Pull / Legs",),
-    },
     ("fullbody2", "ru"): {
-        "name": ("🌿 Всё тело — 2 дня",),
+        "name": ("Всё тело — 2 дня",),
     },
     ("fullbody2", "en"): {
-        "name": ("🌿 Full Body — 2 Days",),
+        "name": ("Full Body — 2 Days",),
     },
     ("upperlower", "ru"): {
-        "name": ("Верх / Низ — 4 дня", "↕️ Верх / Низ"),
+        "name": ("Верх / Низ — 4 дня", "Верх / Низ"),
         "description": (
             "Тело делится на верх и низ, каждый прорабатывается дважды в неделю. "
             "Больше объёма на группу, чем в full body, но восстановиться проще, "
@@ -707,10 +677,9 @@ LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
         ),
     },
     ("upperlower", "en"): {
-        "name": ("Upper / Lower — 4 Days", "↕️ Upper / Lower"),
+        "name": ("Upper / Lower — 4 Days", "Upper / Lower"),
     },
     ("fullbody3", "ru"): {
-        "name": ("🌱 Всё тело — 3 дня",),
         "description": (
             "Классика для старта. Три похожие тренировки на всё тело за неделю "
             "(например пн/ср/пт). Базовые движения, минимум изоляции — быстро "
@@ -718,7 +687,6 @@ LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
         ),
     },
     ("strength5x5", "ru"): {
-        "name": ("🏋️ Сила 5×5 — A/B",),
         "description": (
             "Пять подходов по пять, три больших движения за тренировку, "
             "чередуешь день A и день B: A-B-A на одной неделе, B-A-B на "
@@ -727,7 +695,6 @@ LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
         ),
     },
     ("strength5x5", "en"): {
-        "name": ("🏋️ Strength 5×5 — A/B",),
         "description": (
             "Five sets of five, three big lifts a session, alternating day A and "
             "day B: A-B-A one week, B-A-B the next. No isolation on purpose — the "
@@ -739,7 +706,7 @@ LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
         # Третий заход (B-12): «Толкай / Тяни» — калька с push/pull, в зале
         # так не говорят. Имя дня — тоже снимок в routines.name, поэтому
         # прежние имена дней лежат здесь же под "day.<индекс>".
-        "name": ("🔁 Толкай / Тяни / Ноги", "🔁 Push/Pull/Legs (жим, тяга, ноги)"),
+        "name": ("🔁 Толкай / Тяни / Ноги",),
         "day.0": ("Толкай",),
         "day.1": ("Тяни",),
         "description": (
@@ -749,6 +716,26 @@ LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
         ),
     },
 }
+
+# Пятый заход — откат #732. Тот PR снял эмодзи со всех имён каталога, и на
+# проде миграция v11 уже переписала нетронутые копии на имена без эмодзи.
+# Каталог вернулся к именам с эмодзи, поэтому имена без эмодзи — теперь тоже
+# «прежний текст»: по ним v12 возвращает такие копии к текущему каталогу.
+_NAMES_WITHOUT_EMOJI: dict[tuple[str, str], str] = {
+    ("fullbody3", "ru"): "Всё тело — 3 дня",
+    ("strength5x5", "ru"): "Сила 5×5 — A/B",
+    ("ppl", "ru"): "Push/Pull/Legs (жим, тяга, ноги)",
+    ("split3", "ru"): "Сплит на 3 дня",
+    ("glutes3", "ru"): "Ягодицы и ноги — 3 дня",
+    ("fullbody3", "en"): "Full Body — 3 Days",
+    ("strength5x5", "en"): "Strength 5×5 — A/B",
+    ("ppl", "en"): "Push / Pull / Legs",
+    ("split3", "en"): "3-Day Split",
+    ("glutes3", "en"): "Glutes & Legs — 3 Days",
+}
+for _key, _name in _NAMES_WITHOUT_EMOJI.items():
+    _entry = LEGACY_PROGRAM_TEXTS.setdefault(_key, {})
+    _entry["name"] = (*_entry.get("name", ()), _name)
 
 
 def legacy_program_texts(key: str, field: str) -> set[str]:

@@ -20,7 +20,6 @@ from typing import Any, Iterable, Optional
 import analytics
 import db
 import formatting
-import i18n
 import timeutil
 
 # Окно роста e1RM. У истории моложе восьми недель «рост за 8 недель» врёт: вся
@@ -54,9 +53,6 @@ class MenuDashboard:
     lift_tiles: list[tuple[str, str, str, int]] = field(default_factory=list)
     lifts_title: str = ""
     lifts_note: str = ""
-    #: Строка живых данных под плитками «Меню» приложения: раздел → текст или
-    #: None (данных нет — строки нет, а не «0»). См. menu_lines ниже.
-    menu_lines: dict[str, Optional[str]] = field(default_factory=dict)
 
 
 async def collect(
@@ -139,13 +135,6 @@ async def collect(
         analytics.workouts_per_week(dates, today),
     )
     lift_tiles = formatting.menu_lift_tiles(growth, user["unit"])
-    lines = await menu_lines(
-        user_id, rank,
-        total_workouts=len(dates),
-        tonnage_kg=formatting.to_kg(agg["tonnage"], user["unit"]),
-        per_week=analytics.workouts_per_week(dates, today),
-        growth=growth, lift_tiles=lift_tiles, lift_window_weeks=lift_window_weeks, unit=user["unit"],
-    )
     return MenuDashboard(
         headline=formatting.menu_headline(dashboard),
         rank_name=rank.name,
@@ -159,67 +148,7 @@ async def collect(
         lift_tiles=lift_tiles,
         lifts_title=formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "",
         lifts_note=formatting.MENU_LIFTS_NOTE,
-        menu_lines=lines,
     )
-
-
-async def menu_lines(
-    user_id: int,
-    rank: "analytics.Rank",
-    *,
-    total_workouts: int,
-    tonnage_kg: float,
-    per_week: float,
-    growth: list[tuple[str, float, float, int]],
-    lift_tiles: list[tuple],
-    lift_window_weeks: int,
-    unit: str = "kg",
-) -> dict[str, Optional[str]]:
-    """По строке живых данных на плитки «Меню» приложения.
-
-    Плитки без данных выглядели одинаково и не подсказывали, куда идти
-    (разбор UI, B-03). Здесь — только то, что подтверждают данные атлета
-    (TONE_OF_VOICE.md, «Пуш обязан быть правдой»): нет роста — нет строки
-    прогресса, а не «+0%»; до звания называется недостача, только когда
-    отстаёт одна ось, — иначе «ещё 3 тренировки» было бы неправдой, ведь
-    после них звание всё равно не дадут.
-
-    История и дневник веса сюда не входят: последнюю тренировку и последний
-    вес приложение и так держит у себя (`/workouts`, `/bodyweight`).
-    """
-    lines: dict[str, Optional[str]] = {
-        "progress": None, "exercises": None, "programs": None, "achievements": None,
-    }
-    if lift_tiles:
-        top_id = lift_tiles[0][3]
-        name = next((n for n, _b, _w, ex_id in growth if ex_id == top_id), None)
-        if name:
-            lines["progress"] = i18n.t(
-                "menu.line.progress", exercise=name, growth=lift_tiles[0][1],
-                weeks=lift_window_weeks,
-            )
-    exercises = await db.count_user_exercises(user_id)
-    if exercises:
-        lines["exercises"] = i18n.t("menu.line.exercises", n=exercises)
-    programs = await db.list_programs(user_id)
-    # Первая — та, по которой тренировался последней (порядок list_programs):
-    # рабочая программа, а не первая заведённая.
-    lines["programs"] = programs[0]["name"] if programs else i18n.t("menu.line.programs_catalog")
-    nxt = analytics.next_rank(rank)
-    if nxt is not None:
-        lagging = sum((
-            total_workouts < nxt.min_workouts,
-            tonnage_kg < nxt.min_tonnage_kg,
-            per_week < nxt.min_per_week,
-        ))
-        gap = analytics.rank_gap(rank, total_workouts, tonnage_kg, per_week) if lagging == 1 else None
-        if gap is not None:
-            lines["achievements"] = i18n.t(
-                "menu.line.rank_gap", name=nxt.name, gap=formatting.format_rank_gap(gap, unit)
-            )
-    if lines["achievements"] is None:
-        lines["achievements"] = i18n.t("menu.line.rank", name=rank.name)
-    return lines
 
 
 async def rank_promotion(user_id: int, user) -> "analytics.Rank | None":

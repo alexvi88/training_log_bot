@@ -64,7 +64,6 @@ import apple_signin
 import config
 import dashboard_data
 import db
-import finish_summary
 import formatting
 import history_search_data
 import i18n
@@ -1384,12 +1383,7 @@ async def _finish_rewards_json(
     показывается, как и в боте: такие записи вносятся не по порядку, и счётчик
     по ним сообщал бы не то, что человек подумает.
     """
-    # С прошлым разом и рекордами (как у карточки бота): по ним собирается
-    # `summary` — главный факт тренировки для листа итогов (finish_summary).
-    blocks = await view_builder.build_block_views(
-        workout["id"], user["e1rm_formula"],
-        previous_before=workout["started_at"], mark_records=True, workout=workout,
-    )
+    blocks = await view_builder.build_block_views(workout["id"], user["e1rm_formula"])
     tonnage = sum(block.load_tonnage for block in blocks)
     with i18n.use_lang(user["lang"]):
         milestone = None
@@ -1405,7 +1399,7 @@ async def _finish_rewards_json(
         return {
             "sets": sum(len(block.sets) for block in blocks),
             "exercises": len(blocks),
-            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"], grouped=False)),
+            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"])),
             "tonnage_equivalent": _plain(
                 formatting.format_tonnage_equivalent(
                     tonnage, seed=workout["id"], unit=user["unit"]
@@ -1429,11 +1423,6 @@ async def _finish_rewards_json(
                 }
             ),
             "milestone": milestone,
-            # Новое поле: старые сборки его не читают и рисуют тоннаж, как
-            # раньше. Форма — finish_summary.collect.
-            "summary": await finish_summary.collect(
-                workout, user, blocks, was_backfill=was_backfill
-            ),
         }
 
 

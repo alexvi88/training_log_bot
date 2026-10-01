@@ -42,6 +42,5 @@ def test_formatted_weights_have_no_space_before_the_unit():
         assert formatting.format_rank_gap(analytics.RankGap("tonnage", 20)) == "20kg to go"
         assert formatting.format_tonnage(800, "lb") == "800lb"
         # Полное слово — через пробел: это слово, а не сокращение единицы.
-        assert formatting.format_tonnage(13200, "kg") == "13.2 tons"
-        assert formatting.format_tonnage(3200, "kg") == "3,200kg"
+        assert formatting.format_tonnage(3200, "kg") == "3.2 tons"
 

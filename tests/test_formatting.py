@@ -27,19 +27,6 @@ def test_format_tonnage_never_abbreviates():
     assert formatting.format_tonnage(500) == "500кг"
 
 
-def test_format_tonnage_below_ten_tons_is_grouped_kilograms():
-    """1020 кг — это не «1 тонна»: до десяти тонн тонна с одним знаком
-    огрубляла до круглой цифры (разбор UI, A-05)."""
-    assert formatting.format_tonnage(1020) == "1\u00a0020кг"
-    assert formatting.format_tonnage(9999) == "9\u00a0999кг"
-    assert formatting.format_tonnage(10000) == "10 тонн"
-    with i18n.use_lang("en"):
-        assert formatting.format_tonnage(4100) == "4,100kg"
-    # Для /v1 rewards.tonnage — без разрядов: старый TonnageParser приложения
-    # ждёт разделитель только перед «lb».
-    assert formatting.format_tonnage(1020, grouped=False) == "1020кг"
-
-
 def test_format_date_ru_includes_weekday():
     d = dt.datetime(2026, 6, 26)  # Friday
     assert formatting.format_date_ru(d) == "26.06.2026 (пт)"
