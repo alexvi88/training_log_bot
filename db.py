@@ -1749,7 +1749,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 
 async def _run_one_shot_migrations() -> None:
@@ -1778,10 +1778,11 @@ async def _run_one_shot_migrations() -> None:
         await _backfill_bodyweight_load()
     if version < 6:
         await _move_default_abs_exercises()
-    if version < 10:
+    if version < 11:
         # v7 — первый заход («Верх / Низ — 4 дня» → «Верх / Низ»), v8 — эмодзи
         # перед «Всё тело — 2 дня» и «Верх / Низ», v10 — «Толкай / Тяни / Ноги»
-        # → «Push/Pull/Legs (жим, тяга, ноги)» вместе с именами дней: та же
+        # → «Push/Pull/Legs (жим, тяга, ноги)» вместе с именами дней, v11 —
+        # эмодзи из всех имён каталога убраны (уровень — поле `level`): та же
         # миграция по дополненной seed_data.LEGACY_PROGRAM_TEXTS. Идемпотентна —
         # базе, прошедшей v7/v8, повтор ничего лишнего не перепишет.
         await _migrate_legacy_catalog_program_texts()
