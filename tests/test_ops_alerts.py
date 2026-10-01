@@ -217,6 +217,34 @@ async def test_only_first_crash_of_its_kind_in_build_alerts(fresh_db, alerts):
     assert "1.4 (58)" in texts[2]
 
 
+@pytest.mark.asyncio
+async def test_keychain_save_failure_alerts_once_per_build_with_its_code(fresh_db, alerts):
+    """Клиент сам шлёт `keychain_save_failed`, когда Keychain не принял токен
+    входа (iOS `KeychainStore.save`): метаданные — в той же форме, что у
+    MetricKit, код Keychain — `exceptionCode`."""
+    queue = await alerts()
+    api_v1_diagnostics.reset_rate_limit()
+    payload = {
+        "account": "default",
+        "diagnosticMetaData": {
+            "appVersion": "1.0", "appBuildVersion": "37", "osVersion": "iPhone OS 18.0",
+            "deviceType": "iPhone17,1", "exceptionCode": -34018,
+        },
+    }
+    transport = httpx.ASGITransport(app=api_v1.build_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for _ in range(2):
+            resp = await client.post(
+                "/diagnostics", json={"kind": "keychain_save_failed", "payload": payload}
+            )
+            assert resp.status_code == 201, resp.text
+    await asyncio.sleep(0)
+    texts = _drain(queue)
+    assert len(texts) == 1
+    assert "Keychain не сохранил вход" in texts[0]
+    assert "1.0 (37)" in texts[0] and "code -34018" in texts[0]
+
+
 # --- часовые проверки --------------------------------------------------------------
 
 

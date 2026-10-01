@@ -603,6 +603,7 @@ _KIND_LABELS = {
     "hang": "зависания",
     "cpu_exception": "перерасход CPU",
     "disk_write_exception": "запись на диск",
+    "keychain_save_failed": "Keychain не сохранил вход",
 }
 
 
