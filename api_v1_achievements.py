@@ -52,6 +52,10 @@ def _achievement_json(a: "achievements.Achievement", earned_at: str | None) -> d
         "emoji": a.emoji,
         "title": a.title,
         "description": a.description,
+        # Условие значка повелительным («Подними 140кг в одном подходе») —
+        # показывать вместо `description`, пока значок не взят: тот звучит
+        # как уже сделанное. Отдаём всегда, решение — по `earned`.
+        "goal": a.goal,
         "earned": earned_at is not None,
         "earned_at": earned_at,
     }
@@ -88,6 +92,9 @@ def _nearest_json(bp: "achievements.BadgeProgress", unit: str) -> dict[str, Any]
         "emoji": a.emoji,
         "title": a.title,
         "description": a.description,
+        # Значок здесь всегда не взят — подпись под ним `goal`, а не
+        # `description` (см. _achievement_json).
+        "goal": a.goal,
         "current": current,
         "target": target,
         "remaining": round(max(target - current, 0.0), 1) if is_weight else bp.remaining,

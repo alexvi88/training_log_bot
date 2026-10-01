@@ -55,6 +55,10 @@ async def test_list_for_fresh_user_has_full_catalog_none_earned(fresh_db, client
     first = next(a for a in body if a["code"] == "first")
     assert first["title"]
     assert first["description"]
+    # Пока не взят — условие в повелительном рядом с прежним описанием.
+    club = next(a for a in body if a["code"] == "club140")
+    assert club["goal"] == "Подними 140кг в одном подходе"
+    assert club["description"] == "Поднял 140кг в одном подходе"
 
 
 @pytest.mark.asyncio
@@ -146,6 +150,7 @@ async def test_nearest_reports_progress_toward_unearned_badge(fresh_db, client_f
     assert body[0]["target"] == 10
     assert body[0]["remaining"] == 1
     assert body[0]["title"]
+    assert body[0]["goal"] == "Проведи 10 тренировок"
 
 
 @pytest.mark.asyncio
