@@ -2992,6 +2992,17 @@ _VISIBLE_EXERCISE_FILTER = (
 )
 
 
+# Сколько подходов реально записано на упражнение — по всем тренировкам
+# атлета (упражнения и так личные, чужих подходов на e.id быть не может).
+# usage_count для этого не годится: он считает и тренировку, куда упражнение
+# добавили, но не сделали ни одного подхода. Экрану «Прогресс» в приложении
+# нужно именно «есть что показать». Коррелированный подзапрос идёт по
+# idx_sets_exercise — один запрос на весь список, без N+1. Брошенная
+# тренировка (discard_workout) стирает свои подходы, так что считать их тут
+# не придётся.
+_SET_COUNT_COLUMN = "(SELECT COUNT(*) FROM sets s WHERE s.exercise_id = e.id) AS set_count"
+
+
 async def list_user_exercises_in_group(
     user_id: int, group_id: int, limit: Optional[int] = None, offset: int = 0
 ) -> list[aiosqlite.Row]:
@@ -2999,7 +3010,8 @@ async def list_user_exercises_in_group(
         "SELECT e.*, "
         "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
         "   JOIN workout_blocks wb ON wb.id = be.block_id "
-        "   WHERE be.exercise_id = e.id) AS usage_count "
+        "   WHERE be.exercise_id = e.id) AS usage_count, "
+        f"{_SET_COUNT_COLUMN} "
         "FROM exercises e "
         "WHERE e.user_id = ? AND e.primary_group_id = ? "
         "AND e.is_archived = 0 AND e.is_template = 0 "
@@ -3032,7 +3044,8 @@ async def list_user_exercises(
         "SELECT e.*, "
         "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
         "   JOIN workout_blocks wb ON wb.id = be.block_id "
-        "   WHERE be.exercise_id = e.id) AS usage_count "
+        "   WHERE be.exercise_id = e.id) AS usage_count, "
+        f"{_SET_COUNT_COLUMN} "
         "FROM exercises e "
         "WHERE e.user_id = ? "
         "AND e.is_archived = 0 AND e.is_template = 0 "

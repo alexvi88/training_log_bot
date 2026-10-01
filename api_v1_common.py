@@ -369,7 +369,7 @@ def exercise_json(row) -> dict[str, Any]:
     """Сериализация упражнения — общая для api_v1.py (CRUD своих упражнений)
     и api_v1_templates.py (форк каталожного шаблона возвращает уже свою
     заведённую копию тем же форматом, каким её потом отдаст GET /exercises)."""
-    return {
+    data = {
         "id": row["id"],
         "display_name": row["display_name"],
         "original_name": row["original_name"],
@@ -394,6 +394,13 @@ def exercise_json(row) -> dict[str, Any]:
         # только ссылкой в Telegram, ручка /photo отдать не может.
         "has_photo": exercise_photos.path_for_exercise(row) is not None,
     }
+    # Число записанных подходов — только у строк списка GET /exercises
+    # (db.list_user_exercises*), остальные выборки (поиск, архив, создание,
+    # форк шаблона) этой колонки не несут и поля не получают. `.keys()` здесь
+    # нужен: `in` у sqlite3.Row ищет по значениям, а не по именам колонок.
+    if "set_count" in row.keys():  # noqa: SIM118
+        data["set_count"] = row["set_count"]
+    return data
 
 
 def query_int(request: Request, key: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
