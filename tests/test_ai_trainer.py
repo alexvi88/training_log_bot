@@ -2128,3 +2128,17 @@ async def test_prompt_keeps_program_answer_short():
     assert "без таблиц" in prompt
     assert "состав и подходы видны в превью программы" in prompt
     assert "только если цель масса или сушка" in prompt
+
+
+async def test_prompt_replaces_pullups_for_beginners():
+    """Новичку ставились подтягивания 3×5–10, хотя многие не сделают и пяти, а
+    замены не было. Замена — тяга верхнего блока, и она есть в каталоге."""
+    import seed_data
+
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "лучший подход меньше 5 повторов" in prompt
+    assert "«Тяга верхнего блока»" in prompt
+    assert "как цель на будущее" in prompt
+    assert "Дома без блока" in prompt
+    catalog = {name for _, name in seed_data.EXERCISE_TEMPLATES}
+    assert "Тяга верхнего блока" in catalog
