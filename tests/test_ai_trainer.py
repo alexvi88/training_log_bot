@@ -2116,3 +2116,15 @@ async def test_prompt_names_stored_limitation_used_for_program():
     assert "из его прежних слов" in prompt
     assert "Учёл колено, про которое ты говорил раньше" in prompt
     assert "на языке ответа" in prompt
+
+
+async def test_prompt_keeps_program_answer_short():
+    """Ответ на собранную программу занимал 400–700 слов: разделы, таблицы
+    объёма, питание, добавки — три экрана текста на телефоне под программой.
+    Теперь рамка из четырёх частей и ориентир 150–200 слов."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Рамка ответа — четыре части" in prompt
+    assert "150–200 слов" in prompt
+    assert "без таблиц" in prompt
+    assert "состав и подходы видны в превью программы" in prompt
+    assert "только если цель масса или сушка" in prompt
