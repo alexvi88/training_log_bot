@@ -10,6 +10,7 @@ import json
 import ai_trainer
 import config
 import formatting
+import i18n
 import keyboards
 
 # asyncio_mode=auto (pytest.ini) — async-тестам маркер не нужен, а часть
@@ -1298,3 +1299,53 @@ async def test_weekly_volume_skips_exercises_without_a_set_count(fresh_db, user_
 
     assert "Грудь" not in payload["weekly_sets_by_group"]
     assert payload["weekly_sets_by_group"]["Ноги"] == 3
+
+
+# ---------- недельный объём под превью — числа от кода, не от модели ----------
+
+async def _two_day_draft(user_id: int) -> dict:
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "Верх/низ",
+            "days": [
+                _day("День 1", [
+                    {"name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 8},
+                    {"name": TEMPLATE_B, "sets": 4, "reps_min": 5, "reps_max": 8},
+                ]),
+                _day("День 2", [{"name": TEMPLATE_B, "sets": 4, "reps_min": 6, "reps_max": 10}]),
+            ],
+        },
+    )
+    assert draft is not None
+    return draft
+
+
+async def test_preview_shows_weekly_sets_counted_by_code_ru(fresh_db, user_id):
+    """В живом прогоне тренер сам писал таблицу объёма, и она не сходилась с
+    программой. Теперь строку под превью считает код: по убыванию, без нулей."""
+    draft = await _two_day_draft(user_id)
+
+    rows = await ai_trainer.program_weekly_sets(user_id, draft["days"])
+    assert rows == [{"group": "Ноги", "sets": 8}, {"group": "Грудь", "sets": 3}]
+
+    text = formatting.build_ai_program_preview(draft["name"], draft["days"], weekly_sets=rows)
+    assert "Подходов в неделю: ноги 8 · грудь 3" in text
+
+
+async def test_preview_shows_weekly_sets_counted_by_code_en(fresh_db, user_id):
+    draft = await _two_day_draft(user_id)
+    await fresh_db.update_user(user_id, lang="en")
+
+    with i18n.use_lang("en"):
+        rows = await ai_trainer.program_weekly_sets(user_id, draft["days"])
+        text = formatting.build_ai_program_preview(draft["name"], draft["days"], weekly_sets=rows)
+
+    assert rows == [{"group": "Legs", "sets": 8}, {"group": "Chest", "sets": 3}]
+    assert "Sets per week: legs 8 · chest 3" in text
+
+
+def test_preview_without_countable_sets_has_no_volume_line():
+    days = [{"name": "День 1", "items": [{"name": "Жим", "source": "own"}]}]
+    assert "Подходов в неделю" not in formatting.build_ai_program_preview("П", days, weekly_sets=[])
+    assert "Подходов в неделю" not in formatting.build_ai_program_preview("П", days)

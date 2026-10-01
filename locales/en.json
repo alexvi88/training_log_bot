@@ -1091,6 +1091,7 @@
   "program.upperlower.description": "Body splits into upper and lower, each trained twice a week. More volume per group than full body, easier to recover from than a daily split. Only got two evenings? Run the same two days once a week instead.",
   "program.upperlower.meta": "intermediate · 2–4 workouts a week",
   "program.upperlower.name": "↕️ Upper / Lower",
+  "program.weekly_sets": "Sets per week: {groups}",
   "progress.e1rm_delta": "e1RM: {delta} {since}",
   "progress.e1rm_hint": "ℹ️ <i>e1RM — your estimated one-rep max: the weight you could probably lift once (I count it from your weights, reps and RPE — @9 means you left one rep in the tank).</i>",
   "progress.need_second_session": "Log this exercise once more and I'll draw the chart",

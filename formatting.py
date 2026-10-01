@@ -1406,9 +1406,19 @@ def _editable_later() -> str:
     return i18n.t("program.editable_later")
 
 
+def format_weekly_sets(rows: Optional[list[dict]]) -> Optional[str]:
+    """«Подходов в неделю: грудь 9 · спина 9 · ноги 13» — из готовых строк
+    ai_trainer.program_weekly_sets (порядок и нули решены там). None — если
+    считать нечего: пустую строку объёма не показываем."""
+    if not rows:
+        return None
+    groups = " · ".join(f"{escape(r['group'].lower())} {r['sets']}" for r in rows)
+    return i18n.t("program.weekly_sets", groups=groups)
+
+
 def build_ai_program_preview(
     name: str, days: list[dict], replaces: Optional[dict] = None, notes: Optional[list[str]] = None,
-    unit: Optional[str] = None,
+    unit: Optional[str] = None, weekly_sets: Optional[list[dict]] = None,
 ) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
@@ -1432,6 +1442,10 @@ def build_ai_program_preview(
 
     `unit` — "kg"/"lb" пользователя для строк прогрессии («прибавь 2.5кг»,
     см. format_progression_rule); без него — нейтральное «к весу».
+
+    `weekly_sets` — ai_trainer.program_weekly_sets: подходы в неделю по группам,
+    посчитанные кодом. Одной строкой под составом, в хвосте — чтобы обрезка
+    состава её не съела.
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -1471,6 +1485,9 @@ def build_ai_program_preview(
                 composition.append(f"   ⤴️ {escape(i18n.t(_PROGRESSION_KIND_KEYS[kind]))}")
 
     tail = ["", DIVIDER]
+    volume_line = format_weekly_sets(weekly_sets)
+    if volume_line:
+        tail = ["", volume_line] + tail
     if replaces:
         tail.append(i18n.t("program.replaces_tail", name=escape(replaces["name"])))
     elif len(days) == 1:

@@ -593,6 +593,11 @@ async def test_ask_returns_program_draft_with_composition(fresh_db, client_facto
     assert day["name"] == "День 1"
     exercise_names = {item["name"] for item in day["items"]}
     assert exercise_names == {TEMPLATE_A, TEMPLATE_B}
+    # Объём — от кода, тем же счётом, что строка под превью в боте: по
+    # убыванию, имена групп на языке атлета.
+    assert program["weekly_sets"] == [{"group": "Ноги", "sets": 4}, {"group": "Грудь", "sets": 3}]
+    pending = await client.get("/ai/pending")
+    assert pending.json()["program"]["weekly_sets"] == program["weekly_sets"]
     # Опросника в этом же ходе быть не должно — программа и опросник
     # взаимоисключающи (см. api_v1_ai._turn_response).
     assert body["questions"] is None

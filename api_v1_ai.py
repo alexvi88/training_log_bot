@@ -511,9 +511,15 @@ async def _store_undo_actions(
     return await db.add_ai_undo_actions(user_id, turn_id, items)
 
 
-def _program_json(draft_id: str, draft: dict[str, Any]) -> dict[str, Any]:
+def _program_json(
+    draft_id: str, draft: dict[str, Any], weekly_sets: list[dict[str, Any]]
+) -> dict[str, Any]:
     """То, что в боте становится кнопками «Забрать: <имя>» + превью с составом
-    (см. keyboards.ai_trainer_keyboard/ai_program_preview_keyboard)."""
+    (см. keyboards.ai_trainer_keyboard/ai_program_preview_keyboard).
+
+    `weekly_sets` — ai_trainer.program_weekly_sets, та же строка объёма, что
+    бот пишет под превью: [{"group": локализованное имя, "sets": int}], по
+    убыванию, без нулей."""
     return {
         "draft_id": draft_id,
         "name": draft["name"],
@@ -544,6 +550,7 @@ def _program_json(draft_id: str, draft: dict[str, Any]) -> dict[str, Any]:
             for day in draft["days"]
         ],
         "notes": draft.get("notes") or [],
+        "weekly_sets": weekly_sets,
     }
 
 
@@ -646,7 +653,10 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
             await db.clear_ai_setup_state(user_id)
             draft_id = secrets.token_hex(4)
             await db.set_ai_program_draft(user_id, draft_id, turn["draft"])
-            program_json = _program_json(draft_id, turn["draft"])
+            program_json = _program_json(
+                draft_id, turn["draft"],
+                await ai_trainer.program_weekly_sets(user_id, turn["draft"]["days"]),
+            )
         elif turn["questions"]:
             previous = await db.get_ai_setup_state(user_id) or {}
             kind, payload = await _next_setup_step(user_id, turn["questions"], goal, previous)
@@ -1313,7 +1323,10 @@ async def get_pending_state(request: Request) -> JSONResponse:
     actions = await db.get_ai_undo_actions(user_id, last_turn[0]["id"]) if last_turn else []
 
     with i18n.use_lang(lang):
-        program_json = _program_json(draft["id"], draft) if draft else None
+        program_json = (
+            _program_json(draft["id"], draft, await ai_trainer.program_weekly_sets(user_id, draft["days"]))
+            if draft else None
+        )
         # Пустой список вопросов — теоретически невозможное, но не проверяемое
         # здесь состояние БД (см. _next_setup_step): не рисовать несуществующий
         # вопрос лучше, чем упасть на IndexError из _question_json.

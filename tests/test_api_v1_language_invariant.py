@@ -593,6 +593,9 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     program_turn = (await w.call("POST", "/ai/ask", json={"question": "PROGRAM " + text["question"]},
                                  expect=200)).json()
     draft_id = program_turn["program"]["draft_id"]
+    # Имена групп в weekly_sets — показываемые данные: без непустого списка
+    # инвариант их бы не прошёл.
+    assert program_turn["program"]["weekly_sets"]
     await w.call("GET", "/ai/pending", expect=200)
     await w.call("POST", "/ai/program/train", json={"draft_id": draft_id}, expect=201)
     await w.call("DELETE", "/workouts/active", expect=200)
