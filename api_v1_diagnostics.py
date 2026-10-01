@@ -8,7 +8,8 @@ MetricKit отдаёт приложению те же диагностики (`M
 
 **Тело** — одна диагностика на запрос:
 
-    {"kind": "crash" | "hang" | "cpu_exception" | "disk_write_exception",
+    {"kind": "crash" | "hang" | "cpu_exception" | "disk_write_exception"
+             | "keychain_save_failed",
      "payload": {...},              # diagnostic.jsonRepresentation() как есть
      "app_version": "1.4", "build": "57", "os_version": "17.5.1",
      "device": "iPhone15,2"}
@@ -68,7 +69,12 @@ ApiError = common.ApiError
 
 MAX_BODY_BYTES = 256 * 1024
 
-KINDS = frozenset({"crash", "hang", "cpu_exception", "disk_write_exception"})
+# `keychain_save_failed` — не MetricKit, а сам клиент: Keychain не принял
+# токен входа (`KeychainStore.save` в iOS-репо вернул не errSecSuccess).
+# Токен тогда живёт только в памяти, и на следующем холодном старте человека
+# выкидывает на экран входа. Payload — `{"osStatus": <код>, "account": ...}`,
+# без токена и без данных атлета: нужно знать масштаб на живых устройствах.
+KINDS = frozenset({"crash", "hang", "cpu_exception", "disk_write_exception", "keychain_save_failed"})
 
 RATE_WINDOW_SECONDS = 3600
 RATE_LIMIT_PER_IP = 60

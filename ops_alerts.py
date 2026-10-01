@@ -295,6 +295,7 @@ _CRASH_KIND_LABELS = {
     "hang": "Зависание",
     "cpu_exception": "Перерасход CPU",
     "disk_write_exception": "Запись на диск",
+    "keychain_save_failed": "Keychain не сохранил вход",
 }
 
 
@@ -344,7 +345,7 @@ async def maybe_alert_new_diagnostic(
     meta: dict,
 ) -> bool:
     """Тревога, если такого сбоя в этой сборке ещё не было. Не бросает."""
-    if not enabled() or kind not in ("crash", "hang"):
+    if not enabled() or kind not in ("crash", "hang", "keychain_save_failed"):
         return False
     import db
 
