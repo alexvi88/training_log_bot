@@ -1835,5 +1835,10 @@
   "api.error.payload_too_large": "Слишком тяжёлый файл — я его не принял, ничего не записалось. Пришли поменьше: фото полегче или видео покороче.",
   "share.app_store_line": "📱 С iPhone — приложение: {url}",
   "support.push.reply_title": "Поддержка",
-  "support.push.reply_body": "Ответ поддержки: {text}"
+  "support.push.reply_body": "Ответ поддержки: {text}",
+  "menu.line.progress": "{exercise} {growth} за {weeks} {weeks, plural, one{неделю} few{недели} many{недель} other{недели}}",
+  "menu.line.exercises": "{n} в твоём списке",
+  "menu.line.programs_catalog": "Готовые — старт в один тап",
+  "menu.line.rank_gap": "«{name}» — {gap}",
+  "menu.line.rank": "Звание — {name}"
 }

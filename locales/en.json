@@ -1834,5 +1834,10 @@
   "api.error.payload_too_large": "That file's too heavy — I didn't take it, nothing got saved. Send a smaller one: a lighter photo or a shorter video.",
   "share.app_store_line": "📱 On iPhone — get the app: {url}",
   "support.push.reply_title": "Support",
-  "support.push.reply_body": "Reply from support: {text}"
+  "support.push.reply_body": "Reply from support: {text}",
+  "menu.line.progress": "{exercise} {growth} in {weeks} {weeks, plural, one{week} other{weeks}}",
+  "menu.line.exercises": "{n} in your list",
+  "menu.line.programs_catalog": "Ready-made — one tap to start",
+  "menu.line.rank_gap": "{name}: {gap}",
+  "menu.line.rank": "Rank: {name}"
 }
