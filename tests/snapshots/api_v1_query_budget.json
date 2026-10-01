@@ -6,7 +6,7 @@
      {
       "display_name": "Жим лёжа",
       "e1rm_text": null,
-      "exercise_id": 129,
+      "exercise_id": 229,
       "group_tag": "ГРУДЬ",
       "has_record": false,
       "note": "заметка 150/0",
@@ -15,7 +15,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:02:00",
-        "exercise_id": 129,
+        "exercise_id": 229,
         "id": 5555,
         "is_gold": false,
         "load_weight": 60.0,
@@ -26,7 +26,7 @@
        },
        {
         "created_at": "2026-10-04T04:06:00",
-        "exercise_id": 129,
+        "exercise_id": 229,
         "id": 5556,
         "is_gold": false,
         "load_weight": 100.0,
@@ -46,7 +46,7 @@
      {
       "display_name": "Тяга",
       "e1rm_text": null,
-      "exercise_id": 131,
+      "exercise_id": 231,
       "group_tag": "БИЦЕПС",
       "has_record": false,
       "note": "заметка 150/1",
@@ -55,7 +55,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:08:00",
-        "exercise_id": 131,
+        "exercise_id": 231,
         "id": 5557,
         "is_gold": false,
         "load_weight": 120.0,
@@ -66,7 +66,7 @@
        },
        {
         "created_at": "2026-10-04T04:13:00",
-        "exercise_id": 131,
+        "exercise_id": 231,
         "id": 5559,
         "is_gold": false,
         "load_weight": 60.0,
@@ -77,7 +77,7 @@
        },
        {
         "created_at": "2026-10-04T04:19:00",
-        "exercise_id": 131,
+        "exercise_id": 231,
         "id": 5561,
         "is_gold": false,
         "load_weight": 140.0,
@@ -91,7 +91,7 @@
      {
       "display_name": "Странное",
       "e1rm_text": null,
-      "exercise_id": 136,
+      "exercise_id": 236,
       "group_tag": "СВОЯ",
       "has_record": false,
       "note": "заметка 150/2",
@@ -100,7 +100,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:10:00",
-        "exercise_id": 136,
+        "exercise_id": 236,
         "id": 5558,
         "is_gold": false,
         "load_weight": 60.0,
@@ -111,7 +111,7 @@
        },
        {
         "created_at": "2026-10-04T04:16:00",
-        "exercise_id": 136,
+        "exercise_id": 236,
         "id": 5560,
         "is_gold": true,
         "load_weight": 140.0,
@@ -122,7 +122,7 @@
        },
        {
         "created_at": "2026-10-04T04:22:00",
-        "exercise_id": 136,
+        "exercise_id": 236,
         "id": 5562,
         "is_gold": false,
         "load_weight": 100.0,
@@ -142,7 +142,7 @@
      {
       "display_name": "Странное",
       "e1rm_text": null,
-      "exercise_id": 136,
+      "exercise_id": 236,
       "group_tag": "СВОЯ",
       "has_record": false,
       "note": "заметка 150/2",
@@ -151,7 +151,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:25:00",
-        "exercise_id": 136,
+        "exercise_id": 236,
         "id": 5563,
         "is_gold": false,
         "load_weight": 140.0,
@@ -162,7 +162,7 @@
        },
        {
         "created_at": "2026-10-04T04:27:00",
-        "exercise_id": 136,
+        "exercise_id": 236,
         "id": 5564,
         "is_gold": true,
         "load_weight": 140.0,
@@ -182,7 +182,7 @@
      {
       "display_name": "Присед",
       "e1rm_text": null,
-      "exercise_id": 130,
+      "exercise_id": 230,
       "group_tag": "ТРИЦЕПС",
       "has_record": false,
       "note": "заметка 150/3",
@@ -191,7 +191,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:29:00",
-        "exercise_id": 130,
+        "exercise_id": 230,
         "id": 5565,
         "is_gold": false,
         "load_weight": 60.0,
@@ -202,7 +202,7 @@
        },
        {
         "created_at": "2026-10-04T04:33:00",
-        "exercise_id": 130,
+        "exercise_id": 230,
         "id": 5566,
         "is_gold": false,
         "load_weight": 60.0,
@@ -213,7 +213,7 @@
        },
        {
         "created_at": "2026-10-04T04:36:00",
-        "exercise_id": 130,
+        "exercise_id": 230,
         "id": 5567,
         "is_gold": true,
         "load_weight": 142.5,
@@ -233,7 +233,7 @@
      {
       "display_name": "Подтягивания",
       "e1rm_text": null,
-      "exercise_id": 133,
+      "exercise_id": 233,
       "group_tag": "БИЦЕПС",
       "has_record": false,
       "note": "заметка 150/4",
@@ -242,7 +242,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:39:00",
-        "exercise_id": 133,
+        "exercise_id": 233,
         "id": 5568,
         "is_gold": false,
         "load_weight": 80.0,
@@ -253,7 +253,7 @@
        },
        {
         "created_at": "2026-10-04T04:42:00",
-        "exercise_id": 133,
+        "exercise_id": 233,
         "id": 5569,
         "is_gold": false,
         "load_weight": 80.0,
@@ -273,7 +273,7 @@
      {
       "display_name": "Жим стоя",
       "e1rm_text": null,
-      "exercise_id": 132,
+      "exercise_id": 232,
       "group_tag": "ПЛЕЧИ",
       "has_record": false,
       "note": "заметка 150/5",
@@ -282,7 +282,7 @@
       "sets": [
        {
         "created_at": "2026-10-04T04:44:00",
-        "exercise_id": 132,
+        "exercise_id": 232,
         "id": 5570,
         "is_gold": false,
         "load_weight": 140.0,
@@ -293,7 +293,7 @@
        },
        {
         "created_at": "2026-10-04T04:46:00",
-        "exercise_id": 132,
+        "exercise_id": 232,
         "id": 5571,
         "is_gold": false,
         "load_weight": 80.0,
@@ -304,7 +304,7 @@
        },
        {
         "created_at": "2026-10-04T04:49:00",
-        "exercise_id": 132,
+        "exercise_id": 232,
         "id": 5572,
         "is_gold": true,
         "load_weight": 140.0,
@@ -336,7 +336,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 133.3кг",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -345,7 +345,7 @@
        "sets": [
         {
          "created_at": "2026-01-03T06:04:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2787,
          "is_gold": false,
          "load_weight": 100.0,
@@ -356,7 +356,7 @@
         },
         {
          "created_at": "2026-01-03T06:06:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2788,
          "is_gold": false,
          "load_weight": 80.0,
@@ -376,7 +376,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 129.8кг",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -385,7 +385,7 @@
        "sets": [
         {
          "created_at": "2026-01-03T06:09:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2789,
          "is_gold": false,
          "load_weight": 40.0,
@@ -396,7 +396,7 @@
         },
         {
          "created_at": "2026-01-03T06:13:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2790,
          "is_gold": false,
          "load_weight": 20.0,
@@ -407,7 +407,7 @@
         },
         {
          "created_at": "2026-01-03T06:17:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2791,
          "is_gold": false,
          "load_weight": 102.5,
@@ -427,7 +427,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 140кг",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -436,7 +436,7 @@
        "sets": [
         {
          "created_at": "2026-01-03T06:20:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2792,
          "is_gold": false,
          "load_weight": 100.0,
@@ -447,7 +447,7 @@
         },
         {
          "created_at": "2026-01-03T06:22:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2793,
          "is_gold": false,
          "load_weight": 100.0,
@@ -458,7 +458,7 @@
         },
         {
          "created_at": "2026-01-03T06:25:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2794,
          "is_gold": false,
          "load_weight": 60.0,
@@ -469,7 +469,7 @@
         },
         {
          "created_at": "2026-01-03T06:27:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2795,
          "is_gold": false,
          "load_weight": 102.5,
@@ -489,7 +489,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 138.4кг",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -498,7 +498,7 @@
        "sets": [
         {
          "created_at": "2026-01-03T06:30:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2796,
          "is_gold": false,
          "load_weight": 40.0,
@@ -509,7 +509,7 @@
         },
         {
          "created_at": "2026-01-03T06:33:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2797,
          "is_gold": false,
          "load_weight": 102.5,
@@ -520,7 +520,7 @@
         },
         {
          "created_at": "2026-01-03T06:37:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2798,
          "is_gold": false,
          "load_weight": 40.0,
@@ -531,7 +531,7 @@
         },
         {
          "created_at": "2026-01-03T06:40:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2799,
          "is_gold": false,
          "load_weight": 102.5,
@@ -551,7 +551,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": "↳ e1RM 116.7кг",
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
        "note": null,
@@ -560,7 +560,7 @@
        "sets": [
         {
          "created_at": "2026-01-03T06:44:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2800,
          "is_gold": false,
          "load_weight": 100.0,
@@ -571,7 +571,7 @@
         },
         {
          "created_at": "2026-01-03T06:48:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2801,
          "is_gold": false,
          "load_weight": 102.5,
@@ -591,7 +591,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 140кг",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -600,7 +600,7 @@
        "sets": [
         {
          "created_at": "2026-01-03T06:52:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2802,
          "is_gold": false,
          "load_weight": 20.0,
@@ -611,7 +611,7 @@
         },
         {
          "created_at": "2026-01-03T06:54:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2803,
          "is_gold": false,
          "load_weight": 80.0,
@@ -622,7 +622,7 @@
         },
         {
          "created_at": "2026-01-03T06:56:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2804,
          "is_gold": false,
          "load_weight": 100.0,
@@ -633,7 +633,7 @@
         },
         {
          "created_at": "2026-01-03T06:59:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2805,
          "is_gold": false,
          "load_weight": 20.0,
@@ -664,7 +664,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 140кг",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": true,
        "note": null,
@@ -673,7 +673,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T09:04:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2825,
          "is_gold": false,
          "load_weight": 80.0,
@@ -684,7 +684,7 @@
         },
         {
          "created_at": "2026-01-08T09:07:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2826,
          "is_gold": false,
          "load_weight": 80.0,
@@ -695,7 +695,7 @@
         },
         {
          "created_at": "2026-01-08T09:10:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2827,
          "is_gold": false,
          "load_weight": 120.0,
@@ -715,7 +715,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 150.3кг (↓1.3кг vs 06.01)",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -724,7 +724,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T09:12:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2828,
          "is_gold": false,
          "load_weight": 20.0,
@@ -735,7 +735,7 @@
         },
         {
          "created_at": "2026-01-08T09:15:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2829,
          "is_gold": false,
          "load_weight": 20.0,
@@ -746,7 +746,7 @@
         },
         {
          "created_at": "2026-01-08T09:19:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2830,
          "is_gold": false,
          "load_weight": 102.5,
@@ -766,7 +766,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": "↳ e1RM 155.5кг",
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": true,
        "note": null,
@@ -775,7 +775,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T09:22:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2831,
          "is_gold": false,
          "load_weight": 100.0,
@@ -786,7 +786,7 @@
         },
         {
          "created_at": "2026-01-08T09:26:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2832,
          "is_gold": false,
          "load_weight": 102.5,
@@ -797,7 +797,7 @@
         },
         {
          "created_at": "2026-01-08T09:29:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2833,
          "is_gold": false,
          "load_weight": 60.0,
@@ -808,7 +808,7 @@
         },
         {
          "created_at": "2026-01-08T09:32:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2834,
          "is_gold": false,
          "load_weight": 60.0,
@@ -828,7 +828,7 @@
       {
        "display_name": "Скручивания",
        "e1rm_text": "↳ e1RM 119.6кг (↓25.6кг vs 06.01)",
-       "exercise_id": 135,
+       "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
        "note": null,
@@ -837,7 +837,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T09:35:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 2835,
          "is_gold": false,
          "load_weight": 20.0,
@@ -848,7 +848,7 @@
         },
         {
          "created_at": "2026-01-08T09:37:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 2836,
          "is_gold": false,
          "load_weight": 20.0,
@@ -859,7 +859,7 @@
         },
         {
          "created_at": "2026-01-08T09:40:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 2837,
          "is_gold": false,
          "load_weight": 102.5,
@@ -870,7 +870,7 @@
         },
         {
          "created_at": "2026-01-08T09:42:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 2838,
          "is_gold": false,
          "load_weight": 20.0,
@@ -890,7 +890,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 116.7кг (↑5кг vs 06.01)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -899,7 +899,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T09:44:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2839,
          "is_gold": false,
          "load_weight": 100.0,
@@ -910,7 +910,7 @@
         },
         {
          "created_at": "2026-01-08T09:48:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2840,
          "is_gold": false,
          "load_weight": 40.0,
@@ -921,7 +921,7 @@
         },
         {
          "created_at": "2026-01-08T09:52:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2841,
          "is_gold": false,
          "load_weight": 100.0,
@@ -941,7 +941,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": null,
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -950,7 +950,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T09:54:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2842,
          "is_gold": false,
          "load_weight": 80.0,
@@ -961,7 +961,7 @@
         },
         {
          "created_at": "2026-01-08T09:58:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2843,
          "is_gold": false,
          "load_weight": 80.0,
@@ -972,7 +972,7 @@
         },
         {
          "created_at": "2026-01-08T10:00:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2844,
          "is_gold": false,
          "load_weight": 80.0,
@@ -992,7 +992,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 140кг",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": true,
        "note": null,
@@ -1001,7 +1001,7 @@
        "sets": [
         {
          "created_at": "2026-01-08T10:02:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2845,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1012,7 +1012,7 @@
         },
         {
          "created_at": "2026-01-08T10:06:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2846,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1023,7 +1023,7 @@
         },
         {
          "created_at": "2026-01-08T10:09:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2847,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1034,7 +1034,7 @@
         },
         {
          "created_at": "2026-01-08T10:13:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2848,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1065,7 +1065,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 106.7кг (↑4.2кг vs 09.01)",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -1074,7 +1074,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T04:03:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2871,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1085,7 +1085,7 @@
         },
         {
          "created_at": "2026-01-12T04:06:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2872,
          "is_gold": false,
          "load_weight": 40.0,
@@ -1105,7 +1105,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 140кг (↓1.7кг vs 09.01)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -1114,7 +1114,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T04:09:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2873,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1125,7 +1125,7 @@
         },
         {
          "created_at": "2026-01-12T04:13:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2874,
          "is_gold": false,
          "load_weight": 102.5,
@@ -1145,7 +1145,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": "↳ e1RM 160кг (↓26.7кг vs 09.01)",
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -1154,7 +1154,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T04:15:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2875,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1165,7 +1165,7 @@
         },
         {
          "created_at": "2026-01-12T04:17:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2876,
          "is_gold": false,
          "load_weight": 120.0,
@@ -1176,7 +1176,7 @@
         },
         {
          "created_at": "2026-01-12T04:20:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2877,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1196,7 +1196,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 120кг (↓23.5кг vs 09.01)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -1205,7 +1205,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T04:23:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2878,
          "is_gold": false,
          "load_weight": 40.0,
@@ -1216,7 +1216,7 @@
         },
         {
          "created_at": "2026-01-12T04:27:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2879,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1236,7 +1236,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 240кг",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": true,
        "note": null,
@@ -1245,7 +1245,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T04:31:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2880,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1256,7 +1256,7 @@
         },
         {
          "created_at": "2026-01-12T04:33:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2881,
          "is_gold": false,
          "load_weight": 180.0,
@@ -1267,7 +1267,7 @@
         },
         {
          "created_at": "2026-01-12T04:37:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2882,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1278,7 +1278,7 @@
         },
         {
          "created_at": "2026-01-12T04:41:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2883,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1298,7 +1298,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": null,
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
        "note": null,
@@ -1326,7 +1326,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": "↳ e1RM 120кг (↑0.4кг vs 09.01)",
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
        "note": null,
@@ -1335,7 +1335,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T23:02:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2884,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1346,7 +1346,7 @@
         },
         {
          "created_at": "2026-01-12T23:04:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2885,
          "is_gold": false,
          "load_weight": 20.0,
@@ -1357,7 +1357,7 @@
         },
         {
          "created_at": "2026-01-12T23:08:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2886,
          "is_gold": false,
          "load_weight": 60.0,
@@ -1368,7 +1368,7 @@
         },
         {
          "created_at": "2026-01-12T23:11:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2887,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1388,7 +1388,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 126.4кг (↑6.4кг vs 12.01)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -1397,7 +1397,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T23:14:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2888,
          "is_gold": false,
          "load_weight": 102.5,
@@ -1408,7 +1408,7 @@
         },
         {
          "created_at": "2026-01-12T23:17:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 2889,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1428,7 +1428,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 150кг (↑35.5кг vs 06.01)",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": true,
        "note": null,
@@ -1437,7 +1437,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T23:21:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2890,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1448,7 +1448,7 @@
         },
         {
          "created_at": "2026-01-12T23:23:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2891,
          "is_gold": false,
          "load_weight": 102.5,
@@ -1459,7 +1459,7 @@
         },
         {
          "created_at": "2026-01-12T23:25:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2892,
          "is_gold": false,
          "load_weight": 20.0,
@@ -1479,7 +1479,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 135кг (↓5кг vs 12.01)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -1488,7 +1488,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T23:29:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2893,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1499,7 +1499,7 @@
         },
         {
          "created_at": "2026-01-12T23:31:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 2894,
          "is_gold": false,
          "load_weight": 40.0,
@@ -1519,7 +1519,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 153.8кг (↑47.1кг vs 12.01)",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": true,
        "note": null,
@@ -1528,7 +1528,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T23:35:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2895,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1539,7 +1539,7 @@
         },
         {
          "created_at": "2026-01-12T23:38:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2896,
          "is_gold": false,
          "load_weight": 102.5,
@@ -1550,7 +1550,7 @@
         },
         {
          "created_at": "2026-01-12T23:40:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2897,
          "is_gold": false,
          "load_weight": 40.0,
@@ -1570,7 +1570,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 210кг (↓30кг vs 12.01)",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -1579,7 +1579,7 @@
        "sets": [
         {
          "created_at": "2026-01-12T23:43:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2898,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1590,7 +1590,7 @@
         },
         {
          "created_at": "2026-01-12T23:47:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2899,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1601,7 +1601,7 @@
         },
         {
          "created_at": "2026-01-12T23:49:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2900,
          "is_gold": false,
          "load_weight": 180.0,
@@ -1632,7 +1632,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 88кг (↓41.8кг vs 19.01)",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -1641,7 +1641,7 @@
        "sets": [
         {
          "created_at": "2026-01-22T06:04:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2939,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1652,7 +1652,7 @@
         },
         {
          "created_at": "2026-01-22T06:07:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2940,
          "is_gold": false,
          "load_weight": 60.0,
@@ -1663,7 +1663,7 @@
         },
         {
          "created_at": "2026-01-22T06:10:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 2941,
          "is_gold": false,
          "load_weight": 20.0,
@@ -1683,7 +1683,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": "↳ e1RM 186.7кг (↓2.3кг vs 19.01)",
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -1692,7 +1692,7 @@
        "sets": [
         {
          "created_at": "2026-01-22T06:12:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2942,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1703,7 +1703,7 @@
         },
         {
          "created_at": "2026-01-22T06:14:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2943,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1714,7 +1714,7 @@
         },
         {
          "created_at": "2026-01-22T06:16:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 2944,
          "is_gold": false,
          "load_weight": 160.0,
@@ -1734,7 +1734,7 @@
       {
        "display_name": "Скручивания",
        "e1rm_text": "↳ e1RM 126.7кг (↑16.7кг vs 19.01)",
-       "exercise_id": 135,
+       "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
        "note": null,
@@ -1743,7 +1743,7 @@
        "sets": [
         {
          "created_at": "2026-01-22T06:18:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 2945,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1754,7 +1754,7 @@
         },
         {
          "created_at": "2026-01-22T06:20:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 2946,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1774,7 +1774,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 153.8кг (↑10.2кг vs 19.01)",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": true,
        "note": null,
@@ -1783,7 +1783,7 @@
        "sets": [
         {
          "created_at": "2026-01-22T06:23:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2947,
          "is_gold": false,
          "load_weight": 102.5,
@@ -1794,7 +1794,7 @@
         },
         {
          "created_at": "2026-01-22T06:25:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 2948,
          "is_gold": false,
          "load_weight": 102.5,
@@ -1814,7 +1814,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": "↳ e1RM 133.3кг (↑43.3кг vs 15.01)",
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
        "note": null,
@@ -1823,7 +1823,7 @@
        "sets": [
         {
          "created_at": "2026-01-22T06:27:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2949,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1834,7 +1834,7 @@
         },
         {
          "created_at": "2026-01-22T06:30:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2950,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1845,7 +1845,7 @@
         },
         {
          "created_at": "2026-01-22T06:34:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 2951,
          "is_gold": false,
          "load_weight": 100.0,
@@ -1865,7 +1865,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": null,
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -1874,7 +1874,7 @@
        "sets": [
         {
          "created_at": "2026-01-22T06:37:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2952,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1885,7 +1885,7 @@
         },
         {
          "created_at": "2026-01-22T06:39:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2953,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1896,7 +1896,7 @@
         },
         {
          "created_at": "2026-01-22T11:00:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 2954,
          "is_gold": false,
          "load_weight": 80.0,
@@ -1927,7 +1927,7 @@
       {
        "display_name": "Скручивания",
        "e1rm_text": "↳ e1RM 151.5кг (↑127кг vs 30.01)",
-       "exercise_id": 135,
+       "exercise_id": 235,
        "group_tag": null,
        "has_record": true,
        "note": "заметка 13/0",
@@ -1936,7 +1936,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:03:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 3033,
          "is_gold": false,
          "load_weight": 21.0,
@@ -1947,7 +1947,7 @@
         },
         {
          "created_at": "2026-02-02T06:05:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 3034,
          "is_gold": false,
          "load_weight": 21.0,
@@ -1958,7 +1958,7 @@
         },
         {
          "created_at": "2026-02-02T06:08:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 3035,
          "is_gold": false,
          "load_weight": 101.0,
@@ -1978,7 +1978,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": "↳ e1RM 144.9кг (↑24.1кг vs 30.01)",
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
        "note": "заметка 13/1",
@@ -1987,7 +1987,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:12:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 3036,
          "is_gold": false,
          "load_weight": 103.5,
@@ -1998,7 +1998,7 @@
         },
         {
          "created_at": "2026-02-02T06:18:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 3038,
          "is_gold": false,
          "load_weight": 41.0,
@@ -2012,7 +2012,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 138кг (↑13.4кг vs 30.01)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": "заметка 13/2",
@@ -2021,7 +2021,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:15:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 3037,
          "is_gold": false,
          "load_weight": 101.0,
@@ -2032,7 +2032,7 @@
         },
         {
          "created_at": "2026-02-02T06:22:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 3039,
          "is_gold": false,
          "load_weight": 103.5,
@@ -2052,7 +2052,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 138кг (↑13.4кг vs 30.01)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": "заметка 13/2",
@@ -2061,7 +2061,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:26:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 3040,
          "is_gold": false,
          "load_weight": 103.5,
@@ -2072,7 +2072,7 @@
         },
         {
          "created_at": "2026-02-02T06:28:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 3041,
          "is_gold": false,
          "load_weight": 103.5,
@@ -2083,7 +2083,7 @@
         },
         {
          "created_at": "2026-02-02T06:30:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 3042,
          "is_gold": false,
          "load_weight": 21.0,
@@ -2103,7 +2103,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 157кг (↑34.1кг vs 27.01)",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": true,
        "note": "заметка 13/3",
@@ -2112,7 +2112,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:32:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 3043,
          "is_gold": false,
          "load_weight": 103.5,
@@ -2123,7 +2123,7 @@
         },
         {
          "created_at": "2026-02-02T06:36:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 3044,
          "is_gold": false,
          "load_weight": 81.0,
@@ -2134,7 +2134,7 @@
         },
         {
          "created_at": "2026-02-02T06:40:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 3045,
          "is_gold": false,
          "load_weight": 61.0,
@@ -2154,7 +2154,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": "↳ e1RM 187.8кг (↓53.5кг vs 30.01)",
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": "заметка 13/4",
@@ -2163,7 +2163,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:44:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 3046,
          "is_gold": false,
          "load_weight": 141.0,
@@ -2174,7 +2174,7 @@
         },
         {
          "created_at": "2026-02-02T06:48:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 3047,
          "is_gold": false,
          "load_weight": 161.0,
@@ -2194,7 +2194,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 157.5кг (↓99.4кг vs 30.01)",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": "заметка 13/5",
@@ -2203,7 +2203,7 @@
        "sets": [
         {
          "created_at": "2026-02-02T06:52:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 3048,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2214,7 +2214,7 @@
         },
         {
          "created_at": "2026-02-02T06:54:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 3049,
          "is_gold": false,
          "load_weight": 141.0,
@@ -2245,7 +2245,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 156.9кг (↑63.1кг vs 23.05)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -2254,7 +2254,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:03:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4195,
          "is_gold": false,
          "load_weight": 109.5,
@@ -2265,7 +2265,7 @@
         },
         {
          "created_at": "2026-05-24T10:07:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4196,
          "is_gold": false,
          "load_weight": 107.0,
@@ -2285,7 +2285,7 @@
       {
        "display_name": "Скручивания",
        "e1rm_text": "↳ e1RM 164.2кг (↑128.2кг vs 21.05)",
-       "exercise_id": 135,
+       "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
        "note": null,
@@ -2294,7 +2294,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:11:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4197,
          "is_gold": false,
          "load_weight": 47.0,
@@ -2305,7 +2305,7 @@
         },
         {
          "created_at": "2026-05-24T10:14:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4198,
          "is_gold": false,
          "load_weight": 109.5,
@@ -2316,7 +2316,7 @@
         },
         {
          "created_at": "2026-05-24T10:17:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4199,
          "is_gold": false,
          "load_weight": 109.5,
@@ -2336,7 +2336,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": "↳ e1RM 249.3кг (↓12.5кг vs 23.05)",
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -2345,7 +2345,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:20:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4200,
          "is_gold": false,
          "load_weight": 187.0,
@@ -2356,7 +2356,7 @@
         },
         {
          "created_at": "2026-05-24T10:22:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4201,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2367,7 +2367,7 @@
         },
         {
          "created_at": "2026-05-24T10:24:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4202,
          "is_gold": false,
          "load_weight": 167.0,
@@ -2387,7 +2387,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 129.6кг (↑7.8кг vs 22.05)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -2396,7 +2396,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:26:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4203,
          "is_gold": false,
          "load_weight": 67.0,
@@ -2407,7 +2407,7 @@
         },
         {
          "created_at": "2026-05-24T10:29:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4204,
          "is_gold": false,
          "load_weight": 109.5,
@@ -2418,7 +2418,7 @@
         },
         {
          "created_at": "2026-05-24T10:33:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4205,
          "is_gold": false,
          "load_weight": 27.0,
@@ -2438,7 +2438,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 121.8кг (↓40.5кг vs 23.05)",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -2447,7 +2447,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:35:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 4206,
          "is_gold": false,
          "load_weight": 27.0,
@@ -2458,7 +2458,7 @@
         },
         {
          "created_at": "2026-05-24T10:38:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 4207,
          "is_gold": false,
          "load_weight": 87.0,
@@ -2478,7 +2478,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 156.6кг (↑55.3кг vs 23.05)",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -2487,7 +2487,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:42:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4208,
          "is_gold": false,
          "load_weight": 127.0,
@@ -2498,7 +2498,7 @@
         },
         {
          "created_at": "2026-05-24T10:44:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4209,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2509,7 +2509,7 @@
         },
         {
          "created_at": "2026-05-24T15:00:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4210,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2540,7 +2540,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": null,
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -2549,7 +2549,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:03:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4211,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2560,7 +2560,7 @@
         },
         {
          "created_at": "2026-05-24T10:06:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4212,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2571,7 +2571,7 @@
         },
         {
          "created_at": "2026-05-24T10:09:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4213,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2591,7 +2591,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 208.5кг (↑107.1кг vs 23.05)",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -2600,7 +2600,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:13:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4214,
          "is_gold": false,
          "load_weight": 189.5,
@@ -2611,7 +2611,7 @@
         },
         {
          "created_at": "2026-05-24T10:16:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4215,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2622,7 +2622,7 @@
         },
         {
          "created_at": "2026-05-24T10:20:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4216,
          "is_gold": false,
          "load_weight": 80.0,
@@ -2642,7 +2642,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 101.5кг (↓20.3кг vs 22.05)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -2651,7 +2651,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:22:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4217,
          "is_gold": false,
          "load_weight": 47.0,
@@ -2662,7 +2662,7 @@
         },
         {
          "created_at": "2026-05-24T10:26:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4218,
          "is_gold": false,
          "load_weight": 67.0,
@@ -2673,7 +2673,7 @@
         },
         {
          "created_at": "2026-05-24T10:29:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4219,
          "is_gold": false,
          "load_weight": 87.0,
@@ -2684,7 +2684,7 @@
         },
         {
          "created_at": "2026-05-24T10:33:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4220,
          "is_gold": false,
          "load_weight": 87.0,
@@ -2704,7 +2704,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": "↳ e1RM 84.9кг (↓42.9кг vs 23.05)",
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
        "note": null,
@@ -2713,7 +2713,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:37:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 4221,
          "is_gold": false,
          "load_weight": 67.0,
@@ -2724,7 +2724,7 @@
         },
         {
          "created_at": "2026-05-24T10:40:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 4222,
          "is_gold": false,
          "load_weight": 67.0,
@@ -2735,7 +2735,7 @@
         },
         {
          "created_at": "2026-05-24T10:43:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 4223,
          "is_gold": false,
          "load_weight": 67.0,
@@ -2755,7 +2755,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 146кг (↑52.2кг vs 23.05)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -2764,7 +2764,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:47:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4224,
          "is_gold": false,
          "load_weight": 109.5,
@@ -2775,7 +2775,7 @@
         },
         {
          "created_at": "2026-05-24T10:49:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4225,
          "is_gold": false,
          "load_weight": 47.0,
@@ -2786,7 +2786,7 @@
         },
         {
          "created_at": "2026-05-24T10:52:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4226,
          "is_gold": false,
          "load_weight": 107.0,
@@ -2806,7 +2806,7 @@
       {
        "display_name": "Скручивания",
        "e1rm_text": "↳ e1RM 131.9кг (↑95.9кг vs 21.05)",
-       "exercise_id": 135,
+       "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
        "note": null,
@@ -2815,7 +2815,7 @@
        "sets": [
         {
          "created_at": "2026-05-24T10:54:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4227,
          "is_gold": false,
          "load_weight": 87.0,
@@ -2826,7 +2826,7 @@
         },
         {
          "created_at": "2026-05-24T10:56:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4228,
          "is_gold": false,
          "load_weight": 47.0,
@@ -2837,7 +2837,7 @@
         },
         {
          "created_at": "2026-05-24T11:00:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4229,
          "is_gold": false,
          "load_weight": 47.0,
@@ -2848,7 +2848,7 @@
         },
         {
          "created_at": "2026-05-24T11:02:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 4230,
          "is_gold": false,
          "load_weight": 27.0,
@@ -2879,7 +2879,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 153.3кг (↑7.3кг vs 24.05)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -2888,7 +2888,7 @@
        "sets": [
         {
          "created_at": "2026-05-27T05:04:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4231,
          "is_gold": false,
          "load_weight": 47.0,
@@ -2899,7 +2899,7 @@
         },
         {
          "created_at": "2026-05-27T05:08:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4232,
          "is_gold": false,
          "load_weight": 87.0,
@@ -2910,7 +2910,7 @@
         },
         {
          "created_at": "2026-05-27T05:11:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 4233,
          "is_gold": false,
          "load_weight": 109.5,
@@ -2930,7 +2930,7 @@
       {
        "display_name": "Отжимания",
        "e1rm_text": "↳ e1RM 284.2кг (↑164.2кг vs 24.05)",
-       "exercise_id": 134,
+       "exercise_id": 234,
        "group_tag": "ГРУДЬ",
        "has_record": true,
        "note": null,
@@ -2939,7 +2939,7 @@
        "sets": [
         {
          "created_at": "2026-05-27T05:15:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4234,
          "is_gold": false,
          "load_weight": 167.0,
@@ -2950,7 +2950,7 @@
         },
         {
          "created_at": "2026-05-27T05:18:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4235,
          "is_gold": false,
          "load_weight": 189.5,
@@ -2961,7 +2961,7 @@
         },
         {
          "created_at": "2026-05-27T05:22:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4236,
          "is_gold": false,
          "load_weight": 127.0,
@@ -2972,7 +2972,7 @@
         },
         {
          "created_at": "2026-05-27T05:25:00",
-         "exercise_id": 134,
+         "exercise_id": 234,
          "id": 4237,
          "is_gold": false,
          "load_weight": 189.5,
@@ -2992,7 +2992,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 144.5кг (↓64кг vs 24.05)",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -3001,7 +3001,7 @@
        "sets": [
         {
          "created_at": "2026-05-27T05:29:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4238,
          "is_gold": false,
          "load_weight": 80.0,
@@ -3012,7 +3012,7 @@
         },
         {
          "created_at": "2026-05-27T05:33:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 4239,
          "is_gold": false,
          "load_weight": 107.0,
@@ -3032,7 +3032,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 127.8кг (↑26.3кг vs 24.05)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -3041,7 +3041,7 @@
        "sets": [
         {
          "created_at": "2026-05-27T05:35:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4240,
          "is_gold": false,
          "load_weight": 109.5,
@@ -3052,7 +3052,7 @@
         },
         {
          "created_at": "2026-05-27T05:37:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4241,
          "is_gold": false,
          "load_weight": 87.0,
@@ -3063,7 +3063,7 @@
         },
         {
          "created_at": "2026-05-27T05:39:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4242,
          "is_gold": false,
          "load_weight": 67.0,
@@ -3074,7 +3074,7 @@
         },
         {
          "created_at": "2026-05-27T05:41:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 4243,
          "is_gold": false,
          "load_weight": 67.0,
@@ -3094,7 +3094,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 101.5кг (↑14.5кг vs 23.05)",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -3103,7 +3103,7 @@
        "sets": [
         {
          "created_at": "2026-05-27T05:44:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 4244,
          "is_gold": false,
          "load_weight": 87.0,
@@ -3114,7 +3114,7 @@
         },
         {
          "created_at": "2026-05-27T05:46:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 4245,
          "is_gold": false,
          "load_weight": 87.0,
@@ -3125,7 +3125,7 @@
         },
         {
          "created_at": "2026-05-27T05:49:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 4246,
          "is_gold": false,
          "load_weight": 87.0,
@@ -3145,7 +3145,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 146кг (↑24.2кг vs 24.05)",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -3154,7 +3154,7 @@
        "sets": [
         {
          "created_at": "2026-05-27T05:51:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 4247,
          "is_gold": false,
          "load_weight": 27.0,
@@ -3165,7 +3165,7 @@
         },
         {
          "created_at": "2026-05-27T05:54:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 4248,
          "is_gold": false,
          "load_weight": 109.5,
@@ -3196,7 +3196,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": "↳ e1RM 167.2кг (↓3.7кг vs 30.09)",
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
@@ -3205,7 +3205,7 @@
        "sets": [
         {
          "created_at": "2026-10-02T04:02:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 5535,
          "is_gold": false,
          "load_weight": 114.0,
@@ -3216,7 +3216,7 @@
         },
         {
          "created_at": "2026-10-02T04:05:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 5536,
          "is_gold": false,
          "load_weight": 116.5,
@@ -3227,7 +3227,7 @@
         },
         {
          "created_at": "2026-10-02T04:07:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 5537,
          "is_gold": false,
          "load_weight": 94.0,
@@ -3247,7 +3247,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": "↳ e1RM 93.7кг (↓69.4кг vs 25.09)",
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": false,
        "note": null,
@@ -3256,7 +3256,7 @@
        "sets": [
         {
          "created_at": "2026-10-02T04:09:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 5538,
          "is_gold": false,
          "load_weight": 34.0,
@@ -3267,7 +3267,7 @@
         },
         {
          "created_at": "2026-10-02T04:12:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 5539,
          "is_gold": false,
          "load_weight": 74.0,
@@ -3278,7 +3278,7 @@
         },
         {
          "created_at": "2026-10-02T04:14:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 5540,
          "is_gold": false,
          "load_weight": 74.0,
@@ -3298,7 +3298,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": "↳ e1RM 167.2кг (↓3.8кг vs 30.09)",
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -3307,7 +3307,7 @@
        "sets": [
         {
          "created_at": "2026-10-02T04:16:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5541,
          "is_gold": false,
          "load_weight": 116.5,
@@ -3318,7 +3318,7 @@
         },
         {
          "created_at": "2026-10-02T04:19:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5542,
          "is_gold": false,
          "load_weight": 114.0,
@@ -3329,7 +3329,7 @@
         },
         {
          "created_at": "2026-10-02T04:21:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5543,
          "is_gold": false,
          "load_weight": 114.0,
@@ -3340,7 +3340,7 @@
         },
         {
          "created_at": "2026-10-02T04:24:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5544,
          "is_gold": false,
          "load_weight": 74.0,
@@ -3360,7 +3360,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": "↳ e1RM 141кг (↓14.3кг vs 30.09)",
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
        "note": null,
@@ -3369,7 +3369,7 @@
        "sets": [
         {
          "created_at": "2026-10-02T04:28:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5545,
          "is_gold": false,
          "load_weight": 94.0,
@@ -3380,7 +3380,7 @@
         },
         {
          "created_at": "2026-10-02T04:31:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5546,
          "is_gold": false,
          "load_weight": 34.0,
@@ -3391,7 +3391,7 @@
         },
         {
          "created_at": "2026-10-02T04:33:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5547,
          "is_gold": false,
          "load_weight": 74.0,
@@ -3402,7 +3402,7 @@
         },
         {
          "created_at": "2026-10-02T04:35:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5548,
          "is_gold": false,
          "load_weight": 34.0,
@@ -3422,7 +3422,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": "↳ e1RM 278.4кг (↑43.5кг vs 26.09)",
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
@@ -3431,7 +3431,7 @@
        "sets": [
         {
          "created_at": "2026-10-02T04:37:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 5549,
          "is_gold": false,
          "load_weight": 80.0,
@@ -3442,7 +3442,7 @@
         },
         {
          "created_at": "2026-10-02T04:40:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 5550,
          "is_gold": false,
          "load_weight": 196.5,
@@ -3453,7 +3453,7 @@
         },
         {
          "created_at": "2026-10-02T04:43:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 5551,
          "is_gold": false,
          "load_weight": 80.0,
@@ -3473,7 +3473,7 @@
       {
        "display_name": "Скручивания",
        "e1rm_text": "↳ e1RM 174.8кг (↓1.9кг vs 30.09)",
-       "exercise_id": 135,
+       "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
        "note": null,
@@ -3482,7 +3482,7 @@
        "sets": [
         {
          "created_at": "2026-10-02T04:46:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 5552,
          "is_gold": false,
          "load_weight": 74.0,
@@ -3493,7 +3493,7 @@
         },
         {
          "created_at": "2026-10-02T04:50:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 5553,
          "is_gold": false,
          "load_weight": 74.0,
@@ -3504,7 +3504,7 @@
         },
         {
          "created_at": "2026-10-02T04:52:00",
-         "exercise_id": 135,
+         "exercise_id": 235,
          "id": 5554,
          "is_gold": false,
          "load_weight": 116.5,
@@ -3535,7 +3535,7 @@
       {
        "display_name": "Жим лёжа",
        "e1rm_text": null,
-       "exercise_id": 129,
+       "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": "заметка 150/0",
@@ -3544,7 +3544,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:02:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 5555,
          "is_gold": false,
          "load_weight": 60.0,
@@ -3555,7 +3555,7 @@
         },
         {
          "created_at": "2026-10-04T04:06:00",
-         "exercise_id": 129,
+         "exercise_id": 229,
          "id": 5556,
          "is_gold": false,
          "load_weight": 100.0,
@@ -3575,7 +3575,7 @@
       {
        "display_name": "Тяга",
        "e1rm_text": null,
-       "exercise_id": 131,
+       "exercise_id": 231,
        "group_tag": "БИЦЕПС",
        "has_record": true,
        "note": "заметка 150/1",
@@ -3584,7 +3584,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:08:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5557,
          "is_gold": false,
          "load_weight": 120.0,
@@ -3595,7 +3595,7 @@
         },
         {
          "created_at": "2026-10-04T04:13:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5559,
          "is_gold": false,
          "load_weight": 60.0,
@@ -3606,7 +3606,7 @@
         },
         {
          "created_at": "2026-10-04T04:19:00",
-         "exercise_id": 131,
+         "exercise_id": 231,
          "id": 5561,
          "is_gold": false,
          "load_weight": 140.0,
@@ -3620,7 +3620,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": null,
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": true,
        "note": "заметка 150/2",
@@ -3629,7 +3629,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:10:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 5558,
          "is_gold": false,
          "load_weight": 60.0,
@@ -3640,7 +3640,7 @@
         },
         {
          "created_at": "2026-10-04T04:16:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 5560,
          "is_gold": true,
          "load_weight": 140.0,
@@ -3651,7 +3651,7 @@
         },
         {
          "created_at": "2026-10-04T04:22:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 5562,
          "is_gold": false,
          "load_weight": 100.0,
@@ -3671,7 +3671,7 @@
       {
        "display_name": "Странное",
        "e1rm_text": null,
-       "exercise_id": 136,
+       "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": true,
        "note": "заметка 150/2",
@@ -3680,7 +3680,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:25:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 5563,
          "is_gold": false,
          "load_weight": 140.0,
@@ -3691,7 +3691,7 @@
         },
         {
          "created_at": "2026-10-04T04:27:00",
-         "exercise_id": 136,
+         "exercise_id": 236,
          "id": 5564,
          "is_gold": true,
          "load_weight": 140.0,
@@ -3711,7 +3711,7 @@
       {
        "display_name": "Присед",
        "e1rm_text": null,
-       "exercise_id": 130,
+       "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": true,
        "note": "заметка 150/3",
@@ -3720,7 +3720,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:29:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5565,
          "is_gold": false,
          "load_weight": 60.0,
@@ -3731,7 +3731,7 @@
         },
         {
          "created_at": "2026-10-04T04:33:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5566,
          "is_gold": false,
          "load_weight": 60.0,
@@ -3742,7 +3742,7 @@
         },
         {
          "created_at": "2026-10-04T04:36:00",
-         "exercise_id": 130,
+         "exercise_id": 230,
          "id": 5567,
          "is_gold": true,
          "load_weight": 142.5,
@@ -3762,7 +3762,7 @@
       {
        "display_name": "Подтягивания",
        "e1rm_text": null,
-       "exercise_id": 133,
+       "exercise_id": 233,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": "заметка 150/4",
@@ -3771,7 +3771,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:39:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 5568,
          "is_gold": false,
          "load_weight": 80.0,
@@ -3782,7 +3782,7 @@
         },
         {
          "created_at": "2026-10-04T04:42:00",
-         "exercise_id": 133,
+         "exercise_id": 233,
          "id": 5569,
          "is_gold": false,
          "load_weight": 80.0,
@@ -3802,7 +3802,7 @@
       {
        "display_name": "Жим стоя",
        "e1rm_text": null,
-       "exercise_id": 132,
+       "exercise_id": 232,
        "group_tag": "ПЛЕЧИ",
        "has_record": true,
        "note": "заметка 150/5",
@@ -3811,7 +3811,7 @@
        "sets": [
         {
          "created_at": "2026-10-04T04:44:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 5570,
          "is_gold": false,
          "load_weight": 140.0,
@@ -3822,7 +3822,7 @@
         },
         {
          "created_at": "2026-10-04T04:46:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 5571,
          "is_gold": false,
          "load_weight": 80.0,
@@ -3833,7 +3833,7 @@
         },
         {
          "created_at": "2026-10-04T04:49:00",
-         "exercise_id": 132,
+         "exercise_id": 232,
          "id": 5572,
          "is_gold": true,
          "load_weight": 140.0,
@@ -3875,7 +3875,7 @@
    {
     "e1rm": 294.5,
     "exercise": "Подтягивания",
-    "exercise_id": 133,
+    "exercise_id": 233,
     "is_bodyweight": false,
     "record": "188×15",
     "reps": 15,
@@ -3884,7 +3884,7 @@
    {
     "e1rm": 285.0,
     "exercise": "Отжимания",
-    "exercise_id": 134,
+    "exercise_id": 234,
     "is_bodyweight": false,
     "record": "190×15",
     "reps": 15,
@@ -3893,7 +3893,7 @@
    {
     "e1rm": 182.5,
     "exercise": "Тяга",
-    "exercise_id": 131,
+    "exercise_id": 231,
     "is_bodyweight": false,
     "record": "116.5×15",
     "reps": 15,
@@ -3902,7 +3902,7 @@
    {
     "e1rm": 179.4,
     "exercise": "Странное",
-    "exercise_id": 136,
+    "exercise_id": 236,
     "is_bodyweight": false,
     "record": "114.5×15",
     "reps": 15,
@@ -3911,7 +3911,7 @@
    {
     "e1rm": 178.6,
     "exercise": "Скручивания",
-    "exercise_id": 135,
+    "exercise_id": 235,
     "is_bodyweight": false,
     "record": "114×15",
     "reps": 15,
@@ -3920,7 +3920,7 @@
    {
     "e1rm": 177.8,
     "exercise": "Присед",
-    "exercise_id": 130,
+    "exercise_id": 230,
     "is_bodyweight": false,
     "record": "113.5×15",
     "reps": 15,
@@ -3929,7 +3929,7 @@
    {
     "e1rm": 174.8,
     "exercise": "Жим лёжа",
-    "exercise_id": 129,
+    "exercise_id": 229,
     "is_bodyweight": false,
     "record": "116.5×15",
     "reps": 15,
@@ -3938,7 +3938,7 @@
    {
     "e1rm": 172.9,
     "exercise": "Жим стоя",
-    "exercise_id": 132,
+    "exercise_id": 232,
     "is_bodyweight": false,
     "record": "114×15",
     "reps": 15,
@@ -4239,7 +4239,7 @@
  "views": {
   "152:golds": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -4268,7 +4268,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -4306,7 +4306,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -4350,7 +4350,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -4394,7 +4394,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -4426,7 +4426,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -4472,7 +4472,7 @@
   ],
   "152:plain": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -4501,7 +4501,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -4539,7 +4539,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -4583,7 +4583,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -4627,7 +4627,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -4659,7 +4659,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -4705,7 +4705,7 @@
   ],
   "152:prev_only": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -4734,7 +4734,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -4772,7 +4772,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -4816,7 +4816,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -4860,7 +4860,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -4892,7 +4892,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -4938,7 +4938,7 @@
   ],
   "152:prev_records": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -4967,7 +4967,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -5005,7 +5005,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -5049,7 +5049,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -5093,7 +5093,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -5125,7 +5125,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -5171,7 +5171,7 @@
   ],
   "152:records_only": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5200,7 +5200,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -5238,7 +5238,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -5282,7 +5282,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -5326,7 +5326,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -5358,7 +5358,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -5404,7 +5404,7 @@
   ],
   "154:golds": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5466,7 +5466,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -5504,7 +5504,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -5548,7 +5548,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5587,7 +5587,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -5625,7 +5625,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5665,7 +5665,7 @@
   ],
   "154:plain": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5727,7 +5727,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -5765,7 +5765,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -5809,7 +5809,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5848,7 +5848,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -5886,7 +5886,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -5926,7 +5926,7 @@
   ],
   "154:prev_only": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6000,7 +6000,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -6050,7 +6050,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -6106,7 +6106,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6162,7 +6162,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -6217,7 +6217,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6279,7 +6279,7 @@
   ],
   "154:prev_records": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6353,7 +6353,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -6403,7 +6403,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -6459,7 +6459,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6515,7 +6515,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -6570,7 +6570,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6632,7 +6632,7 @@
   ],
   "154:records_only": [
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6694,7 +6694,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -6732,7 +6732,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -6776,7 +6776,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6815,7 +6815,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -6853,7 +6853,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6893,7 +6893,7 @@
   ],
   "156:golds": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -6922,7 +6922,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -6951,7 +6951,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -6989,7 +6989,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -7021,7 +7021,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7065,7 +7065,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -7084,7 +7084,7 @@
   ],
   "156:plain": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -7113,7 +7113,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -7142,7 +7142,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7180,7 +7180,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -7212,7 +7212,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7256,7 +7256,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -7275,7 +7275,7 @@
   ],
   "156:prev_only": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -7336,7 +7336,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -7382,7 +7382,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7442,7 +7442,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -7491,7 +7491,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7557,7 +7557,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -7588,7 +7588,7 @@
   ],
   "156:prev_records": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -7649,7 +7649,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -7695,7 +7695,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7755,7 +7755,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -7804,7 +7804,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7870,7 +7870,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -7901,7 +7901,7 @@
   ],
   "156:records_only": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -7930,7 +7930,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -7959,7 +7959,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -7997,7 +7997,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -8029,7 +8029,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -8073,7 +8073,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -8092,7 +8092,7 @@
   ],
   "157:golds": [
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -8136,7 +8136,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -8168,7 +8168,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -8206,7 +8206,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -8238,7 +8238,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -8272,7 +8272,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -8312,7 +8312,7 @@
   ],
   "157:plain": [
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -8356,7 +8356,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -8388,7 +8388,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -8426,7 +8426,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -8458,7 +8458,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -8492,7 +8492,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -8532,7 +8532,7 @@
   ],
   "157:prev_only": [
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -8588,7 +8588,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -8632,7 +8632,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -8687,7 +8687,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -8731,7 +8731,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -8777,7 +8777,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -8839,7 +8839,7 @@
   ],
   "157:prev_records": [
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -8895,7 +8895,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -8939,7 +8939,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -8994,7 +8994,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -9038,7 +9038,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -9084,7 +9084,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9146,7 +9146,7 @@
   ],
   "157:records_only": [
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -9190,7 +9190,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -9222,7 +9222,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -9260,7 +9260,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -9292,7 +9292,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -9326,7 +9326,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9366,7 +9366,7 @@
   ],
   "160:golds": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -9404,7 +9404,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9442,7 +9442,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9474,7 +9474,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -9503,7 +9503,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -9541,7 +9541,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9581,7 +9581,7 @@
   ],
   "160:plain": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -9619,7 +9619,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9657,7 +9657,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9689,7 +9689,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -9718,7 +9718,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -9756,7 +9756,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9796,7 +9796,7 @@
   ],
   "160:prev_only": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -9851,7 +9851,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9906,7 +9906,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -9955,7 +9955,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -10006,7 +10006,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -10061,7 +10061,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10123,7 +10123,7 @@
   ],
   "160:prev_records": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -10178,7 +10178,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10233,7 +10233,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10282,7 +10282,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -10333,7 +10333,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -10388,7 +10388,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10450,7 +10450,7 @@
   ],
   "160:records_only": [
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -10488,7 +10488,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10526,7 +10526,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10558,7 +10558,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -10587,7 +10587,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -10625,7 +10625,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10665,7 +10665,7 @@
   ],
   "165:golds": [
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10703,7 +10703,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -10747,7 +10747,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -10781,7 +10781,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -10819,7 +10819,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10851,7 +10851,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10885,7 +10885,7 @@
   ],
   "165:plain": [
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -10923,7 +10923,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -10967,7 +10967,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -11001,7 +11001,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -11039,7 +11039,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11071,7 +11071,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11105,7 +11105,7 @@
   ],
   "165:prev_only": [
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11155,7 +11155,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -11221,7 +11221,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -11277,7 +11277,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -11332,7 +11332,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11386,7 +11386,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11437,7 +11437,7 @@
   ],
   "165:prev_records": [
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11487,7 +11487,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -11553,7 +11553,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -11609,7 +11609,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -11664,7 +11664,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11718,7 +11718,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11769,7 +11769,7 @@
   ],
   "165:records_only": [
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11807,7 +11807,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -11851,7 +11851,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -11885,7 +11885,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -11923,7 +11923,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11955,7 +11955,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -11989,7 +11989,7 @@
   ],
   "228:golds": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -12021,7 +12021,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12059,7 +12059,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12097,7 +12097,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -12135,7 +12135,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -12167,7 +12167,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12207,7 +12207,7 @@
   ],
   "228:plain": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -12239,7 +12239,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12277,7 +12277,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12315,7 +12315,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -12353,7 +12353,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -12385,7 +12385,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12425,7 +12425,7 @@
   ],
   "228:prev_only": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -12479,7 +12479,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12529,7 +12529,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12584,7 +12584,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -12664,7 +12664,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -12718,7 +12718,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12775,7 +12775,7 @@
   ],
   "228:prev_records": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -12829,7 +12829,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12879,7 +12879,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -12934,7 +12934,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -13014,7 +13014,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -13068,7 +13068,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13125,7 +13125,7 @@
   ],
   "228:records_only": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -13157,7 +13157,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13195,7 +13195,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13233,7 +13233,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -13271,7 +13271,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -13303,7 +13303,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13343,7 +13343,7 @@
   ],
   "229:golds": [
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13381,7 +13381,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13419,7 +13419,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -13463,7 +13463,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -13501,7 +13501,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -13539,7 +13539,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13585,7 +13585,7 @@
   ],
   "229:plain": [
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13623,7 +13623,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13661,7 +13661,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -13705,7 +13705,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -13743,7 +13743,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -13781,7 +13781,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13827,7 +13827,7 @@
   ],
   "229:prev_only": [
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13882,7 +13882,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -13937,7 +13937,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -14023,7 +14023,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -14078,7 +14078,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -14138,7 +14138,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14196,7 +14196,7 @@
   ],
   "229:prev_records": [
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14251,7 +14251,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14306,7 +14306,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -14392,7 +14392,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -14447,7 +14447,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -14507,7 +14507,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14565,7 +14565,7 @@
   ],
   "229:records_only": [
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14603,7 +14603,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14641,7 +14641,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -14685,7 +14685,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -14723,7 +14723,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -14761,7 +14761,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14807,7 +14807,7 @@
   ],
   "230:golds": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -14845,7 +14845,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14889,7 +14889,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -14921,7 +14921,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -14965,7 +14965,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -15003,7 +15003,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -15037,7 +15037,7 @@
   ],
   "230:plain": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -15075,7 +15075,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -15119,7 +15119,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -15151,7 +15151,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -15195,7 +15195,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -15233,7 +15233,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -15267,7 +15267,7 @@
   ],
   "230:prev_only": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -15322,7 +15322,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -15383,7 +15383,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -15432,7 +15432,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -15498,7 +15498,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -15548,7 +15548,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -15594,7 +15594,7 @@
   ],
   "230:prev_records": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -15649,7 +15649,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -15710,7 +15710,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -15759,7 +15759,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -15825,7 +15825,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -15875,7 +15875,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -15921,7 +15921,7 @@
   ],
   "230:records_only": [
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -15959,7 +15959,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 134,
+    "exercise_id": 234,
     "exercise_name": "Отжимания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16003,7 +16003,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16035,7 +16035,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -16079,7 +16079,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -16117,7 +16117,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -16151,7 +16151,7 @@
   ],
   "301:golds": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -16189,7 +16189,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -16227,7 +16227,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -16271,7 +16271,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -16315,7 +16315,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16353,7 +16353,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16393,7 +16393,7 @@
   ],
   "301:plain": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -16431,7 +16431,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -16469,7 +16469,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -16513,7 +16513,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -16557,7 +16557,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16595,7 +16595,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16635,7 +16635,7 @@
   ],
   "301:prev_only": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -16685,7 +16685,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -16740,7 +16740,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -16801,7 +16801,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -16862,7 +16862,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16922,7 +16922,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -16984,7 +16984,7 @@
   ],
   "301:prev_records": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -17034,7 +17034,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -17089,7 +17089,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -17150,7 +17150,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -17211,7 +17211,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -17271,7 +17271,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -17333,7 +17333,7 @@
   ],
   "301:records_only": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -17371,7 +17371,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -17409,7 +17409,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -17453,7 +17453,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -17497,7 +17497,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -17535,7 +17535,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 135,
+    "exercise_id": 235,
     "exercise_name": "Скручивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -17575,7 +17575,7 @@
   ],
   "302:golds": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -17604,7 +17604,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": 3,
@@ -17660,7 +17660,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": 1,
@@ -17692,7 +17692,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": 2,
@@ -17730,7 +17730,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -17762,7 +17762,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": 2,
@@ -17802,7 +17802,7 @@
   ],
   "302:plain": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -17831,7 +17831,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -17887,7 +17887,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -17919,7 +17919,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -17957,7 +17957,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -17989,7 +17989,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -18029,7 +18029,7 @@
   ],
   "302:prev_only": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -18075,7 +18075,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": null,
@@ -18153,7 +18153,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": null,
@@ -18202,7 +18202,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": null,
@@ -18262,7 +18262,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -18311,7 +18311,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": null,
@@ -18368,7 +18368,7 @@
   ],
   "302:prev_records": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -18414,7 +18414,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": 3,
@@ -18492,7 +18492,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": 1,
@@ -18541,7 +18541,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": 2,
@@ -18601,7 +18601,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -18650,7 +18650,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": 2,
@@ -18707,7 +18707,7 @@
   ],
   "302:records_only": [
    {
-    "exercise_id": 129,
+    "exercise_id": 229,
     "exercise_name": "Жим лёжа",
     "formula": "brzycki",
     "gold_index": null,
@@ -18736,7 +18736,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 131,
+    "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
     "gold_index": 3,
@@ -18792,7 +18792,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 136,
+    "exercise_id": 236,
     "exercise_name": "Странное",
     "formula": "brzycki",
     "gold_index": 1,
@@ -18824,7 +18824,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 130,
+    "exercise_id": 230,
     "exercise_name": "Присед",
     "formula": "brzycki",
     "gold_index": 2,
@@ -18862,7 +18862,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 133,
+    "exercise_id": 233,
     "exercise_name": "Подтягивания",
     "formula": "brzycki",
     "gold_index": null,
@@ -18894,7 +18894,7 @@
     "type": "single"
    },
    {
-    "exercise_id": 132,
+    "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
     "gold_index": 2,

@@ -304,7 +304,7 @@ async def test_template_search_limit_goes_up_to_200(fresh_db, monkeypatch):
 
 async def test_share_preview_localizes_group_and_catalog_names_for_the_viewer(fresh_db):
     owner = await _linked(fresh_db, "ru", telegram_id=111)
-    ex = await _forked(owner, "жим штанги")
+    ex = await _forked(owner, "жим штанги лёжа")
     token = (await owner.post(f"/share/exercises/{ex['id']}")).json()["token"]
 
     viewer = await _linked(fresh_db, "en", telegram_id=222)
