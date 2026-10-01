@@ -2336,9 +2336,10 @@ TOOLS: list[dict[str, Any]] = [
                                                         "minimum": PROGRESSION_MIN_STEP,
                                                         "maximum": PROGRESSION_SCHEMA_MAX_STEP,
                                                         "description": (
-                                                            "Прибавка веса в единицах пользователя "
-                                                            "(unit из get_training_overview): типично "
-                                                            "2.5 для kg, 5 для lb"
+                                                            "Прибавка веса в unit пользователя: "
+                                                            "типично 2.5 kg / 5 lb. Не ставь на вес "
+                                                            "тела, скручивания, подъёмы ног. Планка и "
+                                                            "прочее на время: reps и step — секунды"
                                                         ),
                                                     },
                                                 },
@@ -3730,7 +3731,63 @@ def _clean_progression(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
     return out
 
 
-def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
+def _fit_progression_to_kind(
+    progression: Optional[dict[str, Any]], kind: str, reps_max: Optional[int]
+) -> tuple[Optional[dict[str, Any]], list[str]]:
+    """Правило прогрессии под вид нагрузки упражнения (seed_data.progression_kind).
+
+    Живой прогон тренера: шаг в кг стоял на каждом упражнении — «Подтягивания»
+    +2.5 кг двухмесячному новичку, «Скручивания» +2.5, «Планка» +5 при
+    «повторах» 30–45 (то есть секундах). В домашних программах так было 7
+    упражнений из 19. Здесь это чинится до сохранения, а пометки уходят модели
+    в `clamped` — чтобы она узнала, почему правило стало другим.
+
+    - bodyweight / no_load — шага в кг нет: прогресс повторами до reps_top.
+      linear_load на них превращается в double_progression (если есть
+      диапазон, верх которого станет reps_top) или отбрасывается.
+    - timed — повторы это секунды, и шаг тоже секунды: зажат в
+      analytics.TIMED_STEP_MIN..MAX, по умолчанию TIMED_STEP_DEFAULT, а
+      `step_unit: "sec"` говорит всем, кто правило читает, что это не кг.
+    - weight — как было.
+    """
+    notes: list[str] = []
+    if progression is None or kind == "weight":
+        return progression, notes
+    if kind in ("bodyweight", "no_load"):
+        why = (
+            "упражнение с весом тела — прогресс повторами до reps_top, дальше вариант "
+            "потяжелее или отягощение"
+            if kind == "bodyweight"
+            else "вес тут не прибавляют — прогресс повторами до reps_top"
+        )
+        if progression["rule"] == "linear_load":
+            if reps_max is None:
+                notes.append(f"progression linear_load отброшена: {why}")
+                return None, notes
+            notes.append(f"linear_load→double_progression (reps_top {reps_max}): {why}")
+            return {"rule": "double_progression", "reps_top": reps_max}, notes
+        if "step" in progression:
+            progression = {k: v for k, v in progression.items() if k != "step"}
+            notes.append(f"step снят: {why}; шаг в кг сюда не ставь")
+        return progression, notes
+    if kind == "timed":
+        raw_step = progression.get("step")
+        step = analytics.TIMED_STEP_DEFAULT if raw_step is None else int(round(max(
+            analytics.TIMED_STEP_MIN, min(raw_step, analytics.TIMED_STEP_MAX)
+        )))
+        progression = {**progression, "step": step, "step_unit": "sec"}
+        note = "упражнение на время: reps_min/reps_max/reps_top — секунды, step — секунды, не кг"
+        if raw_step is None:
+            note += f" (step не задан → {step:g} сек)"
+        elif raw_step != step:
+            note += f" (step {raw_step:g}→{step:g} сек)"
+        notes.append(note)
+    return progression, notes
+
+
+def _clean_program_item(
+    raw: Any, unit: str = "kg", kind: Optional[str] = None
+) -> Optional[dict[str, Any]]:
     """Одно упражнение из предложенной программы: имя плюс схема подходов.
 
     Схема необязательна — тренер может задать только подходы или только
@@ -3801,6 +3858,14 @@ def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
             progression = None
             clamped.append("progression linear_load без step — отброшена")
 
+    # Вид нагрузки — по идентичности: `kind` передаёт _propose_program, уже
+    # срезолвив имя в каталог (в т.ч. своё переименованное упражнение по
+    # original_name); без него — по имени, каноничному или показанному.
+    if kind is None:
+        kind = seed_data.progression_kind_for_name(name)
+    progression, kind_notes = _fit_progression_to_kind(progression, kind, reps_max)
+    clamped += kind_notes
+
     return {
         "name": name,
         "sets": sets,
@@ -3808,6 +3873,7 @@ def _clean_program_item(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
         "reps_max": reps_max,
         "clamped": clamped,
         "progression": progression,
+        "kind": kind,
     }
 
 
@@ -5069,10 +5135,18 @@ async def _propose_program(
             item = _clean_program_item(raw_item, unit)
             if item is None:
                 continue
-            source, display_name = await db.resolve_exercise_name(user_id, item["name"])
+            source, display_name, identity = await db.resolve_exercise_identity(
+                user_id, item["name"]
+            )
             if source is None:
                 unresolved.append(item["name"])
                 continue
+            # Вид нагрузки — по идентичности каталога, а не по присланному имени:
+            # своё переименованное «Подтягивания» остаётся подтягиваниями.
+            kind = seed_data.progression_kind(identity)
+            if kind != item["kind"]:
+                item = _clean_program_item(raw_item, unit, kind=kind)
+            item.pop("kind", None)
             key = display_name.lower()
             if key in seen:
                 continue

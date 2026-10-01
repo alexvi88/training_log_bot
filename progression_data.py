@@ -31,8 +31,12 @@ def hint(
     inferred_step: Optional[float] = None,
     rule: Optional[dict] = None,
     target: Optional[str] = None,
+    kind: str = "weight",
 ) -> Optional[dict[str, Any]]:
     """Что предложить в следующем подходе, готовой строкой и числами.
+
+    `kind` — вид нагрузки упражнения (db.exercise_progression_kind): у планки
+    цель в секундах, у подтягиваний и скручиваний — без шага в кг из программы.
 
     `None`, когда предлагать нечего: истории нет вовсе или
     `analytics.suggest_progression` не нашла осмысленного шага.
@@ -50,6 +54,7 @@ def hint(
         formula=formula,
         rule=rule,
         planned_reps=formatting.planned_rep_range(target),
+        kind=kind,
     )
     if suggestion is None:
         return None
@@ -63,6 +68,8 @@ def hint(
         "target_weight": round(suggestion.target_weight, 2),
         "target_reps": suggestion.target_reps,
         "is_bodyweight": suggestion.is_bodyweight,
+        # Планка и прочее на время: target_reps тогда — секунды, а не повторы.
+        "is_timed": suggestion.is_timed,
     }
 
 
@@ -106,6 +113,7 @@ async def hint_for_workout(
     today_sets = [(r["weight"], r["reps"]) for r in today]
     targets = await db.workout_exercise_targets(workout_id)
     rule = await db.progression_rule_for_workout(workout_id, exercise_id)
+    kind = await db.exercise_progression_kind(exercise_id)
 
     with i18n.use_lang(user["lang"]):
         return hint(
@@ -116,4 +124,5 @@ async def hint_for_workout(
             inferred_step=step,
             rule=rule,
             target=targets.get(exercise_id),
+            kind=kind,
         )
