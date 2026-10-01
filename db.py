@@ -6065,7 +6065,12 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
     """
     cur = await conn().execute(
         f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, s.rpe, e.id AS exercise_id, e.display_name, "
-        "       w.id AS workout_id, w.started_at "
+        "       w.id AS workout_id, w.started_at, "
+        # Что человек записал сам (добавка на поясе, помощь гравитрона) и
+        # посчитан ли вес тела в нагрузку — зал славы подписывает такой
+        # рекорд «свой вес × 10», а не голым числом нагрузки.
+        "       s.weight AS logged_weight, e.bodyweight_load, "
+        "       (s.load_weight IS NOT NULL AND e.bodyweight_load != 'none') AS own_load "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "

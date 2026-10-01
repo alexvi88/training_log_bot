@@ -265,6 +265,7 @@ async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) ->
         best_week_streak=hof.best_week_streak,
         longest_workout_seconds=hof.longest_workout_seconds,
         top_lifts=hof.top_lifts,
+        own_weight=hof.top_lift_own_weight,
         unit=hof.unit,
         rank=hof.rank,
         rank_gap=hof.rank_gap,

@@ -30,25 +30,34 @@ from api_v1_common import ApiError, authed_user_id
 
 
 def _lift_json(
-    entry: tuple[str, float, int, float], exercise_id: Optional[int] = None
+    entry: tuple[str, float, int, float], exercise_id: Optional[int] = None,
+    own_weight: Optional[float] = None, unit: str = "kg",
 ) -> dict[str, Any]:
     """(имя, вес лучшего подхода, повторы, e1RM) — вес 0 значит «свой вес»,
     тем же признаком, что и formatting._hall_of_fame_lift. `record` — готовая
     строка подхода/повторов, чтобы клиенту не пересобирать русское/английское
-    согласование самому."""
+    согласование самому.
+
+    `own_weight` не None — нагрузка рекорда и есть вес тела (подтягивания при
+    записанном взвешивании): `record` тогда «свой вес × 10», а `weight` —
+    вся нагрузка с весом тела, по ней посчитан `e1rm`; `with_bodyweight`
+    говорит клиенту подписать её как вес тела, а не железо."""
     name, weight, reps, e1rm = entry
     is_bodyweight = weight <= 0
-    record = (
-        i18n.t("progress.total_reps", n=reps)
-        if is_bodyweight
-        else formatting.format_set(weight, reps)
-    )
+    with_bodyweight = not is_bodyweight and own_weight is not None
+    if is_bodyweight:
+        record = i18n.t("progress.total_reps", n=reps)
+    elif with_bodyweight:
+        record = formatting.format_own_weight_record(reps, own_weight, unit)
+    else:
+        record = formatting.format_set(weight, reps)
     return {
         # id упражнения пользователя — по нему приложение открывает его
         # прогресс; `exercise` — только показ. null, если строку не к чему привязать.
         "exercise_id": exercise_id,
         "exercise": name,
         "is_bodyweight": is_bodyweight,
+        "with_bodyweight": with_bodyweight,
         "weight": None if is_bodyweight else weight,
         "reps": reps,
         "e1rm": None if is_bodyweight else round(e1rm, 1),
@@ -69,6 +78,7 @@ def _rank_json(rank, gap, unit: str = "kg") -> Optional[dict[str, Any]]:
 def _hall_of_fame_json(hof: "hall_of_fame_data.HallOfFame") -> dict[str, Any]:
     # Недостающие id добиваем None, чтобы ни одна строка не потерялась в zip.
     ids = hof.top_lift_ids + [None] * (len(hof.top_lifts) - len(hof.top_lift_ids))
+    own = hof.top_lift_own_weight + [None] * (len(hof.top_lifts) - len(hof.top_lift_own_weight))
     return {
         "total_workouts": hof.total_workouts,
         "rank": _rank_json(hof.rank, hof.rank_gap, hof.unit),
@@ -80,7 +90,9 @@ def _hall_of_fame_json(hof: "hall_of_fame_data.HallOfFame") -> dict[str, Any]:
         },
         "best_week_streak": hof.best_week_streak,
         "longest_workout_seconds": hof.longest_workout_seconds,
-        "top_lifts": [_lift_json(t, i) for t, i in zip(hof.top_lifts, ids, strict=True)],
+        "top_lifts": [
+            _lift_json(t, i, ow, hof.unit) for t, i, ow in zip(hof.top_lifts, ids, own, strict=True)
+        ],
     }
 
 

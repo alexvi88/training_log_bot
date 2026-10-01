@@ -666,6 +666,8 @@
   "hall.best_streak": "🔥 Best streak: <b>{n}</b> {n, plural, one{week} other{weeks}} in a row",
   "hall.empty": "Nothing yet — finish your first workout and your records will show up here.",
   "hall.longest_workout": "⏱ Longest workout: <b>{duration}</b>",
+  "hall.own_weight_set": "bodyweight × {reps}",
+  "hall.own_weight_extra_set": "bodyweight {extra} × {reps}",
   "hall.personal_records": "<b>Personal records:</b>",
   "hall.reps_line": "• {name} — {reps} {n, plural, one{rep} other{reps}}",
   "hall.shown_of": "<i>showing {kept} of {total}</i>",

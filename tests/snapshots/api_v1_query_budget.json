@@ -3876,18 +3876,20 @@
     "exercise": "Подтягивания",
     "exercise_id": 133,
     "is_bodyweight": false,
-    "record": "188×15",
+    "record": "свой вес +108кг × 15",
     "reps": 15,
-    "weight": 188.0
+    "weight": 188.0,
+    "with_bodyweight": true
    },
    {
     "e1rm": 285.0,
     "exercise": "Отжимания",
     "exercise_id": 134,
     "is_bodyweight": false,
-    "record": "190×15",
+    "record": "свой вес +110кг × 15",
     "reps": 15,
-    "weight": 190.0
+    "weight": 190.0,
+    "with_bodyweight": true
    },
    {
     "e1rm": 182.5,
@@ -3896,7 +3898,8 @@
     "is_bodyweight": false,
     "record": "116.5×15",
     "reps": 15,
-    "weight": 116.5
+    "weight": 116.5,
+    "with_bodyweight": false
    },
    {
     "e1rm": 179.4,
@@ -3905,7 +3908,8 @@
     "is_bodyweight": false,
     "record": "114.5×15",
     "reps": 15,
-    "weight": 114.5
+    "weight": 114.5,
+    "with_bodyweight": false
    },
    {
     "e1rm": 178.6,
@@ -3914,7 +3918,8 @@
     "is_bodyweight": false,
     "record": "114×15",
     "reps": 15,
-    "weight": 114.0
+    "weight": 114.0,
+    "with_bodyweight": false
    },
    {
     "e1rm": 177.8,
@@ -3923,7 +3928,8 @@
     "is_bodyweight": false,
     "record": "113.5×15",
     "reps": 15,
-    "weight": 113.5
+    "weight": 113.5,
+    "with_bodyweight": false
    },
    {
     "e1rm": 174.8,
@@ -3932,7 +3938,8 @@
     "is_bodyweight": false,
     "record": "116.5×15",
     "reps": 15,
-    "weight": 116.5
+    "weight": 116.5,
+    "with_bodyweight": false
    },
    {
     "e1rm": 172.9,
@@ -3941,7 +3948,8 @@
     "is_bodyweight": false,
     "record": "114×15",
     "reps": 15,
-    "weight": 114.0
+    "weight": 114.0,
+    "with_bodyweight": false
    }
   ],
   "total_workouts": 150

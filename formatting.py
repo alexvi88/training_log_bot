@@ -2119,11 +2119,34 @@ def format_duration_hm(seconds: float) -> str:
     return i18n.t("date.duration_m", m=m)
 
 
-def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, unit_label: str) -> str:
+def format_own_weight_record(reps: int, extra: float, unit: str = "kg") -> str:
+    """Рекорд упражнения, в нагрузку которого вошёл вес тела: «свой вес × 10»,
+    «свой вес +10кг × 8», «свой вес −20кг × 10» (помощь гравитрона).
+
+    Голое «81.5×10» у подтягиваний читалось как подтягивания с блином 81.5:
+    нагрузка — это вес тела, а не железо. `extra` — что человек записал сам,
+    уже со знаком (hall_of_fame_data.HallOfFame.top_lift_own_weight)."""
+    if not extra:
+        return i18n.t("hall.own_weight_set", reps=reps)
+    sign = "+" if extra > 0 else "−"
+    return i18n.t(
+        "hall.own_weight_extra_set",
+        extra=f"{sign}{format_weight(abs(extra))}{unit_label(unit)}",
+        reps=reps,
+    )
+
+
+def _hall_of_fame_lift(
+    name: str, weight: float, reps: int, e1rm_value: float, unit_label: str,
+    own_weight: float | None = None, unit: str = "kg",
+) -> str:
     """One personal-record line. Bodyweight moves have no load to report, so their
-    record is the best set of reps instead of a weight and an e1RM."""
+    record is the best set of reps instead of a weight and an e1RM. A bodyweight
+    move whose load is the athlete's own weight (`own_weight` is not None) says
+    so instead of showing that weight as if it were iron."""
     if weight > 0:
-        return f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1rm_value:.0f}{unit_label}"
+        lift = format_set(weight, reps) if own_weight is None else format_own_weight_record(reps, own_weight, unit)
+        return f"• {escape(name)} — {lift} · e1RM {e1rm_value:.0f}{unit_label}"
     return i18n.t("hall.reps_line", name=escape(name), reps=reps, n=reps)
 
 
@@ -2242,6 +2265,7 @@ def build_hall_of_fame(
     max_chars: int | None = None,
     rank=None,  # analytics.Rank | None
     rank_gap=None,  # analytics.RankGap | None
+    own_weight: list[float | None] | None = None,  # hall_of_fame_data.HallOfFame.top_lift_own_weight
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""
@@ -2281,7 +2305,11 @@ def build_hall_of_fame(
     if not top_lifts:
         return "\n".join(lines)
 
-    entries = [_hall_of_fame_lift(name, weight, reps, e1, u) for name, weight, reps, e1 in top_lifts]
+    own = list(own_weight or []) + [None] * (len(top_lifts) - len(own_weight or []))
+    entries = [
+        _hall_of_fame_lift(name, weight, reps, e1, u, own_weight=ow, unit=unit)
+        for (name, weight, reps, e1), ow in zip(top_lifts, own, strict=True)
+    ]
     lines.append("")
     lines.append(i18n.t("hall.personal_records"))
     head = "\n".join(lines)

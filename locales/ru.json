@@ -666,6 +666,8 @@
   "hall.best_streak": "🔥 Лучшая серия: <b>{n}</b> {n, plural, one{неделя} few{недели} many{недель} other{недели}} подряд",
   "hall.empty": "Пока пусто — заверши первую тренировку, и здесь появятся твои рекорды.",
   "hall.longest_workout": "⏱ Самая длинная тренировка: <b>{duration}</b>",
+  "hall.own_weight_set": "свой вес × {reps}",
+  "hall.own_weight_extra_set": "свой вес {extra} × {reps}",
   "hall.personal_records": "<b>Личные рекорды:</b>",
   "hall.reps_line": "• {name} — {reps} {n, plural, one{повтор} few{повтора} many{повторов} other{повтора}}",
   "hall.shown_of": "<i>показано {kept} из {total}</i>",
