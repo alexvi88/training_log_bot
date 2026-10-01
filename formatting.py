@@ -1189,13 +1189,19 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
     rule = progression.get("rule")
     step = progression.get("step")
     step_text = None
-    if step:
+    timed = progression.get("step_unit") == "sec"
+    if step and timed:
+        # Планка: шаг в секундах, к весу он отношения не имеет.
+        step_text = f"{step:g} {i18n.t('program.target.seconds')}"
+    elif step:
         # Вплотную к числу, как везде в проекте («20кг», не «20 кг»).
         step_text = (
             f"{step:g}{unit_label(unit)}" if unit else i18n.t("program.step_neutral", step=f"{step:g}")
         )
     if rule == "double_progression":
         top = progression.get("reps_top")
+        if top and step_text and timed:
+            return i18n.t("program.progression_timed_at_top", top=top, step=step_text)
         if top and step_text:
             return i18n.t("program.progression_double_at_top", top=top, step=step_text)
         return i18n.t("program.progression_double_generic")
@@ -2548,7 +2554,12 @@ def format_progression_hint(suggestion, achieved: bool = False) -> str:
     """"Цель: …" nudge from analytics.suggest_progression, on its own line under
     the "Прошлый раз" line (no bold — the surrounding line is already italicized).
     """
-    if suggestion.is_bodyweight:
+    if getattr(suggestion, "is_timed", False):
+        # Планка: «повторы» — секунды, и цель тоже в секундах, а не «×N».
+        goal = i18n.t("progression.goal_seconds", n=suggestion.target_reps)
+        if not suggestion.is_bodyweight:
+            goal = f"{format_weight(suggestion.target_weight)}×{goal}"
+    elif suggestion.is_bodyweight:
         goal = i18n.t("progression.goal_reps", n=suggestion.target_reps)
     else:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
