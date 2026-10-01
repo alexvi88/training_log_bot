@@ -717,6 +717,26 @@ LEGACY_PROGRAM_TEXTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
     },
 }
 
+# Пятый заход — откат #732. Тот PR снял эмодзи со всех имён каталога, и на
+# проде миграция v11 уже переписала нетронутые копии на имена без эмодзи.
+# Каталог вернулся к именам с эмодзи, поэтому имена без эмодзи — теперь тоже
+# «прежний текст»: по ним v12 возвращает такие копии к текущему каталогу.
+_NAMES_WITHOUT_EMOJI: dict[tuple[str, str], str] = {
+    ("fullbody3", "ru"): "Всё тело — 3 дня",
+    ("strength5x5", "ru"): "Сила 5×5 — A/B",
+    ("ppl", "ru"): "Push/Pull/Legs (жим, тяга, ноги)",
+    ("split3", "ru"): "Сплит на 3 дня",
+    ("glutes3", "ru"): "Ягодицы и ноги — 3 дня",
+    ("fullbody3", "en"): "Full Body — 3 Days",
+    ("strength5x5", "en"): "Strength 5×5 — A/B",
+    ("ppl", "en"): "Push / Pull / Legs",
+    ("split3", "en"): "3-Day Split",
+    ("glutes3", "en"): "Glutes & Legs — 3 Days",
+}
+for _key, _name in _NAMES_WITHOUT_EMOJI.items():
+    _entry = LEGACY_PROGRAM_TEXTS.setdefault(_key, {})
+    _entry["name"] = (*_entry.get("name", ()), _name)
+
 
 def legacy_program_texts(key: str, field: str) -> set[str]:
     """Все прежние написания поля `field` ("name"/"description"/"day.<i>")

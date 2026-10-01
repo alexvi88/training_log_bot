@@ -296,3 +296,17 @@ async def test_readding_ppl_after_migration_is_name_taken(fresh_db, user_id):
         "SELECT COUNT(*) FROM programs WHERE user_id = ? AND source_ref = 'ppl'", (user_id,)
     )
     assert (await cur.fetchone())[0] == 1
+
+
+async def test_v12_returns_emoji_to_copies_renamed_by_reverted_v11(fresh_db, user_id):
+    """На проде v11 сняла эмодзи с копий, каталог их вернул — v12 догоняет."""
+    db = fresh_db
+    ids = {}
+    for (key, lang), plain in seed_data._NAMES_WITHOUT_EMOJI.items():
+        with i18n.use_lang(lang):
+            ids[(key, lang)] = await seed_data.instantiate_program(user_id, key, plain)
+    await db.conn().execute("PRAGMA user_version = 11")
+    await db.conn().commit()
+    await db._run_one_shot_migrations()
+    for (key, lang), program_id in ids.items():
+        assert (await db.get_program(program_id))["name"] == seed_data.localized_program_name(key, lang)
