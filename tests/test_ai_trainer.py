@@ -50,7 +50,11 @@ _GATE_NO_SEARCH = '{"search": false, "data": true}'
 # символов сверх ужатой старой прозы): модель ставила шаг в кг на подтягивания,
 # скручивания и планку. Остальное чинит _fit_progression_to_kind, но без
 # строки в схеме модель узнавала бы об этом только из clamped — раундом позже.
-_TOOL_SCHEMA_CHAR_BUDGET = 22_450
+# Поднят с 22_450 под top_set_backoff и deload_every_weeks у propose_program
+# (~530 символов): живой прогон — силовику (присед 180) досталось 5×3–5 с
+# «+2.5, когда возьмёшь 5×5» на ~89 %, а «топ-сет + бэкоффы» из текста тренера
+# схема выразить не могла; разгрузки не было ни в одной из девяти программ.
+_TOOL_SCHEMA_CHAR_BUDGET = 23_000
 
 
 async def test_tool_schemas_stay_within_their_character_budget():

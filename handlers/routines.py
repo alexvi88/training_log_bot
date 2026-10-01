@@ -345,6 +345,9 @@ async def _show_program(event, state: FSMContext, program_id: int, page: int = 0
     )
     if description:
         header.append(f"\n{escape(description)}")
+    deload_note = formatting.format_deload_note(program["deload_every_weeks"])
+    if deload_note:
+        header.append(f"\n{escape(deload_note)}")
     tail = (
         i18n.t("routine.program.next_day", name=escape(next_day["name"]))
         if next_day is not None and history
@@ -1088,7 +1091,8 @@ async def rt_program_copy(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     name = await db.unique_program_name(user_id, program["name"])
     copy_id = await db.create_program(
-        user_id, name, source=program["source"], source_ref=program["source_ref"]
+        user_id, name, source=program["source"], source_ref=program["source_ref"],
+        deload_every_weeks=program["deload_every_weeks"],
     )
     for day in days:
         day_id = await db.create_routine(user_id, day["name"], program_id=copy_id)

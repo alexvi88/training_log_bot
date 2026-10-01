@@ -97,7 +97,7 @@ SETUP_CHOICE_LIMIT = 32
 # строка — иначе хранили бы то, что не умеем интерпретировать. step — на сколько
 # прибавлять вес (в единицах пользователя), зажат тем же приёмом, что sets/reps
 # в _clean_program_item.
-PROGRESSION_RULES = ("double_progression", "linear_load")
+PROGRESSION_RULES = ("double_progression", "linear_load", "top_set_backoff")
 PROGRESSION_MIN_STEP = 0.25
 # Потолок шага — в кг, для фунтов тот же физический (analytics.
 # progression_max_step): одно число на обе единицы зажимало атлету в lb шаг
@@ -723,6 +723,17 @@ save_athlete_profile сразу, без спроса и без кнопок по
 в 5-12: восьмёрка в становой это не силовая работа, а испытание поясницы, и
 человек, который тянет к своему максимуму, читает такую схему как «тренер не
 понял, о чём я». Изоляции и тренажёры — наоборот, 8-15.
+
+Силовая цель (просит силу, пауэрлифтинг, максимум в приседе/жиме/становой) или
+стаж от трёх лет — на соревновательных движениях (присед, жим лёжа, становая)
+ставь progression top_set_backoff: топ-сет на 1-5 повторов и 2-4 бэкоффа по
+80-90% от него. «5×5 с прибавкой, когда возьмёшь все пять» на ~89% от максимума
+невыполнимо — так не пишут программу сильному атлету. Остальные упражнения —
+двойная прогрессия, как обычно.
+
+Разгрузка: в каждой программе для всех, кроме совсем новичков в первые два
+месяца, ставь deload_every_weeks 4-6. В эту неделю бот сам подскажет на
+тренировке ~60% подходов на ~90% веса — скажи об этом одной фразой в ответе.
 
 НИКОГДА не обещай действие вместо того, чтобы его сделать. «Сейчас исправлю
 программу», «сейчас соберу», «минуту, пересоберу» — и конец хода: человек
@@ -2265,6 +2276,12 @@ TOOLS: list[dict[str, Any]] = [
                             "пересказывай. На «ты», без приветствия."
                         ),
                     },
+                    "deload_every_weeks": {
+                        "type": "integer",
+                        "minimum": db.DELOAD_MIN_WEEKS,
+                        "maximum": db.DELOAD_MAX_WEEKS,
+                        "description": "Каждая N-я неделя — разгрузка",
+                    },
                     "days": {
                         "type": "array",
                         "minItems": 1,
@@ -2320,8 +2337,20 @@ TOOLS: list[dict[str, Any]] = [
                                                         "description": (
                                                             "double_progression — сначала повторы до "
                                                             "reps_top, потом вес; linear_load — вес "
-                                                            "растёт на step каждую тренировку"
+                                                            "растёт на step каждую тренировку; "
+                                                            "top_set_backoff — топ-сет на top_reps, потом "
+                                                            "backoff_sets по backoff_pct% его веса, step к "
+                                                            "топу, когда взял top_reps_max с запасом"
                                                         ),
+                                                    },
+                                                    **{
+                                                        field: {"type": "integer", "minimum": low, "maximum": high}
+                                                        for field, low, high in (
+                                                            ("top_reps_min", analytics.TOP_SET_REPS_MIN, analytics.TOP_SET_REPS_MAX),
+                                                            ("top_reps_max", analytics.TOP_SET_REPS_MIN, analytics.TOP_SET_REPS_MAX),
+                                                            ("backoff_sets", analytics.BACKOFF_SETS_MIN, analytics.BACKOFF_SETS_MAX),
+                                                            ("backoff_pct", analytics.BACKOFF_PCT_MIN, analytics.BACKOFF_PCT_MAX),
+                                                        )
                                                     },
                                                     "reps_top": {
                                                         "type": "integer",
@@ -3310,7 +3339,10 @@ async def _saved_program_detail(
         for day in await db.list_program_days_by_id(program["id"]):
             days.append({"name": day["name"], "exercises": await exercises(day["id"])})
         return _program_detail_payload(
-            {"name": program["name"], "kind": "program", "days": days}
+            {
+                "name": program["name"], "kind": "program",
+                "deload_every_weeks": program["deload_every_weeks"], "days": days,
+            }
         )
     for routine in await db.list_standalone_routines(user_id):
         if routine["name"].strip().lower() == name.lower():
@@ -3350,8 +3382,8 @@ def _program_detail_payload(program: dict[str, Any]) -> dict[str, Any]:
             "Это то, что у пользователя уже сохранено. Чтобы поправить эту "
             "программу, вызови propose_program целиком (со всеми днями, "
             "включая нетронутые) и передай её точное имя в replaces_program. "
-            "Правила progression нетронутых упражнений тоже переноси как есть — "
-            "чего не пришлёшь, у того сотрётся."
+            "Правила progression нетронутых упражнений и deload_every_weeks тоже "
+            "переноси как есть — чего не пришлёшь, у того сотрётся."
         ),
     }
 
@@ -3724,6 +3756,22 @@ def _clean_progression(raw: Any, unit: str = "kg") -> Optional[dict[str, Any]]:
     step = _as_number(raw.get("step"))
     if step is not None:
         out["step"] = max(PROGRESSION_MIN_STEP, min(step, analytics.progression_max_step(unit)))
+    if rule == "top_set_backoff":
+        # Топ-сет + бэкоффы: один тяжёлый подход в top_reps_min..max, потом
+        # backoff_sets подходов по backoff_pct % его веса (analytics.
+        # suggest_top_set_backoff). Без поля — середина типичного: топ-сет
+        # 1–5 силовика, три бэкоффа по 85 %; зажимы — те же, что у подсказки.
+        low = _clean_int(raw.get("top_reps_min"), analytics.TOP_SET_REPS_MIN, analytics.TOP_SET_REPS_MAX)
+        high = _clean_int(raw.get("top_reps_max"), analytics.TOP_SET_REPS_MIN, analytics.TOP_SET_REPS_MAX)
+        low, high = low or high or 1, high or low or 5
+        out["top_reps_min"], out["top_reps_max"] = min(low, high), max(low, high)
+        out["backoff_sets"] = _clean_int(
+            raw.get("backoff_sets"), analytics.BACKOFF_SETS_MIN, analytics.BACKOFF_SETS_MAX
+        ) or 3
+        out["backoff_pct"] = _clean_int(
+            raw.get("backoff_pct"), analytics.BACKOFF_PCT_MIN, analytics.BACKOFF_PCT_MAX
+        ) or 85
+        return out
     if raw.get("reps_top") is not None:
         reps_top = _clean_int(raw.get("reps_top"), 1, PROGRAM_MAX_REPS)
         if reps_top is not None:
@@ -3753,6 +3801,13 @@ def _fit_progression_to_kind(
     notes: list[str] = []
     if progression is None or kind == "weight":
         return progression, notes
+    if progression["rule"] == "top_set_backoff":
+        # Топ-сет считается от веса на штанге — без веса или на время ему не
+        # от чего брать проценты. Дальше как с двойной прогрессией.
+        notes.append("top_set_backoff→double_progression: только для упражнений с весом")
+        progression = {"rule": "double_progression"}
+        if reps_max is not None and kind != "timed":
+            progression["reps_top"] = reps_max
     if kind in ("bodyweight", "no_load"):
         why = (
             "упражнение с весом тела — прогресс повторами до reps_top, дальше вариант "
@@ -3865,6 +3920,18 @@ def _clean_program_item(
         kind = seed_data.progression_kind_for_name(name)
     progression, kind_notes = _fit_progression_to_kind(progression, kind, reps_max)
     clamped += kind_notes
+    if progression is not None and progression["rule"] == "top_set_backoff":
+        # Схема на карточке («План: 4×1–3») обязана совпадать с правилом:
+        # один топ плюс бэкоффы, повторы — диапазон топа. Иначе подсказка
+        # «🎯 Топ-сет: 160×3» спорила бы с планом «5×3–5» строкой выше.
+        want_sets = 1 + progression["backoff_sets"]
+        want = (progression["top_reps_min"], progression["top_reps_max"])
+        if sets != want_sets or (reps_min, reps_max) != want:
+            clamped.append(
+                f"схема {sets or '-'}×{reps_min or '-'}–{reps_max or '-'}→"
+                f"{want_sets}×{want[0]}–{want[1]} (топ-сет + бэкоффы: {progression['backoff_sets']})"
+            )
+        sets, (reps_min, reps_max) = want_sets, want
 
     return {
         "name": name,
@@ -4119,6 +4186,7 @@ async def _copy_program(
     copy_id = await db.create_program(
         user_id, copy_name,
         description=source_program["description"] if source_program else None,
+        deload_every_weeks=source_program["deload_every_weeks"] if source_program else None,
     )
     if copy_id is None:  # разошлись с параллельной вставкой — имени уже нет
         return {"error": f"«{copy_name}» успели занять, попробуй другое имя"}, None
@@ -5099,6 +5167,7 @@ async def _propose_program(
     # показываем, а модели говорим, чего не хватает — тем же способом, что и про
     # урезанные дни: пусть допишет вызовом заново.
     description = db.clean_program_description(tool_input.get("description"))
+    deload_every_weeks = db.clean_deload_every_weeks(tool_input.get("deload_every_weeks"))
     replaces, replaces_error = await _resolve_replaced_program(
         user_id, tool_input.get("replaces_program")
     )
@@ -5294,6 +5363,9 @@ async def _propose_program(
         # ровно до следующего сообщения, а экран программы человек открывает
         # перед каждой тренировкой.
         "description": description,
+        # Разгрузка каждые N недель — свойство программы, а не упражнения:
+        # ложится в programs.deload_every_weeks (db.deload_week_for_workout).
+        "deload_every_weeks": deload_every_weeks,
         "days": days,
         "replaces": replaces,
         "notes": notes,

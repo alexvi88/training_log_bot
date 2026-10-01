@@ -1389,6 +1389,7 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
     text = formatting.build_ai_program_preview(
         draft["name"], draft["days"], replaces=replaces, notes=draft.get("notes"),
         unit=user["unit"] if user else None,
+        deload_every_weeks=draft.get("deload_every_weeks"),
     )
     await callback.message.answer(
         text,

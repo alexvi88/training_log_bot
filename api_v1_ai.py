@@ -518,6 +518,7 @@ def _program_json(draft_id: str, draft: dict[str, Any]) -> dict[str, Any]:
         "draft_id": draft_id,
         "name": draft["name"],
         "description": draft.get("description") or None,
+        "deload_every_weeks": draft.get("deload_every_weeks"),
         # Готовая подпись кнопки — локализованная, отдаётся под i18n.use_lang
         # вызывающим (см. _turn_response): "Забрать: <имя>", а не голое имя —
         # иначе название программы читается как навигация, а не предложение.

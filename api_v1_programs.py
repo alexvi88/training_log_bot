@@ -127,6 +127,8 @@ def _program_detail_json(program, days) -> dict[str, Any]:
         "id": program["id"],
         "name": program["name"],
         "description": program["description"],
+        # Разгрузка каждые N недель (4–6) или null — у программы её нет.
+        "deload_every_weeks": program["deload_every_weeks"],
         "created_at": program["created_at"],
         "source": program["source"],
         "source_ref": program["source_ref"],
@@ -222,7 +224,7 @@ async def get_program(request: Request) -> JSONResponse:
 
 
 async def update_program(request: Request) -> JSONResponse:
-    """Имя и описание правятся независимо (см. db.set_program_description):
+    """Имя, описание и разгрузка правятся независимо (см. db.set_program_description):
     коллизия имени не должна ронять уже принятое описание из того же тела."""
     user_id = await _authed_user_id(request)
     program_id = int(request.path_params["program_id"])
@@ -235,6 +237,12 @@ async def update_program(request: Request) -> JSONResponse:
             raise ApiError(409, "name_taken", "a program with this name already exists")
     if "description" in body:
         await db.set_program_description(program_id, _optional_str(body, "description"))
+    if "deload_every_weeks" in body:
+        weeks = body["deload_every_weeks"]
+        if weeks is not None and (isinstance(weeks, bool) or not isinstance(weeks, int)):
+            raise ApiError(400, "bad_request", "deload_every_weeks must be an integer or null")
+        # Зажим в 4–6 — db.clean_deload_every_weeks; 0 и null снимают разгрузку.
+        await db.set_program_deload(program_id, weeks)
     program = await _owned_program(program_id, user_id)
     days = await db.list_program_days_by_id(program_id)
     return JSONResponse(_program_detail_json(program, days))

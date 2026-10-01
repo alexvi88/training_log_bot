@@ -13,6 +13,7 @@ from typing import Callable, Literal, Optional
 
 from aiogram.types import MessageEntity
 
+import analytics
 import config
 import i18n
 import seed_data
@@ -1209,7 +1210,28 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
         if step_text:
             return i18n.t("program.progression_linear_step", step=step_text)
         return i18n.t("program.progression_linear_generic")
+    if rule == "top_set_backoff":
+        low, high = progression.get("top_reps_min"), progression.get("top_reps_max")
+        reps = f"{low}–{high}" if low and high and low != high else str(high or low or "")
+        n = progression.get("backoff_sets") or 0
+        pct = progression.get("backoff_pct")
+        if not (reps and n and pct):
+            return i18n.t("program.progression_top_set_generic")
+        key = "program.progression_top_set_step" if step_text else "program.progression_top_set"
+        return i18n.t(key, reps=reps, n=n, pct=pct, step=step_text or "")
     return ""
+
+
+def format_deload_note(deload_every_weeks: Optional[int]) -> str:
+    """«Разгрузка каждые 4 недели» — строка программы, а не упражнения:
+    разгрузка общая на всю неделю (db.deload_week_for_workout). Пусто, если у
+    программы её нет."""
+    if not deload_every_weeks:
+        return ""
+    return i18n.t(
+        "program.deload_every", n=deload_every_weeks,
+        sets=analytics.DELOAD_SETS_PCT, pct=analytics.DELOAD_WEIGHT_PCT,
+    )
 
 
 # Правило прогрессии общими словами, без шага: шаг у каждого упражнения свой
@@ -1219,6 +1241,7 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
 _PROGRESSION_KIND_KEYS = {
     "double_progression": "program.kind_double",
     "linear_load": "program.kind_linear",
+    "top_set_backoff": "program.kind_top_set",
 }
 
 
@@ -1414,7 +1437,7 @@ def _editable_later() -> str:
 
 def build_ai_program_preview(
     name: str, days: list[dict], replaces: Optional[dict] = None, notes: Optional[list[str]] = None,
-    unit: Optional[str] = None,
+    unit: Optional[str] = None, deload_every_weeks: Optional[int] = None,
 ) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
@@ -1438,6 +1461,9 @@ def build_ai_program_preview(
 
     `unit` — "kg"/"lb" пользователя для строк прогрессии («прибавь 2.5кг»,
     см. format_progression_rule); без него — нейтральное «к весу».
+
+    `deload_every_weeks` — разгрузка программы (format_deload_note), строкой
+    рядом с общей прогрессией: это тоже принцип всей программы.
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -1456,6 +1482,9 @@ def build_ai_program_preview(
     shared_progression, shared_kind = progression_summary(days)
     if shared_progression:
         lines.append(escape(shared_progression))
+    deload_note = format_deload_note(deload_every_weeks)
+    if deload_note:
+        lines.append(escape(deload_note))
 
     composition: list[str] = []
     for day in days:
@@ -2533,9 +2562,13 @@ def build_bodyweight_list_screen(
     return text
 
 
-def format_progression_hint(suggestion, achieved: bool = False) -> str:
+def format_progression_hint(suggestion, achieved: bool = False, deload: bool = False) -> str:
     """"Цель: …" nudge from analytics.suggest_progression, on its own line under
     the "Прошлый раз" line (no bold — the surrounding line is already italicized).
+
+    `deload` — неделя разгрузки программы: строка напоминает срезать подходы и
+    вес и держится до конца упражнения, даже когда цель уже взята, — иначе
+    «✅ Цель выполнена» читалось бы как разрешение добить обычный объём.
     """
     if getattr(suggestion, "is_timed", False):
         # Планка: «повторы» — секунды, и цель тоже в секундах, а не «×N».
@@ -2546,8 +2579,20 @@ def format_progression_hint(suggestion, achieved: bool = False) -> str:
         goal = i18n.t("progression.goal_reps", n=suggestion.target_reps)
     else:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
+    if deload:
+        return i18n.t(
+            "progression.deload", goal=goal,
+            sets=analytics.DELOAD_SETS_PCT, pct=analytics.DELOAD_WEIGHT_PCT,
+        )
+    role = getattr(suggestion, "role", None)
+    if role == "backoff":
+        if achieved:
+            return i18n.t("progression.backoff_done", goal=goal)
+        return i18n.t("progression.backoff", goal=goal, pct=suggestion.backoff_pct)
     if achieved:
         return i18n.t("progression.goal_achieved", goal=goal)
+    if role == "top":
+        return i18n.t("progression.top_set", goal=goal, reason=_progression_reason(suggestion))
     return i18n.t("progression.goal", goal=goal, reason=_progression_reason(suggestion))
 
 

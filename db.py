@@ -28,6 +28,7 @@ from typing import Any, Iterable, Optional
 
 import aiosqlite
 
+import analytics
 import config
 import exercise_photos
 import i18n
@@ -523,7 +524,8 @@ CREATE TABLE IF NOT EXISTS programs (
     created_at TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'manual',
     source_ref TEXT,
-    description TEXT
+    description TEXT,
+    deload_every_weeks INTEGER
 );
 -- The index is the point of the table: a name collision is now an error the
 -- caller has to handle, not a silent merge.
@@ -1501,6 +1503,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE programs ADD COLUMN name_key TEXT NOT NULL DEFAULT ''")
     if "description" not in program_cols:
         await _conn.execute("ALTER TABLE programs ADD COLUMN description TEXT")
+    if "deload_every_weeks" not in program_cols:
+        # Разгрузка каждые N недель (ai_trainer.propose_program): NULL — у
+        # программы её нет, как у всех программ до этой колонки.
+        await _conn.execute("ALTER TABLE programs ADD COLUMN deload_every_weeks INTEGER")
     await _conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_programs_user_name ON programs (user_id, name_key)"
     )
@@ -7538,6 +7544,35 @@ def clean_program_description(text: Optional[str]) -> Optional[str]:
     return cleaned[:PROGRAM_DESCRIPTION_LIMIT]
 
 
+# Разгрузка — раз в 4–6 недель: чаще съедает рост, реже — копит усталость, и
+# сильный атлет к шестой неделе уже не восстанавливается между тренировками.
+DELOAD_MIN_WEEKS = 4
+DELOAD_MAX_WEEKS = 6
+
+
+def clean_deload_every_weeks(raw: Any) -> Optional[int]:
+    """Неделя разгрузки — целое, зажатое в DELOAD_MIN_WEEKS..MAX; None — без
+    разгрузки (мусор и ноль тоже: выдумывать за программу её нет причины)."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return max(DELOAD_MIN_WEEKS, min(value, DELOAD_MAX_WEEKS))
+
+
+async def set_program_deload(program_id: int, deload_every_weeks: Optional[int]) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE programs SET deload_every_weeks = ? WHERE id = ?",
+            (clean_deload_every_weeks(deload_every_weeks), program_id),
+        )
+        await conn().commit()
+
+
 async def set_program_description(program_id: int, description: Optional[str]) -> None:
     """Переписать описание — правка программы тренером меняет и его тоже.
 
@@ -7559,6 +7594,7 @@ async def create_program(
     source: str = "manual",
     source_ref: Optional[str] = None,
     description: Optional[str] = None,
+    deload_every_weeks: Optional[int] = None,
 ) -> Optional[int]:
     """A new program, or None if the user already has one by that name.
 
@@ -7572,11 +7608,13 @@ async def create_program(
         try:
             cur = await conn().execute(
                 "INSERT INTO programs "
-                "(user_id, name, name_key, created_at, source, source_ref, description) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(user_id, name, name_key, created_at, source, source_ref, description, "
+                "deload_every_weeks) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id, name.strip(), _program_key(name), now_iso(),
                     source, source_ref, clean_program_description(description),
+                    clean_deload_every_weeks(deload_every_weeks),
                 ),
             )
         except aiosqlite.IntegrityError:
@@ -8446,6 +8484,32 @@ async def progression_rule_for_workout(workout_id: int, exercise_id: int) -> Opt
     except (TypeError, ValueError):
         return None
     return rule if isinstance(rule, dict) else None
+
+
+async def deload_week_for_workout(workout_id: int) -> bool:
+    """Идёт ли эта тренировка в неделю разгрузки своей программы.
+
+    Правило нарочно такое, чтобы его можно было пересказать словами: недели
+    считаются календарные (с понедельника) от той, в которую программу
+    сохранили, и разгрузочная — каждая N-я (N = programs.deload_every_weeks),
+    см. analytics.is_deload_week. False — тренировка не по программе, у
+    программы нет разгрузки или неделя обычная.
+    """
+    cur = await conn().execute(
+        "SELECT w.started_at, p.created_at, p.deload_every_weeks FROM workouts w "
+        "JOIN routines r ON r.id = w.routine_id JOIN programs p ON p.id = r.program_id "
+        "WHERE w.id = ?",
+        (workout_id,),
+    )
+    row = await cur.fetchone()
+    if row is None or not row["deload_every_weeks"]:
+        return False
+    try:
+        started = dt.date.fromisoformat(row["started_at"][:10])
+        created = dt.date.fromisoformat(row["created_at"][:10])
+    except (TypeError, ValueError):
+        return False
+    return analytics.is_deload_week(created, started, row["deload_every_weeks"])
 
 
 async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
