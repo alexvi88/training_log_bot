@@ -2104,3 +2104,15 @@ async def test_stalled_lifts_skips_what_there_is_too_little_data_about(
 
     assert payload["lifts"] == []
     assert payload["skipped_too_few_sessions"] == 1  # заброшенное вне окна выборки вовсе
+
+
+async def test_prompt_names_stored_limitation_used_for_program():
+    """Живой прогон: «правое колено» из профиля молча перетекло в программу, и
+    тренер написал англоязычному атлету «easier on cranky knees», хотя про колени
+    в этой просьбе речи не было. Ограничение из памяти называется вслух — откуда
+    оно и что его можно стереть."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Травму или ограничение из profile" in prompt
+    assert "из его прежних слов" in prompt
+    assert "Учёл колено, про которое ты говорил раньше" in prompt
+    assert "на языке ответа" in prompt
