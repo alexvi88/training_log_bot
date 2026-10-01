@@ -1218,7 +1218,7 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "2. На выдохе подтянись, пока подбородок не окажется над рукоятью.\n"
         "3. На вдохе плавно опустись вниз."
     ),
-    "Тяга штанги в наклоне на скамье": (
+    "Тяга штанги лёжа на скамье": (
         "1. Ляг грудью на скамью и возьми штангу с пола хватом чуть шире плеч.\n"
         "2. На выдохе тяни штангу к груди, сводя лопатки.\n"
         "3. На вдохе медленно опусти."
@@ -2616,7 +2616,7 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "2. Exhale and pull yourself up until your chin clears the handle.\n"
         "3. Inhale and lower yourself under control."
     ),
-    "Тяга штанги в наклоне на скамье": (
+    "Тяга штанги лёжа на скамье": (
         "1. Lie chest-down on a bench and pick up the bar from the floor with a grip a bit wider than shoulders.\n"
         "2. Exhale and row it to your chest, squeezing your shoulder blades.\n"
         "3. Inhale and lower it slowly."

@@ -63,3 +63,10 @@ async def test_archived_copy_is_offered_as_template(fresh_db, user_id):
     await db.archive_exercise(db_bench_id)
     alts = await exercise_alternatives.for_exercise(user_id, await db.get_exercise(bench_id), "ru")
     assert all(a["exercise_id"] != db_bench_id for a in alts)
+
+
+def test_every_catalog_template_has_alternatives():
+    """Новое упражнение каталога без семейства остаётся без замен молча —
+    экран «Альтернативные упражнения» пустой. Дописывай в FAMILIES."""
+    missing = [n for _g, n in seed_data.EXERCISE_TEMPLATES if not exercise_alternatives.alternatives_for(n)]
+    assert not missing, f"нет ни в одном семействе FAMILIES: {missing}"
