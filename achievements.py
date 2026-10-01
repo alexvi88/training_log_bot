@@ -36,9 +36,17 @@ class Achievement:
     def description(self) -> str:
         return i18n.t(f"achievement.{self.code}.description")
 
+    @property
+    def goal(self) -> str:
+        """Условие значка, пока он не взят: повелительное «Подними 140кг в
+        одном подходе» вместо констатации «Поднял 140кг…». `description`
+        звучит как уже сделанное и под полоской «125 из 140» читалось как
+        неправда — его показываем только у заработанных."""
+        return i18n.t(f"achievement.{self.code}.goal")
+
 
 # Ordered for display (easiest → rarest within each theme). Текст — в
-# locales/*.json по ключам achievement.<code>.title/description.
+# locales/*.json по ключам achievement.<code>.title/description/goal.
 CATALOG: list[Achievement] = [
     Achievement("first", "🌱"),
     Achievement("w10", "🔟"),
