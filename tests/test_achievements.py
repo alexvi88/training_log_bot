@@ -102,3 +102,24 @@ async def test_award_returns_only_new(fresh_db, user_id):
     again = await db.award_achievements(user_id, {"first", "w10", "w25"})
     assert again == ["w25"]  # only the genuinely new one
     assert await db.list_achievement_codes(user_id) == {"first", "w10", "w25"}
+
+
+def test_every_badge_has_goal_form_in_both_languages():
+    """Незакрытый значок подписан условием в повелительном, а не констатацией
+    «Поднял 140кг…» — та под прогрессом «125 из 140» звучала как неправда.
+    Форма своя у каждого значка каталога и в обоих языках."""
+    import i18n
+
+    for lang in ("ru", "en"):
+        with i18n.use_lang(lang):
+            for a in achievements.CATALOG:
+                assert a.goal and a.goal != f"achievement.{a.code}.goal", (lang, a.code)
+                assert a.goal != a.description, (lang, a.code)
+    assert achievements.BY_CODE["club140"].goal == "Подними 140кг в одном подходе"
+
+
+def test_locked_badges_show_goal_earned_keep_description():
+    text = formatting.build_achievements_screen({"club100"})
+    assert "Поднял 100кг в одном подходе" in text
+    assert "Подними 140кг в одном подходе" in text
+    assert "Поднял 140кг" not in text

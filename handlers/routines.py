@@ -454,7 +454,7 @@ async def rt_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "rt:programs")
 async def rt_programs(callback: CallbackQuery, state: FSMContext):
     # Кнопка вмещает только название, и до этого весь выбор человек делал по
-    # нему одному: чем «Верх / Низ» отличается от «Толкай / Тяни / Ноги» и
+    # нему одному: чем «Верх / Низ» отличается от «Push/Pull/Legs» и
     # какая из них про два вечера в неделю, выяснялось только заходом внутрь
     # каждой. Строка meta у каждой программы уже написана — показываем её
     # списком над кнопками, в том же порядке.

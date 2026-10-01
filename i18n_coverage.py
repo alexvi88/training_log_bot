@@ -192,6 +192,7 @@ LOCALIZED: list[str] = [
     # показывает.
     "progress_data.py",
     "progression_data.py",
+    "finish_summary.py",
     # Опросник тренера перед сборкой программы — общая для бота и REST `/v1`
     # логика (вопрос о цели, потолок кругов, сборка ответов в одно сообщение
     # модели): все подписи идут через i18n.t внутри use_lang, своих литералов
@@ -223,6 +224,10 @@ LOCALIZED: list[str] = [
     # Сбор сводки для обоих потребителей — бота и /dashboard. Своих литералов
     # не держит: весь текст собирают formatting.menu_* по текущему языку.
     "dashboard_data.py",
+    # Фраза тренера на заставке приложения (поле coach_greeting в /dashboard):
+    # своих литералов не держит — только ключи coach_greeting.* через i18n.t
+    # внутри use_lang(users.lang) у api_v1_dashboard.
+    "coach_greeting.py",
     # Сбор зала славы для обоих потребителей — бота (handlers/history.py) и
     # /v1 (api_v1_hall_of_fame.py). Своих литералов не держит: текст собирают
     # formatting.build_hall_of_fame/format_tonnage_equivalent по текущему языку.

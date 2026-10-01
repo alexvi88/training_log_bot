@@ -1369,6 +1369,13 @@ async def _migrate_schema() -> None:
         # ровно один раз: само звание считается на лету из тренировок и тоннажа,
         # так что без этой отметки карточка объявляла бы его каждый раз.
         await _conn.execute("ALTER TABLE users ADD COLUMN rank_level_seen INTEGER NOT NULL DEFAULT -1")
+    for greeting_col in ("coach_greeting_day", "coach_greeting_kind"):
+        # Фраза тренера на заставке приложения (coach_greeting.py): на какой
+        # местный день и какую фразу уже выбрали. Нужно ради «одна фраза на
+        # день»: выбор детерминирован по данным, но данные и часы за день
+        # меняются, и без отметки фраза прыгала бы от запуска к запуску.
+        if greeting_col not in user_cols:
+            await _conn.execute(f"ALTER TABLE users ADD COLUMN {greeting_col} TEXT")
     if "source" not in user_cols:
         # Откуда человек пришёл в бота: метка из deep link'а на первом /start
         # (см. acquisition.py). NULL значит «ещё не размечен» — на этом держится
@@ -1749,7 +1756,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 
 async def _run_one_shot_migrations() -> None:
@@ -1778,11 +1785,12 @@ async def _run_one_shot_migrations() -> None:
         await _backfill_bodyweight_load()
     if version < 6:
         await _move_default_abs_exercises()
-    if version < 8:
+    if version < 10:
         # v7 — первый заход («Верх / Низ — 4 дня» → «Верх / Низ»), v8 — эмодзи
-        # перед «Всё тело — 2 дня» и «Верх / Низ»: та же миграция по
-        # дополненной seed_data.LEGACY_PROGRAM_TEXTS. Идемпотентна — базе,
-        # прошедшей v7, повтор ничего лишнего не перепишет.
+        # перед «Всё тело — 2 дня» и «Верх / Низ», v10 — «Толкай / Тяни / Ноги»
+        # → «Push/Pull/Legs (жим, тяга, ноги)» вместе с именами дней: та же
+        # миграция по дополненной seed_data.LEGACY_PROGRAM_TEXTS. Идемпотентна —
+        # базе, прошедшей v7/v8, повтор ничего лишнего не перепишет.
         await _migrate_legacy_catalog_program_texts()
     if version < 9:
         await _move_ungrouped_exercises_to_other()
@@ -1917,8 +1925,9 @@ async def _migrate_legacy_catalog_program_texts() -> None:
     LEGACY_PROGRAM_TEXTS) и помечено source='catalog' с тем же source_ref:
     своё имя, данное человеком, не трогаем. Занятое новое имя (у атлета уже
     есть своя «Верх / Низ») — пропуск, а не слияние, как в rename_program_by_id.
+    Имена дней («Толкай» → «Жим») — по тому же правилу, в днях каталожных копий.
     """
-    renamed = described = 0
+    renamed = described = days_renamed = 0
     for (key, lang), fields in LEGACY_PROGRAM_TEXTS.items():
         if key not in PROGRAM_BY_KEY:
             continue
@@ -1945,10 +1954,24 @@ async def _migrate_legacy_catalog_program_texts() -> None:
                 (new_description, key, clean_program_description(old_description)),
             )
             described += cur.rowcount or 0
+        # Имя дня — тоже снимок (routines.name). История тренировок держится
+        # за routines.id, а не за имя, так что переименование её не разводит.
+        # Своё имя дня, данное человеком, не совпадёт с прежним каталожным —
+        # и останется как было.
+        for day_index in range(len(PROGRAM_BY_KEY[key]["days"])):
+            new_day = localized_program_day_name(key, day_index, lang)
+            for old_day in fields.get(f"day.{day_index}", ()):
+                cur = await _conn.execute(
+                    "UPDATE routines SET name = ? WHERE name = ? AND program_id IN ("
+                    "SELECT id FROM programs WHERE source = 'catalog' AND source_ref = ?)",
+                    (new_day, old_day, key),
+                )
+                days_renamed += cur.rowcount or 0
     await _conn.commit()
-    if renamed or described:
+    if renamed or described or days_renamed:
         logger.info(
-            "legacy catalog program texts: renamed %s, descriptions %s", renamed, described
+            "legacy catalog program texts: renamed %s, descriptions %s, days %s",
+            renamed, described, days_renamed,
         )
 
 
@@ -2532,6 +2555,7 @@ async def relocalize_catalog_copies(user_id: int, lang: str) -> dict[str, int]:
                 (
                     i for i in range(len(catalog["days"]))
                     if day["name"] in _catalog_spellings(localized_program_day_name, key, i)
+                    or day["name"] in legacy_program_texts(key, f"day.{i}")
                 ),
                 None,
             )

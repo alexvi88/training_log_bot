@@ -23,6 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import coach_greeting
 import dashboard_data
 import i18n
 from api_v1_common import authed_user, query_excluded_workouts
@@ -98,7 +99,15 @@ async def get_dashboard(request: Request) -> JSONResponse:
         data = await dashboard_data.collect(user_id, user, exclude_workout_ids=excluded)
         if data is None:
             return JSONResponse(None)
-        return JSONResponse(_dashboard_json(data, excluded))
+        payload = _dashboard_json(data, excluded)
+        # Фраза тренера для заставки приложения — новым ключом, старые клиенты
+        # его не читают. Приложение кэширует сводку и на старте берёт фразу
+        # оттуда, не дожидаясь сети; `until` говорит, до какого момента она
+        # ещё правда. Контракт — в coach_greeting.render.
+        payload["coach_greeting"] = await coach_greeting.for_user(
+            user_id, user, exclude_workout_ids=excluded
+        )
+        return JSONResponse(payload)
 
 
 routes = [
