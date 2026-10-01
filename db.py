@@ -1369,6 +1369,13 @@ async def _migrate_schema() -> None:
         # ровно один раз: само звание считается на лету из тренировок и тоннажа,
         # так что без этой отметки карточка объявляла бы его каждый раз.
         await _conn.execute("ALTER TABLE users ADD COLUMN rank_level_seen INTEGER NOT NULL DEFAULT -1")
+    for greeting_col in ("coach_greeting_day", "coach_greeting_kind"):
+        # Фраза тренера на заставке приложения (coach_greeting.py): на какой
+        # местный день и какую фразу уже выбрали. Нужно ради «одна фраза на
+        # день»: выбор детерминирован по данным, но данные и часы за день
+        # меняются, и без отметки фраза прыгала бы от запуска к запуску.
+        if greeting_col not in user_cols:
+            await _conn.execute(f"ALTER TABLE users ADD COLUMN {greeting_col} TEXT")
     if "source" not in user_cols:
         # Откуда человек пришёл в бота: метка из deep link'а на первом /start
         # (см. acquisition.py). NULL значит «ещё не размечен» — на этом держится
