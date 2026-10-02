@@ -174,7 +174,7 @@
   "api.error.forbidden": "Only support can open this.",
   "ai.comment.workout_not_found": "Can't find that workout — open your history and pick it again.",
   "ai.factcheck.empty": "Couldn't make it out — try forwarding it again.",
-  "ai.language_tail": "Reply ONLY in English — never switch to Russian, Ukrainian, or any other language, not even one word inside an English sentence. Terms the user themselves used in another language (an exercise name from the catalog, a unit, a technique term) are normal gym vocabulary, not a violation — keep them as given.",
+  "ai.language_tail": "Reply ONLY in English — never switch to Russian, Ukrainian, or any other language, not even one word inside an English sentence. Terms the user themselves used in another language (an exercise name from the catalog, a unit, a technique term) are normal gym vocabulary, not a violation — keep them as given. Speak of yourself as “I”, never “the bot”: “I'll cut the sets myself”, “I don't put weights into the program”.",
   "ai.video.confidence_high": "high",
   "ai.video.confidence_low": "low",
   "ai.video.confidence_medium": "medium",

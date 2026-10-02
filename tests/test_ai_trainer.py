@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 import logging
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1899,6 +1900,19 @@ async def test_prompt_knows_about_csv_import():
     assert "Импорт CSV" in prompt
     assert "Hevy" in prompt
     assert "нет и что перенести историю нельзя" in prompt
+
+
+async def test_coach_never_learns_to_call_itself_the_bot():
+    """Живой эвал: «Каждая 5-я неделя — разгрузка: бот сам подрежет подходы» и
+    «Бот веса в программу не проставляет». Модель повторяла третье лицо из
+    своего же промпта и описаний инструментов — тренер говорит «подрежу сам».
+    Ловим «бот» как подлежащее при глаголе, а не «в боте»/«Telegram-бот»."""
+    tool_text = json.dumps(ai_trainer.TOOLS, ensure_ascii=False)
+    for text in (ai_trainer.SYSTEM_PROMPT, tool_text):
+        hits = re.findall(r"(?i)(?<![\w-])бот\s+(?:сам\s+)?[а-яё]+(?:[её]т|ит|ут|ят)\b|[а-яё]+(?:[её]т|ит)\s+бот\b", text)
+        assert not hits, f"тренер о себе в третьем лице: {hits}"
+    assert "Словом «бот» себя не называй" in ai_trainer.SYSTEM_PROMPT
+    assert "never “the bot”" in i18n.t_in("en", "ai.language_tail")
 
 
 async def test_prompt_does_not_promise_the_start_button_under_the_message():
