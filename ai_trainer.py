@@ -6155,6 +6155,15 @@ async def _ask_plain(
     )
 
     content = ""
+    reasoning = ""
+    # Реплики раундов с инструментами (см. _explained_final_program): то, что
+    # модель сказала до propose_program, который потом сама же переделала, —
+    # разговор о черновике, которого больше нет. stale — сказанное до
+    # последнего propose_program (включительно), pending — после него.
+    stale_fragments: list[str] = []
+    pending_fragments: list[str] = []
+    proposed_program = False
+    last_round_tools = with_tools
     for _ in range(MAX_TOOL_ROUNDS + 1):
         # with_tools=False — гейт решил, что данные пользователя вопросу не нужны
         # (общее знание вроде «креатин работает?»), и тогда схемы 27 инструментов
@@ -6172,6 +6181,12 @@ async def _ask_plain(
         if on_status:
             variants = TOOL_STATUS_TEXTS.get(tool_calls[0].function.name, _DEFAULT_TOOL_STATUS)
             await on_status(random.choice(variants))
+        if content.strip():
+            pending_fragments.append(content.strip())
+        if any(tc.function.name == "propose_program" for tc in tool_calls):
+            proposed_program = True
+            stale_fragments.extend(pending_fragments)
+            pending_fragments.clear()
         messages.append(
             {
                 "role": "assistant",
@@ -6208,6 +6223,7 @@ async def _ask_plain(
         # видел провал и живую кнопку программы под ним разом (см. A12).
         # tools здесь физически не передаются: без них отвечать нечем, кроме
         # текста.
+        last_round_tools = False
         content, _, reasoning = await _completion_round(
             client, messages, user_id, on_chunk, include_tools=False
         )
@@ -6217,6 +6233,11 @@ async def _ask_plain(
             await on_reasoning(reasoning)
 
     text = (content or "").strip()
+    if proposed_program:
+        text, reasoning = await _explained_final_program(
+            client, messages, user_id, text, reasoning, stale_fragments,
+            on_chunk=on_chunk, on_reasoning=on_reasoning, include_tools=last_round_tools,
+        )
 
     if on_wire:
         # Финальный ответ модели дописываем сами: в messages он не попадал, потому
@@ -6238,6 +6259,95 @@ async def _ask_plain(
         await on_wire(_trim_wire_history(wire, config.AI_WIRE_HISTORY_MAX_CHARS))
 
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
+
+
+# Меньше стольких букв и цифр после вычета промежуточных реплик — объяснения
+# собранной программы в ответе нет (см. _explained_final_program). Короткое
+# честное «убрал становую, правка ждёт подтверждения под сообщением» порог
+# проходит; «и готово» — нет.
+_MIN_PROGRAM_EXPLANATION_CHARS = 30
+
+# Просьба объяснить окончательный черновик, когда модель пересобрала программу
+# несколько раз за ход и закончила его промежуточной репликой. Дописывается в
+# конец разговора, а не правит его: префикс запроса остаётся тем же, кэш живёт.
+_EXPLAIN_FINAL_PROGRAM = (
+    "Последний propose_program выше — окончательный черновик, больше его не "
+    "пересобирай и инструменты не вызывай. Ответь атлету по этому черновику по "
+    "рамке из методики: логика сплита, как прогрессировать, разгрузка, если она "
+    "стоит, ориентиры стартовых весов — и что сделать дальше: программа ждёт "
+    "подтверждения под сообщением. Промежуточные реплики про правки не повторяй."
+)
+
+
+def _without_stale_fragments(text: str, fragments: list[str]) -> str:
+    """Текст ответа без промежуточных реплик хода.
+
+    Модель, пересобравшая программу, бывает, заканчивает ход теми же фразами,
+    что говорила между вызовами, склеенными без пробела («…и готово.Срежу…»).
+    Они про черновик, которого больше нет, — вырезаем, а на их место ставим
+    пробел, чтобы соседние куски не слиплись."""
+    found = [f for f in sorted(set(fragments), key=len, reverse=True) if f in text]
+    if not found:
+        return text
+    for fragment in found:
+        text = text.replace(fragment, " ")
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+async def _explained_final_program(
+    client: AsyncOpenAI,
+    messages: list[dict[str, Any]],
+    user_id: int,
+    text: str,
+    reasoning: str,
+    stale_fragments: list[str],
+    *,
+    on_chunk: ChunkCallback,
+    on_reasoning: Optional[Callable[[str], Awaitable[None]]],
+    include_tools: bool,
+) -> tuple[str, str]:
+    """Финальный ответ хода, в котором тренер собрал программу.
+
+    Живой прогон: модель вызвала propose_program трижды, урезая подходы под
+    потолок, и ответом атлету уехали одни реплики между вызовами — «Ещё один
+    подход срежу с задней дельты — и готово.Срежу один подход с тяги к лицу…»
+    — без единого слова о самой программе. Промежуточное вырезаем; если от
+    ответа ничего не осталось, просим модель ещё одним шагом объяснить
+    окончательный черновик.
+
+    Шаг — обычный _completion_round: тот же набор инструментов, что у
+    последнего запроса (иначе промах кэша по всей шапке), стоимость пишется
+    там же, квота вопроса уже списана за этот ход. Вызов инструмента в ответ
+    не исполняем — берём только текст. Возвращает (text, reasoning)."""
+    cleaned = _without_stale_fragments(text, stale_fragments)
+    if sum(ch.isalnum() for ch in cleaned) >= _MIN_PROGRAM_EXPLANATION_CHARS:
+        return cleaned, reasoning
+    logger.info(
+        "AI trainer: no explanation of the final program for user %s (%r), asking once more",
+        user_id, text[:200],
+    )
+    if text:
+        said: dict[str, Any] = {"role": "assistant", "content": text}
+        if reasoning:
+            said["reasoning_content"] = reasoning
+        messages.append(said)
+    messages.append({"role": "system", "content": _EXPLAIN_FINAL_PROGRAM})
+    try:
+        content, _, new_reasoning = await _completion_round(
+            client, messages, user_id, on_chunk, include_tools=include_tools
+        )
+    except Exception:
+        logger.exception("AI trainer: explaining the final program failed for user %s", user_id)
+        # Хвост разговора уже дописан выше, а ответа на него нет — откатываем,
+        # чтобы сохранённая история не кончалась просьбой без ответа.
+        del messages[-2 if text else -1:]
+        return cleaned, reasoning
+    if on_reasoning and new_reasoning:
+        await on_reasoning(new_reasoning)
+    explained = _without_stale_fragments((content or "").strip(), stale_fragments)
+    return (explained or cleaned), new_reasoning
 
 
 def _to_xai_messages(
