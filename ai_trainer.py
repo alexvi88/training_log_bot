@@ -78,6 +78,24 @@ PROGRAM_DESCRIPTION_LIMIT = db.PROGRAM_DESCRIPTION_LIMIT
 PROGRAM_MAX_SETS = 10
 PROGRAM_MAX_REPS = 50
 
+# Недельный объём по методике (SYSTEM_PROMPT, «Минимумы внутри групп» и
+# «Отстающей мышце») — одни и те же числа и в промпте, и в проверке черновика
+# (_program_volume_hints): модель их арифметику не держит, код — держит.
+# Мишени — ключи seed_data.MUSCLE_TARGETS_BY_GROUP, группы — канонические
+# русские имена (идентичность, не показ).
+PROGRAM_TARGET_MIN_SETS: dict[str, int] = {
+    "side_delts": 6,
+    "quads": 6,
+    "hamstrings": 6,
+    "glutes": 4,
+}
+PROGRAM_GROUP_MIN_SETS: dict[str, int] = {"Бицепс": 4, "Трицепс": 4}
+# Потолок — отстающая мышца с прибавкой; выше не бывает ни у какой группы.
+# У ног — по мишеням, а не по группе: несколько крупных мышц, и одни минимумы
+# уже дают 16 на группу (промпт: «для ног планка мягче»).
+PROGRAM_MAX_WEEKLY_SETS = 16
+PROGRAM_CEILING_BY_TARGET_GROUPS: frozenset[str] = frozenset({"Ноги"})
+
 # Границы опросника, который тренер задаёт ПЕРЕД сборкой программы (см.
 # ask_setup_questions). Всё сверх — срезается в _ask_setup_questions, а модели
 # про это говорят прямо в ответе инструмента: молча урезанный опросник хуже
@@ -499,11 +517,13 @@ SYSTEM_PROMPT = """\
 - Недельный объём на одну мышечную группу — база 6-12 рабочих подходов.
   Для ног планка мягче: там несколько крупных мышц и обычно больше упражнений, так
   что объём выше диапазона 6-12 — норма, а не перебор.
+""" + f"""\
 - Минимумы внутри групп в неделю: средняя дельта, квадрицепс и бицепс бедра — не
-  меньше 6 рабочих подходов; бицепс и трицепс — не меньше 4; ягодицы — не меньше 4,
+  меньше {PROGRAM_TARGET_MIN_SETS["side_delts"]} рабочих подходов; бицепс и трицепс — не меньше {PROGRAM_GROUP_MIN_SETS["Бицепс"]}; ягодицы — не меньше {PROGRAM_TARGET_MIN_SETS["glutes"]},
   а если цель атлета — ягодицы, то больше.
-- Отстающей мышце, которую назвал атлет, — плюс 30-50% к её объёму, до 16 подходов
+- Отстающей мышце, которую назвал атлет, — плюс 30-50% к её объёму, до {PROGRAM_MAX_WEEKLY_SETS} подходов
   в неделю.
+""" + """\
 - При 4 и больше тренировочных днях в неделю каждая мышца работает дважды в неделю,
   если атлет сам не попросил сплит.
 - Прогрессия двойная: пока вес держится в диапазоне 5-12 повторений — сначала
@@ -5073,9 +5093,20 @@ async def _weekly_sets_by_group(user_id: int, days: list[dict[str, Any]]) -> dic
     русская навсегда. Считаем по идентичности, показываем локализованное — то же
     правило, что и у названий упражнений.
     """
+    lang = i18n.get_lang()
+    return {
+        seed_data.localized_muscle_group_name(group, lang): sets
+        for group, sets in (await _weekly_sets_by_group_canonical(user_id, days)).items()
+    }
+
+
+async def _weekly_sets_by_group_canonical(
+    user_id: int, days: list[dict[str, Any]]
+) -> dict[str, int]:
+    """То же, что _weekly_sets_by_group, но ключи — канонические имена групп:
+    по ним сверяется методика (_program_volume_hints)."""
     totals: dict[str, int] = {}
     cache: dict[str, Optional[str]] = {}
-    lang = i18n.get_lang()
     for day in days:
         for item in day["items"]:
             if item.get("sets") is None:
@@ -5085,8 +5116,7 @@ async def _weekly_sets_by_group(user_id: int, days: list[dict[str, Any]]) -> dic
                 cache[name] = await db.exercise_group_name(user_id, name)
             group = cache[name]
             if group:
-                shown = seed_data.localized_muscle_group_name(group, lang)
-                totals[shown] = totals.get(shown, 0) + int(item["sets"])
+                totals[group] = totals.get(group, 0) + int(item["sets"])
     return totals
 
 
@@ -5122,6 +5152,28 @@ async def _weekly_sets_by_target(
     хоть одно упражнение попало в мишень, показываются все её мишени — и с
     нулём: ноль на средней дельте и есть то, ради чего эта разбивка.
     """
+    counts = await _weekly_sets_by_target_canonical(user_id, days)
+    lang = i18n.get_lang()
+    result: dict[str, dict[str, int]] = {}
+    for group, targets in seed_data.MUSCLE_TARGETS_BY_GROUP.items():
+        if group not in counts:
+            continue
+        shown_targets: dict[str, int] = {}
+        for target in targets:
+            sets = counts[group].get(target, 0)
+            if sets == 0 and target in seed_data.OPTIONAL_MUSCLE_TARGETS:
+                continue
+            shown_targets[seed_data.localized_muscle_target_name(target, lang)] = sets
+        result[seed_data.localized_muscle_group_name(group, lang)] = shown_targets
+    return result
+
+
+async def _weekly_sets_by_target_canonical(
+    user_id: int, days: list[dict[str, Any]]
+) -> dict[str, dict[str, int]]:
+    """{каноническая группа: {мишень: подходы}} — сырой счёт для
+    _weekly_sets_by_target (показ) и _program_volume_hints (сверка). Нулевых
+    мишеней тут нет; группа есть, только если в неё попало хоть что-то."""
     counts: dict[str, dict[str, int]] = {}
     cache: dict[str, Optional[str]] = {}
     for day in days:
@@ -5143,19 +5195,69 @@ async def _weekly_sets_by_target(
             group = seed_data.muscle_target_group(target)
             bucket = counts.setdefault(group, {})
             bucket[target] = bucket.get(target, 0) + int(item["sets"])
+    return counts
+
+
+def _program_volume_hints(
+    days: list[dict[str, Any]],
+    by_group: dict[str, int],
+    by_target: dict[str, dict[str, int]],
+) -> list[str]:
+    """Где черновик разошёлся с методикой из промпта — строками для модели.
+
+    Модель держит минимумы и потолок в промпте, но не в арифметике: в живых
+    прогонах средняя дельта получала 2-3 подхода, а отстающие «Плечи» после
+    нескольких попыток — 17 при потолке 16. Черновик не блокируем: атлет его
+    уже видит, а модель может поправить ещё одним вызовом.
+
+    Консервативно, чтобы не дёргать модель там, где методика не про это:
+    - один день — разовая тренировка «на сегодня», недельный объём к ней не
+      применяется, проверки нет совсем;
+    - минимумы — только у того, что программа и так тренирует: мишень — если
+      в её группу попало хоть одно упражнение, бицепс/трицепс — если группа
+      есть в программе. Отсутствующую группу молча не достраиваем: сигнала
+      «атлет просил без рук» в коде нет, а промах тут дороже подсказки;
+    - есть top_set_backoff — это силовая цель или большой стаж (промпт), там
+      методика гипертрофии не по умолчанию, минимумы не сверяем. Потолок — да.
+
+    Имена — на языке атлета, как ключи weekly_sets_by_* рядом в ответе.
+    """
+    if len(days) < 2:
+        return []
     lang = i18n.get_lang()
-    result: dict[str, dict[str, int]] = {}
-    for group, targets in seed_data.MUSCLE_TARGETS_BY_GROUP.items():
-        if group not in counts:
-            continue
-        shown_targets: dict[str, int] = {}
-        for target in targets:
-            sets = counts[group].get(target, 0)
-            if sets == 0 and target in seed_data.OPTIONAL_MUSCLE_TARGETS:
+    hints: list[str] = []
+    strength = any(
+        (item.get("progression") or {}).get("rule") == "top_set_backoff"
+        for day in days
+        for item in day["items"]
+    )
+    if not strength:
+        for target, minimum in PROGRAM_TARGET_MIN_SETS.items():
+            group = seed_data.muscle_target_group(target)
+            if group not in by_target:
                 continue
-            shown_targets[seed_data.localized_muscle_target_name(target, lang)] = sets
-        result[seed_data.localized_muscle_group_name(group, lang)] = shown_targets
-    return result
+            sets = by_target[group].get(target, 0)
+            if sets < minimum:
+                hints.append(
+                    f"{seed_data.localized_muscle_target_name(target, lang)}: подходов в неделю {sets}, нужно от {minimum}"
+                )
+        for group, minimum in PROGRAM_GROUP_MIN_SETS.items():
+            sets = by_group.get(group, 0)
+            if 0 < sets < minimum:
+                hints.append(
+                    f"{seed_data.localized_muscle_group_name(group, lang)}: подходов в неделю {sets}, нужно от {minimum}"
+                )
+    ceiling = PROGRAM_MAX_WEEKLY_SETS
+    for group, sets in by_group.items():
+        if group in PROGRAM_CEILING_BY_TARGET_GROUPS:
+            for target, target_sets in by_target.get(group, {}).items():
+                if target_sets > ceiling:
+                    hints.append(
+                        f"{seed_data.localized_muscle_target_name(target, lang)}: подходов в неделю {target_sets}, потолок {ceiling}"
+                    )
+        elif sets > ceiling:
+            hints.append(f"{seed_data.localized_muscle_group_name(group, lang)}: подходов в неделю {sets}, потолок {ceiling}")
+    return hints
 
 
 async def _ask_setup_questions(
@@ -5408,6 +5510,18 @@ async def _propose_program(
         )
     if replaces_error:
         payload["replaces_program_error"] = replaces_error
+    volume_hints = _program_volume_hints(
+        days,
+        await _weekly_sets_by_group_canonical(user_id, days),
+        await _weekly_sets_by_target_canonical(user_id, days),
+    )
+    if volume_hints:
+        payload["volume_check"] = volume_hints
+        payload["volume_check_note"] = (
+            "Объём разошёлся с методикой из промпта — посчитал сам. Черновик уже "
+            "показан. Если атлет сам не просил такой объём, вызови propose_program "
+            "ещё раз целиком с поправленными подходами; чисел в ответе не называй."
+        )
     if truncated_days:
         payload["truncated_days"] = (
             f"дней было больше {PROGRAM_MAX_DAYS}, лишние отброшены"
