@@ -33,6 +33,7 @@ def hint(
     target: Optional[str] = None,
     kind: str = "weight",
     is_deload: bool = False,
+    rep_range: Optional[tuple[int, int]] = None,
 ) -> Optional[dict[str, Any]]:
     """Что предложить в следующем подходе, готовой строкой и числами.
 
@@ -45,6 +46,9 @@ def hint(
 
     `kind` — вид нагрузки упражнения (db.exercise_progression_kind): у планки
     цель в секундах, у подтягиваний и скручиваний — без шага в кг из программы.
+
+    `rep_range` — диапазон повторов по умолчанию из настроек атлета
+    (analytics.user_rep_range); схема программы в `target` его перекрывает.
 
     `None`, когда предлагать нечего: истории нет вовсе или
     `analytics.suggest_progression` не нашла осмысленного шага.
@@ -65,6 +69,7 @@ def hint(
         kind=kind,
         today_sets=today_sets,
         last_rpes=[rpe for _weight, _reps, rpe in last_session],
+        default_range=rep_range,
     )
     if suggestion is None:
         return None
@@ -148,4 +153,5 @@ async def hint_for_workout(
             target=targets.get(exercise_id),
             kind=kind,
             is_deload=is_deload,
+            rep_range=analytics.user_rep_range(user),
         )

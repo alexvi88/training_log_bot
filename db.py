@@ -71,6 +71,10 @@ CREATE TABLE IF NOT EXISTS users (
     -- «ни разу не открывал настройку» и «сам выключил» в базе неотличимы.
     ai_comments_enabled INTEGER NOT NULL DEFAULT 1,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
+    -- Диапазон повторов для подсказки «Цель» (analytics.REP_RANGE_PRESETS).
+    -- NULL у обоих — 5–12 по умолчанию; пишутся только парой.
+    rep_range_min INTEGER,
+    rep_range_max INTEGER,
     tz_offset INTEGER NOT NULL DEFAULT 0,
     -- Язык интерфейса. Дефолт 'ru' — вся живая база русскоязычная, угадывать
     -- язык молча нельзя (см. set_user_lang).
@@ -1354,6 +1358,10 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
         )
+    for range_col in ("rep_range_min", "rep_range_max"):
+        # NULL — «не выбирал», то есть 5–12 (analytics.user_rep_range).
+        if range_col not in user_cols:
+            await _conn.execute(f"ALTER TABLE users ADD COLUMN {range_col} INTEGER")
     if "ai_conversation_id" not in user_cols:
         # 1 — тот же номер, который получили все уже накопленные ходы: до этой
         # колонки разговор был ровно один, и он же текущий.

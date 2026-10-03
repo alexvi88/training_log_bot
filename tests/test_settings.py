@@ -250,23 +250,25 @@ async def test_settings_keyboard_groups_into_three_blocks():
     # Профиль: единицы+пояс, язык+формула — парами по 2, короткие подписи.
     assert rows[0] == ["settings:unit", "settings:tz"]
     assert rows[1] == ["settings:lang", "settings:formula"]
-    # Как разговариваю: пять тумблеров, по одному в ряд — длинные подписи.
+    # Как разговариваю: пять тумблеров, по одному в ряд — длинные подписи;
+    # диапазон повторов — сразу под подсказками прогрессии.
     assert rows[2] == ["settings:progression"]
-    assert rows[3] == ["settings:pushes"]
-    assert rows[4] == ["settings:ai_comments"]
-    assert rows[5] == ["settings:food_macros"]
-    assert rows[6] == ["settings:card_detail"]
+    assert rows[3] == ["settings:rep_range"]
+    assert rows[4] == ["settings:pushes"]
+    assert rows[5] == ["settings:ai_comments"]
+    assert rows[6] == ["settings:food_macros"]
+    assert rows[7] == ["settings:card_detail"]
     # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
-    assert rows[7] == ["settings:profile"]
-    assert rows[8] == ["settings:export"]
-    assert rows[9] == ["settings:import"]
-    assert rows[10] == ["settings:mcp"]
-    assert rows[11] == ["feedback:open"]
-    assert rows[12] == ["invite:show"]
+    assert rows[8] == ["settings:profile"]
+    assert rows[9] == ["settings:export"]
+    assert rows[10] == ["settings:import"]
+    assert rows[11] == ["settings:mcp"]
+    assert rows[12] == ["feedback:open"]
+    assert rows[13] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[13] == ["settings:delete"]
-    assert rows[14] == ["settings:back"]
+    assert rows[14] == ["settings:delete"]
+    assert rows[15] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
