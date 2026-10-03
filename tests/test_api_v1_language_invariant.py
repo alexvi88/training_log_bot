@@ -494,6 +494,18 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
 
     # --- сводки ---
     await w.call("GET", "/dashboard", expect=200)
+    # Итог недели: воскресный разбор тренера лежит на языке атлета — он
+    # проходит ту же проверку, что и тексты вердикта. Без недели — прошлая
+    # (у сценария она пустая), с неделей — текущая (первая неделя атлета).
+    import timeutil
+    import weekly_summary
+
+    this_monday = weekly_summary.week_monday(timeutil.user_today(await fresh_db.get_user(111)))
+    await fresh_db.save_weekly_digest(111, this_monday.isoformat(), lang, MODEL_TEXT[lang]["answer"])
+    await w.call("GET", "/weekly-summary", expect=200)
+    await w.call("GET", f"/weekly-summary?week={this_monday.isoformat()}", expect=200)
+    await w.call("GET", "/weekly-summary?week=2999-01-05", expect=400)
+    await w.call("GET", "/weekly-summary?week=soon", expect=400)
     await w.call("GET", "/achievements", expect=200)
     await w.call("GET", "/achievements/nearest", expect=200)
     await w.call("GET", "/achievements/stats", expect=200)

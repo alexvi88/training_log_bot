@@ -251,13 +251,28 @@ ROUTE_SCREEN_BY_CATEGORY: dict[str, str] = {
 }
 
 
+# Категории, чей маршрут несёт неделю (`week` — её понедельник, YYYY-MM-DD):
+# новые сборки по нему открывают «Итог недели» за эту неделю, старые видят
+# прежний `{"screen": "dashboard"}` и лишний ключ молча игнорируют.
+_WEEK_ROUTE_CATEGORIES = frozenset({push_texts.WEEKLY_DIGEST, push_texts.AI_WEEKLY})
+
+
 def ios_route(
-    category: str, *, exercise_id: Optional[int] = None, exercise_name: Optional[str] = None
+    category: str,
+    *,
+    exercise_id: Optional[int] = None,
+    exercise_name: Optional[str] = None,
+    week: Optional[str] = None,
 ) -> Optional[dict]:
     """Маршрут для `route` в APNs payload, или None — без маршрута.
 
     Плато без упражнения (не должно случаться: engagement шлёт его только
     найдя упражнение) — None, а не график неизвестно чего.
+
+    `week` — понедельник недели у воскресного дайджеста: `{"screen":
+    "dashboard", "week": "2026-09-28"}`. Имя экрана то же, что раньше, — старые
+    сборки по-прежнему открывают вкладку «Тренировка»; у других категорий
+    `week` не ставится.
     """
     if category == push_texts.PLATEAU:
         if exercise_id is None or not exercise_name:
@@ -268,7 +283,12 @@ def ios_route(
             "exercise_name": exercise_name,
         }
     screen = ROUTE_SCREEN_BY_CATEGORY.get(category)
-    return {"screen": screen} if screen else None
+    if not screen:
+        return None
+    route: dict = {"screen": screen}
+    if week and category in _WEEK_ROUTE_CATEGORIES:
+        route["week"] = week
+    return route
 
 
 def support_route() -> dict:

@@ -223,6 +223,11 @@ LOCALIZED: list[str] = [
     # Сбор сводки для обоих потребителей — бота и /dashboard. Своих литералов
     # не держит: весь текст собирают formatting.menu_* по текущему языку.
     "dashboard_data.py",
+    # «Итог недели» (GET /v1/weekly-summary): сбор и вердикт — weekly_summary,
+    # перевод в JSON — api_v1_weekly. Своих литералов не держат: вердикт,
+    # подсказка и подписи — weekly.* через i18n.t внутри use_lang(users.lang).
+    "weekly_summary.py",
+    "api_v1_weekly.py",
     # Фраза тренера на заставке приложения (поле coach_greeting в /dashboard):
     # своих литералов не держит — только ключи coach_greeting.* через i18n.t
     # внутри use_lang(users.lang) у api_v1_dashboard.
