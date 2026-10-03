@@ -359,14 +359,24 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             digest_ios_params = {
                 "tonnage": format_tonnage(tonnage, digest_unit), "week_count": _workouts_phrase(dashboard.this_week),
             }
+            # Неделя, про которую пуш, — в маршрут iOS-баннера: тап открывает
+            # «Итог недели» именно за неё, даже если пуш открыли в понедельник.
+            week_start = (today - dt.timedelta(days=today.weekday())).isoformat()
+            digest_route = {"week": week_start}
             ai_text = await _ai_weekly_digest_text(telegram_id)
             if ai_text:
+                # Тот же текст — экрану «Итог недели» в приложении (GET
+                # /v1/weekly-summary): за него уже заплачено, второй вызов модели
+                # не нужен. Язык — тот, на котором текст написан (weekly_digest
+                # пишет на users.lang); сменят язык — экран текст спрячет.
+                await _save_weekly_digest(telegram_id, week_start, digest_user, ai_text)
                 # with_cta=False — как у статического дайджеста ниже: это один и
                 # тот же воскресный слот, и кнопка «начать тренировку» под
                 # аналитикой то появлялась, то нет — в зависимости от того,
                 # ответила ли модель.
                 return PushDecision(
-                    push_texts.AI_WEEKLY, ai_text, with_cta=False, ios_params=digest_ios_params
+                    push_texts.AI_WEEKLY, ai_text, with_cta=False, ios_params=digest_ios_params,
+                    ios_route_params=digest_route,
                 )
             # None when no weekday clearly stands out — pick_text then drops the
             # variant that would have claimed one, instead of asserting a habit
@@ -387,10 +397,21 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
                 whale=i18n.t("push.phrase.whale") if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
             )
             return PushDecision(
-                push_texts.WEEKLY_DIGEST, text, with_cta=False, ios_params=digest_ios_params
+                push_texts.WEEKLY_DIGEST, text, with_cta=False, ios_params=digest_ios_params,
+                ios_route_params=digest_route,
             )
 
     return None
+
+
+async def _save_weekly_digest(telegram_id: int, week_start: str, user, text: str) -> None:
+    """Запомнить воскресный разбор для экрана «Итог недели». Сбой записи пуш
+    не отменяет: текст уже готов и оплачен, атлет получит его хотя бы пушем."""
+    lang = user["lang"] if user is not None and user["lang"] in i18n.SUPPORTED else i18n.get_lang()
+    try:
+        await db.save_weekly_digest(telegram_id, week_start, lang, text)
+    except Exception:
+        logger.exception("weekly digest save failed for user %s", telegram_id)
 
 
 async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:

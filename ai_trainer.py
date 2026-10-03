@@ -1356,9 +1356,11 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 суровый, но поддерживающий, вайб подвальной качалки, шаришь за науку. Методика:
 рабочий диапазон 5-12 повторений, недельный объём на мышцу 6-12 подходов.
 
-Тебе дают короткую сводку за прошедшую неделю: сколько тренировок, суммарный
-тоннаж и объём (рабочих подходов) по каждой группе мышц со статусом относительно
-целевого диапазона (low = мало, in_range = норм, high = многовато).
+Тебе дают короткую сводку за неделю с понедельника: сколько тренировок (и сколько
+было на прошлой неделе), суммарный тоннаж, сколько упражнений дали рекорд (если
+дали) и объём (рабочих подходов) по каждой группе мышц со статусом относительно
+целевого диапазона (low = мало, in_range = норм, high = многовато). Строки про
+рекорды нет — значит, рекордов нет, и про них молчи.
 
 Если человек вёл дневник питания, в сводке будет и еда: за сколько дней есть
 записи и средние калории с белком в день. Это то, чего не умеет ни одно
@@ -1407,15 +1409,31 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
         dash = analytics.compute_dashboard(dates, today)
         vol = await _weekly_volume(user_id)
-        since = (today - dt.timedelta(days=7)).isoformat()
-        tonnage = await db.tonnage_since(user_id, since)
+        # Неделя — с понедельника по сегодня, то же окно, что у экрана «Итог
+        # недели» (weekly_summary): раньше тоннаж брался от today − 7 с `>=`,
+        # то есть за восемь суток, и разбор расходился с числом на экране.
+        monday = today - dt.timedelta(days=today.weekday())
+        tonnage = sum(
+            (await db.daily_tonnage(user_id, monday.isoformat(), today.isoformat())).values()
+        )
+        last_monday = monday - dt.timedelta(days=7)
+        last_week = sum(1 for d in dates if last_monday <= d < monday)
+        records = len(
+            await db.e1rm_records_in_window(
+                user_id, monday.isoformat(), today.isoformat(), user["e1rm_formula"]
+            )
+        )
 
         groups_line = "; ".join(
             f"{g['group']}: {g['sets']} подходов ({g['status']})" for g in vol["groups"]
         )
         summary = (
-            f"Тренировок на этой неделе: {dash.this_week}.\n"
-            f"Суммарный тоннаж за 7 дней: {tonnage:.0f} {user['unit']}.\n"
+            f"Тренировок на этой неделе: {dash.this_week} (на прошлой: {last_week}).\n"
+            f"Суммарный тоннаж с понедельника: {tonnage:.0f} {user['unit']}.\n"
+        )
+        if records:
+            summary += f"Рекордов за неделю (упражнений с новым лучшим e1RM): {records}.\n"
+        summary += (
             f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
             f"Объём по группам: {groups_line}."
         )
