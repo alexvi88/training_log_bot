@@ -652,7 +652,10 @@ async def merge_exercises(request: Request) -> JSONResponse:
     # обычное отсутствие ресурса, а не как единая проверка позже.
     await _owned_exercise(target_id, user_id)
     await _owned_exercise(source_id, user_id)
-    outcome = await db.merge_exercises(user_id, keep_id=target_id, drop_id=source_id)
+    journal: dict = {}
+    outcome = await db.merge_exercises(
+        user_id, keep_id=target_id, drop_id=source_id, journal_out=journal,
+    )
     if outcome != db.MERGE_OK:
         code, message = {
             db.MERGE_TARGET_ARCHIVED: ("target_archived", "target exercise is archived"),
@@ -660,7 +663,30 @@ async def merge_exercises(request: Request) -> JSONResponse:
         }.get(outcome, ("bad_request", "cannot merge these exercises"))
         raise ApiError(409, code, message)
     row = await db.get_exercise(target_id)
-    return JSONResponse(_exercise_json(row))
+    # merge_id — для «Разъединить» (POST /exercises/merges/{merge_id}/undo).
+    # Поле добавочное: старые сборки читают карточку упражнения как раньше.
+    return JSONResponse({**_exercise_json(row), "merge_id": journal.get("merge_id")})
+
+
+async def undo_exercise_merge(request: Request) -> JSONResponse:
+    """«Разъединить»: вернуть упражнение, снесённое объединением, с той же
+    карточкой и id, и увезти обратно его подходы (см. db.undo_exercise_merge).
+    Срок — config.MERGE_JOURNAL_RETENTION_DAYS."""
+    user_id = await _authed_user_id(request)
+    merge_id = request.path_params["merge_id"]
+    outcome, restored_id, moved = await db.undo_exercise_merge(user_id, merge_id)
+    if outcome == db.UNMERGE_NOT_FOUND:
+        raise ApiError(404, "merge_not_found", "merge not found or already undone", key="exercise.unmerge_gone")
+    if outcome == db.UNMERGE_NAME_TAKEN:
+        raise ApiError(409, "name_conflict", "the restored exercise name is taken", key="exercise.unmerge_name_taken")
+    if outcome == db.UNMERGE_IN_ACTIVE_WORKOUT:
+        raise ApiError(409, "active_workout", "the exercise is in the active workout")
+    restored = await db.get_exercise(restored_id)
+    return JSONResponse({
+        "restored_exercise_id": restored_id,
+        "moved_back_sets": moved,
+        "message": i18n.t("exercise.unmerged", name=restored["display_name"], n=moved),
+    })
 
 
 async def exercise_progress(request: Request) -> JSONResponse:
@@ -1983,6 +2009,7 @@ routes = [
     Route("/exercises", list_exercises, methods=["GET"]),
     Route("/exercises", create_exercise, methods=["POST"]),
     Route("/exercises/merge", merge_exercises, methods=["POST"]),
+    Route("/exercises/merges/{merge_id}/undo", undo_exercise_merge, methods=["POST"]),
     Route("/exercises/next-suggestions", next_exercise_suggestions, methods=["GET"]),
     Route("/exercises/{exercise_id:int}", update_exercise, methods=["PATCH"]),
     Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),

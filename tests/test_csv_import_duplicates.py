@@ -19,6 +19,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import handlers.csv_import as csv_import
+import keyboards
 from fsm import ImportFlow
 
 TWO_DAYS = [
@@ -137,7 +138,8 @@ async def test_overlapping_file_imports_only_the_new_dates(fresh_db, user_id, sq
     assert await _totals(db, user_id) == (2, 3)
     dates = await db.list_finished_workout_dates(user_id)
     assert dates == ["2026-05-04", "2026-05-06"]
-    assert "Загрузил 1 тренировка" in alerts[-1]
+    # L1: винительный падеж — «Загрузил 1 тренировку», а не «1 тренировка».
+    assert "Загрузил 1 тренировку" in alerts[-1]
     assert "пропустил 1" in alerts[-1]
 
 
@@ -251,10 +253,15 @@ async def test_confirmation_of_a_fully_duplicate_file_has_no_plain_load_button(
 
     text, buttons = await _confirmation(user_id, TWO_DAYS, squat)
 
-    assert "уже есть в истории" in text
-    assert "imp:save" not in buttons            # нечего загружать «как обычно»
-    assert "imp:saveall" in buttons             # но настоять всё ещё можно
-    assert "imp:cancel" in buttons
+    # M5: прямо сказано, что загружать нечего, и главная кнопка — «Понятно»;
+    # «загрузить с дублями» — только во второстепенном меню, а не
+    # единственной кнопкой действия на экране.
+    assert "Всё уже есть в истории, загружать нечего" in text
+    assert "imp:save" not in buttons
+    assert "imp:saveall" not in buttons
+    assert buttons[-2:] == ["imp:ok", "imp:more"]
+    submenu = keyboards.csv_import_dupes_submenu_keyboard(2)
+    assert [b.callback_data for row in submenu.inline_keyboard for b in row] == ["imp:saveall", "imp:moreback"]
 
 
 async def test_confirmation_without_duplicates_looks_as_before(fresh_db, user_id, squat):

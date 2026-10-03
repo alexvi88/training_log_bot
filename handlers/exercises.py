@@ -788,6 +788,10 @@ def _merge_target_keyboard(source_id: int, candidates) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+# Сколько своих упражнений показать в списке «с чем объединить» до поиска.
+_MERGE_LIST_LIMIT = 20
+
+
 @router.callback_query(F.data.startswith("exm:mergestart:"))
 async def exm_merge_start(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
@@ -797,7 +801,10 @@ async def exm_merge_start(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(exm_merge_source_id=ex_id)
     await state.set_state(ExerciseManage.picking_merge_target)
-    candidates = await db.search_exercises(callback.from_user.id, "")
+    # Пустой запрос — свои упражнения сразу, а не пустой экран, на котором
+    # нужно угадывать, что набрать (search_exercises на пустую строку не
+    # отвечал ничем).
+    candidates = (await db.list_user_exercises(callback.from_user.id))[:_MERGE_LIST_LIMIT]
     text = i18n.t("exercises.merge.pick_target", name=escape(ex["display_name"]))
     await ui.safe_edit(callback, text, reply_markup=_merge_target_keyboard(ex_id, candidates), parse_mode="HTML")
     await callback.answer()
@@ -854,7 +861,11 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
     if source_id is None:
         await ui.alert_exercise_not_found(callback)
         return
-    outcome = await db.merge_exercises(callback.from_user.id, keep_id=target_id, drop_id=source_id)
+    source = await db.get_exercise(source_id)
+    journal: dict = {}
+    outcome = await db.merge_exercises(
+        callback.from_user.id, keep_id=target_id, drop_id=source_id, journal_out=journal,
+    )
     if outcome != db.MERGE_OK:
         # Причину называем: «не получилось» — ровно тот ответ, после которого
         # человек жмёт ту же кнопку ещё раз.
@@ -870,6 +881,42 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     await callback.answer(i18n.t("exercises.merge.done"))
     await _render_exercise_card(callback, state, target_id)
+    target = await db.get_exercise(target_id)
+    # Итог отдельным сообщением с «Разъединить»: объединение больше не
+    # окончательное (журнал — db.exercise_merges), и вернуть всё как было
+    # можно тут же, одним нажатием.
+    await callback.message.answer(
+        i18n.t(
+            "exercises.merge.done_undo",
+            source=escape(source["display_name"] if source else ""),
+            target=escape(target["display_name"]),
+        ),
+        reply_markup=keyboards.merge_done_keyboard(target_id, journal["merge_id"]),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("exm:unmerge:"))
+async def exm_unmerge(callback: CallbackQuery, state: FSMContext):
+    """«Разъединить»: вернуть снесённое объединением упражнение и его подходы."""
+    merge_id = callback.data.split(":", 2)[2]
+    outcome, restored_id, moved = await db.undo_exercise_merge(callback.from_user.id, merge_id)
+    if outcome != db.UNMERGE_OK:
+        await callback.answer(
+            {
+                db.UNMERGE_NAME_TAKEN: i18n.t("exercise.unmerge_name_taken"),
+                db.UNMERGE_IN_ACTIVE_WORKOUT: i18n.t("exercises.merge.error_active_workout"),
+            }.get(outcome, i18n.t("exercise.unmerge_gone")),
+            show_alert=True,
+        )
+        return
+    restored = await db.get_exercise(restored_id)
+    await ui.safe_edit(
+        callback,
+        i18n.t("exercise.unmerged", name=escape(restored["display_name"]), n=moved),
+        reply_markup=None,
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("prog:card:"))

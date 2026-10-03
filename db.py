@@ -24,6 +24,7 @@ import os
 import secrets
 import sqlite3
 import time
+import uuid
 from typing import Any, Iterable, Optional
 
 import aiosqlite
@@ -177,6 +178,9 @@ CREATE TABLE IF NOT EXISTS exercises (
     custom_photo_file_id TEXT,
     custom_photo_path TEXT,
     description TEXT,
+    -- Упражнение, которое завёл импорт (import_batches.id): отмена этого
+    -- импорта сносит его, если по нему не осталось других подходов.
+    import_batch_id TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
@@ -193,7 +197,14 @@ CREATE TABLE IF NOT EXISTS workouts (
     source TEXT NOT NULL DEFAULT 'manual',
     ai_comment TEXT,
     routine_id INTEGER,
-    program_id INTEGER
+    program_id INTEGER,
+    -- Название тренировки из чужого приложения («Push», «Вечерняя тренировка»)
+    -- — Hevy и Strong зовут так сессию, и без него несколько тренировок за
+    -- один день в истории неотличимы. У записанных в боте — NULL.
+    title TEXT,
+    -- Каким импортом заведена (import_batches.id): по нему «Отменить импорт»
+    -- снимает ровно этот файл и ничего больше. NULL — не из импорта.
+    import_batch_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -773,9 +784,58 @@ CREATE TABLE IF NOT EXISTS achievements (
     user_id INTEGER NOT NULL,
     code TEXT NOT NULL,
     earned_at TEXT NOT NULL,
+    -- Значок, который открыл импорт истории (import_batches.id): отмена
+    -- импорта забирает его вместе с тренировками, которые его дали.
+    import_batch_id TEXT,
     UNIQUE (user_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements (user_id);
+
+-- Имя из чужого файла → своё упражнение атлета. Пишется, когда человек сам
+-- выбрал, куда ложится незнакомое имя при импорте, и при ручном объединении
+-- (старое имя → то, куда объединили). Резолвер импорта смотрит сюда первым:
+-- повторный импорт того же файла после объединения не воскрешает старое имя.
+-- folded_name — db._fold_exercise_name (регистр, ё=е, пробелы по краям).
+CREATE TABLE IF NOT EXISTS exercise_aliases (
+    user_id INTEGER NOT NULL,
+    folded_name TEXT NOT NULL,
+    exercise_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, folded_name),
+    FOREIGN KEY (exercise_id) REFERENCES exercises (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_aliases_exercise ON exercise_aliases (exercise_id);
+
+-- Один импорт истории (файл Hevy/Strong, свой CSV или заметки) — чтобы его
+-- можно было отменить целиком: тренировки, подходы, заведённые им упражнения
+-- и открытые им значки помечены этим id (import_batch_id). Отменить можно
+-- config.IMPORT_UNDO_DAYS, строка живёт config.IMPORT_BATCH_RETENTION_DAYS.
+CREATE TABLE IF NOT EXISTS import_batches (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    workouts INTEGER NOT NULL DEFAULT 0,
+    sets INTEGER NOT NULL DEFAULT 0,
+    undone_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_import_batches_user ON import_batches (user_id, created_at);
+
+-- Журнал объединений упражнений: что именно переехало (id подходов, строк
+-- блоков и дней программ, заметок) и карточка снесённого упражнения целиком
+-- — ровно столько, чтобы «Разъединить» вернуло всё как было. Живёт
+-- config.MERGE_JOURNAL_RETENTION_DAYS.
+CREATE TABLE IF NOT EXISTS exercise_merges (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    keep_id INTEGER NOT NULL,
+    drop_id INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    undone_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_merges_user ON exercise_merges (user_id, created_at);
 
 -- Токен доступа к своим данным по MCP (см. mcp_server.py): пользователь
 -- вставляет его в конфиг внешнего AI-клиента, и тот читает историю тренировок
@@ -1299,7 +1359,21 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE workouts DROP COLUMN followup_due_at")
         await _conn.execute("ALTER TABLE workouts DROP COLUMN followup_sent")
 
+    if "title" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN title TEXT")
+    if "import_batch_id" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN import_batch_id TEXT")
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workouts_import_batch "
+        "ON workouts (import_batch_id) WHERE import_batch_id IS NOT NULL"
+    )
+    achievement_cols = await _column_names("achievements")
+    if "import_batch_id" not in achievement_cols:
+        await _conn.execute("ALTER TABLE achievements ADD COLUMN import_batch_id TEXT")
+
     exercise_cols = await _column_names("exercises")
+    if "import_batch_id" not in exercise_cols:
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN import_batch_id TEXT")
     if "original_name" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN original_name TEXT")
         await _conn.execute("UPDATE exercises SET original_name = name WHERE original_name IS NULL")
@@ -3912,7 +3986,9 @@ async def _exercise_in_active_workout(user_id: int, exercise_id: int) -> bool:
     return await cur.fetchone() is not None
 
 
-async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
+async def merge_exercises(
+    user_id: int, keep_id: int, drop_id: int, *, journal_out: Optional[dict] = None
+) -> str:
     """Merges drop_id into keep_id — for when the same movement got logged
     under two different names/entries (e.g. typed once as "ягодичный мостик",
     later as "glute bridge") and the user wants one combined history instead
@@ -3957,9 +4033,32 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
     # середине (см. discard_workout про то же рассуждение), оставил бы историю
     # переехавшей только наполовину — часть подходов уже на keep_id, часть ещё
     # на drop_id, который следующая строка вот-вот удалит совсем.
+    merge_id = uuid.uuid4().hex
     async with _write_lock:
         db = conn()
         try:
+            # Журнал — до любого переноса и в той же транзакции: что именно
+            # переехало и откуда, чтобы «Разъединить» вернуло ровно это (см.
+            # undo_exercise_merge). Без него объединение было необратимым.
+            payload = await _merge_journal_payload(db, keep, drop)
+            await db.execute(
+                "INSERT INTO exercise_merges (id, user_id, keep_id, drop_id, payload, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (merge_id, user_id, keep_id, drop_id, json.dumps(payload, ensure_ascii=False), now_iso()),
+            )
+            # Старое имя → оставшееся упражнение: повторный импорт файла, где
+            # упражнение звалось по-старому, ляжет сюда, а не воскресит
+            # снесённое (см. find_exercise_by_alias). Уже заведённые на
+            # снесённое имена переезжают следом.
+            await db.execute(
+                "UPDATE exercise_aliases SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+            )
+            for folded in payload["aliases_created"]:
+                await db.execute(
+                    "INSERT OR IGNORE INTO exercise_aliases "
+                    "(user_id, folded_name, exercise_id, source, created_at) VALUES (?, ?, ?, 'merge', ?)",
+                    (user_id, folded, keep_id, now_iso()),
+                )
             await db.execute(
                 "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
             )
@@ -4040,10 +4139,227 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
         except Exception:
             await db.rollback()
             raise
-    # Файл сносим только после успешного коммита: откат вернул бы строку с
-    # именем файла, которого уже нет.
-    exercise_photos.delete(dropped_photo_name)
+    # Фото снесённого упражнения с диска не стираем сразу: «Разъединить»
+    # вернёт карточку вместе с ним. Файл уходит, когда журнал объединения
+    # отживёт своё (prune_old_exercise_merges) или раньше — если фото так и
+    # осталось без хозяина.
+    del dropped_photo_name
+    if journal_out is not None:
+        journal_out["merge_id"] = merge_id
     return MERGE_OK
+
+
+async def _merge_journal_payload(db, keep, drop) -> dict:
+    """Что объединение keep ← drop сейчас перенесёт или удалит — снимок для
+    undo_exercise_merge. Читается внутри той же транзакции, до переноса."""
+    keep_id, drop_id = keep["id"], drop["id"]
+
+    async def rows(sql: str, params: tuple) -> list[dict]:
+        cur = await db.execute(sql, params)
+        return [dict(r) for r in await cur.fetchall()]
+
+    sets_moved = [r["id"] for r in await rows("SELECT id FROM sets WHERE exercise_id = ?", (drop_id,))]
+    block_rows = await rows(
+        "SELECT id, block_id, order_in_block FROM block_exercises WHERE exercise_id = ?", (drop_id,)
+    )
+    keep_blocks = {r["block_id"] for r in await rows(
+        "SELECT block_id FROM block_exercises WHERE exercise_id = ?", (keep_id,)
+    )}
+    routine_rows = await rows("SELECT * FROM routine_exercises WHERE exercise_id = ?", (drop_id,))
+    keep_routines = {r["routine_id"]: r for r in await rows(
+        "SELECT * FROM routine_exercises WHERE exercise_id = ?", (keep_id,)
+    )}
+    note_rows = await rows("SELECT workout_id, note FROM exercise_notes WHERE exercise_id = ?", (drop_id,))
+    keep_notes = {r["workout_id"] for r in await rows(
+        "SELECT workout_id FROM exercise_notes WHERE exercise_id = ?", (keep_id,)
+    )}
+    alias_rows = await rows(
+        "SELECT folded_name FROM exercise_aliases WHERE exercise_id = ?", (drop_id,)
+    )
+    existing_aliases = {r["folded_name"] for r in await rows(
+        "SELECT folded_name FROM exercise_aliases WHERE user_id = ?", (drop["user_id"],)
+    )}
+    created = []
+    for value in (drop["display_name"], drop["name"]):
+        folded = _fold_exercise_name(value or "")
+        if folded and folded not in existing_aliases and folded not in created:
+            created.append(folded)
+    return {
+        "drop": dict(drop),
+        "keep_before": {
+            k: keep[k] for k in (
+                "last_used_at", "description", "custom_photo_file_id", "custom_photo_path", "notes",
+            )
+        },
+        "sets": sets_moved,
+        "blocks_moved": [r for r in block_rows if r["block_id"] not in keep_blocks],
+        "blocks_deleted": [r for r in block_rows if r["block_id"] in keep_blocks],
+        "routines_moved": [r for r in routine_rows if r["routine_id"] not in keep_routines],
+        "routines_deleted": [r for r in routine_rows if r["routine_id"] in keep_routines],
+        "keep_routines_before": [
+            {"id": keep_routines[r["routine_id"]]["id"],
+             "target": keep_routines[r["routine_id"]]["target"],
+             "progression": keep_routines[r["routine_id"]]["progression"]}
+            for r in routine_rows if r["routine_id"] in keep_routines
+        ],
+        "notes_moved": [r for r in note_rows if r["workout_id"] not in keep_notes],
+        "notes_deleted": [r for r in note_rows if r["workout_id"] in keep_notes],
+        "aliases_repointed": [r["folded_name"] for r in alias_rows],
+        "aliases_created": created,
+    }
+
+
+UNMERGE_OK = "ok"
+UNMERGE_NOT_FOUND = "not_found"      # чужое, неизвестное или уже разъединённое
+UNMERGE_NAME_TAKEN = "name_taken"    # имя снесённого с тех пор занял кто-то ещё
+UNMERGE_IN_ACTIVE_WORKOUT = "active"  # оставшееся открыто в текущей тренировке
+
+
+async def get_exercise_merge(merge_id: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM exercise_merges WHERE id = ?", (merge_id,))
+    return await cur.fetchone()
+
+
+async def undo_exercise_merge(user_id: int, merge_id: str) -> tuple[str, Optional[int], int]:
+    """«Разъединить»: вернуть снесённое объединением упражнение с той же
+    карточкой и тем же id и увезти обратно всё, что переехало (подходы, места
+    в тренировках и днях программ, заметки, имена для импорта). Возвращает
+    (UNMERGE_*, id восстановленного упражнения, сколько подходов вернулось).
+
+    Что после объединения поменяли руками, не трогаем: подход, который с тех
+    пор удалили, вернуть нельзя, а поля оставшегося упражнения откатываются,
+    только если они всё ещё те, что поставило само объединение."""
+    merge = await get_exercise_merge(merge_id)
+    if merge is None or merge["user_id"] != user_id or merge["undone_at"] is not None:
+        return UNMERGE_NOT_FOUND, None, 0
+    keep = await get_exercise(merge["keep_id"])
+    if keep is None:
+        return UNMERGE_NOT_FOUND, None, 0
+    if await _exercise_in_active_workout(user_id, keep["id"]):
+        return UNMERGE_IN_ACTIVE_WORKOUT, None, 0
+    payload = json.loads(merge["payload"])
+    drop = payload["drop"]
+    keep_id, drop_id = keep["id"], drop["id"]
+    if await get_exercise(drop_id) is not None:
+        return UNMERGE_NOT_FOUND, None, 0
+    taken = await find_exercise_by_display_name(user_id, drop["display_name"])
+    if taken is not None:
+        return UNMERGE_NAME_TAKEN, None, 0
+    columns = await _column_names("exercises")
+    values = {k: v for k, v in drop.items() if k in columns}
+    async with _write_lock:
+        db = conn()
+        try:
+            await db.execute(
+                f"INSERT INTO exercises ({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+                tuple(values.values()),
+            )
+            moved = 0
+            if payload["sets"]:
+                ids = payload["sets"]
+                cur = await db.execute(
+                    f"UPDATE sets SET exercise_id = ? WHERE exercise_id = ? AND id IN ({_placeholders(ids)})",
+                    (drop_id, keep_id, *ids),
+                )
+                moved = cur.rowcount
+            for row in payload["blocks_moved"]:
+                await db.execute(
+                    "UPDATE block_exercises SET exercise_id = ? WHERE id = ? AND exercise_id = ?",
+                    (drop_id, row["id"], keep_id),
+                )
+            for row in payload["blocks_deleted"]:
+                await db.execute(
+                    "INSERT OR IGNORE INTO block_exercises (block_id, exercise_id, order_in_block) "
+                    "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM workout_blocks WHERE id = ?)",
+                    (row["block_id"], drop_id, row["order_in_block"], row["block_id"]),
+                )
+            for row in payload["routines_moved"]:
+                await db.execute(
+                    "UPDATE routine_exercises SET exercise_id = ? WHERE id = ? AND exercise_id = ?",
+                    (drop_id, row["id"], keep_id),
+                )
+            for row in payload["routines_deleted"]:
+                await db.execute(
+                    "INSERT OR IGNORE INTO routine_exercises "
+                    "(routine_id, exercise_id, order_index, target, progression) "
+                    "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM routines WHERE id = ?)",
+                    (row["routine_id"], drop_id, row["order_index"], row["target"],
+                     row["progression"], row["routine_id"]),
+                )
+            for row in payload["keep_routines_before"]:
+                await db.execute(
+                    "UPDATE routine_exercises SET target = ?, progression = ? WHERE id = ?",
+                    (row["target"], row["progression"], row["id"]),
+                )
+            for row in payload["notes_moved"]:
+                await db.execute(
+                    "UPDATE exercise_notes SET exercise_id = ? "
+                    "WHERE workout_id = ? AND exercise_id = ? AND note = ?",
+                    (drop_id, row["workout_id"], keep_id, row["note"]),
+                )
+            for row in payload["notes_deleted"]:
+                await db.execute(
+                    "INSERT OR IGNORE INTO exercise_notes (workout_id, exercise_id, note) "
+                    "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM workouts WHERE id = ?)",
+                    (row["workout_id"], drop_id, row["note"], row["workout_id"]),
+                )
+            before = payload["keep_before"]
+            for column, old_value in before.items():
+                if keep[column] != old_value and keep[column] == drop.get(column):
+                    await db.execute(
+                        f"UPDATE exercises SET {column} = ? WHERE id = ?", (old_value, keep_id)
+                    )
+            created = payload["aliases_created"]
+            if created:
+                await db.execute(
+                    f"DELETE FROM exercise_aliases WHERE user_id = ? AND exercise_id = ? "
+                    f"AND folded_name IN ({_placeholders(created)})",
+                    (user_id, keep_id, *created),
+                )
+            repointed = payload["aliases_repointed"]
+            if repointed:
+                await db.execute(
+                    f"UPDATE exercise_aliases SET exercise_id = ? WHERE user_id = ? AND exercise_id = ? "
+                    f"AND folded_name IN ({_placeholders(repointed)})",
+                    (drop_id, user_id, keep_id, *repointed),
+                )
+            await db.execute(
+                "UPDATE exercise_merges SET undone_at = ? WHERE id = ?", (now_iso(), merge_id)
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return UNMERGE_OK, drop_id, moved
+
+
+async def prune_old_exercise_merges(retention_days: int) -> int:
+    """Журнал объединений старше срока — вместе с файлами фото снесённых
+    упражнений, которые так и остались без хозяина (их держали ради
+    «Разъединить»)."""
+    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat()
+    cur = await conn().execute(
+        "SELECT id, payload FROM exercise_merges WHERE created_at < ?", (cutoff,)
+    )
+    old = await cur.fetchall()
+    if not old:
+        return 0
+    orphan_photos = []
+    for row in old:
+        drop = json.loads(row["payload"]).get("drop") or {}
+        name = drop.get("custom_photo_path")
+        if name:
+            cur = await conn().execute(
+                "SELECT 1 FROM exercises WHERE custom_photo_path = ? LIMIT 1", (name,)
+            )
+            if await cur.fetchone() is None:
+                orphan_photos.append(name)
+    async with _write_lock:
+        await conn().execute("DELETE FROM exercise_merges WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    for name in orphan_photos:
+        exercise_photos.delete(name)
+    return len(old)
 
 
 # ---------- workouts ----------
@@ -4245,14 +4561,18 @@ async def create_workout(
 
 
 async def create_finished_workout(
-    user_id: int, started_at: str, finished_at: str, source: str = "manual", note: Optional[str] = None
+    user_id: int, started_at: str, finished_at: str, source: str = "manual", note: Optional[str] = None,
+    *, title: Optional[str] = None, import_batch_id: Optional[str] = None,
 ) -> int:
-    """Insert a workout that's already finished — used for backfill/import (no live FSM)."""
+    """Insert a workout that's already finished — used for backfill/import (no live FSM).
+
+    `title` — название сессии из чужого приложения, `import_batch_id` — какой
+    импорт её завёл (см. import_batches)."""
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO workouts (user_id, started_at, finished_at, status, source, note) "
-            "VALUES (?, ?, ?, 'finished', ?, ?)",
-            (user_id, started_at, finished_at, source, note),
+            "INSERT INTO workouts (user_id, started_at, finished_at, status, source, note, "
+            "title, import_batch_id) VALUES (?, ?, ?, 'finished', ?, ?, ?, ?)",
+            (user_id, started_at, finished_at, source, note, title, import_batch_id),
         )
         await conn().commit()
         return cur.lastrowid
@@ -4830,13 +5150,16 @@ def _e1rm_sql(formula: str) -> str:
     w = LOAD_WEIGHT_SQL
     r = _EFF_REPS_SQL
     epley = f"{w} * (1 + {r} / 30.0)"
+    # Подход длиннее config.E1RM_MAX_REPS повторов в e1RM не участвует —
+    # как analytics.counts_for_e1rm (там 0, здесь 0: MAX по нему не выбирает).
+    too_long = f"WHEN s.reps > {int(config.E1RM_MAX_REPS)} THEN 0 "
     if formula == "brzycki":
         return (
-            f"CASE WHEN {r} <= 1 THEN {w} "
+            f"CASE {too_long}WHEN {r} <= 1 THEN {w} "
             f"WHEN {r} > 10 THEN {epley} "
             f"ELSE {w} * 36.0 / (37 - {r}) END"
         )
-    return f"CASE WHEN {r} <= 1 THEN {w} ELSE {epley} END"
+    return f"CASE {too_long}WHEN {r} <= 1 THEN {w} ELSE {epley} END"
 
 
 async def max_e1rm_before_workout(
@@ -5659,7 +5982,12 @@ async def add_set(
     weight: float,
     reps: int,
     rpe: Optional[float] = None,
+    *,
+    created_at: Optional[str] = None,
 ) -> int:
+    """`created_at` — время подхода, если оно известно не «сейчас»: импорт
+    раскладывает подходы по настоящему времени сессии из файла, иначе
+    длительность перенесённой тренировки считалась бы по моменту загрузки."""
     load_weight = await _load_weight_for(
         exercise_id, weight, await _workout_date_of_block(block_id)
     )
@@ -5670,7 +5998,7 @@ async def add_set(
             " load_weight, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (block_id, exercise_id, round_index, order_in_round, weight, reps, rpe,
-             load_weight, now_iso()),
+             load_weight, created_at or now_iso()),
         )
         await conn().commit()
         return cur.lastrowid
@@ -6753,6 +7081,10 @@ _MERGE_CONTENT_TABLES = frozenset({
     "programs", "routines",
     "ai_conversation_turns", "ai_chat_messages",
     "achievements", "shared_items",
+    # Имена из импорта, пачки импорта и журнал объединений ссылаются на
+    # тренировки и упражнения атлета — переезжают вместе с ними, иначе
+    # «Отменить импорт» и «Разъединить» после привязки не нашли бы своего.
+    "exercise_aliases", "import_batches", "exercise_merges",
 })
 
 #
@@ -11303,3 +11635,184 @@ async def support_photo_names_for(user_id: int) -> list[str]:
         (user_id,),
     )
     return [row[0] for row in await cur.fetchall()]
+
+
+# ---------- импорт истории: имена из чужих файлов, пачки импорта ----------
+
+
+async def find_exercise_by_alias(user_id: int, name: str) -> Optional[aiosqlite.Row]:
+    """Своё упражнение, за которым закреплено это имя из чужого файла (см.
+    exercise_aliases): выбор человека при прошлом импорте или ручное
+    объединение. Архивное и шаблоны не считаются — ими имя не займёшь."""
+    cur = await conn().execute(
+        "SELECT e.* FROM exercise_aliases a JOIN exercises e ON e.id = a.exercise_id "
+        "WHERE a.user_id = ? AND a.folded_name = ? AND e.is_archived = 0 AND e.is_template = 0",
+        (user_id, _fold_exercise_name(name)),
+    )
+    return await cur.fetchone()
+
+
+async def set_exercise_alias(user_id: int, name: str, exercise_id: int, source: str) -> None:
+    """Закрепить имя из файла за своим упражнением (последний выбор побеждает)."""
+    folded = _fold_exercise_name(name)
+    if not folded:
+        return
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO exercise_aliases (user_id, folded_name, exercise_id, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id, folded_name) DO UPDATE SET "
+            "exercise_id = excluded.exercise_id, source = excluded.source, created_at = excluded.created_at",
+            (user_id, folded, exercise_id, source, now_iso()),
+        )
+        await conn().commit()
+
+
+async def create_import_batch(user_id: int, source: str) -> str:
+    batch_id = uuid.uuid4().hex
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO import_batches (id, user_id, source, created_at) VALUES (?, ?, ?, ?)",
+            (batch_id, user_id, source, now_iso()),
+        )
+        await conn().commit()
+    return batch_id
+
+
+async def finish_import_batch(batch_id: str, workouts: int, sets: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE import_batches SET workouts = ?, sets = ? WHERE id = ?", (workouts, sets, batch_id)
+        )
+        await conn().commit()
+
+
+async def get_import_batch(batch_id: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM import_batches WHERE id = ?", (batch_id,))
+    return await cur.fetchone()
+
+
+async def list_import_batches(user_id: int, days: int) -> list[aiosqlite.Row]:
+    """Импорты за последние `days` суток, новые первыми, — те, что ещё можно
+    отменить или уже отменены (`undone_at`). Пустые (ничего не записали) не
+    показываем: отменять в них нечего."""
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat()
+    cur = await conn().execute(
+        "SELECT b.*, (SELECT COUNT(*) FROM workouts w WHERE w.import_batch_id = b.id) AS live_workouts "
+        "FROM import_batches b WHERE b.user_id = ? AND b.created_at >= ? AND b.workouts > 0 "
+        "ORDER BY b.created_at DESC, b.rowid DESC",
+        (user_id, since),
+    )
+    return await cur.fetchall()
+
+
+async def tag_exercise_import_batch(exercise_id: int, batch_id: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET import_batch_id = ? WHERE id = ? AND import_batch_id IS NULL",
+            (batch_id, exercise_id),
+        )
+        await conn().commit()
+
+
+async def tag_achievements_import_batch(
+    user_id: int, earned_on: dict[str, str], batch_id: str
+) -> None:
+    """Значки, открытые импортом: помечаем пачкой и ставим дату тренировки,
+    которая их дала (а не момент загрузки), — `earned_on` code → метка времени."""
+    if not earned_on:
+        return
+    async with _write_lock:
+        await conn().executemany(
+            "UPDATE achievements SET import_batch_id = ?, earned_at = ? WHERE user_id = ? AND code = ?",
+            [(batch_id, when, user_id, code) for code, when in earned_on.items()],
+        )
+        await conn().commit()
+
+
+async def undo_import_batch(user_id: int, batch_id: str) -> Optional[dict[str, int]]:
+    """Снять импорт целиком: его тренировки (с подходами, блоками и заметками),
+    упражнения, которые он завёл, — если по ним не осталось других подходов и
+    они не стоят в программе, — и значки, которые он открыл. None — пачка не
+    этого атлета или её нет. Пересчёт значков по оставшейся истории — забота
+    вызывающего (achievement_sync.resync)."""
+    batch = await get_import_batch(batch_id)
+    if batch is None or batch["user_id"] != user_id:
+        return None
+    cur = await conn().execute(
+        "SELECT id FROM workouts WHERE user_id = ? AND import_batch_id = ?", (user_id, batch_id)
+    )
+    workout_ids = [r["id"] for r in await cur.fetchall()]
+    removed_sets = 0
+    for wid in workout_ids:
+        cur = await conn().execute(
+            "SELECT COUNT(*) AS n FROM sets s JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
+            (wid,),
+        )
+        removed_sets += (await cur.fetchone())["n"]
+        await discard_workout(wid)
+    cur = await conn().execute(
+        "SELECT id FROM exercises WHERE user_id = ? AND import_batch_id = ? AND is_template = 0",
+        (user_id, batch_id),
+    )
+    removed_exercises = 0
+    for row in await cur.fetchall():
+        if await delete_exercise_if_unused(row["id"], user_id):
+            removed_exercises += 1
+    async with _write_lock:
+        await conn().execute(
+            "DELETE FROM achievements WHERE user_id = ? AND import_batch_id = ?", (user_id, batch_id)
+        )
+        await conn().execute(
+            "UPDATE import_batches SET undone_at = ? WHERE id = ?", (now_iso(), batch_id)
+        )
+        await conn().commit()
+    return {
+        "removed_workouts": len(workout_ids),
+        "removed_sets": removed_sets,
+        "removed_exercises": removed_exercises,
+    }
+
+
+async def prune_old_import_batches(retention_days: int) -> int:
+    """Строки пачек импорта старше срока: отменить их уже нельзя, а метки на
+    тренировках и упражнениях без пачки ничего не значат — снимаем и их."""
+    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        db = conn()
+        old = "SELECT id FROM import_batches WHERE created_at < ?"
+        await db.execute(f"UPDATE workouts SET import_batch_id = NULL WHERE import_batch_id IN ({old})", (cutoff,))
+        await db.execute(f"UPDATE exercises SET import_batch_id = NULL WHERE import_batch_id IN ({old})", (cutoff,))
+        await db.execute(
+            f"UPDATE achievements SET import_batch_id = NULL WHERE import_batch_id IN ({old})", (cutoff,)
+        )
+        cur = await db.execute("DELETE FROM import_batches WHERE created_at < ?", (cutoff,))
+        await db.commit()
+        return cur.rowcount
+
+
+async def list_session_fingerprints(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> list[dict]:
+    """Завершённые тренировки атлета для сверки импорта с историей: начало
+    (UTC, как в базе), местный день и состав — (exercise_id, вес, повторы)
+    каждого подхода. Дублем импорт считает только ту же сессию (то же начало
+    с точностью до минуты или тот же состав в тот же день), а не «день, где
+    уже было это упражнение» — см. handlers.csv_import._duplicate_sessions."""
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT w.id AS wid, w.started_at AS started_at, {day} AS d, "
+        "s.exercise_id AS ex_id, s.weight AS weight, s.reps AS reps "
+        "FROM workouts w LEFT JOIN workout_blocks b ON b.workout_id = w.id "
+        "LEFT JOIN sets s ON s.block_id = b.id "
+        "WHERE w.user_id = ? AND w.status = 'finished' ORDER BY w.id",
+        (user_id,),
+    )
+    by_id: dict[int, dict] = {}
+    for r in await cur.fetchall():
+        item = by_id.setdefault(
+            r["wid"], {"id": r["wid"], "started_at": r["started_at"], "date": r["d"], "sets": []}
+        )
+        if r["ex_id"] is not None:
+            item["sets"].append((r["ex_id"], round(float(r["weight"]), 1), int(r["reps"])))
+    return list(by_id.values())
+

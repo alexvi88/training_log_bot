@@ -735,6 +735,61 @@ def _strip_autonyms(text: str) -> str:
     return text
 
 
+def _kb_texts(kb) -> str:
+    return " ".join(b.text for row in kb.inline_keyboard for b in row)
+
+
+async def _screen_import_confirmation(db, user_id: int) -> str:
+    """Подтверждение импорта: сессии с временем и названием, пропуски по
+    причинам, предупреждение о датах и «всё уже есть» — плюс кнопки."""
+    import handlers.csv_import as csv_import
+
+    stats: dict = {"date_order_ambiguous": True, "date_order_example": {"text": "03/09/2026", "date": "2026-09-03"}}
+    for reason in csv_import.SKIP_REASONS:
+        csv_import.add_skip(stats, reason, "Bench Press (Barbell) 50×10")
+    entries = [(dt.date(2026, 8, 7), ["Bench Press (Barbell)"], True, "08:27 · Push")]
+    text = formatting.build_import_confirmation_list(entries, set(), i18n.t("import.confirm_header", n=1))
+    text += "\n" + "\n".join(csv_import._report_lines(stats)) + "\n" + i18n.t("import.all_already_there")
+    text += " " + _kb_texts(keyboards.csv_import_all_duplicates_keyboard(0, 1))
+    text += " " + i18n.t("import.dupes_submenu", n=3) + " " + _kb_texts(keyboards.csv_import_dupes_submenu_keyboard(3))
+    return text
+
+
+async def _screen_import_result(db, user_id: int) -> str:
+    """Итог импорта с отменой, отмена, список прошлых импортов, согласие на
+    разбор заметок и короткий разбор от тренера (ai_trainer)."""
+    import ai_trainer
+    import handlers.csv_import as csv_import
+
+    result = {"imported": 6, "sets": 11, "achievements": ["first", "club100"], "batch_id": "b" * 32}
+    text = csv_import._result_text(result, 2, {})
+    text += " " + _kb_texts(keyboards.import_result_keyboard("b" * 32))
+    text += " " + csv_import.undo_message({"removed_workouts": 6, "removed_sets": 11, "removed_exercises": 2})
+    text += " " + i18n.t("import.undo_confirm", n=6, sets=11, date="03.10.2026")
+    text += " " + _kb_texts(keyboards.import_undo_confirm_keyboard("b" * 32))
+    text += " " + i18n.t("import.batch_label", date="03.10.2026", source=i18n.t("import.source.notes"), n=3)
+    text += " " + _kb_texts(keyboards.import_intro_keyboard(True)) + " " + i18n.t("import.batches_header")
+    text += " " + i18n.t("import.notes_consent") + " " + _kb_texts(keyboards.import_notes_consent_keyboard())
+    text += " " + await ai_trainer._small_import_overview(2, ["Bench Press (Barbell)", "Squat"])
+    return text
+
+
+async def _screen_import_resolve(db, user_id: int) -> str:
+    """Вопрос «куда это имя»: шаблоны каталога — на языке атлета, хотя в базе
+    они хранятся русским именем-идентичностью."""
+    templates = await db.search_exercise_templates(user_id, "Bench Press")
+    assert templates
+    kb = keyboards.exercise_resolve_keyboard([], "Bench Press", "resolve", remaining=3, templates=templates)
+    return i18n.t("resolve.progress_similar", position=1, total=4, name="Bench Press") + " " + _kb_texts(kb)
+
+
+async def _screen_merge_done(db, user_id: int) -> str:
+    text = i18n.t("exercises.merge.done_undo", source="Bench", target="Bench Press")
+    text += " " + _kb_texts(keyboards.merge_done_keyboard(1, "m" * 32))
+    text += " " + i18n.t("exercise.unmerged", name="Bench", n=3)
+    return text
+
+
 def _leaks(text: str) -> list[str]:
     return [word for word in _strip_autonyms(text).split() if i18n_coverage.has_cyrillic(word)]
 
@@ -791,6 +846,10 @@ SCREENS: list[tuple[str, object]] = [
     ("factcheck_screen", _screen_factcheck),
     ("invite_screen", _screen_invite),
     ("ios_link_screen", _screen_ios_link),
+    ("import_confirmation", _screen_import_confirmation),
+    ("import_result_and_undo", _screen_import_result),
+    ("import_resolve_templates", _screen_import_resolve),
+    ("exercise_merge_done", _screen_merge_done),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

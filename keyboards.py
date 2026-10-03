@@ -2412,14 +2412,20 @@ def exercise_resolve_keyboard(
     items = [(f"{prefix}:pick:{ex['id']}", ex["display_name"]) for ex in candidates[:6]]
     for row in named_buttons(items):
         b.row(*row)
+    lang = i18n.get_lang()
     for tpl in list(templates)[:4]:
+        # Шаблон каталога хранится русским именем-идентичностью; кнопка
+        # показывает его на языке атлета (seed_data.localized_exercise_name).
         b.row(
             InlineKeyboardButton(
-                text=f"📋 {tpl['display_name']}", callback_data=f"{prefix}:tpl:{tpl['id']}"
+                text=f"📋 {seed_data.localized_exercise_name(tpl['name'], lang)}",
+                callback_data=f"{prefix}:tpl:{tpl['id']}",
             )
         )
     b.row(InlineKeyboardButton(text=i18n.t("btn.create_named", name=name), callback_data=f"{prefix}:create"))
     if remaining > 0:
+        # «Все оставшиеся» — вместе с этим: число на кнопке то же, что
+        # заведётся по нажатию.
         b.row(
             InlineKeyboardButton(
                 text=i18n.t("btn.create_all_remaining", n=remaining + 1),
@@ -2498,6 +2504,78 @@ def csv_import_page_keyboard(
             text=i18n.t("btn.upload_all_with_dupes", n=total), callback_data="imp:saveall"
         ))
     b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="imp:cancel"))
+    return b.as_markup()
+
+
+def csv_import_all_duplicates_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Всё из файла уже есть в истории: главная кнопка — «Понятно», а
+    «загрузить с дублями» спрятана во второстепенное меню (imp:more), а не
+    стоит единственной кнопкой действия на экране."""
+    b = InlineKeyboardBuilder()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"imp:page:{page - 1}"))
+    if page + 1 < total_pages:
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"imp:page:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text=i18n.t("btn.got_it"), callback_data="imp:ok"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.import_more"), callback_data="imp:more"))
+    return b.as_markup()
+
+
+def csv_import_dupes_submenu_keyboard(total: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=i18n.t("btn.upload_all_with_dupes", n=total), callback_data="imp:saveall"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="imp:moreback"))
+    return b.as_markup()
+
+
+def import_intro_keyboard(has_undo: bool) -> InlineKeyboardMarkup:
+    """Экран «пришли файл»: «Отмена» и, если за 30 дней были импорты, —
+    вход в их отмену (imp:batches)."""
+    b = InlineKeyboardBuilder()
+    if has_undo:
+        b.row(InlineKeyboardButton(text=i18n.t("btn.import_undo_past"), callback_data="imp:batches"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="imp:cancel"))
+    return b.as_markup()
+
+
+def import_result_keyboard(batch_id: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=i18n.t("btn.import_undo"), callback_data=f"imp:undo:{batch_id}"))
+    return b.as_markup()
+
+
+def import_batches_keyboard(items: Sequence[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Импорты, которые ещё можно отменить: (batch_id, подпись)."""
+    b = InlineKeyboardBuilder()
+    for batch_id, label in items:
+        b.row(InlineKeyboardButton(text=f"↩️ {label}", callback_data=f"imp:undo:{batch_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="settings:import"))
+    return b.as_markup()
+
+
+def import_undo_confirm_keyboard(batch_id: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=i18n.t("btn.import_undo_yes"), callback_data=f"imp:undoyes:{batch_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.import_undo_no"), callback_data="imp:undono"))
+    return b.as_markup()
+
+
+def import_notes_consent_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=i18n.t("btn.import_notes_go"), callback_data="imp:notes:go"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="imp:cancel"))
+    return b.as_markup()
+
+
+def merge_done_keyboard(exercise_id: int, merge_id: str) -> InlineKeyboardMarkup:
+    """Под «Объединил»: сразу вернуть как было («Разъединить») или дальше
+    в карточку оставшегося упражнения."""
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=i18n.t("btn.unmerge"), callback_data=f"exm:unmerge:{merge_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.open_exercise"), callback_data=f"exm:ex:{exercise_id}"))
     return b.as_markup()
 
 

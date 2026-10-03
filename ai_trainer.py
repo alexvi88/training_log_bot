@@ -1344,6 +1344,11 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
         return workout["ai_comment"]
     if not user["ai_comments_enabled"] or not is_configured():
         return None
+    # Перенесённая из другого приложения тренировка — не та, которую человек
+    # только что закончил: открыть старую запись из истории не повод платить
+    # модели за комментарий. Только по кнопке «комментарий тренера».
+    if workout["source"] == "import":
+        return None
     if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
         return None
     comment = await comment_on_workout(user["telegram_id"], workout_id)
@@ -1609,37 +1614,26 @@ _IMPORT_OVERVIEW_MIN_WORKOUTS = 3
 _SMALL_OVERVIEW_TOP_EXERCISES = 3
 
 
-def _join_ru(names: list[str]) -> str:
-    """«жим», «жим и тяга», «жим, тяга и присед» — без Оксфордской запятой,
-    как в обычной русской речи тренера, а не в списке через точку с запятой."""
-    if len(names) == 1:
-        return names[0]
-    return f"{', '.join(names[:-1])} и {names[-1]}"
-
-
-async def _small_import_overview(user_id: int, dates: list[str]) -> str:
-    """Детерминированная реплика вместо тишины ниже `_IMPORT_OVERVIEW_MIN_WORKOUTS`:
-    моделью тут разбирать нечего (1-2 тренировки — не привычка), но человек
-    только что явно нажал «Загрузить» и заслуживает подтверждения, что перенос
-    правда сработал, а не завис. Никакого completion — считаем то же самое,
-    что и остальная сводка (db.exercise_history_spans), просто говорим об этом
-    сами, без модели.
+async def _small_import_overview(count: int, names: list[str]) -> str:
+    """Детерминированная реплика вместо тишины, когда импорт принёс меньше
+    `_IMPORT_OVERVIEW_MIN_WORKOUTS` тренировок: моделью тут разбирать нечего
+    (1-2 тренировки — не привычка), но человек только что нажал «Загрузить» и
+    заслуживает подтверждения, что перенос сработал. Считаем ровно то, что
+    загрузил этот импорт, а не всю историю — и на языке атлета (i18n), без
+    модели.
     """
-    word = formatting.plural_ru(len(dates), ("тренировку", "тренировки", "тренировок"))
-    spans = await db.exercise_history_spans(user_id)
-    # Список — именительным падежом («жим, тяга»), не винительным: имя
-    # упражнения приходит от пользователя произвольным и непредсказуемо
-    # склоняемым текстом, а «среди них — …» не требует согласования с глаголом,
-    # как потребовало бы «вижу жим и тягу».
-    names = _join_ru([row["display_name"].lower() for row in spans[:_SMALL_OVERVIEW_TOP_EXERCISES]])
-    seen = f" — среди них {names}" if names else ""
-    return (
-        f"Перенёс {len(dates)} {word}{seen}. Продолжай, с третьей начну "
-        "разбирать твои привычки."
+    # Список — именительным падежом («жим, тяга»): имя упражнения приходит от
+    # пользователя произвольным и непредсказуемо склоняемым текстом.
+    shown = [name.lower() for name in names[:_SMALL_OVERVIEW_TOP_EXERCISES]]
+    if not shown:
+        return i18n.t("import.overview_small_bare", n=count)
+    joined = shown[0] if len(shown) == 1 else i18n.t(
+        "import.overview_join", head=", ".join(shown[:-1]), last=shown[-1],
     )
+    return i18n.t("import.overview_small", n=count, names=joined)
 
 
-async def import_history_overview(user_id: int) -> Optional[str]:
+async def import_history_overview(user_id: int, batch_id: Optional[str] = None) -> Optional[str]:
     """Разбор всей перенесённой истории сразу после CSV/Hevy-импорта — то самое
     «вижу два года жима, присед бросил в марте», а не тишина, в которую
     сейчас утыкается перебежчик из другого приложения.
@@ -1658,8 +1652,17 @@ async def import_history_overview(user_id: int) -> Optional[str]:
     dates = await db.list_finished_workout_dates(user_id)
     if not dates:
         return None
-    if len(dates) < _IMPORT_OVERVIEW_MIN_WORKOUTS:
-        return await _small_import_overview(user_id, dates)
+    if batch_id is not None:
+        # Порог и короткая реплика — по ЭТОМУ импорту: «перенёс 2 тренировки»
+        # должно быть про два перенесённых, а не про всю историю дневника.
+        imported, names = await _batch_contents(batch_id)
+        if not imported:
+            return None
+        if imported < _IMPORT_OVERVIEW_MIN_WORKOUTS:
+            return await _small_import_overview(imported, names)
+    elif len(dates) < _IMPORT_OVERVIEW_MIN_WORKOUTS:
+        spans = await db.exercise_history_spans(user_id)
+        return await _small_import_overview(len(dates), [r["display_name"] for r in spans])
     if not is_configured():
         return None
     spans = await db.exercise_history_spans(user_id)
@@ -1717,6 +1720,22 @@ async def import_history_overview(user_id: int) -> Optional[str]:
         return None
     text = (response.choices[0].message.content or "").strip()
     return text or None
+
+
+async def _batch_contents(batch_id: str) -> tuple[int, list[str]]:
+    """(сколько тренировок в импорте, его упражнения — частые первыми)."""
+    cur = await db.conn().execute(
+        "SELECT COUNT(*) AS n FROM workouts WHERE import_batch_id = ?", (batch_id,)
+    )
+    count = (await cur.fetchone())["n"]
+    cur = await db.conn().execute(
+        "SELECT e.display_name AS name, COUNT(DISTINCT w.id) AS n FROM workouts w "
+        "JOIN workout_blocks b ON b.workout_id = w.id JOIN block_exercises be ON be.block_id = b.id "
+        "JOIN exercises e ON e.id = be.exercise_id WHERE w.import_batch_id = ? "
+        "GROUP BY e.id ORDER BY n DESC, e.display_name",
+        (batch_id,),
+    )
+    return count, [r["name"] for r in await cur.fetchall()]
 
 
 async def _weekly_food_summary(user_id: int) -> str:
@@ -3172,29 +3191,36 @@ async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dic
 async def _match_alias_batch(
     user_id: int, names: list[str], catalog_flat: list[str]
 ) -> dict[str, str]:
+    # Платный системный шаг без личной квоты: потолок по деньгам (HARD-стоп)
+    # проверяем сами, цену пишет paid_call — тем же путём, что и остальные
+    # нестримящие вызовы (CLAUDE.md, «Сколько это стоит»).
+    if await ai_limits.hard_stop_block() is not None:
+        return {}
     try:
         client = _get_client()
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=2000,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            response_format=_EXERCISE_ALIAS_SCHEMA,
-            messages=[
-                {"role": "system", "content": _EXERCISE_ALIAS_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    # Каталог первым: он одинаковый у всех пачек, и неизменный
-                    # префикс запроса попадает в кэш провайдера.
-                    "content": json.dumps(
-                        {"catalog": catalog_flat, "import_names": names}, ensure_ascii=False
-                    ),
-                },
-            ],
+        response = await paid_call(
+            user_id, None,
+            lambda: client.chat.completions.create(
+                model=config.GROK_MODEL,
+                max_tokens=2000,
+                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                response_format=_EXERCISE_ALIAS_SCHEMA,
+                messages=[
+                    {"role": "system", "content": _EXERCISE_ALIAS_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        # Каталог первым: он одинаковый у всех пачек, и неизменный
+                        # префикс запроса попадает в кэш провайдера.
+                        "content": json.dumps(
+                            {"catalog": catalog_flat, "import_names": names}, ensure_ascii=False
+                        ),
+                    },
+                ],
+            ),
         )
     except Exception:
         logger.exception("exercise alias matching failed for user %s", user_id)
         return {}
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     try:
         data = _extract_json_object(response.choices[0].message.content or "")
     except ValueError:

@@ -142,6 +142,12 @@ async def test_aliased_exercise_keeps_its_own_name_but_links_template_media(
 
     # Никакого ручного разрешения — сразу подтверждение.
     assert await state.get_state() == ImportFlow.confirming
+    # До «Загрузить» в базе не появляется ничего (H6).
+    assert await db.find_exercise_by_name(user_id, "Bench Press (Barbell)") is None
+    data = await state.get_data()
+    await csv_import.run_import(
+        user_id, data["imp_ready"], csv_import._decisions_from_state(data), "hevy",
+    )
     # Своё оригинальное имя осталось как было — не подменилось русским каталожным.
     assert await db.find_exercise_by_name(user_id, "Жим штанги лёжа") is None
     ex = await db.find_exercise_by_name(user_id, "Bench Press (Barbell)")
@@ -157,15 +163,18 @@ async def test_matching_unresolved_names_sends_a_progress_message_first(
     путём (английские имена против русского каталога), и без знака, что файл
     вообще читается, выглядит как зависший бот."""
     async def fake_match(uid, names):
-        return {"Bench Press (Barbell)": "Жим штанги лёжа"}
+        return {"BP flat (Barbell)": "Жим штанги лёжа"}
 
     monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
+    # Имя, которое без модели не узнать: точное имя каталога («Bench Press
+    # (Barbell)») модели теперь не уходит вовсе.
     raw = (
         b'"title","start_time","end_time","description","exercise_title","superset_id",'
         b'"exercise_notes","set_index","set_type","weight_kg","reps","distance_km",'
         b'"duration_seconds","rpe"\n'
-        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","Bench Press (Barbell)",,'
+        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","BP flat (Barbell)",,'
         b'"",0,"normal",100,8,,,\n'
     )
     message = _message(user_id, "workout_data.csv", raw)
@@ -191,7 +200,11 @@ async def test_alias_does_not_relink_an_already_existing_exercise(fresh_db, user
     assert ex_id == own_id
 
 
-async def test_unmatched_names_still_go_through_manual_resolve(fresh_db, user_id, monkeypatch):
+async def test_unknown_name_with_nothing_similar_is_a_new_exercise_without_questions(
+    fresh_db, user_id, monkeypatch
+):
+    """Имя, которому нет ни шаблона, ни похожего своего, спрашивать не о чем:
+    заведётся как есть — но только при «Загрузить»."""
     async def fake_match(uid, names):
         return {}
 
@@ -209,19 +222,19 @@ async def test_unmatched_names_still_go_through_manual_resolve(fresh_db, user_id
 
     await csv_import.import_file_received(message, state)
 
-    from fsm import ResolveFlow
-    assert await state.get_state() == ResolveFlow.picking
+    assert await state.get_state() == ImportFlow.confirming
+    assert (await state.get_data())["imp_decisions"]["Some Unknown Move"] == {"kind": "new"}
 
 
-async def test_alias_to_a_nonexistent_catalog_name_still_goes_to_manual_resolve(
-    fresh_db, user_id, monkeypatch
-):
-    """Модель может назвать catalog_name, которого на самом деле нет ни одним
-    шаблоном (create_exercise_matching_catalog_name тогда вернёт None) — имя
-    не должно тихо потеряться (не резолвится, не уходит на разрешение), а
-    потом ронять import_save KeyError'ом на resolved[name]."""
+async def test_similar_own_exercises_go_through_manual_resolve(fresh_db, user_id, monkeypatch):
+    """Есть похожие свои, но какое из них — неизвестно: решает человек."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Unknown Move Wide", gid)
+    await db.create_exercise(user_id, "Unknown Move Narrow", gid)
+
     async def fake_match(uid, names):
-        return {"Bench Press (Barbell)": "Совсем не то, чего нет в каталоге"}
+        return {}
 
     monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
 
@@ -229,7 +242,7 @@ async def test_alias_to_a_nonexistent_catalog_name_still_goes_to_manual_resolve(
         b'"title","start_time","end_time","description","exercise_title","superset_id",'
         b'"exercise_notes","set_index","set_type","weight_kg","reps","distance_km",'
         b'"duration_seconds","rpe"\n'
-        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","Bench Press (Barbell)",,'
+        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","Unknown Move",,'
         b'"",0,"normal",100,8,,,\n'
     )
     message = _message(user_id, "workout_data.csv", raw)
@@ -239,4 +252,33 @@ async def test_alias_to_a_nonexistent_catalog_name_still_goes_to_manual_resolve(
 
     from fsm import ResolveFlow
     assert await state.get_state() == ResolveFlow.picking
-    assert "Bench Press (Barbell)" not in (await state.get_data()).get("imp_resolved", {})
+
+
+async def test_alias_to_a_nonexistent_catalog_name_becomes_a_plain_new_exercise(
+    fresh_db, user_id, monkeypatch
+):
+    """Модель может назвать catalog_name, которого на самом деле нет ни одним
+    шаблоном — имя не должно тихо потеряться: оно остаётся новым упражнением
+    как есть, а не роняет сохранение KeyError'ом на resolved[name]."""
+    async def fake_match(uid, names):
+        return {"BP flat (Barbell)": "Совсем не то, чего нет в каталоге"}
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+
+    raw = (
+        b'"title","start_time","end_time","description","exercise_title","superset_id",'
+        b'"exercise_notes","set_index","set_type","weight_kg","reps","distance_km",'
+        b'"duration_seconds","rpe"\n'
+        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","BP flat (Barbell)",,'
+        b'"",0,"normal",100,8,,,\n'
+    )
+    message = _message(user_id, "workout_data.csv", raw)
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+
+    await csv_import.import_file_received(message, state)
+
+    assert await state.get_state() == ImportFlow.confirming
+    data = await state.get_data()
+    assert data["imp_decisions"]["BP flat (Barbell)"] == {"kind": "new"}
+    result = await csv_import.run_import(user_id, data["imp_ready"], csv_import._decisions_from_state(data), "hevy")
+    assert result["imported"] == 1

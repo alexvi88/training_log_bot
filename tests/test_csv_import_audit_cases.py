@@ -396,8 +396,17 @@ async def test_rest_rejects_future_iso_date_in_the_users_language(fresh_db):
     await db.update_user(111, lang="en")
     text = "date,exercise,weight,reps\n2024-02-01,Bench,80,8\n2099-01-01,Bench,80,8\n"
 
+    # Строка с датой в будущем пропускается с номером и причиной на языке
+    # атлета, а не валит файл целиком.
     resp = await client.post("/import/csv/preview", json={"csv": text})
+    assert resp.status_code == 200, resp.text
+    (bad,) = [item for item in resp.json()["skipped"] if item["reason"] == "bad_line"]
+    with i18n.use_lang("en"):
+        assert i18n.t("input.date_in_future") in bad["examples"][0]
+        assert "Line 3" in bad["examples"][0]
 
+    # Файл, где не разобралось ничего, — 400 с той же причиной.
+    resp = await client.post("/import/csv/preview", json={"csv": "date,exercise,weight,reps\n2099-01-01,Bench,80,8\n"})
     assert resp.status_code == 400
     body = resp.json()
     assert body["error"] == "invalid_csv"

@@ -175,7 +175,7 @@ async def test_attached_overview_carries_the_cta_button(fresh_db, user_id, monke
     import handlers.csv_import as csv_import
     import keyboards
 
-    async def fake_overview(uid):
+    async def fake_overview(uid, batch_id=None):
         return "Вижу два года жима."
 
     monkeypatch.setattr(csv_import.ai_trainer, "import_history_overview", fake_overview)

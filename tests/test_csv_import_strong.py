@@ -32,7 +32,10 @@ STRONG_SAMPLE = (
     STRONG_HEADER + "\n"
     '2026-08-15 14:23:54,"Afternoon Workout",38s,"Bench Press (Barbell)",1,50.0,10.0,0,0.0,\n'
     '2026-08-15 14:23:54,"Afternoon Workout",38s,"Bench Press (Barbell)",2,60.0,8.0,0,0.0,8\n'
-    '2026-08-15 14:26:06,"Afternoon Workout",31s,"Back Extension",1,0,12.0,0,0.0,\n'
+    # Strong пишет в Date начало ТРЕНИРОВКИ, одно на все её строки (а время
+    # подхода не пишет вовсе): по нему и по Workout Name строки и делятся на
+    # тренировки.
+    '2026-08-15 14:23:54,"Afternoon Workout",31s,"Back Extension",1,0,12.0,0,0.0,\n'
 )
 
 

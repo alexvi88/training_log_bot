@@ -262,12 +262,14 @@ async def test_confirmation_paginates_past_the_page_size(fresh_db, user_id):
     )
     assert "9 тренировок" in text
     assert "стр. 1/2" in text
-    assert "09.05.2026" not in text, "девятая тренировка должна быть на второй странице"
+    # L11: новые первыми, как в истории, — на второй странице самая старая.
+    assert "09.05.2026" in text
+    assert "01.05.2026" not in text, "самая старая тренировка должна быть на второй странице"
 
     event = _message_event(user_id)
     await csv_import._render_confirmation_page(event, state, 1)
     page2_text = event.answer.await_args.args[0]
-    assert "09.05.2026" in page2_text
+    assert "01.05.2026" in page2_text
     assert "стр. 2/2" in page2_text
 
 

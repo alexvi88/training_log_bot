@@ -74,7 +74,12 @@ def chart_series(sessions: list[analytics.SessionStats]) -> ChartSeries:
     не деваются — их показывают текстом (formatting.format_progress_screen).
     """
     is_bw = sessions[-1].is_bodyweight_mode if sessions else False
-    plotted = [s for s in sessions if s.is_bodyweight_mode == is_bw]
+    # Сессия, где все подходы длиннее config.E1RM_MAX_REPS, расчётного
+    # максимума не имеет — точкой «0» она обрушила бы линию; её просто нет.
+    plotted = [
+        s for s in sessions
+        if s.is_bodyweight_mode == is_bw and (is_bw or s.top_e1rm > 0)
+    ]
     points = [
         (
             dt.datetime.fromisoformat(s.started_at),

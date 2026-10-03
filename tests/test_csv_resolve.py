@@ -107,9 +107,9 @@ async def test_create_all_resolves_every_remaining_name(fresh_db, user_id, no_im
 
     data = await state.get_data()
     assert data["resolve_pending"] == []
-    assert sorted(data["resolve_resolved"]) == sorted(names)
-    created = {e["display_name"] for e in await db.list_user_exercises(user_id)}
-    assert set(names).issubset(created)
+    assert sorted(data["resolve_decisions"]) == sorted(names)
+    # H6: до «Загрузить» в базе ничего не заводится — только решения.
+    assert await db.list_user_exercises(user_id) == []
 
 
 async def test_create_all_puts_them_in_a_real_group(fresh_db, user_id, no_import_handoff):
@@ -125,6 +125,9 @@ async def test_create_all_puts_them_in_a_real_group(fresh_db, user_id, no_import
 
     await exercise_resolve.resolve_create_all(callback, state)
 
+    import handlers.csv_import as csv_import
+    decisions = (await state.get_data())["resolve_decisions"]
+    await csv_import.materialize_decisions(user_id, decisions, ["Barbell Row"])
     row = next(e for e in await db.list_user_exercises(user_id) if e["display_name"] == "Barbell Row")
     assert row["primary_group_id"] is not None
     group = await db.get_muscle_group(row["primary_group_id"])

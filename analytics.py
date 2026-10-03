@@ -60,9 +60,37 @@ def brzycki_e1rm(weight: float, reps: int, rpe: Optional[float] = None) -> float
     return weight * 36 / (37 - eff)
 
 
+def counts_for_e1rm(reps: int) -> bool:
+    """Годится ли подход для расчётного максимума: не больше
+    config.E1RM_MAX_REPS повторов. Формулы подогнаны под малые повторы, и
+    5×55 давал «e1RM 14кг» с гантелей на 5кг — рекорд из шума."""
+    return reps <= config.E1RM_MAX_REPS
+
+
+# Изменение e1RM меньше этого — шум, а не прогресс или спад: округление
+# блинов, полповтора RPE, другая формула на соседней тренировке. Порог — в
+# килограммах и в процентах от исходного, срабатывает любой из двух.
+E1RM_NOISE_KG = 1.0
+E1RM_NOISE_SHARE = 0.02
+
+
+def e1rm_change_is_noise(first: float, last: float, unit: str = "kg") -> bool:
+    """«↓0.1кг с первой тренировки» — не спад: такая разница показывается
+    ровной линией, а не красной стрелкой вниз (бот и /v1 одинаково; зовут
+    только для падения — рост показывается как есть)."""
+    delta = abs(last - first)
+    kg_threshold = E1RM_NOISE_KG * (config.LB_PER_KG if unit == "lb" else 1.0)
+    return delta < kg_threshold or (first > 0 and delta < first * E1RM_NOISE_SHARE)
+
+
 def e1rm(
     weight: float, reps: int, formula: str = "epley", rpe: Optional[float] = None
 ) -> float:
+    """Расчётный максимум подхода. 0 — у подхода больше config.E1RM_MAX_REPS
+    повторов: такой подход в e1RM не участвует (ни в рекордах, ни в графике,
+    ни в подсказке «цель»), см. counts_for_e1rm."""
+    if not counts_for_e1rm(reps):
+        return 0.0
     if formula == "brzycki":
         return brzycki_e1rm(weight, reps, rpe)
     return epley_e1rm(weight, reps, rpe)
@@ -102,7 +130,9 @@ class SessionStats:
             return None
         if self.is_bodyweight_mode:
             return max(self.sets, key=lambda s: s.reps)
-        return max(self.sets, key=lambda s: e1rm(s.weight, s.reps, self.formula, s.rpe))
+        # Подходы длиннее E1RM_MAX_REPS дают e1RM 0 — среди них лучший тот,
+        # что тяжелее, а не первый попавшийся.
+        return max(self.sets, key=lambda s: (e1rm(s.weight, s.reps, self.formula, s.rpe), s.weight, s.reps))
 
     @property
     def top_e1rm(self) -> float:
@@ -617,6 +647,10 @@ def _reps_holding_e1rm(
     # на выходе лишний повтор — то есть отдавать человеку в план ту самую работу
     # «в отказ», от которой запас его и уберёг.
     low, high = rep_range or (REP_RANGE_MIN, REP_RANGE_MAX)
+    if not counts_for_e1rm(last_reps):
+        # Прошлый подход длиннее E1RM_MAX_REPS: расчётного максимума у него
+        # нет, держать нечего — прибавка веса и верх диапазона.
+        return high
     reference = e1rm(last_weight, last_reps, formula) * E1RM_HOLD_TOLERANCE
     for reps in range(low, high):
         if e1rm(target_weight, reps, formula) >= reference:

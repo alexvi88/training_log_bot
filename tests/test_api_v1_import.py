@@ -139,12 +139,30 @@ async def test_reimporting_the_same_file_does_not_duplicate_history(fresh_db, cl
     assert len(workouts) == 2  # не 4
 
 
-async def test_import_rejects_malformed_csv_with_line_number_in_english(fresh_db, client_factory):
+async def test_one_bad_line_is_skipped_with_its_number_not_the_whole_file(fresh_db, client_factory):
+    """M9: одна битая строка не валит файл — она в `skipped` (bad_line) с
+    номером строки и причиной на языке атлета, остальное грузится."""
     client = await _linked_client(fresh_db, client_factory)
     bad_csv = (
         "date,exercise,weight,reps\n"
         "2024-01-01,Присед,100,5\n"
         "2024-01-02,Жим лёжа,-50,8\n"  # отрицательный вес — строка 3
+    )
+    resp = await client.post("/import/csv", json={"csv": bad_csv})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["workouts_imported"] == 1
+    (bad,) = [item for item in body["skipped"] if item["reason"] == "bad_line"]
+    assert bad["count"] == 1
+    assert "Строка 3" in bad["examples"][0]
+
+
+async def test_import_rejects_malformed_csv_with_line_number_in_english(fresh_db, client_factory):
+    """Файл, где не разобралось НИЧЕГО, по-прежнему 400 — с номером строки."""
+    client = await _linked_client(fresh_db, client_factory)
+    bad_csv = (
+        "date,exercise,weight,reps\n"
+        "2024-01-02,Жим лёжа,-50,8\n"  # отрицательный вес — строка 2
     )
     resp = await client.post("/import/csv", json={"csv": bad_csv})
     assert resp.status_code == 400
@@ -155,7 +173,7 @@ async def test_import_rejects_malformed_csv_with_line_number_in_english(fresh_db
     # номером строки, тем же текстом, что увидел бы в боте.
     assert "negative weight" in body["detail"]
     assert "Строка" not in body["detail"]
-    assert "Строка 3" in body["message"]
+    assert "Строка 2" in body["message"]
 
     resp2 = await client.post("/import/csv/preview", json={"csv": bad_csv})
     assert resp2.status_code == 400
@@ -257,7 +275,7 @@ async def test_preview_lists_unrecognized_names_with_suggestion(fresh_db, client
     resp = await client.post("/import/csv/preview", json={"csv": CSV_TWO_WORKOUTS})
     body = resp.json()
     assert body["unrecognized_exercises"] == [
-        {"name": "Жим лёжа", "suggested_exercise_id": None, "candidates": []}
+        {"name": "Жим лёжа", "suggested_exercise_id": None, "needs_choice": False, "candidates": []}
     ]
     assert mine  # известное имя в список не попадает
 
