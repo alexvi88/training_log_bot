@@ -67,14 +67,49 @@ def test_warmup_sets_are_skipped_and_counted():
     assert stats["rows_skipped"] == 1
 
 
-def test_bodyweight_style_blank_weight_still_imports():
+def test_blank_weight_is_kept_as_unknown_until_the_exercise_is_known():
+    """Пустая ячейка веса — не «0 кг»: разбор оставляет вес неизвестным (None),
+    а решает сопоставление — у упражнения с собственным весом это подход с
+    весом тела, у гантельного жима — пропуск no_weight (drop_unweighted_sets)."""
     headers, rows, _ = _read_table(HEVY_SAMPLE)
     mapping = _auto_detect(headers)
 
     workouts = _build_workout_groups(rows, mapping)
 
     shoulder = next(e for e in workouts[0]["entries"] if e["name"] == "Shoulder Press (Dumbbell)")
-    assert shoulder["sets"] == [[0.0, 12, None]]
+    assert shoulder["sets"] == [[None, 12, None]]
+
+
+async def test_blank_weight_on_a_loaded_lift_is_skipped_not_logged_as_zero(fresh_db, user_id):
+    from handlers.csv_import import drop_unweighted_sets, skipped_report
+
+    headers, rows, _ = _read_table(HEVY_SAMPLE)
+    mapping = _auto_detect(headers)
+    stats: dict = {}
+    workouts = _build_workout_groups(rows, mapping, stats=stats)
+    decisions = {
+        "Shoulder Press (Dumbbell)": {"kind": "template", "template": "Жим гантелей сидя"},
+        "Bench Press (Barbell)": {"kind": "template", "template": "Жим штанги лёжа"},
+    }
+
+    ready = await drop_unweighted_sets(user_id, workouts, decisions, stats)
+
+    names = [e["name"] for w in ready for e in w["entries"]]
+    assert "Shoulder Press (Dumbbell)" not in names
+    no_weight = next(item for item in skipped_report(stats) if item["reason"] == "no_weight")
+    assert no_weight["count"] == 1
+    assert no_weight["examples"] == ["Shoulder Press (Dumbbell) ×12"]
+
+
+async def test_blank_weight_on_a_bodyweight_exercise_is_a_bodyweight_set(fresh_db, user_id):
+    from handlers.csv_import import drop_unweighted_sets
+
+    workouts = [{"date": "2026-08-07", "entries": [{"name": "Pull Up", "sets": [[None, 8, None]]}]}]
+    decisions = {"Pull Up": {"kind": "template", "template": "Подтягивания"}}
+
+    ready = await drop_unweighted_sets(user_id, workouts, decisions, {})
+
+    assert ready[0]["entries"][0]["sets"] == [[0.0, 8, None]]
 
 
 async def test_hevy_file_goes_from_upload_straight_to_confirmation(fresh_db, user_id):

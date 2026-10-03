@@ -63,13 +63,30 @@ async def show_history_list(
     total = await db.count_workouts(user_id)
     workouts = await db.list_workouts(user_id, limit=HISTORY_PAGE_SIZE, offset=page * HISTORY_PAGE_SIZE)
     contents = await db.list_workout_contents([w["id"] for w in workouts])
+    user = await db.get_user(user_id)
     items = []
     entries = []
+    # Местное время атлета: импорт кладёт тренировки на настоящее время из
+    # файла, и сессия в 00:26 по его часам — это его день, а не вчерашний UTC.
+    local = {w["id"]: timeutil.to_user_local(dt.datetime.fromisoformat(w["started_at"]), user) for w in workouts}
+    per_day: dict = {}
+    for when in local.values():
+        per_day[when.date()] = per_day.get(when.date(), 0) + 1
     for w in workouts:
-        started = dt.datetime.fromisoformat(w["started_at"])
+        started = local[w["id"]]
         names, set_count = contents.get(w["id"], ([], 0))
-        items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
-        entries.append((started, names, set_count))
+        label = formatting.format_date_ru(started)
+        # Несколько тренировок за день — различимы временем на кнопке и
+        # названием (у импорта из Hevy/Strong) в списке, а не четырьмя
+        # одинаковыми датами подряд.
+        same_day = per_day[started.date()] > 1
+        if same_day:
+            label += f" {started:%H:%M}"
+        items.append({"id": w["id"], "label": label})
+        extra = " · ".join(
+            part for part in (started.strftime("%H:%M") if same_day else "", w["title"] or "") if part
+        )
+        entries.append((started, names, set_count, extra))
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
     kb = keyboards.history_list_keyboard(
         items, page, has_next, is_empty=total == 0, undo_workout_id=undo_workout_id
@@ -215,14 +232,18 @@ async def _show_calendar_day_list(callback: CallbackQuery, date: dt.date, workou
     history screen, filtered to just this day, buttons labelled by time of day
     since the date is already the screen's own header."""
     contents = await db.list_workout_contents(workout_ids)
+    user = await db.get_user(callback.from_user.id)
     entries = []
     items = []
     for wid in workout_ids:
         workout = await db.get_workout(wid)
-        started = dt.datetime.fromisoformat(workout["started_at"])
+        started = timeutil.to_user_local(dt.datetime.fromisoformat(workout["started_at"]), user)
         names, set_count = contents.get(wid, ([], 0))
-        entries.append((started, names, set_count))
-        items.append((wid, started.strftime("%H:%M")))
+        entries.append((started, names, set_count, workout["title"] or ""))
+        label = started.strftime("%H:%M")
+        if workout["title"]:
+            label += f" · {workout['title']}"
+        items.append((wid, label))
     text = formatting.build_history_list(
         entries,
         header=i18n.t("history.calendar_day_header", date=formatting.format_date_ru(entries[0][0])),

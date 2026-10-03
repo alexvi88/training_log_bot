@@ -91,6 +91,12 @@ async def _top_lifts(
             weighted.append(
                 ((display_name, pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm), exercise_id)
             )
+        elif pr.max_weight > 0:
+            # Все подходы с весом длиннее config.E1RM_MAX_REPS — расчётного
+            # максимума нет, рекорд — самый тяжёлый подход как есть («5×55»),
+            # а не «55 повторов», будто это упражнение своим весом.
+            reps = pr.max_reps_at_weight.get(pr.max_weight, 0)
+            weighted.append(((display_name, pr.max_weight, reps, 0.0), exercise_id))
         elif pr.max_reps_at_weight:
             best_reps = max(pr.max_reps_at_weight.values())
             bodyweight.append(((display_name, 0.0, best_reps, 0.0), exercise_id))

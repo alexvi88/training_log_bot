@@ -144,3 +144,105 @@ async def resync(user_id: int) -> tuple[list[str], list[str]]:
     except Exception:
         logger.exception("Achievement resync failed for user %s", user_id)
         return [], []
+
+
+async def earned_dates(user_id: int, codes) -> dict[str, str]:
+    """code → когда значок был заработан на самом деле: начало первой
+    тренировки, после которой история стала ему соответствовать.
+
+    Нужен импорту истории: resync выдаёт значки разом, с отметкой «сейчас», и
+    «Клуб 100», взятый в Hevy два года назад, выглядел взятым сегодня. Здесь
+    история проигрывается по тренировкам в хронологическом порядке теми же
+    правилами (achievements.earned_codes), а агрегаты считаются нарастающим
+    итогом в памяти. Только для даты: выдаёт и отбирает значки по-прежнему
+    resync, и код, для которого день не нашёлся, получает «сейчас».
+    """
+    wanted = set(codes)
+    if not wanted:
+        return {}
+    user = await db.get_user(user_id)
+    unit = user["unit"] if user else "kg"
+    cur = await db.conn().execute(
+        "SELECT w.id AS wid, w.started_at, w.finished_at, b.id AS block_id, s.exercise_id, "
+        "e.primary_group_id AS grp, COALESCE(s.load_weight, s.weight) AS load, s.weight, s.reps "
+        "FROM workouts w JOIN workout_blocks b ON b.workout_id = w.id "
+        "JOIN sets s ON s.block_id = b.id JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' ORDER BY w.started_at, w.id, s.id",
+        (user_id,),
+    )
+    sessions: dict[int, dict] = {}
+    for r in await cur.fetchall():
+        item = sessions.setdefault(
+            r["wid"], {"started_at": r["started_at"], "finished_at": r["finished_at"], "sets": []}
+        )
+        item["sets"].append(r)
+    cur = await db.conn().execute(
+        "SELECT logged_at FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at", (user_id,)
+    )
+    bw_logs = [r["logged_at"] for r in await cur.fetchall()]
+    food_days = sorted(dt.date.fromisoformat(d) for d in await db.list_food_entry_dates(user_id))
+
+    found: dict[str, str] = {}
+    dates: list[dt.date] = []
+    tonnage = 0.0
+    max_weight = 0.0
+    exercises: set[int] = set()
+    groups: set[int] = set()
+    max_sets = max_exercises = max_bw_reps = early = 0
+    max_session_tonnage = 0.0
+    has_superset = False
+    for session in sessions.values():
+        started = dt.datetime.fromisoformat(session["started_at"])
+        local = timeutil.to_user_local(started, user)
+        dates.append(local.date())
+        rows = session["sets"]
+        session_tonnage = sum((r["load"] or 0) * r["reps"] for r in rows)
+        tonnage += session_tonnage
+        max_weight = max([max_weight] + [r["load"] or 0 for r in rows])
+        exercises.update(r["exercise_id"] for r in rows)
+        groups.update(r["grp"] for r in rows if r["grp"] is not None)
+        max_sets = max(max_sets, len(rows))
+        max_exercises = max(max_exercises, len({r["exercise_id"] for r in rows}))
+        max_session_tonnage = max(max_session_tonnage, session_tonnage)
+        max_bw_reps = max([max_bw_reps] + [r["reps"] for r in rows if r["weight"] == 0])
+        blocks: dict[int, set[int]] = {}
+        for r in rows:
+            blocks.setdefault(r["block_id"], set()).add(r["exercise_id"])
+        has_superset = has_superset or any(len(v) > 1 for v in blocks.values())
+        if local.hour < 7:
+            early += 1
+        finished = session["finished_at"]
+        duration = None
+        if finished and finished != session["started_at"]:
+            duration = (dt.datetime.fromisoformat(finished) - started).total_seconds()
+        stamp = session["started_at"]
+        ctx = achievements.AchievementContext(
+            total_workouts=len(dates),
+            lifetime_tonnage_kg=formatting.to_kg(tonnage, unit),
+            best_week_streak=analytics.max_week_streak(dates),
+            max_weight_kg=formatting.to_kg(max_weight, unit),
+            distinct_exercises=len(exercises),
+            distinct_groups=len(groups),
+            max_session_sets=max_sets,
+            max_session_tonnage_kg=formatting.to_kg(max_session_tonnage, unit),
+            max_session_exercises=max_exercises,
+            has_superset=has_superset,
+            max_bodyweight_reps=max_bw_reps,
+            early_workouts=early,
+            has_weekend_pair=achievements.weekend_pair_exists(dates),
+            all_weekdays_covered=len({d.weekday() for d in dates}) == 7,
+            has_dec31=any((d.month, d.day) == (12, 31) for d in dates),
+            bodyweight_logs=sum(1 for t in bw_logs if t <= stamp),
+            food_diary_best_run=achievements.longest_daily_run(
+                [d for d in food_days if d <= local.date()]
+            ),
+            workout_start_hour=local.hour,
+            workout_date=local.date(),
+            workout_duration_seconds=duration,
+        )
+        for code in achievements.earned_codes(ctx) & wanted:
+            found.setdefault(code, stamp)
+        if len(found) == len(wanted):
+            break
+    now = db.now_iso()
+    return {code: found.get(code, now) for code in wanted}

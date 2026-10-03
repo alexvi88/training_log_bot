@@ -79,7 +79,7 @@
         "created_at": "2026-10-04T04:19:00",
         "exercise_id": 231,
         "id": 5561,
-        "is_gold": false,
+        "is_gold": true,
         "load_weight": 140.0,
         "reps": 5,
         "round_index": 2,
@@ -284,7 +284,7 @@
         "created_at": "2026-10-04T04:44:00",
         "exercise_id": 232,
         "id": 5570,
-        "is_gold": false,
+        "is_gold": true,
         "load_weight": 140.0,
         "reps": 8,
         "round_index": 0,
@@ -306,7 +306,7 @@
         "created_at": "2026-10-04T04:49:00",
         "exercise_id": 232,
         "id": 5572,
-        "is_gold": true,
+        "is_gold": false,
         "load_weight": 140.0,
         "reps": 15,
         "round_index": 2,
@@ -714,13 +714,13 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 150.3кг (↓1.3кг vs 06.01)",
+       "e1rm_text": "↳ e1RM 150.3кг (↑122.3кг vs 06.01)",
        "exercise_id": 231,
        "group_tag": "БИЦЕПС",
-       "has_record": false,
+       "has_record": true,
        "note": null,
        "previous_sets_text": "100×15 @9.5, 20×10 @8",
-       "record_text": null,
+       "record_text": "🔥 +20.5кг к рекорду",
        "sets": [
         {
          "created_at": "2026-01-08T09:12:00",
@@ -765,13 +765,13 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 155.5кг",
+       "e1rm_text": "↳ e1RM 133.3кг",
        "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": true,
        "note": null,
        "previous_sets_text": "100×5 @10, 102.5×3",
-       "record_text": "🔥 +38.8кг к рекорду",
+       "record_text": "🔥 +16.7кг к рекорду",
        "sets": [
         {
          "created_at": "2026-01-08T09:22:00",
@@ -1195,7 +1195,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 120кг (↓23.5кг vs 09.01)",
+       "e1rm_text": "↳ e1RM 53.3кг (↓90.2кг vs 09.01)",
        "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -1325,7 +1325,7 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 120кг (↑0.4кг vs 09.01)",
+       "e1rm_text": "↳ e1RM 116.7кг (↓2.9кг vs 09.01)",
        "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
@@ -1387,7 +1387,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 126.4кг (↑6.4кг vs 12.01)",
+       "e1rm_text": "↳ e1RM 126.4кг (↑73.1кг vs 12.01)",
        "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -1427,13 +1427,13 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 150кг (↑35.5кг vs 06.01)",
+       "e1rm_text": "↳ e1RM 119.6кг (↑5.1кг vs 06.01)",
        "exercise_id": 229,
        "group_tag": "ГРУДЬ",
-       "has_record": true,
+       "has_record": false,
        "note": null,
        "previous_sets_text": "102.5×3 @9.5, 20×10 @10, 60×15 @8",
-       "record_text": "🔥 +10кг к рекорду",
+       "record_text": null,
        "sets": [
         {
          "created_at": "2026-01-12T23:21:00",
@@ -1518,13 +1518,13 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 153.8кг (↑47.1кг vs 12.01)",
+       "e1rm_text": null,
        "exercise_id": 231,
        "group_tag": "БИЦЕПС",
-       "has_record": true,
+       "has_record": false,
        "note": null,
        "previous_sets_text": "80×10, 40×5",
-       "record_text": "🔥 +2.1кг к рекорду",
+       "record_text": null,
        "sets": [
         {
          "created_at": "2026-01-12T23:35:00",
@@ -1773,13 +1773,13 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 153.8кг (↑10.2кг vs 19.01)",
+       "e1rm_text": "↳ e1RM 143.5кг (→0кг vs 19.01)",
        "exercise_id": 229,
        "group_tag": "ГРУДЬ",
-       "has_record": true,
+       "has_record": false,
        "note": null,
        "previous_sets_text": "20×1, 80×10 @9.5, 102.5×12 @10, 80×10 @9.5",
-       "record_text": "🔥 +3.8кг к рекорду",
+       "record_text": null,
        "sets": [
         {
          "created_at": "2026-01-22T06:23:00",
@@ -1813,7 +1813,7 @@
      "exercises": [
       {
        "display_name": "Странное",
-       "e1rm_text": "↳ e1RM 133.3кг (↑43.3кг vs 15.01)",
+       "e1rm_text": "↳ e1RM 133.3кг (↑89.3кг vs 15.01)",
        "exercise_id": 236,
        "group_tag": "СВОЯ",
        "has_record": false,
@@ -1926,13 +1926,13 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 151.5кг (↑127кг vs 30.01)",
+       "e1rm_text": "↳ e1RM 23.1кг (↓1.4кг vs 30.01)",
        "exercise_id": 235,
        "group_tag": null,
-       "has_record": true,
+       "has_record": false,
        "note": "заметка 13/0",
        "previous_sets_text": "21×5, 21×5",
-       "record_text": "🔥 +6.3кг к рекорду",
+       "record_text": null,
        "sets": [
         {
          "created_at": "2026-02-02T06:03:00",
@@ -1980,10 +1980,10 @@
        "e1rm_text": "↳ e1RM 144.9кг (↑24.1кг vs 30.01)",
        "exercise_id": 236,
        "group_tag": "СВОЯ",
-       "has_record": false,
+       "has_record": true,
        "note": "заметка 13/1",
        "previous_sets_text": "21×12 @9.5, 21×8 @9.5, 41×1 @8, 103.5×5",
-       "record_text": null,
+       "record_text": "🔥 +11.6кг к рекорду",
        "sets": [
         {
          "created_at": "2026-02-02T06:12:00",
@@ -2102,13 +2102,13 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 157кг (↑34.1кг vs 27.01)",
+       "e1rm_text": "↳ e1RM 71.2кг (↓42.7кг vs 27.01)",
        "exercise_id": 229,
        "group_tag": "ГРУДЬ",
-       "has_record": true,
+       "has_record": false,
        "note": "заметка 13/3",
        "previous_sets_text": "103.5×3 @10, 81×15 @9.5, 21×10 @10",
-       "record_text": "🔥 +3.2кг к рекорду",
+       "record_text": null,
        "sets": [
         {
          "created_at": "2026-02-02T06:32:00",
@@ -2247,10 +2247,10 @@
        "e1rm_text": "↳ e1RM 156.9кг (↑63.1кг vs 23.05)",
        "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
-       "has_record": false,
+       "has_record": true,
        "note": null,
        "previous_sets_text": "27×5 @8, 47×1, 67×8, 67×12 @10",
-       "record_text": null,
+       "record_text": "🔥 +2.2кг к рекорду",
        "sets": [
         {
          "created_at": "2026-05-24T10:03:00",
@@ -2284,7 +2284,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 164.2кг (↑128.2кг vs 21.05)",
+       "e1rm_text": "↳ e1RM 109.5кг (↑73.5кг vs 21.05)",
        "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
@@ -2437,7 +2437,7 @@
      "exercises": [
       {
        "display_name": "Жим лёжа",
-       "e1rm_text": "↳ e1RM 121.8кг (↓40.5кг vs 23.05)",
+       "e1rm_text": "↳ e1RM 121.8кг (↑11.6кг vs 23.05)",
        "exercise_id": 229,
        "group_tag": "ГРУДЬ",
        "has_record": false,
@@ -2805,7 +2805,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 131.9кг (↑95.9кг vs 21.05)",
+       "e1rm_text": "↳ e1RM 63.5кг (↑27.5кг vs 21.05)",
        "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
@@ -2929,13 +2929,13 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 284.2кг (↑164.2кг vs 24.05)",
+       "e1rm_text": "↳ e1RM 244.9кг (↑132.9кг vs 24.05)",
        "exercise_id": 234,
        "group_tag": "ГРУДЬ",
-       "has_record": true,
+       "has_record": false,
        "note": null,
        "previous_sets_text": "80×15 @10, 80×15, 80×12",
-       "record_text": "🔥 +6.8кг к рекорду",
+       "record_text": null,
        "sets": [
         {
          "created_at": "2026-05-27T05:15:00",
@@ -3297,13 +3297,13 @@
      "exercises": [
       {
        "display_name": "Тяга",
-       "e1rm_text": "↳ e1RM 167.2кг (↓3.8кг vs 30.09)",
+       "e1rm_text": "↳ e1RM 167.2кг (↑13.3кг vs 30.09)",
        "exercise_id": 231,
        "group_tag": "БИЦЕПС",
-       "has_record": false,
+       "has_record": true,
        "note": null,
        "previous_sets_text": "114×15 @10, 114×5 @10, 114×10 @9.5",
-       "record_text": null,
+       "record_text": "🔥 +2.2кг к рекорду",
        "sets": [
         {
          "created_at": "2026-10-02T04:16:00",
@@ -3359,7 +3359,7 @@
      "exercises": [
       {
        "display_name": "Присед",
-       "e1rm_text": "↳ e1RM 141кг (↓14.3кг vs 30.09)",
+       "e1rm_text": "↳ e1RM 81.4кг (↓73.9кг vs 30.09)",
        "exercise_id": 230,
        "group_tag": "ТРИЦЕПС",
        "has_record": false,
@@ -3472,7 +3472,7 @@
      "exercises": [
       {
        "display_name": "Скручивания",
-       "e1rm_text": "↳ e1RM 174.8кг (↓1.9кг vs 30.09)",
+       "e1rm_text": "↳ e1RM 104.8кг (↓47.2кг vs 30.09)",
        "exercise_id": 235,
        "group_tag": null,
        "has_record": false,
@@ -3580,7 +3580,7 @@
        "has_record": true,
        "note": "заметка 150/1",
        "previous_sets_text": "116.5×8, 114×12 @8, 114×1 @10, 74×3 @10",
-       "record_text": "🔥 +13.5кг к рекорду",
+       "record_text": "🔥 +28.8кг к рекорду",
        "sets": [
         {
          "created_at": "2026-10-04T04:08:00",
@@ -3608,7 +3608,7 @@
          "created_at": "2026-10-04T04:19:00",
          "exercise_id": 231,
          "id": 5561,
-         "is_gold": false,
+         "is_gold": true,
          "load_weight": 140.0,
          "reps": 5,
          "round_index": 2,
@@ -3625,7 +3625,7 @@
        "has_record": true,
        "note": "заметка 150/2",
        "previous_sets_text": "54×15, 94×10, 114×10 @8",
-       "record_text": "🔥 +9.6кг к рекорду",
+       "record_text": "🔥 +24кг к рекорду",
        "sets": [
         {
          "created_at": "2026-10-04T04:10:00",
@@ -3676,7 +3676,7 @@
        "has_record": true,
        "note": "заметка 150/2",
        "previous_sets_text": "54×15, 94×10, 114×10 @8",
-       "record_text": "🔥 +9.6кг к рекорду",
+       "record_text": "🔥 +24кг к рекорду",
        "sets": [
         {
          "created_at": "2026-10-04T04:25:00",
@@ -3716,7 +3716,7 @@
        "has_record": true,
        "note": "заметка 150/3",
        "previous_sets_text": "94×15, 34×12 @9.5, 74×1 @8, 34×1 @10",
-       "record_text": "🔥 +31.2кг к рекорду",
+       "record_text": "🔥 +43.3кг к рекорду",
        "sets": [
         {
          "created_at": "2026-10-04T04:29:00",
@@ -3807,13 +3807,13 @@
        "has_record": true,
        "note": "заметка 150/5",
        "previous_sets_text": "34×1 @10, 74×8, 74×3",
-       "record_text": "🔥 +37.1кг к рекорду",
+       "record_text": "🔥 +13.2кг к рекорду",
        "sets": [
         {
          "created_at": "2026-10-04T04:44:00",
          "exercise_id": 232,
          "id": 5570,
-         "is_gold": false,
+         "is_gold": true,
          "load_weight": 140.0,
          "reps": 8,
          "round_index": 0,
@@ -3835,7 +3835,7 @@
          "created_at": "2026-10-04T04:49:00",
          "exercise_id": 232,
          "id": 5572,
-         "is_gold": true,
+         "is_gold": false,
          "load_weight": 140.0,
          "reps": 15,
          "round_index": 2,
@@ -3873,76 +3873,76 @@
   },
   "top_lifts": [
    {
-    "e1rm": 294.5,
-    "exercise": "Подтягивания",
-    "exercise_id": 233,
-    "is_bodyweight": false,
-    "record": "188×15",
-    "reps": 15,
-    "weight": 188.0
-   },
-   {
-    "e1rm": 285.0,
+    "e1rm": 281.6,
     "exercise": "Отжимания",
     "exercise_id": 234,
     "is_bodyweight": false,
-    "record": "190×15",
-    "reps": 15,
-    "weight": 190.0
+    "record": "192×12",
+    "reps": 12,
+    "weight": 192.0
    },
    {
-    "e1rm": 182.5,
-    "exercise": "Тяга",
-    "exercise_id": 231,
+    "e1rm": 279.4,
+    "exercise": "Подтягивания",
+    "exercise_id": 233,
     "is_bodyweight": false,
-    "record": "116.5×15",
-    "reps": 15,
-    "weight": 116.5
+    "record": "190.5×12",
+    "reps": 12,
+    "weight": 190.5
    },
    {
-    "e1rm": 179.4,
-    "exercise": "Странное",
-    "exercise_id": 236,
-    "is_bodyweight": false,
-    "record": "114.5×15",
-    "reps": 15,
-    "weight": 114.5
-   },
-   {
-    "e1rm": 178.6,
-    "exercise": "Скручивания",
-    "exercise_id": 235,
-    "is_bodyweight": false,
-    "record": "114×15",
-    "reps": 15,
-    "weight": 114.0
-   },
-   {
-    "e1rm": 177.8,
-    "exercise": "Присед",
-    "exercise_id": 230,
-    "is_bodyweight": false,
-    "record": "113.5×15",
-    "reps": 15,
-    "weight": 113.5
-   },
-   {
-    "e1rm": 174.8,
+    "e1rm": 170.9,
     "exercise": "Жим лёжа",
     "exercise_id": 229,
     "is_bodyweight": false,
-    "record": "116.5×15",
-    "reps": 15,
+    "record": "116.5×12",
+    "reps": 12,
     "weight": 116.5
    },
    {
-    "e1rm": 172.9,
+    "e1rm": 167.2,
+    "exercise": "Тяга",
+    "exercise_id": 231,
+    "is_bodyweight": false,
+    "record": "114×12",
+    "reps": 12,
+    "weight": 114.0
+   },
+   {
+    "e1rm": 167.2,
+    "exercise": "Скручивания",
+    "exercise_id": 235,
+    "is_bodyweight": false,
+    "record": "114×12",
+    "reps": 12,
+    "weight": 114.0
+   },
+   {
+    "e1rm": 166.5,
     "exercise": "Жим стоя",
     "exercise_id": 232,
     "is_bodyweight": false,
-    "record": "114×15",
-    "reps": 15,
-    "weight": 114.0
+    "record": "113.5×12",
+    "reps": 12,
+    "weight": 113.5
+   },
+   {
+    "e1rm": 165.7,
+    "exercise": "Присед",
+    "exercise_id": 230,
+    "is_bodyweight": false,
+    "record": "113×12",
+    "reps": 12,
+    "weight": 113.0
+   },
+   {
+    "e1rm": 165.0,
+    "exercise": "Странное",
+    "exercise_id": 236,
+    "is_bodyweight": false,
+    "record": "116.5×12",
+    "reps": 12,
+    "weight": 116.5
    }
   ],
   "total_workouts": 150
@@ -6374,7 +6374,7 @@
      ]
     ],
     "prev_started_at": "2026-01-06 09:00:00",
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 23.091954022988517,
     "record_reps": null,
     "set_loads": [
      20.0,
@@ -6424,7 +6424,7 @@
      ]
     ],
     "prev_started_at": "2026-01-03 06:00:00",
-    "record_e1rm_delta": 42.958333333333314,
+    "record_e1rm_delta": 20.833333333333343,
     "record_reps": null,
     "set_loads": [
      100.0,
@@ -6703,7 +6703,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 23.091954022988517,
     "record_reps": null,
     "set_loads": [
      20.0,
@@ -6741,7 +6741,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 42.958333333333314,
+    "record_e1rm_delta": 20.833333333333343,
     "record_reps": null,
     "set_loads": [
      100.0,
@@ -8965,7 +8965,7 @@
      ]
     ],
     "prev_started_at": "2026-01-06 09:00:00",
-    "record_e1rm_delta": 10.0,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      100.0,
@@ -9059,7 +9059,7 @@
      ]
     ],
     "prev_started_at": "2026-01-12 04:00:00",
-    "record_e1rm_delta": 2.083333333333343,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      100.0,
@@ -9231,7 +9231,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 10.0,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      100.0,
@@ -9301,7 +9301,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 2.083333333333343,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      100.0,
@@ -10313,7 +10313,7 @@
      ]
     ],
     "prev_started_at": "2026-01-19 06:00:00",
-    "record_e1rm_delta": 3.75,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      102.5,
@@ -10567,7 +10567,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 3.75,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      102.5,
@@ -11458,7 +11458,7 @@
      ]
     ],
     "prev_started_at": "2026-01-30 11:00:00",
-    "record_e1rm_delta": 6.291666666666657,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      21.0,
@@ -11518,7 +11518,7 @@
      ]
     ],
     "prev_started_at": "2026-01-30 11:00:00",
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 11.566666666666634,
     "record_reps": null,
     "set_loads": [
      103.5,
@@ -11635,7 +11635,7 @@
      ]
     ],
     "prev_started_at": "2026-01-27 16:00:00",
-    "record_e1rm_delta": 3.2249999999999943,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      103.5,
@@ -11778,7 +11778,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 6.291666666666657,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      21.0,
@@ -11816,7 +11816,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 11.566666666666634,
     "record_reps": null,
     "set_loads": [
      103.5,
@@ -11894,7 +11894,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 3.2249999999999943,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      103.5,
@@ -12806,7 +12806,7 @@
      ]
     ],
     "prev_started_at": "2026-05-23 07:00:00",
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 2.1999999999999886,
     "record_reps": null,
     "set_loads": [
      109.5,
@@ -13134,7 +13134,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 2.1999999999999886,
     "record_reps": null,
     "set_loads": [
      109.5,
@@ -15675,7 +15675,7 @@
      ]
     ],
     "prev_started_at": "2026-05-24 10:00:00",
-    "record_e1rm_delta": 6.75,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      167.0,
@@ -15968,7 +15968,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 6.75,
+    "record_e1rm_delta": null,
     "record_reps": null,
     "set_loads": [
      167.0,
@@ -16230,7 +16230,7 @@
     "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
-    "gold_index": null,
+    "gold_index": 1,
     "group_name": "Бицепс",
     "note": null,
     "prev_set_rpes": null,
@@ -17092,7 +17092,7 @@
     "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
-    "gold_index": null,
+    "gold_index": 1,
     "group_name": "Бицепс",
     "note": null,
     "prev_set_rpes": [
@@ -17115,7 +17115,7 @@
      ]
     ],
     "prev_started_at": "2026-09-30 01:00:00",
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 2.200000000000017,
     "record_reps": null,
     "set_loads": [
      116.5,
@@ -17412,13 +17412,13 @@
     "exercise_id": 231,
     "exercise_name": "Тяга",
     "formula": "brzycki",
-    "gold_index": null,
+    "gold_index": 1,
     "group_name": "Бицепс",
     "note": null,
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": null,
+    "record_e1rm_delta": 2.200000000000017,
     "record_reps": null,
     "set_loads": [
      116.5,
@@ -17765,7 +17765,7 @@
     "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
-    "gold_index": 2,
+    "gold_index": 0,
     "group_name": "Плечи",
     "note": "заметка 150/5",
     "prev_set_rpes": null,
@@ -18445,7 +18445,7 @@
      ]
     ],
     "prev_started_at": "2026-10-02 04:00:00",
-    "record_e1rm_delta": 13.483333333333348,
+    "record_e1rm_delta": 28.799999999999983,
     "record_reps": null,
     "set_loads": [
      120.0,
@@ -18518,7 +18518,7 @@
      ]
     ],
     "prev_started_at": "2026-09-30 01:00:00",
-    "record_e1rm_delta": 9.616666666666674,
+    "record_e1rm_delta": 23.958333333333314,
     "record_reps": null,
     "set_loads": [
      140.0,
@@ -18572,7 +18572,7 @@
      ]
     ],
     "prev_started_at": "2026-10-02 04:00:00",
-    "record_e1rm_delta": 31.183333333333366,
+    "record_e1rm_delta": 43.26666666666668,
     "record_reps": null,
     "set_loads": [
      60.0,
@@ -18653,7 +18653,7 @@
     "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
-    "gold_index": 2,
+    "gold_index": 0,
     "group_name": "Плечи",
     "note": "заметка 150/5",
     "prev_set_rpes": [
@@ -18676,7 +18676,7 @@
      ]
     ],
     "prev_started_at": "2026-10-02 04:00:00",
-    "record_e1rm_delta": 37.099999999999994,
+    "record_e1rm_delta": 10.375438596491222,
     "record_reps": null,
     "set_loads": [
      140.0,
@@ -18745,7 +18745,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 13.483333333333348,
+    "record_e1rm_delta": 28.799999999999983,
     "record_reps": null,
     "set_loads": [
      120.0,
@@ -18801,7 +18801,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 9.616666666666674,
+    "record_e1rm_delta": 23.958333333333314,
     "record_reps": null,
     "set_loads": [
      140.0,
@@ -18833,7 +18833,7 @@
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 31.183333333333366,
+    "record_e1rm_delta": 43.26666666666668,
     "record_reps": null,
     "set_loads": [
      60.0,
@@ -18897,13 +18897,13 @@
     "exercise_id": 232,
     "exercise_name": "Жим стоя",
     "formula": "brzycki",
-    "gold_index": 2,
+    "gold_index": 0,
     "group_name": "Плечи",
     "note": "заметка 150/5",
     "prev_set_rpes": null,
     "prev_sets": null,
     "prev_started_at": null,
-    "record_e1rm_delta": 37.099999999999994,
+    "record_e1rm_delta": 10.375438596491222,
     "record_reps": null,
     "set_loads": [
      140.0,

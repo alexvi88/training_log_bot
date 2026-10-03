@@ -94,9 +94,17 @@ def test_too_long_exercise_name_is_a_line_error():
         ["2025-01-02", "Жим лёжа", "100", "5"],
         ["2025-01-02", ok + "ж", "100", "5"],
     ]
+    # Одна битая строка больше не валит файл: она пропускается с номером и
+    # причиной (bad_line), остальное грузится.
+    stats: dict = {}
+    workouts = _build_workout_groups(rows, MAPPING, stats=stats)
+    assert [e["name"] for e in workouts[0]["entries"]] == ["Жим лёжа"]
+    (message,) = stats["skipped"]["bad_line"]["examples"]
+    assert "3" in message
+    assert str(config.MAX_EXERCISE_NAME_LENGTH) in message
+    # Файл, где не разобралось ничего, по-прежнему отклоняется первой ошибкой.
     with pytest.raises(ParseError) as err:
-        _build_workout_groups(rows, MAPPING)
-    assert "3" in err.value.message
+        _build_workout_groups(rows[1:], MAPPING)
     assert str(config.MAX_EXERCISE_NAME_LENGTH) in err.value.message
 
 

@@ -230,7 +230,12 @@ async def test_merge_drops_the_losing_photo_file(fresh_db, photo_dir):
 
     assert (await fresh_db.get_exercise(keep_id))["custom_photo_path"] == kept_name
     assert os.path.isfile(os.path.join(str(photo_dir), kept_name))
+    # Файл снесённого не стирается сразу: «Разъединить» вернёт карточку с ним.
+    assert os.path.isfile(os.path.join(str(photo_dir), dropped_name))
+    # Журнал объединения отжил своё — файл без хозяина уходит с диска.
+    assert await fresh_db.prune_old_exercise_merges(-1) == 1
     assert not os.path.exists(os.path.join(str(photo_dir), dropped_name))
+    assert os.path.isfile(os.path.join(str(photo_dir), kept_name))
 
 
 @pytest.mark.asyncio

@@ -176,7 +176,8 @@ async def test_tap_marked_day_with_two_workouts_shows_a_day_list(fresh_db, user_
     cbs = [b.callback_data for row_ in kb.inline_keyboard for b in row_]
     assert f"hist:item:{w1}" in cbs
     assert f"hist:item:{w2}" in cbs
-    assert "10:00" in text or "10:00" in "".join(
+    # Время — по часам атлета (UTC+3 по умолчанию), а не сырое UTC из базы.
+    assert "13:00" in text or "13:00" in "".join(
         b.text for row_ in kb.inline_keyboard for b in row_
     )
 

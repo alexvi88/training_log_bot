@@ -83,6 +83,8 @@ MACHINE_KEYS = {
     "reason", "topic", "app_store_url",
     # Ник в Telegram — идентификатор, который человек выбрал сам, а не текст продукта.
     "username",
+    # Идентификаторы пачки импорта и объединения (hex) — для undo-ручек.
+    "batch_id", "merge_id",
     # Черновик CSV из /import/text/convert: машинные заголовки колонок и имена
     # упражнений так, как их написал сам атлет, — вход для /import/csv, а не
     # текст на экране.
@@ -657,8 +659,21 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", "/import/text/convert", json={"text": f"{text['csv_exercise']} 100 5"}, expect=200)
     await w.call("POST", "/import/text/convert", json={"text": " "}, expect=400)
     await w.call("POST", "/import/csv", json={"csv": csv_text, "exercise_mapping": {"x": 999999}}, expect=400)
+    # Похожее своё есть, а выбора нет — 409 с человеческим текстом; с выбором
+    # — импорт, его можно отменить целиком (пачка импорта).
+    choice_csv = f"date,exercise,weight,reps\n2025-03-02,{text['csv_exercise']},100,5\n"
+    await w.call("POST", "/import/csv", json={"csv": choice_csv}, expect=(200, 409))
+    imported = (await w.call("POST", "/import/csv", json={
+        "csv": choice_csv, "exercise_mapping": [{"name": text["csv_exercise"], "exercise_id": own_id}],
+    }, expect=200)).json()
+    await w.call("GET", "/import/batches", expect=200)
+    await w.call("POST", f"/import/batches/{imported['batch_id']}/undo", expect=200)
+    await w.call("POST", f"/import/batches/{imported['batch_id']}/undo", expect=404)
 
     # --- слияние, удаление ---
+    merged = (await w.call("POST", "/exercises/merge", json={"source_id": own2_id, "target_id": own_id}, expect=200)).json()
+    await w.call("POST", f"/exercises/merges/{merged['merge_id']}/undo", expect=200)
+    await w.call("POST", f"/exercises/merges/{merged['merge_id']}/undo", expect=404)
     await w.call("POST", "/exercises/merge", json={"source_id": own2_id, "target_id": own_id}, expect=200)
     await w.call("DELETE", f"/routines/{rid}", expect=200)
     await w.call("DELETE", f"/programs/{pid}", expect=200)

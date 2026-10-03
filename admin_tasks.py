@@ -447,6 +447,10 @@ async def _run_retention_cleanup() -> None:
     await db.prune_old_diagnostics(config.DIAGNOSTICS_RETENTION_DAYS)
     await db.prune_old_behaviour_digests(config.BEHAVIOUR_DIGEST_RETENTION_DAYS)
     await db.prune_old_weekly_digests(config.WEEKLY_DIGEST_RETENTION_DAYS)
+    # Пачки импорта и журнал объединений — ровно столько, сколько их можно
+    # отменить (см. config.IMPORT_BATCH_RETENTION_DAYS).
+    await db.prune_old_import_batches(config.IMPORT_BATCH_RETENTION_DAYS)
+    await db.prune_old_exercise_merges(config.MERGE_JOURNAL_RETENTION_DAYS)
     await db.prune_old_limit_acks()
     # Архив прошлых разговоров с тренером: текущий не трогается никогда, см.
     # db.prune_old_ai_conversations.

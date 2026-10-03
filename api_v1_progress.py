@@ -140,12 +140,20 @@ def _comparison_json(
     if len(values) < 2:
         return None
     since = i18n.t("progress.since_first") if full else i18n.t("progress.since_period")
-    delta = values[-1] - values[0]
+    raw = values[-1] - values[0]
+    delta = raw
     if is_bodyweight:
         text = i18n.t("progress.reps_delta", delta=formatting.format_delta_reps(int(delta)), since=since)
+    elif delta < 0 and analytics.e1rm_change_is_noise(values[0], values[-1], unit):
+        # «↓0.1кг с первой тренировки» красной стрелкой — неправда о данных:
+        # это шум, а не спад. delta — 0 (приложение красит по его знаку),
+        # честная разница — в raw_delta.
+        delta = 0.0
+        text = i18n.t("progress.e1rm_flat", since=since)
     else:
         text = i18n.t("progress.e1rm_delta", delta=formatting.format_delta(delta, unit), since=since)
-    return {"delta": round(delta, 1), "text": text}
+    trend = "up" if delta > 0 else ("down" if delta < 0 else "flat")
+    return {"delta": round(delta, 1), "raw_delta": round(raw, 1), "trend": trend, "text": text}
 
 
 async def exercise_progress_sessions(request: Request) -> JSONResponse:

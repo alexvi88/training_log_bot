@@ -7,7 +7,7 @@
 <ul>
   <li><b>Account.</b> If you came through Telegram — your Telegram ID and username. If you signed in to the app with Sign in with Apple — the identifier Apple issues for this app, and your e-mail if Apple shared it (it is only sent on the first sign-in and may be an Apple private relay address). If you linked Telegram to an app account — your Telegram ID as well.</li>
   <li><b>Settings.</b> Language, time zone, weight units, e1RM formula, which notifications and hints are on, calorie goal.</li>
-  <li><b>Training log.</b> Workouts, exercises, sets (weight, reps, RPE), workout and exercise notes, programs, records, achievements and ranks.</li>
+  <li><b>Training log.</b> Workouts, exercises, sets (weight, reps, RPE), workout and exercise notes, programs, records, achievements and ranks. When you move your history over from another app — the exercise names from the file that you tied to your own exercises (so the next import doesn’t ask again), the list of uploads and the log of exercise merges — so an import or a merge can be undone.</li>
   <li><b>Body weight and food diary.</b> Weight entries; what you ate and the estimated calories and macros.</li>
   <li><b>Training profile.</b> Experience, goal, training days per week, equipment and limitations. You write the limitations yourself, and they may include health information — an injury, for example. Only write what you are comfortable sharing with a coach.</li>
   <li><b>AI coach chat.</b> Your questions, the answers, and whatever the coach logged at your request. Also the coach’s Sunday weekly review: the same text that came as a notification, kept so the app can show it on the Week in review screen.</li>
@@ -42,6 +42,7 @@
   <li>Activity log — 30 days; AI cost records and app crash reports — 90 days; usage statistics and pre-sign-in app steps — 13 months. Daily totals across all users combined (how many people visited, trained, came back) — kept indefinitely: they contain nothing about you personally.</li>
   <li>Past AI coach conversations in the app — 180 days; the current conversation — until you start a new one.</li>
   <li>The coach’s Sunday weekly reviews — 90 days.</li>
+  <li>The list of history uploads and the log of exercise merges — 30 days: that’s how long they can be undone. The moved-over workouts themselves stay in your log.</li>
 </ul>
 <p><b>Backups.</b> The database is continuously copied to Tigris storage; once a day a separate copy is made — the last several are kept on the server, and the same copy is sent to the service owner on Telegram. The host also takes disk snapshots and keeps them for a few days. Backups exist only to recover from failures. After you delete your account, your data remains in them until they are replaced by newer ones, and in the owner's Telegram until they are deleted there.</p>
 

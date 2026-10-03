@@ -51,7 +51,9 @@ def _lift_json(
         "is_bodyweight": is_bodyweight,
         "weight": None if is_bodyweight else weight,
         "reps": reps,
-        "e1rm": None if is_bodyweight else round(e1rm, 1),
+        # null и у подхода длиннее config.E1RM_MAX_REPS: расчётного максимума
+        # у него нет (analytics.counts_for_e1rm).
+        "e1rm": None if is_bodyweight or e1rm <= 0 else round(e1rm, 1),
         "record": record,
     }
 

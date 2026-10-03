@@ -197,7 +197,7 @@ async def test_the_import_resolver_offers_a_matching_catalog_template(fresh_db, 
     assert "Жим штанги лёжа" in template_rows[0][0]
 
 
-async def test_taking_the_template_forks_it_with_its_assets(fresh_db, user_id):
+async def test_taking_the_template_forks_it_with_its_assets(fresh_db, user_id, monkeypatch):
 
     db = fresh_db
     template = next(
@@ -218,10 +218,15 @@ async def test_taking_the_template_forks_it_with_its_assets(fresh_db, user_id):
 
     # Резолвер по завершении отдаёт управление импортёру — в тесте он не нужен.
     import handlers.csv_import as csv_import
-    csv_import.on_exercises_resolved = AsyncMock()
+    monkeypatch.setattr(csv_import, "on_exercises_resolved", AsyncMock())
 
     await exercise_resolve.resolve_pick_template(callback, state)
 
+    # Выбор — только решение; заводит упражнение «Загрузить» (H6), под именем
+    # из файла и с шаблоном каталога за спиной.
+    assert await db.list_user_exercises(user_id) == []
+    decisions = (await state.get_data())["resolve_decisions"]
+    await csv_import.materialize_decisions(user_id, decisions, ["Жим штанги лёжа"])
     mine = await db.list_user_exercises(user_id)
     assert [e["display_name"] for e in mine] == ["Жим штанги лёжа"]
     assert exercise_descriptions.effective_description(mine[0])

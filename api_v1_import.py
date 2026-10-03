@@ -58,8 +58,6 @@ import config
 import db
 import formatting
 import i18n
-import search_terms
-import seed_data
 import text_import
 import timeutil
 from handlers import csv_import as bot_csv_import
@@ -67,12 +65,10 @@ from handlers.csv_import import (
     REQUIRED_FIELDS,
     _auto_detect,
     _build_workout_groups,
-    _duplicate_dates,
     _file_source,
     _file_weight_unit,
     _read_table,
     _weight_factor,
-    apply_import,
     match_exercise_names,
 )
 from parser import ParseError
@@ -116,65 +112,67 @@ def _body_file_unit(body: dict[str, Any]) -> str | None:
 def _parse_workouts(
     text: str, today: dt.date | None, account_unit: str, file_unit: str | None = None,
 ) -> tuple[list[dict], dict]:
-    """headers/rows/mapping/workouts — целиком через handlers.csv_import, в
-    английской локали (см. докстринг модуля), чтобы ошибка при необходимости
-    ушла клиенту не русской строкой. `today` — тот же смысл, что в боте
-    (timeutil.user_today): дата "в будущем" сравнивается с местным днём
-    пользователя, а не с UTC сервера.
+    """headers/rows/mapping/workouts — целиком через handlers.csv_import.
+    `today` — тот же смысл, что в боте (timeutil.user_today): дата "в
+    будущем" сравнивается с местным днём пользователя, а не с UTC сервера.
 
-    Второе значение — что разбор решил сам (пропущенные строки, как прочитан
-    формат «a/b/гггг»), см. _build_workout_groups(stats=...)."""
-    # Язык человека (выставлен authed_user_id на весь запрос) — для поля
-    # `message`, которое покажет приложение; машинное `detail` по-прежнему
-    # собирается в английской локали (см. докстринг модуля).
-    user_lang = i18n.get_lang()
-    with i18n.use_lang("en"):
-        headers, data_rows, has_header = _read_table(text)
-        if not headers:
-            raise ApiError(400, "bad_request", "csv file is empty", key="import.file_empty")
-        if not data_rows:
-            raise ApiError(400, "bad_request", "csv file has no data rows", key="import.no_data_rows")
-        if len(headers) < len(REQUIRED_FIELDS):
-            raise ApiError(
-                400, "too_few_columns",
-                f"found only {len(headers)} column(s), need at least date/exercise/weight/reps",
-                key="import.too_few_columns", n=len(headers),
-            )
-        mapping = _auto_detect(headers)
-        missing = [f for f in REQUIRED_FIELDS if f not in mapping]
-        if missing:
-            # Ручного маппинга колонок тут нет (см. докстринг модуля) —
-            # заголовки файла должны узнаваться сами по SYNONYMS.
-            raise ApiError(
-                400, "unrecognized_columns",
-                "could not auto-detect column(s): " + ", ".join(missing),
-            )
-        stats: dict = {
-            "source": _file_source(headers, has_header),
-            "file_unit_detected": _file_weight_unit(headers, mapping),
-        }
-        try:
-            workouts = _build_workout_groups(
-                data_rows, mapping,
-                first_line=2 if has_header else 1,
-                today=today,
-                weight_factor=_weight_factor(headers, mapping, account_unit, file_unit),
-                stats=stats,
-                account_unit=account_unit,
-            )
-        except ParseError as e:
-            match = _ERR_LINE_RE.match(e.message)
-            detail = match.group(2) if match else e.message
-            raise ApiError(
-                400, "invalid_csv", detail,
-                human=_localized_parse_error(
-                    data_rows, mapping, headers, has_header, today, user_lang, account_unit,
-                    file_unit,
-                ),
-            ) from e
-        if not workouts:
-            raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
-        return workouts, stats
+    Разбор идёт на языке человека (выставлен authed_user_id на весь запрос):
+    из него приходят подписи пропусков (`skipped[].label`, номера битых
+    строк) и предупреждения. Машинное `detail` ошибки собирается повтором в
+    английской локали — только на уже упавшем файле.
+
+    Второе значение — что разбор решил сам (пропуски, как прочитан формат
+    «a/b/гггг»), см. _build_workout_groups(stats=...)."""
+    headers, data_rows, has_header = _read_table(text)
+    if not headers:
+        raise ApiError(400, "bad_request", "csv file is empty", key="import.file_empty")
+    if not data_rows:
+        raise ApiError(400, "bad_request", "csv file has no data rows", key="import.no_data_rows")
+    if len(headers) < len(REQUIRED_FIELDS):
+        raise ApiError(
+            400, "too_few_columns",
+            f"found only {len(headers)} column(s), need at least date/exercise/weight/reps",
+            key="import.too_few_columns", n=len(headers),
+        )
+    mapping = _auto_detect(headers)
+    missing = [f for f in REQUIRED_FIELDS if f not in mapping]
+    if missing:
+        # Ручного маппинга колонок тут нет (см. докстринг модуля) —
+        # заголовки файла должны узнаваться сами по SYNONYMS.
+        raise ApiError(
+            400, "unrecognized_columns",
+            "could not auto-detect column(s): " + ", ".join(missing),
+        )
+    stats: dict = {
+        "source": _file_source(headers, has_header),
+        "file_unit_detected": _file_weight_unit(headers, mapping),
+    }
+    try:
+        workouts = _build_workout_groups(
+            data_rows, mapping,
+            first_line=2 if has_header else 1,
+            today=today,
+            weight_factor=_weight_factor(headers, mapping, account_unit, file_unit),
+            stats=stats,
+            account_unit=account_unit,
+        )
+    except ParseError as e:
+        human = i18n.t("import.file_error", message=e.message)
+        detail = e.message
+        with i18n.use_lang("en"):
+            try:
+                _build_workout_groups(
+                    data_rows, mapping, first_line=2 if has_header else 1, today=today,
+                    weight_factor=_weight_factor(headers, mapping, account_unit, file_unit),
+                    account_unit=account_unit,
+                )
+            except ParseError as en_error:
+                match = _ERR_LINE_RE.match(en_error.message)
+                detail = match.group(2) if match else en_error.message
+        raise ApiError(400, "invalid_csv", detail, human=human) from e
+    if not workouts:
+        raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
+    return workouts, stats
 
 
 # Порог правдоподобия веса. Просто и без справочника упражнений: рабочий вес
@@ -212,16 +210,35 @@ def _weight_warning(workouts: list[dict], account_unit: str, file_unit: str) -> 
 MAX_PREVIEW_WORKOUTS = 500
 
 
-def _preview_workouts(workouts: list[dict], account_unit: str) -> list[dict]:
+def _iso_with_offset(naive_utc: str, tz_offset: int) -> str:
+    """Наивный UTC из базы/расчёта → местное время атлета с офсетом, ISO 8601."""
+    zone = dt.timezone(dt.timedelta(hours=int(tz_offset)))
+    moment = dt.datetime.fromisoformat(naive_utc).replace(tzinfo=dt.timezone.utc)
+    return moment.astimezone(zone).isoformat(timespec="seconds")
+
+
+def _preview_workouts(
+    workouts: list[dict], account_unit: str, dup: set[int] | None = None, tz_offset: int = 0,
+) -> list[dict]:
     """Компактные строки предпросмотра: по упражнению — число подходов и
     самый тяжёлый подход (вес в обеих единицах, чтобы приложение показало
-    «100 кг (220 lb)» без своей математики). Новые даты первыми."""
+    «100 кг (220 lb)» без своей математики). Новые первыми — по дате и
+    времени сессии. У каждой тренировки — название и время из файла
+    (`title`, `started_at`/`finished_at` с офсетом атлета) и `duplicate`:
+    эта сессия уже есть в истории."""
+    dup = dup or set()
+    order = sorted(
+        range(len(workouts)),
+        key=lambda i: (workouts[i]["date"], workouts[i].get("started_at") or ""),
+        reverse=True,
+    )[:MAX_PREVIEW_WORKOUTS]
     rows = []
-    for w in sorted(workouts, key=lambda x: x["date"], reverse=True)[:MAX_PREVIEW_WORKOUTS]:
+    for i in order:
+        w = workouts[i]
         entries = []
         for entry in w["entries"]:
-            top = max(entry["sets"], key=lambda s: (s[0], s[1]))
-            kg = formatting.to_kg(top[0], account_unit)
+            top = max(entry["sets"], key=lambda s: (s[0] or 0, s[1]))
+            kg = formatting.to_kg(top[0] or 0, account_unit)
             entries.append({
                 "name": entry["name"],
                 "sets": len(entry["sets"]),
@@ -229,44 +246,26 @@ def _preview_workouts(workouts: list[dict], account_unit: str) -> list[dict]:
                 "top_weight_lb": round(kg * config.LB_PER_KG, 1),
                 "top_reps": top[1],
             })
-        rows.append({"date": w["date"], "entries": entries})
+        started, finished = bot_csv_import._session_times(w, tz_offset)
+        rows.append({
+            "date": w["date"],
+            "title": w.get("title"),
+            "started_at": _iso_with_offset(started, tz_offset),
+            "finished_at": _iso_with_offset(finished, tz_offset),
+            "duplicate": i in dup,
+            "entries": entries,
+        })
     return rows
 
 
 def _skipped_fields(stats: dict) -> dict[str, int]:
-    """Сколько строк файла разбор пропустил сам и почему — только добавленные
-    поля, прежние ключи ответа не меняются (их декодирует приложение):
-    разминка (Strong «W», Hevy set_type=warmup) и строки без нагрузки (вес и
-    повторы — ноль или пусто: кардио, планка). Ни то, ни другое не ошибка
-    файла, но «в файле 300 строк, а подходов 240» без объяснения выглядит
-    как потеря данных."""
+    """Прежние счётчики пропусков — ключи ответа, которые декодируют старые
+    сборки приложения; подробный разбор по причинам — поле `skipped`."""
     return {
         "rows_skipped": stats.get("rows_skipped", 0),
         "rows_skipped_warmup": stats.get("rows_skipped_warmup", 0),
         "rows_skipped_no_load": stats.get("rows_skipped_no_load", 0),
     }
-
-
-def _localized_parse_error(
-    data_rows, mapping, headers, has_header, today, lang: str, account_unit: str,
-    file_unit: str | None = None,
-) -> str | None:
-    """Та же ошибка разбора, но на языке человека: разбор уже упал в
-    английской локали ради машинного `detail`, и повторить его под `lang` —
-    единственный способ получить «Строка 3: отрицательный вес» без второй
-    реализации сообщений. Повтор идёт только на уже упавшем файле."""
-    with i18n.use_lang(lang):
-        try:
-            _build_workout_groups(
-                data_rows, mapping,
-                first_line=2 if has_header else 1,
-                today=today,
-                weight_factor=_weight_factor(headers, mapping, account_unit, file_unit),
-                account_unit=account_unit,
-            )
-        except ParseError as e:
-            return i18n.t("import.file_error", message=e.message)
-    return None
 
 
 def _date_range(workouts: list[dict]) -> dict[str, str] | None:
@@ -292,8 +291,7 @@ async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, in
     """`exercise_mapping` коммита: имя из файла → id упражнения человека, или
     null — «заведи новое, даже если нашлось похожее». Нет поля — None: тогда
     импорт делает ровно то, что показал предпросмотр. Чужой, шаблонный,
-    архивный или несуществующий id — 400 целиком, до любой записи: тихо
-    пропущенная строка залила бы историю не в то упражнение."""
+    архивный или несуществующий id — 400 целиком, до любой записи."""
     raw = body.get("exercise_mapping")
     if raw is None:
         return None
@@ -326,25 +324,57 @@ async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, in
     return mapping
 
 
-def _resolved_by_choice(matches: dict, mapping: dict[str, int | None] | None) -> dict[str, int]:
-    """Имя → упражнение: решение предпросмотра, поверх которого — выбор
-    человека. Точное совпадение имени не переспрашивается (предпросмотр его
-    на выбор не выносит). Если клиент прислал exercise_mapping, он показал
-    выбор по каждому неточному имени: имя, которого в нём нет, человек
-    оставил на «Завести новое» (так кодирует выбор приложение — пустой пункт
-    просто не отправляется), и подсказку за него не подставляем."""
-    resolved = {n: m.exercise_id for n, m in matches.items() if m.exercise_id is not None}
-    if mapping is None:
-        return resolved
+def _new_decision(match) -> dict:
+    if match.template_name:
+        return {"kind": "template", "template": match.template_name}
+    return {"kind": "new"}
+
+
+def _decisions_by_choice(
+    matches: dict, mapping: dict[str, int | None] | None, create_missing: bool = True,
+) -> dict[str, dict]:
+    """Имя → решение: то, что показал предпросмотр, и выбор человека поверх.
+
+    Точное совпадение (или имя, закреплённое за упражнением) не
+    переспрашивается. Если клиент прислал exercise_mapping, он показал выбор
+    по каждому неточному имени: id — туда (и имя закрепляется за этим
+    упражнением, exercise_aliases), null — завести новое. Имя с
+    needs_choice без выбора человека — 409: молча «завести новое» за него
+    больше не подставляем. Остальные неточные имена, которых нет в списке, —
+    как раньше «Завести новое» (так кодирует выбор приложение: пустой пункт
+    просто не отправляется)."""
+    decisions = bot_csv_import.default_decisions(matches)
+    missing = []
     for name, match in matches.items():
         if match.exact:
             continue
-        chosen = mapping.get(name)
-        if chosen is None:
-            resolved.pop(name, None)
-        else:
-            resolved[name] = chosen
-    return resolved
+        if mapping is not None and name in mapping:
+            chosen = mapping[name]
+            decisions[name] = (
+                {"kind": "existing", "id": chosen, "chosen": True} if chosen is not None
+                else _new_decision(match)
+            )
+        elif match.needs_choice:
+            missing.append(name)
+        elif mapping is not None:
+            decisions[name] = _new_decision(match)
+    # create_missing_exercises=false — имена без выбора просто не грузятся
+    # (их тренировки пропускаются, как и раньше), спрашивать незачем.
+    if missing and create_missing:
+        raise ApiError(
+            409, "exercise_choice_required",
+            "exercise_mapping has no choice for: " + ", ".join(sorted(missing)),
+            key="import.choice_required", names=", ".join(sorted(missing)),
+        )
+    return decisions
+
+
+async def _use_model(request: Request, user_id: int) -> bool:
+    """Спрашивать ли модель о незнакомых именах: только с согласием атлета
+    передавать данные AI и не в день HARD-стопа по деньгам."""
+    if not await api_v1_ai.has_ai_consent(request, user_id):
+        return False
+    return await ai_limits.hard_stop_block() is None
 
 
 async def preview_csv(request: Request) -> JSONResponse:
@@ -363,44 +393,60 @@ async def preview_csv(request: Request) -> JSONResponse:
     file_unit = requested_unit or stats["file_unit_detected"] or user["unit"]
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
-    matches = await match_exercise_names(user_id, all_names)
-    resolved = _resolved_by_choice(matches, None)
-    exercises = [
-        {
-            "name": name,
-            "status": "existing" if name in resolved else "new_will_create",
-            "exercise_id": resolved.get(name),
-        }
-        for name in matches
-    ]
-    set_count = sum(len(entry["sets"]) for w in workouts for entry in w["entries"])
-    dup = await _duplicate_dates(user_id, workouts, resolved)
+    matches = await match_exercise_names(
+        user_id, all_names, use_model=await _use_model(request, user_id),
+    )
+    decisions = bot_csv_import.default_decisions(matches)
+    ready = await bot_csv_import.drop_unweighted_sets(user_id, workouts, decisions, stats)
+    if not ready:
+        raise ApiError(400, "no_sets_found", "no row with a set was found", key="import.no_sets_found")
+    resolved = bot_csv_import.resolved_ids(decisions)
+    dup = await bot_csv_import._duplicate_sessions(user_id, ready, resolved)
     rows = await _candidate_rows(matches)
+    tz_offset = await db.user_tz_offset(user_id)
+    used = {e["name"] for w in ready for e in w["entries"]}
+    new_sets = sum(len(e["sets"]) for i, w in enumerate(ready) if i not in dup for e in w["entries"])
 
     return JSONResponse(
         {
-            "workout_count": len(workouts),
-            "set_count": set_count,
-            "date_range": _date_range(workouts),
-            "exercises": exercises,
+            "workout_count": len(ready),
+            "set_count": sum(len(entry["sets"]) for w in ready for entry in w["entries"]),
+            "date_range": _date_range(ready),
+            "exercises": [
+                {
+                    "name": name,
+                    "status": "existing" if name in resolved else "new_will_create",
+                    "exercise_id": resolved.get(name),
+                    "needs_choice": m.needs_choice,
+                }
+                for name, m in matches.items() if name in used
+            ],
             # Имена без точного совпадения: клиент даёт выбрать своё
             # упражнение (commit → exercise_mapping). suggested_exercise_id —
             # уверенное совпадение (импорт без exercise_mapping положит
-            # подходы именно туда) или null — тогда заведётся новое;
-            # candidates — похожие свои упражнения, лучшие первыми, для
-            # выбора при неоднозначности.
+            # подходы именно туда) или null. needs_choice=true — уверенности
+            # нет, а похожие свои есть: цель по умолчанию не ставится,
+            # candidates отсортированы по похожести, выбор за человеком.
             "unrecognized_exercises": [
                 {
                     "name": n,
-                    "suggested_exercise_id": m.exercise_id,
+                    "suggested_exercise_id": None if m.needs_choice else m.exercise_id,
+                    "needs_choice": m.needs_choice,
                     "candidates": [
                         {"exercise_id": i, "name": rows[i]["display_name"]}
                         for i in m.candidates if i in rows
                     ],
                 }
-                for n, m in matches.items() if not m.exact
+                for n, m in matches.items() if not m.exact and n in used
             ],
-            "duplicate_dates": sorted(dup),
+            "duplicate_dates": sorted({ready[i]["date"] for i in dup}),
+            "new_workouts": len(ready) - len(dup),
+            "new_sets": new_sets,
+            "all_duplicates": len(dup) == len(ready),
+            # Что разбор пропустил и почему (разминка, кардио, на время, без
+            # веса, битая строка) — с примерами, на языке атлета.
+            "skipped": bot_csv_import.skipped_report(stats),
+            "warnings": bot_csv_import.warnings_for(stats),
             # Как прочитан вес: source — "strong" | "hevy" | "other";
             # file_unit_detected — что сказал заголовок ("kg"/"lb"/null);
             # file_unit — единица, которой файл прочитан (выбор человека,
@@ -410,106 +456,32 @@ async def preview_csv(request: Request) -> JSONResponse:
             "file_unit_detected": stats["file_unit_detected"],
             "file_unit": file_unit,
             "account_unit": user["unit"],
-            "weight_warning": _weight_warning(workouts, user["unit"], file_unit),
-            "workouts": _preview_workouts(workouts, user["unit"]),
-            "workouts_truncated": len(workouts) > MAX_PREVIEW_WORKOUTS,
+            "weight_warning": _weight_warning(ready, user["unit"], file_unit),
+            "workouts": _preview_workouts(ready, user["unit"], dup, tz_offset),
+            "workouts_truncated": len(ready) > MAX_PREVIEW_WORKOUTS,
             **_skipped_fields(stats),
             # Как прочитаны даты вида «a/b/гггг»: "mdy" — колонка доказала
             # американский формат, "dmy" — европейский или (при
             # date_order_ambiguous=true) не доказала ничего, и остался
-            # прежний д/м; null — таких дат в файле нет. Неоднозначный случай
-            # стоит показать человеку рядом с date_range: «03/04/2024» легло
-            # 3 апреля, а в его приложении это могло быть 4 марта.
+            # прежний д/м; null — таких дат в файле нет. Человеческий текст
+            # про это — в warnings (code=ambiguous_date).
             "date_order": stats.get("date_order"),
             "date_order_ambiguous": stats.get("date_order_ambiguous", False),
         }
     )
 
 
-async def _create_new_exercises(
-    request: Request, user_id: int, names: list[str], matches: dict, resolved: dict[str, int],
-) -> None:
-    """Завести упражнения, которые предпросмотр назвал новыми, — под именем
-    из файла, дописывая их в resolved.
-
-    Однозначный шаблон каталога (match.template_name) решён ещё
-    предпросмотром — новое упражнение привязывается к нему (группа, фото,
-    техника) без модели. Остальные — модели, если атлет согласен передавать
-    данные AI: она подбирает шаблон по смыслу. Шаблон, чья идентичность у
-    атлета уже есть (или только что заведена этим же импортом), второй раз
-    не привязывается — два упражнения с одной идентичностью и есть дубль,
-    который раскалывает историю; вместо этого имя ложится в уже заведённое
-    этим импортом, а своё давнее — только если его выбрал человек или
-    предпросмотр. Кого не узнал никто — в группу «Другое» (без группы
-    упражнения не бывает — его не было бы видно в «Моих упражнениях»),
-    чтобы create_missing_exercises=true не терял тренировки молча."""
-    owned = {
-        search_terms.fold(r["original_name"]) for r in await db.list_active_exercises_with_identity(user_id)
-    }
-    created: dict[str, int] = {}
-
-    async def link(name: str, template_name: str) -> bool:
-        key = search_terms.fold(template_name)
-        if key in created:
-            resolved[name] = created[key]
-            return True
-        if key in owned:
-            return False
-        ex_id = await db.create_exercise_matching_catalog_name(user_id, name, template_name)
-        if ex_id is None:
-            return False
-        created[key] = ex_id
-        resolved[name] = ex_id
-        return True
-
-    # Несколько имён файла на один новый шаблон — одно упражнение; первым
-    # заводится то, что написано ровно как шаблон, — его имя и останется.
-    ordered = sorted(names, key=lambda n: not _spelled_as(n, matches[n].template_name))
-    rest = []
-    for name in ordered:
-        template_name = matches[name].template_name
-        if not (template_name and await link(name, template_name)):
-            rest.append(name)
-    if rest and await api_v1_ai.has_ai_consent(request, user_id):
-        aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, rest)
-        templates = await db.find_global_templates_by_names(list(set(aliases.values())))
-        for name, catalog_name in aliases.items():
-            template = templates.get(catalog_name)
-            if template is not None:
-                await link(name, template["name"])
-    other_group_id = None
-    for name in rest:
-        if name in resolved:
-            continue
-        if other_group_id is None:
-            other_group_id = await db.other_muscle_group_id()
-        resolved[name] = await db.create_exercise(user_id, name, other_group_id)
-
-
-def _spelled_as(name: str, template_name: str | None) -> bool:
-    if not template_name:
-        return False
-    folded = search_terms.fold(name.strip())
-    return folded == search_terms.fold(template_name) or any(
-        folded == search_terms.fold(seed_data.localized_exercise_name(template_name, lang))
-        for lang in i18n.SUPPORTED
-    )
-
-
 async def import_csv(request: Request) -> JSONResponse:
     """Настоящий импорт: пишет тренировки в базу и возвращает, сколько
-    записалось. Даты, на которые уже есть завершённая тренировка с тем же
-    упражнением (см. handlers.csv_import._duplicate_dates), молча
+    записалось. Сессии, которые уже есть в истории (то же начало или тот же
+    состав в тот же день, см. handlers.csv_import._duplicate_sessions),
     пропускаются — повторная заливка того же файла не плодит дубли; это то
-    же поведение, что у кнопки "✅ Загрузить" в боте (не "Загрузить все")."""
+    же поведение, что у кнопки "✅ Загрузить" в боте."""
     user_id = await common.authed_user_id(request)
-    # Проверка дублей (_duplicate_dates) и запись (apply_import) не атомарны:
-    # два одинаковых запроса подряд (двойной тап, повтор после таймаута)
-    # оба видят пустую историю до того, как первый успел закоммитить, и
-    # файл записывается дважды — 72 тренировки превращались в 144. Та же
-    # бронь, что у кнопки «✅ Загрузить» в боте (общий с ботом _saving: один
-    # процесс, один атлет не пишет импорт в двух местах сразу); ответ — тот
-    # же 409 import_in_progress, что у import_share.
+    # Проверка дублей и запись не атомарны: два одинаковых запроса подряд
+    # (двойной тап, повтор после таймаута) оба видят пустую историю до того,
+    # как первый успел закоммитить. Та же бронь, что у кнопки «✅ Загрузить»
+    # в боте (общий с ботом _saving).
     if not bot_csv_import._try_claim_saving(user_id):
         raise ApiError(409, "import_in_progress", "an import for this account is already running")
     try:
@@ -532,46 +504,69 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
 
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
     # Тот же резолв, что показал предпросмотр, и выбор человека поверх него.
-    matches = await match_exercise_names(user_id, all_names)
-    resolved = _resolved_by_choice(matches, mapping)
-    unresolved = [n for n in matches if n not in resolved]
-    if unresolved and create_missing:
-        await _create_new_exercises(request, user_id, unresolved, matches, resolved)
-        unresolved = []
+    matches = await match_exercise_names(
+        user_id, all_names, use_model=await _use_model(request, user_id),
+    )
+    decisions = _decisions_by_choice(matches, mapping, create_missing)
+    if not create_missing:
+        decisions = {n: d for n, d in decisions.items() if d["kind"] == "existing"}
+    unresolved = sorted(n for n in matches if n not in decisions)
 
     # Тренировки, в которых есть хоть одно неразрешённое имя (только при
     # create_missing_exercises=false), не записываем целиком — иначе часть
-    # подходов внутри одной тренировки тихо пропала бы, а дата уже считалась
-    # бы «занята импортом» для follow-up загрузки того же файла.
-    skipped_exercises = sorted(unresolved)
+    # подходов внутри одной тренировки тихо пропала бы.
     importable = [
         w for w in workouts
-        if all(entry["name"] in resolved for entry in w["entries"])
+        if all(entry["name"] in decisions for entry in w["entries"])
     ]
+    ready = await bot_csv_import.drop_unweighted_sets(user_id, importable, decisions, stats)
+    dup = await bot_csv_import._duplicate_sessions(user_id, ready, bot_csv_import.resolved_ids(decisions))
+    to_import = [w for i, w in enumerate(ready) if i not in dup]
 
-    dup = await _duplicate_dates(user_id, importable, resolved)
-    to_import = [w for w in importable if w["date"] not in dup]
-
-    imported, failed = await apply_import(user_id, to_import, resolved)
-
-    # apply_import не говорит, КАКИЕ именно тренировки сорвались (см. её
-    # докстринг) — сумма подходов по to_import точна, когда failed == 0
-    # (обычный случай), а при сбое чуть завышена на подходы сорвавшейся
-    # тренировки; для отчёта клиенту это приемлемо, workouts_failed рядом
-    # показывает, что часть не долетела.
+    result = await bot_csv_import.run_import(
+        user_id, to_import, decisions, bot_csv_import.detect_source(stats),
+    )
+    badges = bot_csv_import.achievements_summary(result["achievements"])
     return JSONResponse(
         {
-            "workouts_imported": imported,
-            "sets_imported": sum(
-                len(entry["sets"]) for w in to_import for entry in w["entries"]
-            ) if imported else 0,
+            "workouts_imported": result["imported"],
+            "sets_imported": result["sets"],
             "workouts_skipped_duplicate": len(dup),
-            "workouts_failed": failed,
+            "workouts_failed": result["failed"],
             "workouts_skipped_unresolved_exercise": len(workouts) - len(importable),
-            "skipped_exercises": skipped_exercises,
+            "skipped_exercises": unresolved,
             **_skipped_fields(stats),
+            "skipped": bot_csv_import.skipped_report(stats),
+            "warnings": bot_csv_import.warnings_for(stats),
+            # Отменить этот импорт целиком: POST /import/batches/{batch_id}/undo.
+            "batch_id": result["batch_id"],
+            "achievements_unlocked": len(badges),
+            "achievements": badges,
         }
     )
+
+
+async def list_batches(request: Request) -> JSONResponse:
+    """Импорты за последние config.IMPORT_UNDO_DAYS суток, новые первыми, —
+    для экрана «отменить импорт». can_undo=false — уже отменён или от него
+    ничего не осталось."""
+    user_id = await common.authed_user_id(request)
+    batches = await bot_csv_import.undoable_batches(user_id)
+    for b in batches:
+        b["created_at"] = _iso_with_offset(b["created_at"], 0)
+    return JSONResponse({"batches": batches})
+
+
+async def undo_batch(request: Request) -> JSONResponse:
+    """Отменить импорт целиком: его тренировки и подходы, упражнения, которые
+    он завёл (если по ним не осталось других подходов), и значки, которые он
+    открыл. message — что снято, голосом тренера на языке атлета."""
+    user_id = await common.authed_user_id(request)
+    batch_id = request.path_params["batch_id"]
+    result = await bot_csv_import.undo_import(user_id, batch_id)
+    if result is None:
+        raise ApiError(404, "import_batch_not_found", "import batch not found or already undone", key="import.undo_gone")
+    return JSONResponse({**result, "message": bot_csv_import.undo_message(result)})
 
 
 # Разбор текста — один на атлета за раз: второй тап по «Разобрать» (или
@@ -632,16 +627,28 @@ async def convert_text(request: Request) -> JSONResponse:
         if result.undated:
             raise ApiError(400, "no_sets_found", "sets found but none has a date", key="import.text_no_dates")
         raise ApiError(400, "no_sets_found", "no set was found in the text", key="import.text_no_sets")
+    skipped: dict = {}
+    for item in result.skipped:
+        bot_csv_import.add_skip(skipped, item["reason"], item["text"])
+    if result.undated:
+        bot_csv_import.add_skip(skipped, "unparsed", None, count=result.undated)
     return JSONResponse(
         {
             "csv": text_import.rows_to_csv(result.rows, user["unit"]),
             "set_count": len(result.rows),
             "undated_sets": result.undated,
+            # Что из заметок не стало подходами (кардио, на время, разминка,
+            # непонятное) — с примерами; и предупреждение о датах, которые
+            # читаются двумя способами («03/09»), с тем, как прочитано.
+            "skipped": bot_csv_import.skipped_report(skipped),
+            "warnings": text_import.date_warnings(text, user["lang"]),
         }
     )
 
 
 routes = [
+    Route("/import/batches", list_batches, methods=["GET"]),
+    Route("/import/batches/{batch_id}/undo", undo_batch, methods=["POST"]),
     Route("/import/csv/preview", preview_csv, methods=["POST"]),
     Route("/import/csv", import_csv, methods=["POST"]),
     Route("/import/text/convert", convert_text, methods=["POST"]),

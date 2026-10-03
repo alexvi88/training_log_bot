@@ -89,9 +89,9 @@ def test_clean_rows_rejects_nonsense_and_counts_undated():
         TODAY,
     )
     assert rows == [
-        {"date": "2026-03-01", "exercise": "Жим лёжа", "weight": 100.0, "unit": None, "reps": 8},
+        {"date": "2026-03-01", "exercise": "Жим лёжа", "weight": 100.0, "unit": None, "reps": 8, "note": None},
         # Без даты — не брак: дату проставит _stitch_dates по куску выше.
-        {"date": None, "exercise": "Присед", "weight": 100.0, "unit": None, "reps": 5},
+        {"date": None, "exercise": "Присед", "weight": 100.0, "unit": None, "reps": 5, "note": None},
     ]
     assert undated == 2
 
@@ -108,17 +108,53 @@ def test_stitch_dates_fills_from_above_and_counts_orphans():
 def test_rows_to_csv_orders_by_date_and_converts_marked_units():
     rows = [
         {"date": "2026-03-02", "exercise": "Присед", "weight": 225.0, "unit": "lb", "reps": 5},
-        {"date": "2026-03-01", "exercise": "Жим, узкий", "weight": 100.0, "unit": None, "reps": 8},
+        {"date": "2026-03-01", "exercise": "Жим, узкий", "weight": 100.0, "unit": None, "reps": 8,
+         "note": "последний тяжело"},
         {"date": "2026-03-01", "exercise": "Подтягивания", "weight": 0.0, "unit": None, "reps": 10},
     ]
+    # Смесь единиц — в единице аккаунта, и колонка подписана ею (weight_kg).
     assert text_import.rows_to_csv(rows, "kg").splitlines() == [
-        "date,exercise,weight,reps",
-        '2026-03-01,"Жим, узкий",100,8',
-        "2026-03-01,Подтягивания,0,10",
-        "2026-03-02,Присед,102.06,5",
+        "date,exercise,weight_kg,reps,notes",
+        '2026-03-01,"Жим, узкий",100,8,последний тяжело',
+        "2026-03-01,Подтягивания,0,10,",
+        "2026-03-02,Присед,102.06,5,",
     ]
     lb = text_import.rows_to_csv([{"date": "2026-03-01", "exercise": "Жим", "weight": 100.0, "unit": "kg", "reps": 5}], "lb")
-    assert lb.splitlines()[1] == "2026-03-01,Жим,220.46,5"
+    assert lb.splitlines()[1] == "2026-03-01,Жим,100,5,"
+    assert lb.splitlines()[0].startswith("date,exercise,weight_kg,")
+
+
+def test_notes_all_in_pounds_go_out_in_pounds_once():
+    """M8: заметки целиком в фунтах — вес уходит фунтами под честным
+    заголовком weight_lbs, и в килограммы его переводит ровно один раз разбор
+    CSV. Раньше перевод шёл здесь и колонкой без единицы — переключатель
+    «кг | lb» в приложении пересчитывал его второй раз."""
+    from handlers.csv_import import _auto_detect, _build_workout_groups, _read_table, _weight_factor
+
+    rows = [{"date": "2025-12-28", "exercise": "жим", "weight": 225.0, "unit": "lb", "reps": 5}]
+    csv_text = text_import.rows_to_csv(rows, "kg")
+    assert csv_text.splitlines()[:2] == ["date,exercise,weight_lbs,reps,notes", "2025-12-28,жим,225,5,"]
+    headers, data, _ = _read_table(csv_text)
+    mapping = _auto_detect(headers)
+    workouts = _build_workout_groups(data, mapping, weight_factor=_weight_factor(headers, mapping, "kg"))
+    assert workouts[0]["entries"][0]["sets"][0][0] == 102.1
+    # Человек в приложении говорит «это килограммы» — 225, без второго пересчёта.
+    workouts = _build_workout_groups(data, mapping, weight_factor=_weight_factor(headers, mapping, "kg", "kg"))
+    assert workouts[0]["entries"][0]["sets"][0][0] == 225.0
+
+
+def test_ambiguous_numeric_dates_get_a_warning_naming_the_reading():
+    import i18n
+
+    with i18n.use_lang("ru"):
+        (warning,) = text_import.date_warnings("Mon 03/09/2026\nbench 100x5", "ru")
+        assert warning["code"] == "ambiguous_date"
+        assert "03/09/2026" in warning["message"] and "3 сентября" in warning["message"]
+    with i18n.use_lang("en"):
+        (warning,) = text_import.date_warnings("Mon 03/09/2026\nbench 100x5", "en")
+        assert "March 9" in warning["message"]
+    # Порядок доказан числом больше 12 — предупреждать не о чем.
+    assert text_import.date_warnings("03/09/2026\n25/09/2026", "ru") == []
 
 
 async def test_extract_stitches_date_across_chunks(monkeypatch):

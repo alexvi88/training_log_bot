@@ -546,10 +546,14 @@ def build_history_list(
     if not entries:
         return empty if empty is not None else i18n.t("history.empty")
     lines = [header if header is not None else i18n.t("history.header")]
-    for started, names, _set_count in entries:
+    for entry in entries:
+        started, names = entry[0], entry[1]
         head = format_date_ru(started)
+        # Четвёртый элемент — время и название сессии («08:27 · Push»), когда
+        # тренировок за день несколько или у неё есть название из импорта.
+        extra = entry[3] if len(entry) > 3 else ""
         lines.append("")
-        lines.append(f"<b>{head}</b>")
+        lines.append(f"<b>{head}</b>" + (f" · {escape(extra)}" if extra else ""))
         if names:
             lines.extend(f"<i>{b}</i>" for b in _history_bullets(names))
         else:
@@ -572,9 +576,17 @@ def build_import_confirmation_list(
     already in `dup_dates` are flagged inline, since with several workouts per
     page a single blanket warning can't say which ones are affected."""
     lines = [header]
-    for date, names in entries:
+    for item in entries:
+        # (дата, имена) — день целиком, как раньше; (дата, имена, дубль ли,
+        # подпись) — сессия импорта: время и название из файла рядом с датой,
+        # чтобы две тренировки одного дня были различимы.
+        date, names = item[0], item[1]
+        is_dup = item[2] if len(item) > 2 else date.isoformat() in dup_dates
+        suffix = item[3] if len(item) > 3 else ""
         head = f"<b>{format_date_ru(date)}</b>"
-        if date.isoformat() in dup_dates:
+        if suffix:
+            head += f" · {escape(suffix)}"
+        if is_dup:
             head += i18n.t("history.import_duplicate")
         lines.append("")
         lines.append(head)
@@ -706,6 +718,9 @@ def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = Tr
     """
     if not show_extra or not block.sets or block.is_bodyweight:
         return None
+    # Все подходы длиннее config.E1RM_MAX_REPS — расчётного максимума нет.
+    if block.top_e1rm <= 0:
+        return None
     prev_holds_the_record = (
         block.record_e1rm_delta is not None
         and block.prev_sets is not None
@@ -717,7 +732,7 @@ def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = Tr
     if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
         when = format_date_short(block.prev_started_at)
         delta = block.top_e1rm - block.prev_top_e1rm
-        vs_prev = f" ({format_delta(delta, unit)} vs {when})"
+        vs_prev = f" ({format_delta(delta, unit)} vs {when})" if block.prev_top_e1rm > 0 else ""
     return f"↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}"
 
 
@@ -2029,10 +2044,12 @@ def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) 
         return [header,
                 dated(i18n.t("gold.reps_label"), str(golds.max_reps), golds.max_reps_date)]
 
-    rows = [("e1RM", f"{format_weight(golds.best_e1rm)}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
-             golds.best_e1rm_date)]
+    rows = []
+    if golds.best_e1rm > 0:
+        rows.append(("e1RM", f"{format_weight(golds.best_e1rm)}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
+                     golds.best_e1rm_date))
     weight_set = (golds.max_weight, golds.max_weight_reps)
-    if weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
+    if not rows or weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
         rows.append((i18n.t("gold.weight_label"), format_set(*weight_set), golds.max_weight_date))
     return [header] + [dated(label, value, day) for label, value, day in rows]
 
@@ -2176,6 +2193,9 @@ def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, u
     """One personal-record line. Bodyweight moves have no load to report, so their
     record is the best set of reps instead of a weight and an e1RM."""
     if weight > 0:
+        if e1rm_value <= 0:
+            # Подход длиннее config.E1RM_MAX_REPS — без расчётного максимума.
+            return f"• {escape(name)} — {format_set(weight, reps)}"
         return f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1rm_value:.0f}{unit_label}"
     return i18n.t("hall.reps_line", name=escape(name), reps=reps, n=reps)
 
@@ -2389,7 +2409,7 @@ def format_progress_screen(
         return "\n".join(lines)
 
     is_bw = sessions[-1].is_bodyweight_mode
-    window = [s for s in sessions if s.sets]
+    window = [s for s in sessions if s.sets and (is_bw or s.is_bodyweight_mode or s.top_e1rm > 0)]
     candidates = window[-limit:]
 
     if len(candidates) >= 2:
@@ -2402,6 +2422,11 @@ def format_progress_screen(
         if is_bw:
             delta = last.max_reps_in_set - first.max_reps_in_set
             lines.append(i18n.t("progress.reps_delta", delta=format_delta_reps(delta), since=since))
+        elif last.top_e1rm < first.top_e1rm and analytics.e1rm_change_is_noise(
+            first.top_e1rm, last.top_e1rm, unit
+        ):
+            # Спад меньше шума (analytics.E1RM_NOISE_KG/SHARE) — не спад.
+            lines.append(i18n.t("progress.e1rm_flat", since=since))
         else:
             delta = last.top_e1rm - first.top_e1rm
             lines.append(i18n.t("progress.e1rm_delta", delta=format_delta(delta, unit), since=since))

@@ -37,6 +37,7 @@ import datetime as dt
 import io
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -75,13 +76,29 @@ _SCHEMA = {
                             "weight": {"type": "number"},
                             "unit": {"type": "string", "enum": ["kg", "lb", "unknown"]},
                             "reps": {"type": "integer"},
+                            "note": {"type": ["string", "null"]},
                         },
-                        "required": ["date", "exercise", "weight", "unit", "reps"],
+                        "required": ["date", "exercise", "weight", "unit", "reps", "note"],
                         "additionalProperties": False,
                     },
-                }
+                },
+                "skipped": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string"},
+                            "reason": {
+                                "type": "string",
+                                "enum": ["cardio", "warmup", "duration_only", "unparsed"],
+                            },
+                        },
+                        "required": ["text", "reason"],
+                        "additionalProperties": False,
+                    },
+                },
             },
-            "required": ["sets"],
+            "required": ["sets", "skipped"],
             "additionalProperties": False,
         },
     },
@@ -105,8 +122,9 @@ Rules:
 - "exercise": the exercise name exactly as the lifter wrote it (fix only obvious typos and letter case), in the lifter's language. Do not translate, do not rename to a canonical name.
 - "weight": the load as a number. "unit": "kg" or "lb" if the notes say so (kg, lb, lbs or the same words in the notes' language), otherwise "unknown".
 - "reps": a positive integer.
-- Skip anything that is not a set with reps: cardio, distances, times, planks in seconds, body measurements, food, comments, plans for the future, warm-up sets marked as warm-up.
-- If the piece contains no sets at all, return {"sets": []}.
+- "note": a short remark the lifter attached to this set or exercise ("last one was hard", "felt easy", "belt"), in the lifter's words; null when there is none. Never put the weight or reps there.
+- Do not turn into sets anything that is not a set with reps: cardio, distances, times, planks in seconds, body measurements, food, comments, plans for the future, warm-up sets marked as warm-up. Every training line you skip goes to "skipped" with the line as written and a reason: "cardio" (running, cycling, elliptical, rowing, any distance), "duration_only" (only a time, e.g. a plank or a stretch), "warmup" (marked as warm-up), "unparsed" (looks like training but you cannot read weight and reps from it). Dates, headings, food and plain chat are not training lines — do not list them.
+- If the piece contains no sets at all, return {"sets": [], "skipped": [...]}.
 """
 
 
@@ -116,6 +134,10 @@ class ExtractResult:
     # Подходы, для которых в тексте не нашлось даты: в CSV их не положить,
     # но человеку стоит сказать, что они были, а не терять их молча.
     undated: int = 0
+    # Строки тренировки, которые модель сознательно не превратила в подходы
+    # (кардио, на время, разминка, непонятное): [{"text", "reason"}] — в
+    # отчёт импорта, а не молча в никуда.
+    skipped: list[dict] = field(default_factory=list)
 
 
 def numeric_date_order(lang: Optional[str]) -> str:
@@ -185,19 +207,37 @@ def _clean_rows(raw_sets: Any, today: dt.date) -> tuple[list[dict], int]:
             undated += 1
             continue
         unit = item.get("unit")
+        note = item.get("note")
         rows.append({
             "date": date,
             "exercise": " ".join(name.split()),
             "weight": float(weight),
             "unit": unit if unit in ("kg", "lb") else None,
             "reps": reps,
+            "note": " ".join(note.split())[:200] if isinstance(note, str) and note.strip() else None,
         })
     return rows, undated
 
 
+_SKIP_REASONS = ("cardio", "warmup", "duration_only", "unparsed")
+
+
+def _clean_skipped(raw: Any) -> list[dict]:
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text, reason = item.get("text"), item.get("reason")
+        if isinstance(text, str) and text.strip() and reason in _SKIP_REASONS:
+            out.append({"text": " ".join(text.split())[:80], "reason": reason})
+    return out
+
+
 async def _extract_chunk(
     user_id: int, piece: str, today: dt.date, date_order: str
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int, list[dict]]:
     client = ai_trainer._get_client()
     payload = {"today": today.isoformat(), "numeric_date_order": date_order, "notes": piece}
     response = await ai_trainer.paid_call(
@@ -223,8 +263,11 @@ async def _extract_chunk(
         data = ai_trainer._extract_json_object(response.choices[0].message.content or "")
     except (ValueError, IndexError, AttributeError):
         logger.warning("text import: unparsable model response for user %s", user_id)
-        return [], 0
-    return _clean_rows(data.get("sets") if isinstance(data, dict) else None, today)
+        return [], 0, []
+    if not isinstance(data, dict):
+        return [], 0, []
+    rows, undated = _clean_rows(data.get("sets"), today)
+    return rows, undated, _clean_skipped(data.get("skipped"))
 
 
 def _stitch_dates(rows: list[dict]) -> tuple[list[dict], int]:
@@ -256,14 +299,18 @@ async def extract_sets(
     gate = asyncio.Semaphore(_PARALLEL)
     date_order = numeric_date_order(lang if lang is not None else i18n.get_lang())
 
-    async def one(piece: str) -> tuple[list[dict], int]:
+    async def one(piece: str) -> tuple[list[dict], int, list[dict]]:
         async with gate:
             return await _extract_chunk(user_id, piece, today, date_order)
 
     answers = await asyncio.gather(*(one(piece) for piece in _chunks(text)))
-    rows = [row for chunk_rows, _ in answers for row in chunk_rows]
+    rows = [row for chunk_rows, _, _ in answers for row in chunk_rows]
     stitched, undated = _stitch_dates(rows)
-    return ExtractResult(rows=stitched, undated=undated + sum(bad for _, bad in answers))
+    return ExtractResult(
+        rows=stitched,
+        undated=undated + sum(bad for _, bad, _ in answers),
+        skipped=[item for _, _, skipped in answers for item in skipped],
+    )
 
 
 def _format_weight(value: float) -> str:
@@ -274,21 +321,73 @@ def _format_weight(value: float) -> str:
 
 
 def rows_to_csv(rows: list[dict], account_unit: str) -> str:
-    """Подходы → CSV в формате нашего же экспорта: колонка веса без единицы
-    читается разбором в единице аккаунта (handlers.csv_import._weight_factor),
-    поэтому явно помеченные в заметках другие единицы пересчитываются здесь.
-    Порядок строк — порядок дат, внутри дня — порядок записи: разбор CSV
-    группирует строки по дате и сохраняет порядок упражнений как в файле."""
+    """Подходы → CSV, который разбор импорта читает как файл Hevy/Strong.
+
+    Единица веса — честно в заголовке колонки (weight_kg / weight_lbs): если
+    все помеченные подходы в заметках в одной единице, вес идёт в ней как
+    есть, а разбор (handlers.csv_import._weight_factor) переведёт его в
+    единицу аккаунта ровно один раз. Раньше фунты пересчитывались уже здесь и
+    уходили колонкой без единицы, и переключатель «кг | lb» в предпросмотре
+    приложения пересчитывал их второй раз. Смесь единиц (или без единиц вовсе)
+    — в единице аккаунта, с её же меткой в заголовке.
+
+    Порядок строк — порядок дат, внутри дня — порядок записи. Заметка к
+    подходу («последний тяжело») — колонкой notes, её разбор положит к
+    упражнению этой тренировки."""
+    units = {row.get("unit") for row in rows}
+    file_unit = units.pop() if len(units) == 1 and None not in units else account_unit
     ordered = sorted(enumerate(rows), key=lambda pair: (pair[1]["date"], pair[0]))
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(["date", "exercise", "weight", "reps"])
+    weight_header = "weight_lbs" if file_unit == "lb" else "weight_kg"
+    writer.writerow(["date", "exercise", weight_header, "reps", "notes"])
     for _, row in ordered:
         weight = row["weight"]
-        unit = row.get("unit")
-        if unit == "lb" and account_unit == "kg":
+        unit = row.get("unit") or account_unit
+        if unit == "lb" and file_unit == "kg":
             weight = weight / config.LB_PER_KG
-        elif unit == "kg" and account_unit == "lb":
+        elif unit == "kg" and file_unit == "lb":
             weight = weight * config.LB_PER_KG
-        writer.writerow([row["date"], row["exercise"], _format_weight(weight), row["reps"]])
+        writer.writerow([row["date"], row["exercise"], _format_weight(weight), row["reps"], row.get("note") or ""])
     return buf.getvalue()
+
+
+# Числовая дата без названия месяца: «03/09», «03.09.2026», «3-9-26».
+_NUMERIC_DATE_RE = re.compile(r"(?<![\d.,/-])(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?(?![\d.,/-]*\d)")
+
+
+def date_warnings(text: str, lang: Optional[str] = None) -> list[dict]:
+    """Предупреждение, если в заметках есть даты, читаемые двумя способами
+    («03/09» — 3 сентября или 9 марта), а сами заметки порядок не доказали
+    (число больше 12 на месте месяца). Называет, как прочитано —
+    numeric_date_order по языку атлета: [{"code": "ambiguous_date",
+    "message"}] на языке текущего запроса, или []."""
+    order = numeric_date_order(lang if lang is not None else i18n.get_lang())
+    ambiguous = None
+    day_first_proven = month_first_proven = False
+    for line in text.splitlines():
+        for match in _NUMERIC_DATE_RE.finditer(line):
+            a, b = int(match.group(1)), int(match.group(2))
+            if not (1 <= a <= 31 and 1 <= b <= 31):
+                continue
+            if a > 12 and b <= 12:
+                day_first_proven = True
+            elif b > 12 and a <= 12:
+                month_first_proven = True
+            elif a <= 12 and b <= 12 and a != b and ambiguous is None:
+                ambiguous = (match.group(0), a, b)
+    if ambiguous is None or day_first_proven or month_first_proven:
+        return []
+    raw, a, b = ambiguous
+    day, month = (a, b) if order == "day.month" else (b, a)
+    month_name = i18n.t("date.month_gen", m=_MONTH_KEYS[month - 1])
+    return [{
+        "code": "ambiguous_date",
+        "message": i18n.t(
+            "import.warning.ambiguous_date",
+            example=raw, date=i18n.t("date.day_month", day=day, month=month_name),
+        ),
+    }]
+
+
+_MONTH_KEYS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
