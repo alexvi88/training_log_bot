@@ -60,6 +60,7 @@ import api_v1_sharing
 import api_v1_support
 import api_v1_templates
 import api_v1_voice
+import api_v1_weekly
 import apple_signin
 import config
 import dashboard_data
@@ -2034,6 +2035,7 @@ routes += (
     + api_v1_support.routes
     + api_v1_funnel.routes
     + api_v1_dashboard.routes
+    + api_v1_weekly.routes
     + api_v1_progress.routes
     + api_v1_hall_of_fame.routes
     + api_v1_history.routes

@@ -823,6 +823,12 @@ BEHAVIOUR_DIGEST_RETENTION_DAYS = int(os.getenv("BEHAVIOUR_DIGEST_RETENTION_DAYS
 # на диске, которые заметно дороже строк.
 AI_CONVERSATION_RETENTION_DAYS = int(os.getenv("AI_CONVERSATION_RETENTION_DAYS", "180"))
 
+# Сколько живёт воскресный разбор недели от тренера (db.weekly_digests) — текст,
+# который уже ушёл пушем, сохранённый для экрана «Итог недели» в приложении.
+# Экран открывают из свежего пуша; три месяца — с запасом на «открыл через
+# пару недель», дальше разбор про давно прошедшую неделю никому не нужен.
+WEEKLY_DIGEST_RETENTION_DAYS = int(os.getenv("WEEKLY_DIGEST_RETENTION_DAYS", "90"))
+
 
 # --- MCP: доступ к своим данным из внешних AI-клиентов (Claude и т.п.) ------
 #

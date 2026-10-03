@@ -728,6 +728,23 @@ CREATE TABLE IF NOT EXISTS behaviour_digests (
     created_at TEXT NOT NULL
 );
 
+-- Воскресный разбор недели от AI-тренера (engagement.build_daily_push, ветка
+-- AI_WEEKLY) — тот же текст, что ушёл пушем в Telegram, чтобы экран «Итог
+-- недели» в приложении (GET /v1/weekly-summary) показал его, не платя за
+-- второй вызов модели. Строка на атлета и неделю (week_start — понедельник по
+-- местным суткам атлета); lang — язык, на котором текст написан: сменил язык —
+-- экран текст прячет, а не показывает чужой. Чистится по
+-- WEEKLY_DIGEST_RETENTION_DAYS; при сносе аккаунта уходит вместе с ним
+-- (колонка user_id — см. _user_scoped_tables).
+CREATE TABLE IF NOT EXISTS weekly_digests (
+    user_id INTEGER NOT NULL,
+    week_start TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, week_start)
+);
+
 -- Отчёты о сбоях iOS-приложения из MetricKit (api_v1_diagnostics.py): падения,
 -- зависания, перерасход CPU и записи на диск. Строка на одну диагностику,
 -- payload — её jsonRepresentation() от Apple как есть (стек адресами, без
@@ -5209,6 +5226,7 @@ async def exercise_e1rm_growth(
     *,
     tz_offset: Optional[int] = None,
     exclude_workout_ids: Iterable[int] = (),
+    window_end_date: Optional[str] = None,
 ) -> tuple[float, float]:
     """(лучший e1RM ДО окна, лучший e1RM ВНУТРИ окна) — база и результат для
     плитки роста.
@@ -5218,19 +5236,23 @@ async def exercise_e1rm_growth(
     человек на самом деле проседал и только сейчас вернулся выше своего же
     старого максимума — а прирост, который стоит показывать, это разница
     именно с ним.
+
+    `window_end_date` (включительно) — для окна в прошлом: «Итог недели» за
+    прошлую неделю не должен засчитывать ей то, что поднято после неё.
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     e1rm = _e1rm_sql(formula)
     without, without_params = _without_workouts(exclude_workout_ids)
+    end_bound = "9999-12-31" if window_end_date is None else window_end_date
     cur = await conn().execute(
         f"SELECT COALESCE(MAX(CASE WHEN {day} < ? THEN {e1rm} END), 0) AS before_max, "
-        f"       COALESCE(MAX(CASE WHEN {day} >= ? THEN {e1rm} END), 0) AS window_max "
+        f"       COALESCE(MAX(CASE WHEN {day} >= ? AND {day} <= ? THEN {e1rm} END), 0) AS window_max "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
         f"AND s.exercise_id = ? AND s.reps > 0{without}",
-        (window_start_date, window_start_date, user_id, exercise_id, *without_params),
+        (window_start_date, window_start_date, end_bound, user_id, exercise_id, *without_params),
     )
     row = await cur.fetchone()
     return row["before_max"], row["window_max"]
@@ -5301,6 +5323,89 @@ async def e1rm_record_count(
         (since_date, since_date, user_id, *without_params),
     )
     return (await cur.fetchone())["n"]
+
+
+async def e1rm_records_in_window(
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+) -> list[aiosqlite.Row]:
+    """Рекорды окна списком — тот же критерий, что у e1rm_record_count, но с
+    упражнением, лучшим подходом и прежним максимумом, и с правой границей.
+
+    Строка на упражнение, у которого лучший e1RM ВНУТРИ [start_date, end_date]
+    выше лучшего ДО start_date. Без прежнего максимума рекорда нет (первая
+    попытка движения — не рекорд, см. e1rm_record_count). Правая граница нужна
+    «Итогу недели» за прошлую неделю: подход, сделанный после неё, ей не
+    принадлежит. Лучший подход — тот, что дал максимум e1RM (при ничьей —
+    более ранний). Порядок — по приросту в процентах, самый заметный первым.
+
+    Колонки: exercise_id, display_name, e1rm, earlier, weight (как записал
+    атлет), reps.
+    """
+    e1rm = _e1rm_sql(formula)
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        "WITH scoped AS ("
+        f"  SELECT s.id AS sid, s.exercise_id AS ex, {day} AS d, {e1rm} AS e,"
+        "          s.weight AS weight, s.reps AS reps"
+        "   FROM sets s"
+        "   JOIN workout_blocks b ON b.id = s.block_id"
+        "   JOIN workouts w ON w.id = b.workout_id"
+        "   WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
+        "), earlier AS ("
+        "  SELECT ex, MAX(e) AS best FROM scoped WHERE d < ? GROUP BY ex"
+        "), inside AS ("
+        "  SELECT ex, e, weight, reps,"
+        "         ROW_NUMBER() OVER (PARTITION BY ex ORDER BY e DESC, sid) AS rn"
+        "  FROM scoped WHERE d >= ? AND d <= ?"
+        ") "
+        "SELECT i.ex AS exercise_id, x.display_name, i.e AS e1rm, er.best AS earlier,"
+        "       i.weight, i.reps "
+        "FROM inside i JOIN earlier er ON er.ex = i.ex JOIN exercises x ON x.id = i.ex "
+        "WHERE i.rn = 1 AND er.best IS NOT NULL AND er.best > 0 AND i.e > er.best "
+        "ORDER BY (i.e - er.best) / er.best DESC, x.display_name",
+        (user_id, start_date, start_date, end_date),
+    )
+    return await cur.fetchall()
+
+
+async def count_workouts_finished_after(
+    user_id: int, start_date: str, end_date: str, after: str, *, tz_offset: Optional[int] = None
+) -> int:
+    """Сколько тренировок окна [start_date, end_date] закрыто позже `after`
+    (момент по часам сервера, как finished_at). Нужно «Итогу недели»: разбор
+    тренера, написанный до вечерней тренировки, о ней не знает — экран
+    подписывает его как написанный раньше, а не выдаёт за полный."""
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM workouts "
+        f"WHERE user_id = ? AND status = 'finished' AND {day} >= ? AND {day} <= ? "
+        "AND finished_at > ?",
+        (user_id, start_date, end_date, after),
+    )
+    (n,) = await cur.fetchone()
+    return n
+
+
+async def last_trained_program_id(user_id: int) -> Optional[int]:
+    """Программа последней законченной тренировки, проведённой по дню программы,
+    — «текущая» программа атлета. Курсора «текущей программы» в базе нет
+    намеренно (см. next_program_day): что тренировал последним, то и текущее.
+    None — если по программе он не тренировался вовсе."""
+    cur = await conn().execute(
+        "SELECT r.program_id FROM workouts w "
+        "JOIN routines r ON r.id = w.routine_id "
+        "JOIN programs p ON p.id = r.program_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND p.user_id = ? "
+        "ORDER BY w.started_at DESC, w.id DESC LIMIT 1",
+        (user_id, user_id),
+    )
+    row = await cur.fetchone()
+    return row["program_id"] if row else None
 
 
 # ---------- blocks / block exercises ----------
@@ -9119,6 +9224,42 @@ async def prune_old_behaviour_digests(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
         cur = await conn().execute("DELETE FROM behaviour_digests WHERE day < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
+
+
+async def save_weekly_digest(user_id: int, week_start: str, lang: str, text: str) -> None:
+    """Запомнить воскресный разбор тренера за неделю (см. таблицу weekly_digests).
+
+    Перезапись по (атлет, неделя): разбор за неделю один, и если воскресный
+    слот сработал дважды (перезапуск джоба), на экране должен быть последний —
+    тот, что дошёл пушем."""
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO weekly_digests (user_id, week_start, lang, text, created_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, week_start) DO UPDATE SET lang = excluded.lang, "
+            "text = excluded.text, created_at = excluded.created_at",
+            (user_id, week_start, lang, text, now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_weekly_digest(user_id: int, week_start: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT user_id, week_start, lang, text, created_at FROM weekly_digests "
+        "WHERE user_id = ? AND week_start = ?",
+        (user_id, week_start),
+    )
+    return await cur.fetchone()
+
+
+async def prune_old_weekly_digests(retention_days: int) -> int:
+    """Выкинуть разборы недель старше retention_days (по понедельнику недели):
+    экран «Итог недели» открывают из свежего пуша, а не листают год назад."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM weekly_digests WHERE week_start < ?", (cutoff,))
         await conn().commit()
     return cur.rowcount
 
