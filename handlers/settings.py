@@ -11,6 +11,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 import account_deletion
 import achievement_sync
+import analytics
 import config
 import csv_export
 import db
@@ -54,6 +55,7 @@ async def show_settings(
         show_mcp=config.mcp_available(),
         lang=user["lang"],
         show_feedback=config.feedback_available(),
+        rep_range=analytics.user_rep_range(user),
     )
     # Заголовки блоков говорят самим текстом экрана — жирной строкой перед
     # каждой группой кнопок, в том же порядке, в каком идут кнопки ниже (см.
@@ -406,6 +408,39 @@ async def settings_progression(callback: CallbackQuery, state: FSMContext):
         callback.from_user.id, progression_hint_enabled=0 if user["progression_hint_enabled"] else 1
     )
     await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:rep_range")
+async def settings_rep_range(callback: CallbackQuery, state: FSMContext):
+    """Экран выбора диапазона повторов для подсказки «Цель»: пять пресетов
+    и объяснение, на что он влияет."""
+    user = await db.get_user(callback.from_user.id)
+    await ui.safe_edit(
+        callback,
+        i18n.t("settings.rep_range.screen"),
+        reply_markup=keyboards.rep_range_keyboard(analytics.user_rep_range(user)),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("settings:rep_range:"))
+async def settings_rep_range_set(callback: CallbackQuery, state: FSMContext):
+    try:
+        _, _, low, high = callback.data.split(":")
+        chosen = (int(low), int(high))
+    except ValueError:
+        chosen = None
+    if chosen not in analytics.REP_RANGE_PRESETS:
+        # Кнопка от старой версии экрана — просто показываем настройки заново.
+        await show_settings(callback, state)
+        return
+    await db.update_user(callback.from_user.id, rep_range_min=chosen[0], rep_range_max=chosen[1])
+    await show_settings(
+        callback, state,
+        alert=i18n.t("settings.rep_range.done", range=keyboards.format_rep_range(chosen)),
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "settings:card_detail")

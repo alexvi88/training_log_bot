@@ -518,6 +518,7 @@ def _logging_hint(
     reps_row: tuple[float, int] | None = None,
     show_format_hint: bool = False,
     reps_row_hint: str = "",
+    rep_range: tuple[int, int] | None = None,
 ) -> str:
     base = None
     if show_instruction:
@@ -619,6 +620,7 @@ def _logging_hint(
                 target=target,
                 kind=progression_kind,
                 is_deload=is_deload,
+                rep_range=rep_range,
             )
             if nudge is not None:
                 lines.append(nudge["text"])
@@ -777,6 +779,9 @@ async def _render_logging_screen(bot, state: FSMContext, user):
             await db.deload_week_for_workout(data["workout_id"])
             if last_session and not is_backfill else False
         ),
+        # Диапазон повторов из настроек: цель без схемы программы тянется к
+        # его верху, а не к общему 5–12.
+        rep_range=analytics.user_rep_range(user),
     )
     kb = keyboards.logging_keyboard(
         open_items, active, has_sets,

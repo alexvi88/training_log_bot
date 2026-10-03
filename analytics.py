@@ -423,6 +423,35 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
 REP_RANGE_MIN = 5
 REP_RANGE_MAX = 12
 
+# Диапазон по умолчанию — личная настройка атлета («🔢 Диапазон повторов» в
+# настройках бота и приложения; users.rep_range_min/max, NULL = 5–12). Только
+# эти пять пар и больше никаких: каждый пресет — осмысленная двойная
+# прогрессия под свою цель, а произвольные «7–9» превращали бы подсказку в
+# угадайку. Схема программы («3×6–12») и правило прогрессии по-прежнему
+# старше — настройка заменяет только догадку на случай, когда плана нет.
+REP_RANGE_PRESETS: tuple[tuple[int, int], ...] = (
+    (3, 6),
+    (5, 12),
+    (8, 12),
+    (8, 15),
+    (12, 20),
+)
+
+
+def user_rep_range(user: Any) -> tuple[int, int]:
+    """Диапазон по умолчанию у этого атлета: его пресет или 5–12.
+
+    `user` — строка users (sqlite Row или dict). Пара, которой нет среди
+    пресетов (ручная правка базы, колонки ещё нет), молча даёт 5–12: подсказка
+    не должна ломаться из-за настройки."""
+    try:
+        low, high = user["rep_range_min"], user["rep_range_max"]
+    except (KeyError, IndexError, TypeError):
+        return (REP_RANGE_MIN, REP_RANGE_MAX)
+    if (low, high) in REP_RANGE_PRESETS:
+        return (int(low), int(high))
+    return (REP_RANGE_MIN, REP_RANGE_MAX)
+
 # Целевой недельный объём на группу мышц, в рабочих подходах. Round numbers
 # rather than a citation: the dose-response literature usually quotes ~10
 # sets/week as the point where a group is trained *enough*, with more still
@@ -643,6 +672,7 @@ def suggest_progression(
     kind: str = "weight",
     today_sets: Optional[list[tuple[float, int]]] = None,
     last_rpes: Optional[list[Optional[float]]] = None,
+    default_range: Optional[tuple[int, int]] = None,
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
@@ -680,6 +710,10 @@ def suggest_progression(
     `today_sets`/`last_rpes` нужны только правилу top_set_backoff (см.
     suggest_top_set_backoff): там первый подход дня и следующие — разные
     цели, а прибавка к топу зависит от записанного RPE.
+
+    `default_range` — диапазон по умолчанию из настроек атлета
+    (user_rep_range); без него — REP_RANGE_MIN..REP_RANGE_MAX. Работает
+    только там, где нет ни схемы (`planned_reps`), ни правила с reps_top.
     """
     working = [(w, r) for w, r in last_sets if r > 0]
     if not working:
@@ -739,7 +773,7 @@ def suggest_progression(
     elif planned_range:
         top_of_range = planned_range[1]
     else:
-        top_of_range = REP_RANGE_MAX
+        top_of_range = (default_range or (REP_RANGE_MIN, REP_RANGE_MAX))[1]
     from_rule = rule_name == "double_progression" and bool(reps_top or rule_step)
 
     if reps_at_top >= top_of_range:
@@ -750,7 +784,11 @@ def suggest_progression(
             target_weight,
             _reps_holding_e1rm(
                 target_weight, top_weight, reps_at_top, formula,
-                rep_range=(planned_range[0], top_of_range) if planned_range else None,
+                rep_range=(
+                    (planned_range[0], top_of_range) if planned_range
+                    else (min(default_range[0], top_of_range), top_of_range) if default_range
+                    else None
+                ),
             ),
             from_weight=top_weight,
             from_reps=reps_at_top,

@@ -21,6 +21,7 @@ from starlette.routing import Route
 
 import account_deletion
 import achievement_sync
+import analytics
 import api_v1_common as common
 import config
 import db
@@ -69,6 +70,7 @@ _converting = db._unit_converting
 
 
 def _settings_json(user) -> dict[str, Any]:
+    rep_min, rep_max = analytics.user_rep_range(user)
     return {
         "unit": user["unit"],
         "lang": user["lang"],
@@ -89,6 +91,12 @@ def _settings_json(user) -> dict[str, Any]:
         # `ai_consent`, отдаём и то и другое.
         "ai_consent": bool(user["ai_consent_at"]),
         "ai_consent_at": user["ai_consent_at"],
+        # Диапазон повторов для подсказки «Цель» — всегда числами, даже когда
+        # атлет его не выбирал (тогда 5–12): приложению не надо знать, какой
+        # диапазон у сервера по умолчанию. Сборки без этого поля его не читают;
+        # приложение, не нашедшее поля (старый сервер), строку настроек прячет.
+        "rep_range_min": rep_min,
+        "rep_range_max": rep_max,
     }
 
 
@@ -296,6 +304,22 @@ async def update_settings(request: Request) -> JSONResponse:
                 raise ApiError(400, "bad_request", f"{field} must be bool")
             bool_updates[field] = 1 if value else 0
 
+    # Диапазон повторов — только парой и только один из пресетов
+    # (analytics.REP_RANGE_PRESETS), как в пикере бота. Половина пары — 400:
+    # «поменяй только верх» дало бы диапазон, которого нет ни на одном экране.
+    new_rep_range: Optional[tuple[int, int]] = None
+    if "rep_range_min" in body or "rep_range_max" in body:
+        pair = (body.get("rep_range_min"), body.get("rep_range_max"))
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in pair) or (
+            pair not in analytics.REP_RANGE_PRESETS
+        ):
+            raise ApiError(
+                400, "bad_request",
+                f"rep_range_min/rep_range_max must be one of {analytics.REP_RANGE_PRESETS}",
+                key="api.error.rep_range",
+            )
+        new_rep_range = (int(pair[0]), int(pair[1]))
+
     new_consent: Optional[bool] = None
     if "ai_consent" in body:
         new_consent = body["ai_consent"]
@@ -334,6 +358,8 @@ async def update_settings(request: Request) -> JSONResponse:
         plain_updates["tz_offset"] = device_tz
     if new_formula is not None:
         plain_updates["e1rm_formula"] = new_formula
+    if new_rep_range is not None:
+        plain_updates["rep_range_min"], plain_updates["rep_range_max"] = new_rep_range
     if new_consent is True and not user["ai_consent_at"]:
         # Повторное «Согласен» метку не двигает: важен первый момент, с
         # которого данные начали уходить модели, а не последний тап.

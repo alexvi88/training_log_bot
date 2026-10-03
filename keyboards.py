@@ -12,6 +12,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import analytics
 import formatting
 import i18n
 import seed_data
@@ -1713,6 +1714,7 @@ def settings_keyboard(
     show_mcp: bool = False,
     lang: str = "ru",
     show_feedback: bool = False,
+    rep_range: Optional[tuple[int, int]] = None,
 ) -> InlineKeyboardMarkup:
     """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
     заголовки живут в тексте экрана (settings.screen.section.*, см.
@@ -1755,6 +1757,16 @@ def settings_keyboard(
         i18n.t("btn.progression_on") if progression_enabled else i18n.t("btn.progression_off")
     )
     b.button(text=progression_label, callback_data="settings:progression")
+    # Диапазон повторов действует только на подсказку «Цель» — пока подсказки
+    # выключены, кнопке нечего настраивать, и её нет (как и в приложении).
+    if progression_enabled:
+        b.button(
+            text=i18n.t(
+                "btn.rep_range",
+                range=format_rep_range(rep_range or (analytics.REP_RANGE_MIN, analytics.REP_RANGE_MAX)),
+            ),
+            callback_data="settings:rep_range",
+        )
     pushes_label = i18n.t("btn.pushes_on") if pushes_enabled else i18n.t("btn.pushes_off")
     b.button(text=pushes_label, callback_data="settings:pushes")
     ai_label = (
@@ -1805,6 +1817,37 @@ def settings_keyboard(
     # размер на хвост, так что явно перечислять единицы для каждой из
     # оставшихся кнопок не нужно.
     b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+# Подписи пресетов диапазона повторов — ключи каталога, а не готовый текст:
+# строка резолвится на рендере, на языке того, кто смотрит. У трёх «средних»
+# подписи нет — цифр хватает.
+REP_RANGE_PRESET_LABEL_KEYS = {
+    (3, 6): "settings.rep_range.preset.strength",
+    (5, 12): "settings.rep_range.preset.default",
+    (12, 20): "settings.rep_range.preset.endurance",
+}
+
+
+def format_rep_range(rep_range: tuple[int, int]) -> str:
+    return f"{rep_range[0]}–{rep_range[1]}"
+
+
+def rep_range_keyboard(current: tuple[int, int]) -> InlineKeyboardMarkup:
+    """Экран «🔢 Диапазон повторов»: пять пресетов (analytics.REP_RANGE_PRESETS),
+    галочка у выбранного, и «Назад» в настройки."""
+    b = InlineKeyboardBuilder()
+    for low, high in analytics.REP_RANGE_PRESETS:
+        text = format_rep_range((low, high))
+        label_key = REP_RANGE_PRESET_LABEL_KEYS.get((low, high))
+        if label_key:
+            text = f"{text} · {i18n.t(label_key)}"
+        if (low, high) == tuple(current):
+            text = f"✓ {text}"
+        b.button(text=text, callback_data=f"settings:rep_range:{low}:{high}")
+    b.button(text=i18n.t("btn.back"), callback_data="settings:menu")
+    b.adjust(1)
     return b.as_markup()
 
 
