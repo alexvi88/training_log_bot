@@ -133,7 +133,7 @@ async def test_single_session_shows_hint_instead_of_a_chart(fresh_db, user_id):
     text, png, _ = await history._render_progress_view(ex_id, user, 20)
 
     assert png is None
-    assert "Второй заход в это упражнение — и нарисую график" in text
+    assert "Нарисую график после второй тренировки с этим упражнением" in text
 
 
 async def test_prog_change_period_all_shows_every_session(fresh_db, user_id):
