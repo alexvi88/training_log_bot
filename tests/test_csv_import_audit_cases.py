@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+import ai_limits
 import ai_trainer
 import api_v1
 import i18n
@@ -318,7 +319,11 @@ HEVY_CSV = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("consent", [False, True])
-async def test_import_without_ai_consent_skips_the_model_silently(fresh_db, monkeypatch, consent):
+async def test_import_asks_the_model_with_or_without_ai_consent(fresh_db, monkeypatch, consent):
+    """Сопоставление незнакомого имени с каталогом не зависит от согласия на
+    передачу данных AI: модели уходят только названия упражнений (решение
+    владельца — без этого импорт из Hevy заводил половину упражнений без
+    фото и в «Другом»)."""
     db = fresh_db
     calls: list[list[str]] = []
 
@@ -327,6 +332,10 @@ async def test_import_without_ai_consent_skips_the_model_silently(fresh_db, monk
         return {"BP incl (Barbell)": "Жим штанги на наклонной скамье"}
 
     monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    # Ответ модели кэшируется по (атлет, имя): у обоих прогонов один и тот
+    # же атлет, и без сброса второй не дошёл бы до модели.
+    csv_import._MODEL_MATCH_CACHE.clear()
     client = await _client(db, consent=consent)
 
     resp = await client.post("/import/csv", json={"csv": HEVY_CSV}, headers=CONSENT_HEADERS)
@@ -336,16 +345,38 @@ async def test_import_without_ai_consent_skips_the_model_silently(fresh_db, monk
     # Точное имя каталога — без модели в любом случае, и с группой мышц.
     catalog = await db.find_exercise_by_name(111, "Жим штанги лёжа")
     assert catalog["primary_group_id"] is not None
+    # Модели ушло только незнакомое имя — не точное имя каталога.
+    assert calls == [["BP incl (Barbell)"]]
     bench = await db.find_exercise_by_name(111, "BP incl (Barbell)")
-    if consent:
-        assert calls == [["BP incl (Barbell)"]]
-        assert bench["original_name"] == "Жим штанги на наклонной скамье"
-    else:
-        assert calls == []
-        # Заведено как есть, под именем из файла, — тренировка не потеряна.
-        assert bench is not None
-        # Без группы упражнения не бывает — ложится в «Другое».
-        assert bench["primary_group_id"] == await db.other_muscle_group_id()
+    assert bench["original_name"] == "Жим штанги на наклонной скамье"
+
+
+@pytest.mark.asyncio
+async def test_import_skips_the_model_on_hard_stop(fresh_db, monkeypatch):
+    """В день HARD-стопа по деньгам модель не зовётся: имя заводится как
+    есть, в «Другом», и тренировка не теряется."""
+    db = fresh_db
+    calls: list[list[str]] = []
+
+    async def fake_match(uid, names):
+        calls.append(list(names))
+        return {}
+
+    async def blocked():
+        return object()
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+    monkeypatch.setattr(ai_limits, "hard_stop_block", blocked)
+    client = await _client(db)
+
+    resp = await client.post("/import/csv", json={"csv": HEVY_CSV}, headers=CONSENT_HEADERS)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["workouts_imported"] == 1
+    assert calls == []
+    bench = await db.find_exercise_by_name(111, "BP incl (Barbell)")
+    assert bench is not None
+    assert bench["primary_group_id"] == await db.other_muscle_group_id()
 
 
 @pytest.mark.asyncio
