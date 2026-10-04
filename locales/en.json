@@ -1110,7 +1110,7 @@
   "program.weekly_sets": "Sets per week: {groups}",
   "progress.e1rm_delta": "e1RM: {delta} {since}",
   "progress.e1rm_hint": "ℹ️ <i>e1RM — your estimated one-rep max: the weight you could probably lift once (I count it from your weights, reps and RPE — @9 means you left one rep in the tank).</i>",
-  "progress.need_second_session": "Log this exercise once more and I'll draw the chart",
+  "progress.need_second_session": "I'll draw the chart after your second workout with this exercise",
   "progress.no_history": "No workouts with this exercise yet — log one and its history will show up here.",
   "progress.record_e1rm": "Record: {set} · e1RM {value}{u}",
   "progress.record_reps": "Best reps in a set: {n}",
