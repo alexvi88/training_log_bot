@@ -1066,11 +1066,11 @@ class NameMatch:
     Обычный класс, а не dataclass со строковыми полями по умолчанию, — чтобы
     ничего не вычислялось при импорте (см. tests/test_no_frozen_language.py)."""
 
-    __slots__ = ("exercise_id", "template_name", "candidates", "exact", "needs_choice", "via")
+    __slots__ = ("exercise_id", "template_name", "candidates", "exact", "needs_choice", "via", "group_name")
 
     def __init__(
         self, exercise_id=None, template_name=None, candidates=None, exact=False,
-        needs_choice=False, via=None,
+        needs_choice=False, via=None, group_name=None,
     ):
         self.exercise_id: Optional[int] = exercise_id
         self.template_name: Optional[str] = template_name
@@ -1078,6 +1078,11 @@ class NameMatch:
         self.exact: bool = exact
         self.needs_choice: bool = needs_choice
         self.via: Optional[str] = via
+        # Только у нового как есть: группа мышц (русская идентичность
+        # встроенной группы), которую подсказала модель, когда упражнение
+        # каталога она точно назвать не смогла (guess_groups_with_model).
+        # Без неё новое ложится в «Другое».
+        self.group_name: Optional[str] = group_name
 
 
 # Сколько похожих своих упражнений показывать на выбор при неоднозначности.
@@ -1210,6 +1215,18 @@ async def match_exercise_names(
     own_texts = {r["id"]: _name_texts(r) for r in own}
     identity_owner = await _identity_owners(user_id)
     exact_templates = await db.find_global_templates_by_names(remaining)
+    # Стандартные названия Hevy, которые каталог называет иначе («Lat
+    # Pulldown (Cable)» → «Тяга верхнего блока»), — словарём, раньше модели:
+    # бесплатно и одинаково при каждом импорте (seed_data.HEVY_CATALOG_ALIASES).
+    alias_targets = {
+        n: t for n in remaining
+        if n not in exact_templates and (t := seed_data.hevy_catalog_identity(n))
+    }
+    if alias_targets:
+        alias_rows = await db.find_global_templates_by_names(list(set(alias_targets.values())))
+        for n, t in alias_targets.items():
+            if t in alias_rows:
+                exact_templates[n] = alias_rows[t]
     catalog = None
     plain: list[str] = []
 
@@ -1302,9 +1319,7 @@ async def refine_with_model(
         while len(_MODEL_MATCH_CACHE) > _MODEL_MATCH_CACHE_SIZE:
             _MODEL_MATCH_CACHE.popitem(last=False)
     found = {n: c for n, c in found.items() if c}
-    if not found:
-        return
-    templates = await db.find_global_templates_by_names(list(set(found.values())))
+    templates = await db.find_global_templates_by_names(list(set(found.values()))) if found else {}
     if identity_owner is None:
         identity_owner = await _identity_owners(user_id)
     for name, catalog_name in found.items():
@@ -1316,6 +1331,35 @@ async def refine_with_model(
             matches[name] = NameMatch(exercise_id=owner, candidates=[owner], via="model")
         else:
             matches[name] = NameMatch(template_name=template["name"], via="model")
+    # Что модель упражнению каталога не привязала (не уверена: «жим гантелей»
+    # без «сидя»/«стоя»), остаётся новым как есть — но хотя бы в своей группе
+    # мышц, а не в «Другом». Чужую историю это не смешивает: упражнение
+    # отдельное, у него нет фото и техники каталога, только группа.
+    still_new = [n for n in names if matches.get(n) is not None and matches[n].via == "new"]
+    if still_new:
+        for name, group in (await guess_groups_with_model(user_id, still_new)).items():
+            matches[name] = NameMatch(via="new", group_name=group)
+
+
+# Ответы модели «имя → группа мышц» — тот же смысл, что у _MODEL_MATCH_CACHE.
+_MODEL_GROUP_CACHE: "collections.OrderedDict[tuple[int, str], Optional[str]]" = collections.OrderedDict()
+
+
+async def guess_groups_with_model(user_id: int, names: list[str]) -> dict[str, str]:
+    """Имя нового упражнения → встроенная группа мышц (русская идентичность),
+    если модель в ней уверена. Модель недоступна — пусто, упражнения лягут в
+    «Другое», как раньше."""
+    ask = [n for n in names if (user_id, n) not in _MODEL_GROUP_CACHE]
+    found = {n: _MODEL_GROUP_CACHE[(user_id, n)] for n in names if (user_id, n) in _MODEL_GROUP_CACHE}
+    if ask:
+        answers = await ai_trainer.guess_exercise_groups(user_id, ask)
+        for name in ask:
+            found[name] = answers.get(name)
+            if ai_trainer.is_configured():
+                _MODEL_GROUP_CACHE[(user_id, name)] = answers.get(name)
+        while len(_MODEL_GROUP_CACHE) > _MODEL_MATCH_CACHE_SIZE:
+            _MODEL_GROUP_CACHE.popitem(last=False)
+    return {n: g for n, g in found.items() if g}
 
 
 def default_decisions(matches: dict[str, NameMatch]) -> dict[str, dict]:
@@ -1330,6 +1374,8 @@ def default_decisions(matches: dict[str, NameMatch]) -> dict[str, dict]:
             out[name] = {"kind": "existing", "id": m.exercise_id}
         elif m.template_name:
             out[name] = {"kind": "template", "template": m.template_name}
+        elif m.group_name:
+            out[name] = {"kind": "new", "group": m.group_name}
         else:
             out[name] = {"kind": "new"}
     return out
@@ -1523,6 +1569,8 @@ async def materialize_decisions(
                     by_template[key] = ex_id
         if ex_id is None:
             group_id = decision.get("group_id")
+            if group_id is None and decision.get("group"):
+                group_id = await db.builtin_muscle_group_id(decision["group"])
             ex_id = await created(name, db.create_exercise(user_id, name, group_id))
         resolved[name] = ex_id
         if decision.get("chosen"):

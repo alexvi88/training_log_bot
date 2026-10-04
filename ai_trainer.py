@@ -3250,6 +3250,102 @@ async def _match_alias_batch(
     return result
 
 
+_EXERCISE_GROUP_SYSTEM_PROMPT = (
+    # Классификатор, как и _EXERCISE_ALIAS_SYSTEM_PROMPT: ответ — строго JSON,
+    # group — строка ИЗ присланного списка групп (русская идентичность), а не
+    # текст для человека.
+    "Тебе присылают названия упражнений, которые человек принёс из другого "
+    "приложения (Hevy, Strong и т.п.), и список групп мышц. Для каждого "
+    "названия верни основную группу мышц, которую это упражнение нагружает, — "
+    "ТОЧНУЮ строку из присланного списка. Если упражнение незнакомое, это "
+    "кардио, растяжка или основная группа неочевидна — не включай его в ответ."
+)
+
+
+def _exercise_group_schema(groups: list[str]) -> dict:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exercise_groups",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "groups": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "import_name": {"type": "string"},
+                                "group": {"type": "string", "enum": groups},
+                            },
+                            "required": ["import_name", "group"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["groups"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+async def guess_exercise_groups(user_id: int, names: list[str]) -> dict[str, str]:
+    """Названия упражнений, которые не привязались ни к одному шаблону
+    каталога, → встроенная группа мышц (русская идентичность: «Плечи»),
+    если модель в ней уверена. Нужна, чтобы новое упражнение из импорта легло
+    в свою группу, а не в «Другое», — без привязки к чужому упражнению.
+
+    Модель видит только названия и список групп. Платный системный шаг без
+    личной квоты, как match_exercise_names_to_catalog: HARD-стоп по деньгам,
+    paid_call. Модель недоступна или ответ не разобрать — пусто."""
+    if not names or not is_configured():
+        return {}
+    groups = [name for name, _emoji, _order in seed_data.MUSCLE_GROUP_PRESETS if name != seed_data.OTHER_GROUP_NAME]
+    result: dict[str, str] = {}
+    rest = list(dict.fromkeys(names))
+    for i in range(0, len(rest), EXERCISE_ALIAS_BATCH):
+        batch = rest[i:i + EXERCISE_ALIAS_BATCH]
+        if await ai_limits.hard_stop_block() is not None:
+            return result
+        try:
+            client = _get_client()
+            response = await paid_call(
+                user_id, None,
+                lambda batch=batch, client=client: client.chat.completions.create(
+                    model=config.GROK_MODEL,
+                    max_tokens=1500,
+                    extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                    response_format=_exercise_group_schema(groups),
+                    messages=[
+                        {"role": "system", "content": _EXERCISE_GROUP_SYSTEM_PROMPT},
+                        {
+                            "role": "user",
+                            "content": json.dumps({"groups": groups, "import_names": batch}, ensure_ascii=False),
+                        },
+                    ],
+                ),
+            )
+            data = _extract_json_object(response.choices[0].message.content or "")
+        except Exception:
+            logger.exception("exercise group guessing failed for user %s", user_id)
+            continue
+        raw = data.get("groups") if isinstance(data, dict) else None
+        if not isinstance(raw, list):
+            continue
+        names_set, groups_set = set(batch), set(groups)
+        for pair in raw:
+            if not isinstance(pair, dict):
+                continue
+            imp, grp = pair.get("import_name"), pair.get("group")
+            # Как у сопоставления: имя не из запроса или группа не из списка —
+            # не ответ, а выдумка.
+            if isinstance(imp, str) and isinstance(grp, str) and imp in names_set and grp in groups_set:
+                result[imp] = grp
+    return result
+
+
 def _fmt_set(row: Any) -> str:
     """'100x8' or, when RPE was logged, '100x8@9' — as the model sees a set."""
     base = f"{row['weight']:g}x{row['reps']}"

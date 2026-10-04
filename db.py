@@ -1927,6 +1927,17 @@ async def _move_ungrouped_exercises_to_other() -> None:
     await _conn.commit()
 
 
+async def builtin_muscle_group_id(name: str) -> Optional[int]:
+    """Id встроенной группы мышц по её русской идентичности («Плечи») или None."""
+    cur = await conn().execute(
+        "SELECT id FROM muscle_groups WHERE user_id IS NULL AND name = ? "
+        "ORDER BY is_archived, id LIMIT 1",
+        (name,),
+    )
+    row = await cur.fetchone()
+    return row["id"] if row else None
+
+
 async def other_muscle_group_id() -> Optional[int]:
     """Id встроенной группы «Другое» — куда падает упражнение без группы."""
     cur = await conn().execute(
