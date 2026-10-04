@@ -290,14 +290,14 @@ def fake_matcher(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_import_without_consent_skips_ai_matching(fresh_db, client_factory, fake_matcher):
+async def test_import_without_consent_still_uses_ai_matching(fresh_db, client_factory, fake_matcher):
+    """Сопоставление имён с каталогом согласия не требует: модели уходят
+    только названия упражнений, а не дневник (см. api_v1_import._use_model)."""
     client = await _linked_client(fresh_db, client_factory)
     resp = await client.post("/import/csv", json={"csv": CSV_UNKNOWN_EXERCISE}, headers=HEADER)
     assert resp.status_code == 200, resp.text
     assert resp.json()["workouts_imported"] == 1
-    assert fake_matcher == []
-    # Имя из файла заведено как есть — тренировка не потерялась.
-    assert await fresh_db.find_exercise_by_name(111, "Жим Арнольда сидя") is not None
+    assert fake_matcher == [["Жим Арнольда сидя"]]
 
 
 @pytest.mark.asyncio
