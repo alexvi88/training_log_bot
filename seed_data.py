@@ -209,6 +209,81 @@ def progression_kind_for_name(name: str | None) -> str:
 
 
 # (group_name, exercise_name) — group_name must match a MUSCLE_GROUP_PRESETS name.
+# Стандартные названия упражнений Hevy → идентичность шаблона каталога.
+# Импорт сверяет имя из файла с этим словарём раньше модели
+# (handlers.csv_import.match_exercise_names): бесплатно, одинаково при каждом
+# импорте и без ошибок угадывания. Здесь только пары, где Hevy однозначно
+# называет то же движение, снаряд и позицию, что и шаблон; где Hevy молчит о
+# позиции, а каталог её различает, выбор сделан один раз руками — «Shoulder
+# Press (Dumbbell)» в Hevy сидя (решение владельца). Ключи сравниваются
+# без регистра и пробелов по краям (`hevy_catalog_identity`); каждая цель
+# обязана быть шаблоном каталога — это держит тест.
+HEVY_CATALOG_ALIASES = {
+    "Bench Press (Barbell)": "Жим штанги лёжа",
+    "Bench Press (Dumbbell)": "Жим гантелей лёжа",
+    "Incline Bench Press (Barbell)": "Жим штанги на наклонной скамье",
+    "Incline Bench Press (Dumbbell)": "Жим гантелей на наклонной скамье",
+    "Decline Bench Press (Barbell)": "Жим штанги на наклонной скамье вниз головой",
+    "Bench Press (Smith Machine)": "Жим лёжа в Смите",
+    "Bench Press - Close Grip (Barbell)": "Жим штанги узким хватом лёжа",
+    "Chest Press (Machine)": "Жим в тренажёре",
+    "Chest Fly (Dumbbell)": "Разведение гантелей лёжа",
+    "Butterfly (Pec Deck)": "Сведение рук в тренажёре «бабочка»",
+    "Chest Dip": "Отжимания на брусьях",
+    "Triceps Dip": "Отжимания на брусьях на трицепс",
+    "Shoulder Press (Dumbbell)": "Жим гантелей сидя",
+    "Seated Shoulder Press (Machine)": "Жим в тренажёре на плечи",
+    "Overhead Press (Barbell)": "Жим штанги стоя",
+    "Seated Overhead Press (Barbell)": "Жим штанги сидя",
+    "Arnold Press (Dumbbell)": "Жим Арнольда",
+    "Lateral Raise (Dumbbell)": "Разведение гантелей в стороны",
+    "Lateral Raise (Cable)": "Махи в кроссовере",
+    "Front Raise (Dumbbell)": "Подъём гантелей перед собой",
+    "Rear Delt Reverse Fly (Dumbbell)": "Разведение гантелей в наклоне",
+    "Rear Delt Reverse Fly (Machine)": "Обратные разведения в тренажёре",
+    "Upright Row (Barbell)": "Тяга штанги к подбородку",
+    "Lat Pulldown (Cable)": "Тяга верхнего блока",
+    "Straight Arm Lat Pulldown (Cable)": "Пулловер на верхнем блоке",
+    "Pull Up": "Подтягивания",
+    "Chin Up": "Подтягивания обратным хватом",
+    "Bent Over Row (Barbell)": "Тяга штанги в наклоне",
+    "Dumbbell Row": "Тяга гантели в наклоне",
+    "Seated Cable Row - V Grip (Cable)": "Тяга нижнего блока",
+    "T Bar Row": "Тяга Т-грифа",
+    "Deadlift (Barbell)": "Становая тяга",
+    "Sumo Deadlift": "Становая тяга сумо",
+    "Romanian Deadlift (Barbell)": "Румынская тяга",
+    "Back Extension (Hyperextension)": "Гиперэкстензия",
+    "Squat (Barbell)": "Присед со штангой",
+    "Front Squat": "Фронтальный присед",
+    "Goblet Squat": "Присед с гирей у груди",
+    "Hack Squat (Machine)": "Гак-присед",
+    "Leg Press (Machine)": "Жим ногами",
+    "Bulgarian Split Squat": "Болгарские выпады",
+    "Leg Extension (Machine)": "Разгибание ног в тренажёре",
+    "Lying Leg Curl (Machine)": "Сгибание ног в тренажёре",
+    "Seated Leg Curl (Machine)": "Сгибание ног сидя в тренажёре",
+    "Hip Thrust (Barbell)": "Хип-траст со штангой",
+    "Seated Calf Raise": "Подъём на носки сидя",
+    "Bicep Curl (Barbell)": "Подъём штанги на бицепс",
+    "Bicep Curl (Dumbbell)": "Подъём гантелей на бицепс",
+    "EZ Bar Biceps Curl": "Подъём EZ-штанги на бицепс",
+    "Hammer Curl (Dumbbell)": "Подъём гантелей на бицепс молотом",
+    "Preacher Curl (Barbell)": "Подъём на бицепс на скамье Скотта",
+    "Triceps Pushdown": "Разгибание на трицепс на блоке",
+    "Triceps Rope Pushdown": "Разгибание на трицепс на блоке с канатом",
+    "Overhead Triceps Extension (Cable)": "Разгибание на трицепс из-за головы на блоке",
+    "Skullcrusher (Dumbbell)": "Французский жим с гантелями",
+}
+
+_HEVY_ALIASES_BY_FOLD = {name.strip().lower(): target for name, target in HEVY_CATALOG_ALIASES.items()}
+
+
+def hevy_catalog_identity(name: str) -> "str | None":
+    """Идентичность шаблона каталога для стандартного названия Hevy или None."""
+    return _HEVY_ALIASES_BY_FOLD.get((name or "").strip().lower())
+
+
 EXERCISE_TEMPLATES = [
     # ---------- Грудь ----------
     ("Грудь", "Жим штанги лёжа"),

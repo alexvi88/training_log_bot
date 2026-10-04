@@ -330,6 +330,8 @@ async def _validated_mapping(body: dict[str, Any], user_id: int) -> dict[str, in
 def _new_decision(match) -> dict:
     if match.template_name:
         return {"kind": "template", "template": match.template_name}
+    if match.group_name:
+        return {"kind": "new", "group": match.group_name}
     return {"kind": "new"}
 
 

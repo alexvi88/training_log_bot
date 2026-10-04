@@ -443,3 +443,83 @@ async def test_rest_rejects_future_iso_date_in_the_users_language(fresh_db):
     assert body["error"] == "invalid_csv"
     with i18n.use_lang("en"):
         assert i18n.t("input.date_in_future") in body["message"]
+
+
+# ---------- Словарь названий Hevy и запасная группа мышц ----------
+
+
+def test_every_hevy_alias_points_to_a_catalog_template():
+    """Цель каждой пары словаря — живой шаблон каталога: опечатка в
+    идентичности молча превратила бы пару в «новое как есть»."""
+    import seed_data
+
+    identities = {name for _group, name in seed_data.EXERCISE_TEMPLATES}
+    missing = sorted(t for t in seed_data.HEVY_CATALOG_ALIASES.values() if t not in identities)
+    assert missing == []
+    assert seed_data.hevy_catalog_identity("  shoulder press (dumbbell) ") == "Жим гантелей сидя"
+    assert seed_data.hevy_catalog_identity("Something Else") is None
+
+
+HEVY_ALIAS_CSV = (
+    "title,start_time,end_time,description,exercise_title,superset_id,exercise_notes,"
+    "set_index,set_type,weight_kg,reps,distance_km,duration_seconds,rpe\n"
+    'A,"7 Aug 2026, 08:27",,,Shoulder Press (Dumbbell),,,0,normal,20,10,,,\n'
+    'A,"7 Aug 2026, 08:27",,,Odd Press Variation (Dumbbell),,,1,normal,15,10,,,\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_hevy_alias_binds_without_model_and_unmatched_gets_a_group(fresh_db, monkeypatch):
+    """«Shoulder Press (Dumbbell)» ложится в «Жим гантелей сидя» словарём —
+    модель о нём не спрашивают. Имя, которое модель не привязала, заводится
+    отдельным упражнением, но в группе, которую она назвала, а не в «Другом»."""
+    db = fresh_db
+    matched: list[list[str]] = []
+    grouped: list[list[str]] = []
+
+    async def fake_match(uid, names):
+        matched.append(list(names))
+        return {}
+
+    async def fake_groups(uid, names):
+        grouped.append(list(names))
+        return {"Odd Press Variation (Dumbbell)": "Плечи"}
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+    monkeypatch.setattr(ai_trainer, "guess_exercise_groups", fake_groups)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    csv_import._MODEL_MATCH_CACHE.clear()
+    csv_import._MODEL_GROUP_CACHE.clear()
+    client = await _client(db)
+
+    resp = await client.post("/import/csv", json={"csv": HEVY_ALIAS_CSV}, headers=CONSENT_HEADERS)
+
+    assert resp.status_code == 200, resp.text
+    assert matched == [["Odd Press Variation (Dumbbell)"]]
+    assert grouped == [["Odd Press Variation (Dumbbell)"]]
+    press = await db.find_exercise_by_name(111, "Shoulder Press (Dumbbell)")
+    assert press["original_name"] == "Жим гантелей сидя"
+    odd = await db.find_exercise_by_name(111, "Odd Press Variation (Dumbbell)")
+    assert odd["original_name"] in (None, "Odd Press Variation (Dumbbell)")
+    assert odd["primary_group_id"] == await db.builtin_muscle_group_id("Плечи")
+
+
+@pytest.mark.asyncio
+async def test_unmatched_without_group_answer_still_lands_in_other(fresh_db, monkeypatch):
+    db = fresh_db
+
+    async def nothing(uid, names):
+        return {}
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", nothing)
+    monkeypatch.setattr(ai_trainer, "guess_exercise_groups", nothing)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    csv_import._MODEL_MATCH_CACHE.clear()
+    csv_import._MODEL_GROUP_CACHE.clear()
+    client = await _client(db)
+
+    resp = await client.post("/import/csv", json={"csv": HEVY_ALIAS_CSV}, headers=CONSENT_HEADERS)
+
+    assert resp.status_code == 200, resp.text
+    odd = await db.find_exercise_by_name(111, "Odd Press Variation (Dumbbell)")
+    assert odd["primary_group_id"] == await db.other_muscle_group_id()
