@@ -2165,3 +2165,12 @@ async def test_prompt_replaces_pullups_for_beginners():
     assert "Дома без блока" in prompt
     catalog = {name for _, name in seed_data.EXERCISE_TEMPLATES}
     assert "Тяга верхнего блока" in catalog
+
+
+async def test_workout_comment_does_not_argue_with_imaginary_objection():
+    """Живой комментарий: «Силовой жим на пятёрки-семёрки здесь в тему, не
+    цепляйся» под жимом 120×7. Человек ничего не спрашивал — тренер спорил сам
+    с собой. Такие фразы-успокоения про повторы запрещены прямо."""
+    prompt = ai_trainer.WORKOUT_COMMENT_SYSTEM_PROMPT
+    assert "не комментируй вовсе" in prompt
+    assert "«не цепляйся»" in prompt
