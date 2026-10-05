@@ -128,8 +128,8 @@ async def test_second_login_same_user_new_token_no_reseed(fresh_db):
     second = (await _login(client, lang="ru")).json()
     assert second["user_id"] == first["user_id"]
     assert second["token"] != first["token"]
-    # язык существующего аккаунта не переписывается
-    assert second["lang"] == "en"
+    # язык демо-аккаунта на каждом входе — из запроса
+    assert second["lang"] == "ru"
     assert await fresh_db.count_workouts(first["user_id"]) == count
 
 
@@ -256,3 +256,43 @@ async def test_walk_pair_alone_enables_login(fresh_db, monkeypatch):
     # пустой логин ревьюера с пустым паролем не впускает
     empty = await client.post("/auth/password", json={"username": "", "password": ""})
     assert empty.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_every_login_sets_lang_of_existing_demo_account(fresh_db):
+    """Аккаунт заведён русским — англоязычный ревьюер получает английский."""
+    client = _client()
+    first = await _login(client, lang="ru")
+    assert first.json()["lang"] == "ru"
+    uid = first.json()["user_id"]
+
+    again = await _login(client, lang="en-US")
+    assert again.status_code == 200
+    assert again.json()["user_id"] == uid and again.json()["lang"] == "en"
+    assert (await fresh_db.get_user(uid))["lang"] == "en"
+
+    # Без поля lang — Accept-Language.
+    by_header = await client.post(
+        "/auth/password", json={"username": USERNAME, "password": PASSWORD},
+        headers={"Accept-Language": "ru-RU,ru;q=0.9"},
+    )
+    assert by_header.json()["lang"] == "ru"
+    # Совсем без сигнала язык не трогаем.
+    silent = await _login(client)
+    assert silent.json()["lang"] == "ru"
+
+
+@pytest.mark.asyncio
+async def test_lang_sync_does_not_touch_ordinary_accounts(fresh_db):
+    user = await fresh_db.create_app_only_user(language_code="ru")
+    other = await _login(_client(), lang="en")
+    assert other.json()["user_id"] != user["telegram_id"]
+    assert (await fresh_db.get_user(user["telegram_id"]))["lang"] == "ru"
+
+
+@pytest.mark.asyncio
+async def test_password_and_login_tolerate_copy_paste_whitespace(fresh_db):
+    resp = await _client().post(
+        "/auth/password", json={"username": f"  {USERNAME}\n", "password": f" {PASSWORD}\r\n"}
+    )
+    assert resp.status_code == 200, resp.text

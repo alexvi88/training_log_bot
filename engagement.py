@@ -59,6 +59,7 @@ import i18n
 import keyboards
 import push_ios
 import push_texts
+import timeutil
 
 logger = logging.getLogger(__name__)
 
@@ -816,7 +817,7 @@ async def _maybe_send_admin_funnel_digest(bot: Bot) -> None:
 
 
 def _seconds_until_next_hour() -> float:
-    now = dt.datetime.now()
+    now = timeutil.utc_now()
     nxt = (now + dt.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     return (nxt - now).total_seconds()
 

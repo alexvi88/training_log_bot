@@ -75,3 +75,10 @@ def logged_at_for_date(date: Optional[dt.date], tz_offset: int = 0) -> Optional[
     if date is None:
         return None
     return backdated_moment(date, tz_offset)
+
+
+def utc_now() -> dt.datetime:
+    """Текущий момент по UTC как naive datetime — формат, в котором сервер пишет
+    метки в базу (db.now_iso). `dt.datetime.now()` — часы пояса процесса, и при
+    любом TZ, кроме UTC, метки уезжали от клиентских."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)

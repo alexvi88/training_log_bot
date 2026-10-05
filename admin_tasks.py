@@ -17,6 +17,7 @@ import announcements
 import config
 import db
 import formatting
+import timeutil
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ PUSH_RETENTION_DAYS = 90
 
 
 def _seconds_until_next_run(hour: int) -> float:
-    now = dt.datetime.now()
+    now = timeutil.utc_now()
     target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
     if target <= now:
         target += dt.timedelta(days=1)
@@ -160,7 +161,7 @@ def _latest_backup_age_hours() -> Optional[float]:
     newest = max(
         os.path.getmtime(os.path.join(backup_dir, f)) for f in files
     )
-    return (dt.datetime.now().timestamp() - newest) / 3600
+    return (timeutil.utc_now().timestamp() - newest) / 3600
 
 
 async def run_backup_staleness_check(bot: Bot) -> None:
@@ -460,7 +461,7 @@ async def _run_retention_cleanup() -> None:
         keep_categories=tuple(ann.key for ann in announcements.ANNOUNCEMENTS),
     )
     cutoff = (
-        dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
+        timeutil.utc_now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")
     await db.delete_shared_items_older_than(cutoff)
 

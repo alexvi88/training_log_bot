@@ -218,9 +218,28 @@ async def test_finish_rejects_bad_finished_at(fresh_db, client_factory):
     await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 80, "reps": 8})
     before = await client.post(f"/workouts/{wid}/finish", json={"finished_at": _ago(hours=5)})
     assert before.status_code == 400
-    future = await client.post(f"/workouts/{wid}/finish", json={"finished_at": _ago(hours=-2)})
-    assert future.status_code == 400
     assert (await client.get(f"/workouts/{wid}")).json()["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_finish_clamps_future_finished_at_to_server_now(fresh_db, client_factory):
+    """Часы телефона убежали вперёд: финиш не теряется 400-й, а ставится на «сейчас»
+    сервера (и не раньше начала)."""
+    client = await _linked_client(fresh_db, client_factory)
+    ex = (await client.post("/exercises", json={"name": "Жим"})).json()["id"]
+    started = _ago(hours=3)
+    wid = (await client.post(
+        "/workouts/active", json={"client_id": str(uuid.uuid4()), "started_at": started}
+    )).json()["id"]
+    await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 80, "reps": 8})
+    t0 = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+    fin = await client.post(f"/workouts/{wid}/finish", json={"finished_at": _ago(hours=-2)})
+    assert fin.status_code == 200, fin.text
+    body = fin.json()
+    assert body["status"] == "finished"
+    finished = dt.datetime.fromisoformat(body["finished_at"])
+    assert t0 <= finished <= t0 + dt.timedelta(minutes=1)
+    assert finished >= dt.datetime.fromisoformat(body["started_at"])
 
 
 @pytest.mark.asyncio

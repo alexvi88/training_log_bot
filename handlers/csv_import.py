@@ -1741,7 +1741,7 @@ async def undo_import(user_id: int, batch_id: str) -> Optional[dict]:
 
 def _batch_in_window(batch) -> bool:
     created = dt.datetime.fromisoformat(batch["created_at"])
-    return dt.datetime.now() - created <= dt.timedelta(days=config.IMPORT_UNDO_DAYS)
+    return timeutil.utc_now() - created <= dt.timedelta(days=config.IMPORT_UNDO_DAYS)
 
 
 async def undoable_batches(user_id: int) -> list[dict]:

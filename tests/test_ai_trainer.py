@@ -862,6 +862,36 @@ async def test_weekly_digest_uses_its_own_cache_slot(fresh_db, user_id, monkeypa
     assert headers["x-grok-conv-id"] == f"weekly_digest-{user_id}"
 
 
+async def test_weekly_digest_app_only_user_needs_consent(fresh_db, monkeypatch):
+    """App Store 5.1.2(i): Apple-ID-аккаунт без согласия — модель не зовётся;
+    с согласием — зовётся. Заголовка в фоне нет, согласие смотрим по базе."""
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    app_user = await fresh_db.create_app_only_user(language_code="en")
+    uid = app_user["telegram_id"]
+    client = _fake_client([_response(content="HEY ATHLETE! Solid week.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    assert await ai_trainer.weekly_digest(uid) is None
+    client.chat.completions.create.assert_not_awaited()
+
+    await fresh_db.update_user(uid, ai_consent_at=fresh_db.now_iso())
+    assert await ai_trainer.weekly_digest(uid) == "HEY ATHLETE! Solid week."
+    client.chat.completions.create.assert_awaited_once()
+
+
+async def test_weekly_digest_revoked_consent_of_app_user_with_telegram(fresh_db, user_id, monkeypatch):
+    """Телеграмный атлет с iOS-токеном — клиент приложения: без согласия молчим;
+    без токена (чистый бот) — дайджест идёт как раньше."""
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    client = _fake_client([_response(content="Итоги недели.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    await fresh_db.register_push_token(user_id, "ios", "tok")
+    assert await ai_trainer.weekly_digest(user_id) is None
+    client.chat.completions.create.assert_not_awaited()
+    await fresh_db.unregister_push_token(user_id, "ios")
+    assert await ai_trainer.weekly_digest(user_id) == "Итоги недели."
+
+
 async def test_gate_parses_both_verdicts(fresh_db, user_id, monkeypatch):
     client = _fake_client([_response(content='{"search": true, "data": false}')])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)

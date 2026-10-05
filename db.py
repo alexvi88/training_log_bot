@@ -1041,8 +1041,13 @@ _conn: Optional[aiosqlite.Connection] = None
 _write_lock = asyncio.Lock()
 
 
+def _utc_now() -> dt.datetime:
+    """UTC как naive datetime (см. timeutil.utc_now; db не импортирует timeutil)."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
 def now_iso() -> str:
-    return dt.datetime.now().isoformat(timespec="seconds")
+    return _utc_now().isoformat(timespec="seconds")
 
 
 # ---------- сутки по часам пользователя ----------
@@ -2749,7 +2754,7 @@ _FINISHED_BY_USER = (
 # День отдельным случаем, а не «/growth 1»: скользящие сутки от «сейчас» — это
 # вчерашний вечер плюс сегодняшнее утро, и на вопрос «сколько пришло сегодня»
 # они отвечают чужим числом. Границы наивно-локальные, как и сам created_at
-# (now_iso — это dt.datetime.now(), часы сервера).
+# (now_iso — это _utc_now(), часы сервера).
 def _growth_window(days: int, day: Optional[str] = None) -> tuple[str, Optional[str]]:
     """(с какого момента, по какой) — верхняя граница есть только у дня."""
     if day:
@@ -2758,7 +2763,7 @@ def _growth_window(days: int, day: Optional[str] = None) -> tuple[str, Optional[
             dt.datetime.combine(start, dt.time.min).isoformat(timespec="seconds"),
             dt.datetime.combine(start + dt.timedelta(days=1), dt.time.min).isoformat(timespec="seconds"),
         )
-    return (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds"), None
+    return (_utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds"), None
 
 
 async def acquisition_funnel(
@@ -2771,7 +2776,7 @@ async def acquisition_funnel(
     (пришедшие до появления атрибуции) в отчёт не попадает — см. _migrate_schema.
     """
     since, until = _growth_window(days, day)
-    alive_since = (dt.datetime.now() - dt.timedelta(days=alive_days)).isoformat(timespec="seconds")
+    alive_since = (_utc_now() - dt.timedelta(days=alive_days)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT COALESCE(u.source, 'unknown') AS source, "
         "COUNT(*) AS users, "
@@ -4348,7 +4353,7 @@ async def prune_old_exercise_merges(retention_days: int) -> int:
     """Журнал объединений старше срока — вместе с файлами фото снесённых
     упражнений, которые так и остались без хозяина (их держали ради
     «Разъединить»)."""
-    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat()
+    cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat()
     cur = await conn().execute(
         "SELECT id, payload FROM exercise_merges WHERE created_at < ?", (cutoff,)
     )
@@ -6867,7 +6872,7 @@ def _api_token_touch_due(last_used_at: Optional[str]) -> bool:
         last = dt.datetime.fromisoformat(last_used_at)
     except ValueError:
         return True
-    return dt.datetime.now() - last >= API_TOKEN_TOUCH_INTERVAL
+    return _utc_now() - last >= API_TOKEN_TOUCH_INTERVAL
 
 
 # Сколько живых токенов /v1 держим на человека. Токен — это устройство
@@ -9543,7 +9548,7 @@ async def save_behaviour_digest(day: str, text: str) -> None:
         await conn().execute(
             "INSERT INTO behaviour_digests (day, text, created_at) VALUES (?, ?, ?) "
             "ON CONFLICT(day) DO UPDATE SET text = excluded.text, created_at = excluded.created_at",
-            (day, text, dt.datetime.now().isoformat(timespec="seconds")),
+            (day, text, _utc_now().isoformat(timespec="seconds")),
         )
         await conn().commit()
 
@@ -9864,7 +9869,7 @@ async def diagnostic_seen_before(
 async def diagnostics_summary(days: int) -> list[aiosqlite.Row]:
     """Сколько сбоев каждого вида за последние `days` суток — по версиям и
     сборкам, свежие версии первыми."""
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    since = (_utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT COALESCE(app_version, '?') AS app_version, COALESCE(build, '?') AS build, "
         "kind, COUNT(*) AS n, COUNT(DISTINCT user_id) AS users "
@@ -9878,7 +9883,7 @@ async def diagnostics_summary(days: int) -> list[aiosqlite.Row]:
 async def recent_crashes(days: int, limit: int) -> list[aiosqlite.Row]:
     """Последние падения за `days` суток с причиной из diagnosticMetaData —
     чтобы по сводке было видно, одно это падение или разные."""
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    since = (_utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT id, created_at, user_id, app_version, build, os_version, device, "
         "json_extract(payload, '$.diagnosticMetaData.exceptionType') AS exception_type, "
@@ -11442,7 +11447,7 @@ async def prune_old_pushes(retention_days: int, *, keep_categories: tuple[str, .
     would make the announcement go out to people twice. `keep_categories`
     (see admin_tasks.py) is how callers protect them from this prune.
     """
-    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
+    cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
     if keep_categories:
         placeholders = ",".join("?" for _ in keep_categories)
         query = f"DELETE FROM pushes WHERE sent_at < ? AND category NOT IN ({placeholders})"
@@ -11706,7 +11711,7 @@ async def list_import_batches(user_id: int, days: int) -> list[aiosqlite.Row]:
     """Импорты за последние `days` суток, новые первыми, — те, что ещё можно
     отменить или уже отменены (`undone_at`). Пустые (ничего не записали) не
     показываем: отменять в них нечего."""
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat()
+    since = (_utc_now() - dt.timedelta(days=days)).isoformat()
     cur = await conn().execute(
         "SELECT b.*, (SELECT COUNT(*) FROM workouts w WHERE w.import_batch_id = b.id) AS live_workouts "
         "FROM import_batches b WHERE b.user_id = ? AND b.created_at >= ? AND b.workouts > 0 "
@@ -11787,7 +11792,7 @@ async def undo_import_batch(user_id: int, batch_id: str) -> Optional[dict[str, i
 async def prune_old_import_batches(retention_days: int) -> int:
     """Строки пачек импорта старше срока: отменить их уже нельзя, а метки на
     тренировках и упражнениях без пачки ничего не значат — снимаем и их."""
-    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat()
+    cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
         db = conn()
         old = "SELECT id FROM import_batches WHERE created_at < ?"

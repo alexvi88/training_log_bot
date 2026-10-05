@@ -2,7 +2,8 @@
 # сама из amvera.yaml — этот файл ей не нужен и ничего у неё не меняет.
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV TZ=UTC \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
