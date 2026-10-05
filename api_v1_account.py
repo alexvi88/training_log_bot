@@ -91,6 +91,11 @@ def _settings_json(user) -> dict[str, Any]:
         # `ai_consent`, отдаём и то и другое.
         "ai_consent": bool(user["ai_consent_at"]),
         "ai_consent_at": user["ai_consent_at"],
+        # Записывал ли человек подход с экрана блокировки — по нему
+        # приложение не зовёт на локскрин того, кто уже пишет оттуда (после
+        # переустановки или на новом телефоне). Односторонний флаг: PATCH
+        # принимает только `true`. Старые сервера поля не отдают.
+        "lock_screen_used": bool(user["lock_screen_used"]),
         # Диапазон повторов для подсказки «Цель» — всегда числами, даже когда
         # атлет его не выбирал (тогда 5–12): приложению не надо знать, какой
         # диапазон у сервера по умолчанию. Сборки без этого поля его не читают;
@@ -326,6 +331,14 @@ async def update_settings(request: Request) -> JSONResponse:
         if not isinstance(new_consent, bool):
             raise ApiError(400, "bad_request", "ai_consent must be bool")
 
+    # Односторонний флаг: `true` ставит, `false` молча игнорируем (повтор
+    # старого запроса или гонка двух телефонов не должны его снимать).
+    new_lock_screen_used: Optional[bool] = None
+    if "lock_screen_used" in body:
+        new_lock_screen_used = body["lock_screen_used"]
+        if not isinstance(new_lock_screen_used, bool):
+            raise ApiError(400, "bad_request", "lock_screen_used must be bool")
+
     # Всё провалидировано — теперь можно писать. Единицы — отдельным путём
     # (рескейл + ресинк), остальное — одним update_user.
     if new_unit is not None and new_unit != user["unit"]:
@@ -366,6 +379,8 @@ async def update_settings(request: Request) -> JSONResponse:
         plain_updates["ai_consent_at"] = db.now_iso()
     elif new_consent is False:
         plain_updates["ai_consent_at"] = None
+    if new_lock_screen_used is True and not user["lock_screen_used"]:
+        plain_updates["lock_screen_used"] = 1
     if plain_updates:
         await db.update_user(user_id, **plain_updates)
     if new_tz is not None and new_tz != user["tz_offset"]:

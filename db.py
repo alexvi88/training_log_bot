@@ -134,7 +134,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- Бот в Telegram эту колонку не читает: там согласия никто не спрашивал,
     -- и ставить его задним числом всем, кто пришёл через бота, было бы
     -- неправдой. Пишет только PATCH /v1/settings (`ai_consent`).
-    ai_consent_at TEXT
+    ai_consent_at TEXT,
+    -- Записывал ли человек подход с экрана блокировки (кнопки Live Activity
+    -- или виджет в iOS-приложении). Флаг односторонний: ставит только
+    -- PATCH /v1/settings (`lock_screen_used: true`), назад не снимается.
+    -- Приложение по нему не показывает карточку «Записывай с экрана
+    -- блокировки» после переустановки и на новом телефоне.
+    lock_screen_used INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1558,6 +1564,12 @@ async def _migrate_schema() -> None:
         # NULL всем существующим: согласие в приложении ещё никто не давал —
         # лист появляется в нём впервые с этой колонкой.
         await _conn.execute("ALTER TABLE users ADD COLUMN ai_consent_at TEXT")
+    if "lock_screen_used" not in user_cols:
+        # 0 всем существующим: сервер про локскрин до этой колонки ничего не
+        # знал, а приложение при первом запуске само досылает свою отметку.
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN lock_screen_used INTEGER NOT NULL DEFAULT 0"
+        )
     if "telegram_linked" not in user_cols:
         # Дефолт 1 — верный ответ и для новой колонки на старой базе: каждая
         # существующая строка заведена настоящим /start, синтетических
