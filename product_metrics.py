@@ -65,6 +65,10 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "weekly_summary_opened": frozenset({"source", "verdict"}),
     # Действие на этом экране: action start|records|lift|share|discuss.
     "weekly_summary_action": frozenset({"action", "verdict", "source"}),
+    # Предложение плана под итогом тренировки (WorkoutFinishedSheet): action
+    # shown|accept|later. По тройке видно, сколько видят предложение, сколько
+    # идут к тренеру собирать программу и сколько откладывают на неделю.
+    "plan_offer": frozenset({"action"}),
 }
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")
