@@ -28,6 +28,26 @@ from analytics import (
 # datetime.weekday() (0 = понедельник).
 _WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
+_CONTROLS_EXCEPT_NEWLINE_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+_LINE_BREAKS_RE = re.compile(r"\r\n|[\r\u2028\u2029]")
+
+
+def strip_control_chars(text: str, *, keep_newlines: bool = False) -> str:
+    """Убрать управляющие символы (NUL, ESC, DEL, C1…) из введённого текста.
+
+    Имя — одна строка: любой перевод строки и таб становятся пробелом. Заметка
+    (`keep_newlines=True`) сохраняет `\\n` (`\\r\\n`, `\\r` и разделители
+    строк Юникода сводятся к нему), таб — пробел. Один общий санитайзер на
+    имена упражнений, программ, дней и заметки: NUL ломал вывод в CSV, а ESC и
+    C1 — рендер в клиентах.
+    """
+    text = _LINE_BREAKS_RE.sub("\n", text).replace("\t", " ")
+    text = _CONTROLS_EXCEPT_NEWLINE_RE.sub("", text)
+    if not keep_newlines:
+        text = " ".join(text.split())
+    return text
+
+
 def unit_label(unit: str) -> str:
     """Единица веса с учётом языка: «кг»/«kg» по каталогу, lb — как есть (то
     же сокращение в обоих языках).

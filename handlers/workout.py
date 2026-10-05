@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import logging
+import sqlite3
 from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
@@ -379,8 +380,28 @@ async def _delete_message_later(bot, chat_id: int, message_id: int, delay: float
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
 
 
+class WorkoutClosedError(Exception):
+    """Блок из FSM уже нельзя дописывать: тренировку закрыли или удалили."""
+
+
 async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rpe: float | None = None):
-    await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
+    if not await db.block_accepts_sets(block_id):
+        raise WorkoutClosedError
+    try:
+        await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
+    except sqlite3.IntegrityError as exc:
+        # Запасной путь: тренировку удалили между проверкой и записью.
+        raise WorkoutClosedError from exc
+
+
+async def _explain_workout_closed(event: Message | CallbackQuery, state: FSMContext) -> None:
+    """Что случилось + что делать, и сброс FSM — каркас тренировки мёртв."""
+    await clear_state_keep_ai(state)
+    text = i18n.t("workout.closed_cant_log")
+    if isinstance(event, CallbackQuery):
+        await event.answer(text, show_alert=True)
+    else:
+        await event.answer(text)
 
 
 # Below this fraction (or above this multiple) of the heaviest set this exercise
@@ -2314,8 +2335,9 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
     open_blocks = dict(data.get("open_blocks") or {})
 
     if ex_id not in open_exercises:
-        block_id = await db.create_block(data["workout_id"], "single")
-        await db.add_block_exercise(block_id, ex_id, 0)
+        # Приложение могло уже записать это упражнение в тренировку — берём его
+        # блок, а не заводим второй.
+        block_id = await db.get_or_create_single_block_for_exercise(data["workout_id"], ex_id)
         open_exercises.append(ex_id)
         open_blocks[ex_id] = block_id
     last_by = await _seed_last_value(data, ex_id)
@@ -2764,7 +2786,11 @@ async def log_set_text(message: Message, state: FSMContext):
 
     if text == "=":
         user = await db.get_user(message.from_user.id)
-        result = await _repeat_last_set(message.bot, state, user, data)
+        try:
+            result = await _repeat_last_set(message.bot, state, user, data)
+        except WorkoutClosedError:
+            await _explain_workout_closed(message, state)
+            return
         if result is None:
             await message.reply(i18n.t("workout.nothing_to_repeat"))
         else:
@@ -2814,7 +2840,11 @@ async def log_set_text(message: Message, state: FSMContext):
         await _ask_weight_confirmation(message, state, active, resolved, prompt)
         return
 
-    logged = await _store_parsed_sets(state, data, active, parsed)
+    try:
+        logged = await _store_parsed_sets(state, data, active, parsed)
+    except WorkoutClosedError:
+        await _explain_workout_closed(message, state)
+        return
     await _finalize_logged_sets(
         message.bot, state, user, data, active, logged,
         message.chat.id, message.message_id, message=message,
@@ -2866,7 +2896,11 @@ async def log_set_voice(message: Message, state: FSMContext):
         await _ask_weight_confirmation(message, state, active, resolved, prompt, source="voice")
         return
 
-    logged = await _store_parsed_sets(state, data, active, parsed)
+    try:
+        logged = await _store_parsed_sets(state, data, active, parsed)
+    except WorkoutClosedError:
+        await _explain_workout_closed(message, state)
+        return
     await _finalize_voice_sets(
         message.bot, state, user, data, active, logged,
         message.chat.id, message.message_id, message=message,
@@ -2907,7 +2941,11 @@ async def live_weight_confirm(callback: CallbackQuery, state: FSMContext):
 
         active = pending["exercise_id"]
         parsed = [ParsedSet(weight=w, reps=r, rpe=rpe) for w, r, rpe in pending["sets"]]
-        logged = await _store_parsed_sets(state, data, active, parsed)
+        try:
+            logged = await _store_parsed_sets(state, data, active, parsed)
+        except WorkoutClosedError:
+            await _explain_workout_closed(callback, state)
+            return
         confirmed = dict(data.get("confirmed_weights") or {})
         confirmed[active] = logged[-1][0]
         await state.update_data(confirmed_weights=confirmed)
@@ -2945,7 +2983,11 @@ async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
     подключённым: тут же висит действие, и точка входа может вернуться."""
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
-    result = await _repeat_last_set(callback.bot, state, user, data)
+    try:
+        result = await _repeat_last_set(callback.bot, state, user, data)
+    except WorkoutClosedError:
+        await _explain_workout_closed(callback, state)
+        return
     if result is None:
         await callback.answer(i18n.t("workout.nothing_to_repeat"))
     else:
@@ -2991,7 +3033,11 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
         return
 
     user = await db.get_user(callback.from_user.id)
-    await _log_one(block_id, active, weight, reps, None)
+    try:
+        await _log_one(block_id, active, weight, reps, None)
+    except WorkoutClosedError:
+        await _explain_workout_closed(callback, state)
+        return
     last_by = dict(data.get("last_by_exercise") or {})
     last_by[active] = (weight, reps)
     await state.update_data(last_by_exercise=last_by)
@@ -3117,8 +3163,7 @@ async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> 
         if target:
             exercise_targets[ex_id] = target
     for ex_id in block_plan["exercise_ids"]:
-        block_id = await db.create_block(workout_id, "single")
-        await db.add_block_exercise(block_id, ex_id, 0)
+        block_id = await db.get_or_create_single_block_for_exercise(workout_id, ex_id)
         await db.touch_exercise_last_used(ex_id)
         last_by = await _seed_last_value({"last_by_exercise": last_by}, ex_id)
         last_session_sets[ex_id], step = await _exercise_history(ex_id)
