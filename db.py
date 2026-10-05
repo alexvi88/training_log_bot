@@ -1360,6 +1360,15 @@ async def _migrate_schema() -> None:
         # ней уже созданную тренировку, а не заводит вторую. У тренировок бота и
         # старых сборок приложения — NULL.
         await _conn.execute("ALTER TABLE workouts ADD COLUMN client_id TEXT")
+    if "client_adopted" not in workout_cols:
+        # 1 — этой тренировки телефон не заводил: офлайн-старт с client_id
+        # пришёл, когда уже шла другая активная (начата в боте), и сервер
+        # привязал метку к ней (get_or_create_workout_by_client_id). Повтор
+        # старта после потерянного ответа должен снова сказать `adopted` — по
+        # одному client_id чужую тренировку от своей иначе не отличить.
+        await _conn.execute(
+            "ALTER TABLE workouts ADD COLUMN client_adopted INTEGER NOT NULL DEFAULT 0"
+        )
     await _conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_workouts_user_client "
         "ON workouts (user_id, client_id) WHERE client_id IS NOT NULL"
@@ -4485,31 +4494,34 @@ async def get_or_create_workout_by_client_id(
     client_id: str,
     started_at: Optional[str] = None,
     routine_id: Optional[int] = None,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, bool]:
     """Тренировка, заведённая на телефоне офлайн, — идемпотентно по `client_id`.
-    Возвращает (workout_id, created).
+    Возвращает (workout_id, created, adopted).
 
     Порядок под одним `_write_lock` (тот же довод, что у
     get_or_create_active_workout: проверка и вставка не должны разъезжаться):
 
     1. Тренировка с этим client_id у этого пользователя уже есть — любого
        статуса, в том числе уже законченная, — отдаём её: это повтор после
-       потерянного ответа.
+       потерянного ответа. `adopted` — как было записано при первом ответе.
     2. Идёт другая активная тренировка (начата в боте или на другом устройстве):
        вторую активную не заводим — инвариант «одна активная на человека»
        держится на этом. Если у неё нет своей метки, ставим ей эту, чтобы
        повторы дальше находились по п. 1; `started_at` у неё не трогаем.
-       Подходы офлайн-тренировки клиент пишет в возвращённый id.
+       Подходы офлайн-тренировки клиент пишет в возвращённый id. `adopted=True`:
+       это чужая для телефона тренировка — подходы к ней добавить можно, а
+       закончить её за человека (finish с телефона) нельзя.
     3. Иначе заводим новую с `started_at` с телефона (или «сейчас»).
     """
     async with _write_lock:
         db = conn()
         cur = await db.execute(
-            "SELECT id FROM workouts WHERE user_id = ? AND client_id = ?", (user_id, client_id)
+            "SELECT id, client_adopted FROM workouts WHERE user_id = ? AND client_id = ?",
+            (user_id, client_id),
         )
         row = await cur.fetchone()
         if row is not None:
-            return row["id"], False
+            return row["id"], False, bool(row["client_adopted"])
         cur = await db.execute(
             "SELECT id, client_id FROM workouts WHERE user_id = ? AND status = 'active' "
             "ORDER BY id LIMIT 1",
@@ -4519,10 +4531,11 @@ async def get_or_create_workout_by_client_id(
         if row is not None:
             if row["client_id"] is None:
                 await db.execute(
-                    "UPDATE workouts SET client_id = ? WHERE id = ?", (client_id, row["id"])
+                    "UPDATE workouts SET client_id = ?, client_adopted = 1 WHERE id = ?",
+                    (client_id, row["id"]),
                 )
                 await db.commit()
-            return row["id"], False
+            return row["id"], False, True
         program_id = await _program_id_for_routine(routine_id)
         cur = await db.execute(
             "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id, client_id) "
@@ -4530,7 +4543,25 @@ async def get_or_create_workout_by_client_id(
             (user_id, started_at or now_iso(), routine_id, program_id, client_id),
         )
         await db.commit()
-        return cur.lastrowid, True
+        return cur.lastrowid, True, False
+
+
+async def replayed_set_ids(user_id: int, workout_id: int, idempotency_key: str) -> list[int]:
+    """Подходы, уже записанные под этим ключом попытки В ЭТОЙ тренировке (по
+    порядку). Пусто — под ключом ничего нет или он от другой тренировки.
+
+    Нужно повтору из очереди приложения, который пришёл, когда тренировку уже
+    закончили: подход был записан до этого, и честный ответ — «записан», а не
+    409 «тренировка закончена», по которому приложение сочло бы его потерянным."""
+    cur = await conn().execute(
+        "SELECT a.set_id FROM set_write_attempts a "
+        "JOIN sets s ON s.id = a.set_id "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "WHERE a.user_id = ? AND a.idempotency_key = ? AND b.workout_id = ? "
+        "ORDER BY a.position",
+        (user_id, idempotency_key, workout_id),
+    )
+    return [r["set_id"] for r in await cur.fetchall()]
 
 
 async def get_or_create_backfill_workout(user_id: int, started_at: str) -> tuple[int, bool]:
@@ -6054,6 +6085,7 @@ async def append_set(
     *,
     user_id: Optional[int] = None,
     idempotency_key: Optional[str] = None,
+    created_at: Optional[str] = None,
 ) -> int:
     """Insert a set with the next round_index, choosing it under the write lock.
 
@@ -6092,7 +6124,8 @@ async def append_set(
             "SELECT ?, ?, COALESCE(MAX(round_index), 0) + 1, ?, ?, ?, ?, ?, ? "
             "FROM sets WHERE block_id = ? AND exercise_id = ?",
             (
-                block_id, exercise_id, order_in_round, weight, reps, rpe, load_weight, now_iso(),
+                block_id, exercise_id, order_in_round, weight, reps, rpe, load_weight,
+                created_at or now_iso(),
                 block_id, exercise_id,
             ),
         )
@@ -6115,6 +6148,7 @@ async def store_parsed_sets(
     *,
     user_id: Optional[int] = None,
     idempotency_key: Optional[str] = None,
+    created_at: Optional[str] = None,
 ) -> list[int]:
     """Записать пачку разобранных подходов одной строки/голосом (общий хвост
     api_v1.log_sets_from_text и log_set_from_voice) — голые повторы разносятся
@@ -6160,7 +6194,8 @@ async def store_parsed_sets(
                 "SELECT ?, ?, COALESCE(MAX(round_index), 0) + 1, 0, ?, ?, ?, ?, ? "
                 "FROM sets WHERE block_id = ? AND exercise_id = ?",
                 (
-                    block_id, exercise_id, actual_weight, reps, rpe, load_weight, now_iso(),
+                    block_id, exercise_id, actual_weight, reps, rpe, load_weight,
+                    created_at or now_iso(),
                     block_id, exercise_id,
                 ),
             )

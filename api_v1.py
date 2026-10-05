@@ -889,6 +889,27 @@ def _require_open(workout) -> None:
         raise ApiError(409, "workout_finished", "workout is already finished")
 
 
+async def _replay_into_finished(workout, user_id: int, body: dict[str, Any]):
+    """Повтор подхода из очереди приложения в тренировку, которую успели
+    закончить, — когда под этим ключом подход в ней УЖЕ записан: строки этих
+    подходов (по порядку), иначе `None` (тренировка открыта, ключа нет или он
+    от другой тренировки — дальше обычный путь, для закрытой это 409).
+
+    Без этого досылка, чей первый ответ потерялся, а потом тренировку
+    закончили (в том числе тем же телефоном), получала 409 «закончена» про
+    подход, который на самом деле лежит в истории, и приложение объявляло его
+    потерянным."""
+    if workout["status"] != "finished":
+        return None
+    key = common.optional_str(body, "idempotency_key")
+    if not key:
+        return None
+    ids = await db.replayed_set_ids(user_id, workout["id"], key)
+    if not ids:
+        return None
+    return [await db.get_set(set_id) for set_id in ids]
+
+
 async def active_workout(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout = await db.get_active_workout(user_id)
@@ -923,14 +944,22 @@ async def start_workout(request: Request) -> JSONResponse:
         )
     if client_id is None:
         workout_id, created = await db.get_or_create_active_workout(user_id, routine_id=routine_id)
+        adopted = None
     else:
-        workout_id, created = await db.get_or_create_workout_by_client_id(
+        workout_id, created, adopted = await db.get_or_create_workout_by_client_id(
             user_id, client_id,
             started_at.isoformat(timespec="seconds") if started_at else None,
             routine_id=routine_id,
         )
     workout = await db.get_workout(workout_id)
-    return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
+    payload = _workout_json(workout)
+    if adopted is not None:
+        # Только в ответе на старт по client_id (приложению, досылающему
+        # офлайн-тренировку): `true` — телефон тренировку не заводил, это уже
+        # шедшая активная (из бота или с другого устройства), и закончить её
+        # за человека досылкой нельзя — подходы добавить можно.
+        payload["adopted"] = adopted
+    return JSONResponse(payload, status_code=201 if created else 200)
 
 
 async def discard_active_workout(request: Request) -> JSONResponse:
@@ -1008,8 +1037,11 @@ async def log_set(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    _require_open(workout)
     body = await _json_body(request)
+    replay = await _replay_into_finished(workout, user_id, body)
+    if replay is not None:
+        return JSONResponse({**_set_json(replay[0]), "is_record": False}, status_code=201)
+    _require_open(workout)
     exercise_id = _require(body, "exercise_id", int)
     # Те же границы, что у parser.py и у правки уже записанного подхода
     # (api_v1_account): живая запись не должна принимать вес -100 и 10^9
@@ -1027,11 +1059,13 @@ async def log_set(request: Request) -> JSONResponse:
     # в момент отправки) — так повтор из офлайн-очереди после отвалившегося
     # интернета несёт тот же ключ и не заводит второй подход.
     idempotency_key = common.optional_str(body, "idempotency_key")
+    # Момент подхода, если он записан без связи и досылается позже.
+    created_at = common.set_created_at(body, workout)
     await _owned_exercise(exercise_id, user_id)
     block_id = await _block_for_exercise(workout_id, exercise_id)
     set_id = await db.append_set(
         block_id, exercise_id, 0, weight, reps, rpe,
-        user_id=user_id, idempotency_key=idempotency_key,
+        user_id=user_id, idempotency_key=idempotency_key, created_at=created_at,
     )
     cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     row = await cur.fetchone()
@@ -1072,8 +1106,11 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    _require_open(workout)
     body = await _json_body(request)
+    replay = await _replay_into_finished(workout, user_id, body)
+    if replay is not None:
+        return JSONResponse({"sets": [_set_json(r) for r in replay]}, status_code=201)
+    _require_open(workout)
     exercise_id = _require(body, "exercise_id", int)
     text = str(_require(body, "text", str)).strip()
     if not text:
@@ -1091,7 +1128,8 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
             raise ApiError(400, "unparsed_input", "set line not parsed", human=exc.message) from exc
 
     created = await _store_parsed_sets(
-        workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key
+        workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key,
+        created_at=common.set_created_at(body, workout),
     )
     return JSONResponse({"sets": created}, status_code=201)
 
@@ -1103,6 +1141,7 @@ async def _store_parsed_sets(
     *,
     user_id: Optional[int] = None,
     idempotency_key: Optional[str] = None,
+    created_at: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Общий хвост log_sets_from_text и log_set_from_voice: `parser.parse_sets_line`
     (или голос → та же структура через voice_parse) уже дал список подходов —
@@ -1120,7 +1159,7 @@ async def _store_parsed_sets(
     items = [(p.weight_omitted, p.weight, p.reps, p.rpe) for p in parsed]
     set_ids = await db.store_parsed_sets(
         workout_id, block_id, exercise_id, items,
-        user_id=user_id, idempotency_key=idempotency_key,
+        user_id=user_id, idempotency_key=idempotency_key, created_at=created_at,
     )
     created = []
     for set_id in set_ids:
@@ -1180,7 +1219,8 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
             raise ApiError(400, "unparsed_input", "empty transcript", key="ai.screen.voice_empty")
 
     created = await _store_parsed_sets(
-        workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key
+        workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key,
+        created_at=common.set_created_at(body, workout),
     )
     return JSONResponse(
         {"sets": created, "transcript": transcript, "dropped_sets": dropped_sets},
