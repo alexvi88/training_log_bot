@@ -1268,11 +1268,9 @@ async def ask_video(request: Request) -> JSONResponse:
             with i18n.use_lang(lang):
                 raise ApiError(502, "video_analysis_failed", "video analysis failed", key="ai.screen.video_analysis_failed")
 
-        # Квота видео тратится за состоявшийся разбор — как и в боте
-        # (db.increment_ai_video_count сразу после успешного analyze, до
-        # вопроса тренеру, см. _analyze_video_and_answer). Сбой уже вернул бы
-        # 502 выше.
-        await db.increment_ai_video_count(user_id)
+        # Квота видео списана внутри video_analysis.analyze — за каждый
+        # состоявшийся платный вызов (см. там же), поэтому и здесь, и в боте
+        # у вызывающего отдельного списания нет.
 
         # Кадр-превью для истории чата (см. chat_attachments.py) — само видео
         # не хранится. Через to_thread: ffmpeg-процесс синхронный и держал

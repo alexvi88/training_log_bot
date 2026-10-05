@@ -264,7 +264,7 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
 
     monkeypatch.setattr(ai_trainer, "ask", fake_ask)
 
-    async def fake_transcribe(buf, user_id):
+    async def fake_transcribe(buf, user_id, duration_seconds=None):
         return USER_TEXT[lang]["voice"]
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", fake_transcribe)

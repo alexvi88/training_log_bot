@@ -26,6 +26,7 @@ from aiogram.types import (
 
 import achievement_sync
 import acquisition
+import ai_limits
 import ai_trainer
 import analytics
 import charts
@@ -68,9 +69,16 @@ async def _attach_ai_comment(
     already-sent summary message, so finishing a workout isn't blocked on the LLM call.
     """
     try:
+        # Стоп мог включиться, пока шла карточка: проверяем и здесь, перед самим вызовом.
+        block = await ai_limits.hard_stop_block()
+        if block is not None:
+            raise ai_trainer.LimitBlocked(block)
         comment = await ai_trainer.comment_on_workout(user_id, workout_id)
-    except Exception:
-        logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+    except Exception as exc:
+        if isinstance(exc, ai_trainer.LimitBlocked):
+            logger.info("AI trainer workout comment skipped for workout %s: %s", workout_id, exc)
+        else:
+            logger.exception("AI trainer workout comment failed for workout %s", workout_id)
         # base_text не несёт плейсхолдер «Разбираю тренировку...» — он был только
         # в отправленном сообщении (см. _finalize_workout), и без правки текста
         # тут человек навсегда остался бы с «разбираю», под которым внезапно
@@ -2858,10 +2866,23 @@ async def log_set_voice(message: Message, state: FSMContext):
     if not ai_trainer.is_voice_configured():
         await message.reply(i18n.t("workout.voice_not_configured"))
         return
+    # Длина и лимиты — ДО скачивания и расшифровки: она стоит денег поминутно.
+    if message.voice.duration and message.voice.duration > config.MAX_VOICE_SECONDS:
+        await message.reply(i18n.t("ai.screen.voice_too_long"))
+        return
+    block = await ai_limits.check(message.from_user.id, ai_limits.KIND_VOICE)
+    if block is not None:
+        logger.info("Voice set blocked for user %s: %s", message.from_user.id, block.log)
+        await ai_limits.reply(message, block)
+        # preview — свой аккаунт: предупреждение показано, сам шаг идёт как обычно.
+        if not block.preview:
+            return
     try:
         buf = await message.bot.download(message.voice)
         buf.name = "voice.ogg"
-        transcript = await ai_trainer.transcribe_voice(buf, message.from_user.id)
+        transcript = await ai_trainer.transcribe_voice(
+            buf, message.from_user.id, duration_seconds=message.voice.duration
+        )
     except Exception:
         logger.exception("Voice set transcription failed for user %s", message.from_user.id)
         await message.reply(i18n.t("workout.voice_transcription_failed"))
@@ -3764,6 +3785,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     needs_ai_comment = (
         existing_comment is None and bool(user["ai_comments_enabled"]) and ai_trainer.is_configured()
     )
+    # HARD-стоп по деньгам: автоматический комментарий — платный вызов без личной
+    # квоты, и после потолка он не должен уходить сам. Кнопка «Разобрать» под
+    # карточкой остаётся (там свой замок и тот же стоп).
+    if needs_ai_comment and await ai_limits.hard_stop_block() is not None:
+        needs_ai_comment = False
 
     full_text = formatting.fit_workout_text(lambda mc: prefix + summary_fn(mc), suffix)
     card_kb = keyboards.workout_card_keyboard(

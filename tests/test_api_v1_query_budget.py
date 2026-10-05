@@ -49,6 +49,10 @@ UPDATE = os.environ.get("UPDATE_QUERY_SNAPSHOT") == "1"
 MAX_QUERIES_WORKOUT_DETAIL = 16
 MAX_QUERIES_ACTIVE_WORKOUT = 14
 MAX_QUERIES_HALL_OF_FAME = 13
+# GET /exercises: три запроса авторизации + сам список (usage_count и число
+# подходов считаются подзапросами внутри одного SELECT, а не по запросу на
+# упражнение) — потолок с запасом, чтобы N+1 на каталоге не прошёл молча.
+MAX_QUERIES_EXERCISES = 6
 
 FIXED_TODAY = dt.date(2026, 9, 1)
 
@@ -228,6 +232,10 @@ async def test_hot_endpoints_match_snapshot_within_query_budget(fresh_db, monkey
     assert resp.status_code == 200, resp.text
     actual["hall_of_fame"] = resp.json()
 
+    resp, counts["exercises"] = await counter.measure(client.get("/exercises"))
+    assert resp.status_code == 200, resp.text
+    actual["exercises"] = resp.json()
+
     # Тот же сборщик зовёт и бот (карточка, живой трекер, история) — его вид
     # сверяется тоже, со всеми сочетаниями флагов, что встречаются в handlers.
     for wid in seeded["detail_ids"]:
@@ -264,3 +272,4 @@ async def test_hot_endpoints_match_snapshot_within_query_budget(fresh_db, monkey
         assert n <= MAX_QUERIES_WORKOUT_DETAIL, f"GET /workouts/{wid}: {n} queries"
     assert counts["active"] <= MAX_QUERIES_ACTIVE_WORKOUT, counts
     assert counts["hall_of_fame"] <= MAX_QUERIES_HALL_OF_FAME, counts
+    assert counts["exercises"] <= MAX_QUERIES_EXERCISES, counts

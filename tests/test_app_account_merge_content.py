@@ -19,7 +19,7 @@ pytestmark = pytest.mark.asyncio
 # история это или нет, а не проскочит молча.
 SERVICE_TABLES = {
     "ai_food_usage", "ai_limit_ack", "ai_program_drafts", "ai_question_usage",
-    "ai_search_usage", "ai_setup_states", "ai_undo_actions", "ai_video_usage",
+    "ai_search_usage", "ai_setup_states", "ai_undo_actions", "ai_usage", "ai_video_usage",
     "analytics_events", "api_tokens", "auth_identities", "cost_events", "diagnostics", "donations",
     "game_results",
     "mcp_tokens", "oauth_auth_codes", "oauth_link_codes", "oauth_tokens",

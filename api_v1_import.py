@@ -623,6 +623,9 @@ async def convert_text(request: Request) -> JSONResponse:
         result = await text_import.extract_sets(
             user_id, text, timeutil.user_today(user), lang=user["lang"]
         )
+    except ai_trainer.LimitBlocked as e:
+        code = "spend_limit_exceeded" if e.block.kind == ai_limits.KIND_SPEND_HARD else "import_limit_exceeded"
+        raise ApiError(429, code, "daily import limit reached", human=e.block.user_text) from e
     except Exception as e:
         raise ApiError(502, "text_import_failed", "model failed to parse the text") from e
     finally:

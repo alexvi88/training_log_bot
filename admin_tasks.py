@@ -2,9 +2,13 @@
 
 import asyncio
 import datetime as dt
+import html
 import logging
 import os
+import re
+import shutil
 import tempfile
+import time
 from contextlib import suppress
 from typing import Optional
 
@@ -17,11 +21,18 @@ import announcements
 import config
 import db
 import formatting
+import ops_alerts
 import timeutil
 
 logger = logging.getLogger(__name__)
 
 _BACKUP_PREFIX = "training_log_backup_"
+# Недописанная копия: имя не начинается с _BACKUP_PREFIX, поэтому ни возраст копии,
+# ни чистка старых файлов её за бэкап не принимают.
+_BACKUP_TMP_PREFIX = "partial-"
+# Метка последнего удавшегося прогона суточной чистки (mtime файла) — лежит на
+# том же постоянном диске, что и бэкапы, и тоже не начинается с _BACKUP_PREFIX.
+_RETENTION_MARKER = ".retention_last_ok"
 
 # Daily-rotation pushes are pure history past this many days; kept out of
 # config.py deliberately narrow (only this job reads it) — see
@@ -67,7 +78,7 @@ async def _build_cost_report(date_str: str) -> str:
     server_tools = await db.get_server_tool_count(date_str)
 
     llm_cost, llm_calls, llm_tokens = _llm_cost(llm_breakdown)
-    transcription_cost = transcriptions * config.TRANSCRIPTION_PRICE_USD_PER_CALL
+    transcription_cost = await db.get_transcription_cost_usd(date_str)
     # Вызовы web_search/x_search: $5 за 1000 СВЕРХ токенов. В консоли за неделю это
     # было $0.68 — пятнадцать процентов текстового счёта, которых отчёт не видел.
     server_tool_calls = sum(server_tools.values())
@@ -140,11 +151,25 @@ async def _rotate_disk_backup() -> str:
     os.makedirs(backup_dir, exist_ok=True)
     name = f"{_BACKUP_PREFIX}{dt.date.today().isoformat()}.db"
     path = os.path.join(backup_dir, name)
-    if os.path.exists(path):
-        # VACUUM INTO требует отсутствующий файл назначения — второй прогон в
-        # те же сутки (например, после рестарта) иначе падает на ровном месте.
-        os.remove(path)
-    await db.backup_to_file(path)
+    # Сначала временное имя, не начинающееся с _BACKUP_PREFIX: возраст последней
+    # копии считается по файлам с этим префиксом, и недописанный огрызок не должен
+    # выглядеть свежим бэкапом. Старая копия за эти сутки живёт, пока новая не
+    # проверена, — и подменяется атомарно (os.replace), а не удаляется заранее.
+    tmp_path = os.path.join(backup_dir, f"{_BACKUP_TMP_PREFIX}{name}")
+    for leftover in os.listdir(backup_dir):
+        if leftover.startswith(_BACKUP_TMP_PREFIX):
+            # VACUUM INTO требует отсутствующий файл назначения; остатки
+            # прошлых упавших прогонов тоже убираем.
+            with suppress(OSError):
+                os.remove(os.path.join(backup_dir, leftover))
+    try:
+        await db.backup_to_file(tmp_path)
+        await asyncio.to_thread(db.verify_backup_file, tmp_path)
+        os.replace(tmp_path, path)
+    except BaseException:
+        with suppress(OSError):
+            os.remove(tmp_path)
+        raise
     _prune_stale_backups(backup_dir, config.BACKUP_KEEP_COUNT)
     return path
 
@@ -198,7 +223,163 @@ async def run_backup_staleness_check(bot: Bot) -> None:
                 await _repair_stale_backup(bot, age)
         except Exception:
             logger.exception("Backup staleness check failed")
+        try:
+            alert = await check_replica_health()
+            if alert:
+                # Тревога копится в очереди ops_alerts — она же шлёт админу и
+                # молчит, если ADMIN_ID/ops-алерты выключены.
+                ops_alerts.enqueue_text(alert)
+        except Exception:
+            logger.exception("Replica health check failed")
         await asyncio.sleep(3600)
+
+
+# --- репликация Litestream ----------------------------------------------------
+#
+# Диск-бэкап (`_rotate_disk_backup`) лежит на том же volume, что и база: умрёт
+# volume — умрёт и он. Настоящая страховка — реплика в Tigris, и она молча
+# отваливается (ключи, бакет, упавший litestream при живом боте), а увидеть это
+# можно только в `fly logs` на уровне warn. Часовая проверка смотрит на возраст
+# самого свежего снапшота/сегмента WAL реплики.
+
+_ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
+_replica_alerted_at: Optional[float] = None
+
+
+def _litestream_binary() -> Optional[str]:
+    return shutil.which("litestream")
+
+
+async def _run_litestream(binary: str, subcommand: str) -> str:
+    """`litestream <snapshots|wal> -config ... <база>` с таймаутом; stdout текстом.
+    Ненулевой код или таймаут — исключение (его ловит вызывающий и алертит)."""
+    proc = await asyncio.create_subprocess_exec(
+        binary, subcommand, "-config", config.LITESTREAM_CONFIG_PATH, config.DB_PATH,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(
+            proc.communicate(), timeout=config.REPLICA_CHECK_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        with suppress(ProcessLookupError):
+            proc.kill()
+        # Не ждём бесконечно: осиротевший потомок мог удержать трубы открытыми.
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        raise RuntimeError(
+            f"litestream {subcommand}: нет ответа за {config.REPLICA_CHECK_TIMEOUT_SECONDS:.0f} с"
+        ) from None
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"litestream {subcommand} завершился с кодом {proc.returncode}: "
+            f"{err.decode(errors='replace').strip()[:300]}"
+        )
+    return out.decode(errors="replace")
+
+
+def _newest_timestamp(output: str) -> Optional[dt.datetime]:
+    """Самая свежая метка времени в таблице, которую печатают `snapshots`/`wal`
+    (колонка created, RFC 3339). Формат колонок между версиями гулял, метка — нет."""
+    newest: Optional[dt.datetime] = None
+    for raw in _ISO_TS_RE.findall(output):
+        try:
+            stamp = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=dt.timezone.utc)
+        if newest is None or stamp > newest:
+            newest = stamp
+    return newest
+
+
+async def replica_age_hours() -> Optional[float]:
+    """Возраст самого свежего снапшота/WAL реплики в часах. None — проверять нечем
+    (нет бинаря litestream или хранилище не подключено): тихо пропускаем.
+    Исключение — команда упала/зависла, или реплика пуста."""
+    binary = _litestream_binary()
+    if binary is None or not config.BUCKET_NAME:
+        return None
+    newest: Optional[dt.datetime] = None
+    errors: list[str] = []
+    for subcommand in ("wal", "snapshots"):
+        try:
+            stamp = _newest_timestamp(await _run_litestream(binary, subcommand))
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            continue
+        if stamp is not None and (newest is None or stamp > newest):
+            newest = stamp
+    if newest is None:
+        raise RuntimeError("; ".join(errors) if errors else "в реплике нет ни снапшотов, ни WAL")
+    return (dt.datetime.now(dt.timezone.utc) - newest).total_seconds() / 3600
+
+
+def _db_written_since_replica(age_hours: float) -> bool:
+    """Писалась ли база после последней метки реплики (+5 минут запаса).
+
+    Litestream кладёт новый сегмент, только когда в базе что-то изменилось: ночью,
+    пока все спят, «последний сегмент старше двух часов» — норма, а не поломка.
+    Сравниваем с mtime файла базы и -wal. Узнать нельзя (файлов нет) — считаем, что
+    писалась: лучше лишняя тревога, чем пропущенная."""
+    mtimes = []
+    for path in (config.DB_PATH, config.DB_PATH + "-wal"):
+        with suppress(OSError):
+            mtimes.append(os.path.getmtime(path))
+    if not mtimes:
+        return True
+    replica_at = time.time() - age_hours * 3600
+    return max(mtimes) > replica_at + 300
+
+
+async def check_replica_health() -> Optional[str]:
+    """Один проход проверки: текст тревоги или None (всё хорошо / нечем проверить /
+    тревога уже была недавно). Тревога повторяется не чаще
+    config.REPLICA_ALERT_REPEAT_HOURS — пока реплика лежит, час за часом слать одно
+    и то же значит приучить админа не читать."""
+    global _replica_alerted_at
+    problem: Optional[str] = None
+    try:
+        age = await replica_age_hours()
+    except Exception as exc:
+        problem = f"не смог проверить реплику: {type(exc).__name__}: {exc}"
+        age = None
+    else:
+        if age is None:
+            return None
+        if age > config.REPLICA_STALE_ALERT_HOURS and _db_written_since_replica(age):
+            problem = (
+                f"последний снапшот/WAL в реплике старше {age:.1f} ч "
+                f"(порог {config.REPLICA_STALE_ALERT_HOURS:g} ч)"
+            )
+    if problem is None:
+        _replica_alerted_at = None
+        return None
+    now = timeutil.utc_now().timestamp()
+    if (
+        _replica_alerted_at is not None
+        and now - _replica_alerted_at < config.REPLICA_ALERT_REPEAT_HOURS * 3600
+    ):
+        return None
+    _replica_alerted_at = now
+    return (
+        "🛟 <b>Реплика Litestream не живая</b>: " + html.escape(problem) + ".\n"
+        "Бот работает, но копии базы в Tigris могут не обновляться. "
+        "Смотри `fly logs` по litestream и `fly ssh console -C \"litestream wal /data/training_log.db\"`."
+    )
+
+
+def warn_if_replication_missing() -> bool:
+    """На старте: прод без BUCKET_NAME живёт без реплики вообще — logger.error
+    уходит админу тревогой из лога (ops_alerts). True — предупреждение выдано."""
+    if config.is_production() and not config.BUCKET_NAME:
+        logger.error(
+            "BUCKET_NAME не задан на проде: Litestream не запущен, "
+            "базу реплицировать некуда — остался только бэкап на том же диске"
+        )
+        return True
+    return False
 
 
 async def _repair_stale_backup(bot: Bot, age: float) -> None:
@@ -435,35 +616,74 @@ async def _send_behaviour_digest(bot: Bot, day: dt.date) -> None:
         )
 
 
-async def _run_retention_cleanup() -> None:
+def _retention_marker_path() -> str:
+    return os.path.join(_backup_dir(), _RETENTION_MARKER)
+
+
+def _retention_age_hours() -> Optional[float]:
+    """Часов с последнего ПОЛНОСТЬЮ удавшегося прогона чистки, None — меток нет."""
+    try:
+        mtime = os.path.getmtime(_retention_marker_path())
+    except OSError:
+        return None
+    return (timeutil.utc_now().timestamp() - mtime) / 3600
+
+
+def _mark_retention_ok() -> None:
+    try:
+        os.makedirs(_backup_dir(), exist_ok=True)
+        with open(_retention_marker_path(), "w") as f:
+            f.write(timeutil.utc_now().isoformat())
+    except OSError:
+        logger.exception("Не смог записать метку удавшейся чистки")
+
+
+async def _run_retention_cleanup() -> bool:
     """Стереть то, что дольше положенного лежит в базе — стоимость AI-вызовов,
     сырой лог действий, продуктовые события, отчёты о сбоях iOS, отметки о показанных предупреждениях лимита, архив
-    прошлых разговоров с тренером, воскресные разборы недели, отданные ссылки на общие тренировки."""
-    await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
-    await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
-    # Воронка до входа и продуктовые события — годовой срок (см.
-    # config.ANALYTICS_RETENTION_DAYS): текста человека в них нет.
-    await db.prune_old_funnel_events(config.ANALYTICS_RETENTION_DAYS)
-    await db.prune_old_analytics_events(config.ANALYTICS_RETENTION_DAYS)
-    await db.prune_old_diagnostics(config.DIAGNOSTICS_RETENTION_DAYS)
-    await db.prune_old_behaviour_digests(config.BEHAVIOUR_DIGEST_RETENTION_DAYS)
-    await db.prune_old_weekly_digests(config.WEEKLY_DIGEST_RETENTION_DAYS)
-    # Пачки импорта и журнал объединений — ровно столько, сколько их можно
-    # отменить (см. config.IMPORT_BATCH_RETENTION_DAYS).
-    await db.prune_old_import_batches(config.IMPORT_BATCH_RETENTION_DAYS)
-    await db.prune_old_exercise_merges(config.MERGE_JOURNAL_RETENTION_DAYS)
-    await db.prune_old_limit_acks()
-    # Архив прошлых разговоров с тренером: текущий не трогается никогда, см.
-    # db.prune_old_ai_conversations.
-    await db.prune_old_ai_conversations(config.AI_CONVERSATION_RETENTION_DAYS)
-    await db.prune_old_pushes(
-        PUSH_RETENTION_DAYS,
-        keep_categories=tuple(ann.key for ann in announcements.ANNOUNCEMENTS),
-    )
+    прошлых разговоров с тренером, воскресные разборы недели, отданные ссылки на общие тренировки.
+
+    Каждая чистка — в своём try/except: раньше первое же исключение (например,
+    на одной таблице) обрывало всю цепочку, и остальные таблицы не чистились вовсе,
+    а в логе была одна строка про «Retention cleanup failed». Возвращает True,
+    только если удалось всё: по этому и ставится метка для догона на старте.
+    """
     cutoff = (
         timeutil.utc_now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")
-    await db.delete_shared_items_older_than(cutoff)
+    steps = [
+        ("cost_events", lambda: db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)),
+        ("user_events", lambda: db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)),
+        # Воронка до входа и продуктовые события — годовой срок (см.
+        # config.ANALYTICS_RETENTION_DAYS): текста человека в них нет.
+        ("funnel_events", lambda: db.prune_old_funnel_events(config.ANALYTICS_RETENTION_DAYS)),
+        ("analytics_events", lambda: db.prune_old_analytics_events(config.ANALYTICS_RETENTION_DAYS)),
+        ("diagnostics", lambda: db.prune_old_diagnostics(config.DIAGNOSTICS_RETENTION_DAYS)),
+        ("behaviour_digests", lambda: db.prune_old_behaviour_digests(config.BEHAVIOUR_DIGEST_RETENTION_DAYS)),
+        ("weekly_digests", lambda: db.prune_old_weekly_digests(config.WEEKLY_DIGEST_RETENTION_DAYS)),
+        # Пачки импорта и журнал объединений — ровно столько, сколько их можно
+        # отменить (см. config.IMPORT_BATCH_RETENTION_DAYS).
+        ("import_batches", lambda: db.prune_old_import_batches(config.IMPORT_BATCH_RETENTION_DAYS)),
+        ("exercise_merges", lambda: db.prune_old_exercise_merges(config.MERGE_JOURNAL_RETENTION_DAYS)),
+        ("limit_acks", lambda: db.prune_old_limit_acks()),
+        ("ai_usage", lambda: db.prune_old_ai_usage()),
+        # Архив прошлых разговоров с тренером: текущий не трогается никогда, см.
+        # db.prune_old_ai_conversations.
+        ("ai_conversations", lambda: db.prune_old_ai_conversations(config.AI_CONVERSATION_RETENTION_DAYS)),
+        ("pushes", lambda: db.prune_old_pushes(
+            PUSH_RETENTION_DAYS,
+            keep_categories=tuple(ann.key for ann in announcements.ANNOUNCEMENTS),
+        )),
+        ("shared_items", lambda: db.delete_shared_items_older_than(cutoff)),
+    ]
+    all_ok = True
+    for name, step in steps:
+        try:
+            await step()
+        except Exception:
+            all_ok = False
+            logger.exception("Retention cleanup step %s failed", name)
+    return all_ok
 
 
 async def run_retention_cleanup_job() -> None:
@@ -475,13 +695,37 @@ async def run_retention_cleanup_job() -> None:
     `send_message` бросает исключение раньше, чем очередь доходит до чистки.
     В обоих случаях таблицы не чистились бы совсем — тот же самый долг, что
     был у прополки OAuth до её выделения (см. run_oauth_purge_job).
+
+    Расписание живёт в памяти процесса, как и у бэкапа: рестарт после
+    ADMIN_REPORT_HOUR отправлял следующий прогон на сутки вперёд, а частые
+    деплои делали из этого «чистки нет неделями». Поэтому на старте — догон по
+    метке последнего удавшегося прогона (`_catch_up_missed_retention`).
     """
+    await _catch_up_missed_retention()
     while True:
         await asyncio.sleep(_seconds_until_next_run(config.ADMIN_REPORT_HOUR))
         try:
-            await _run_retention_cleanup()
+            if await _run_retention_cleanup():
+                _mark_retention_ok()
         except Exception:
             logger.exception("Retention cleanup failed")
+
+
+async def _catch_up_missed_retention() -> None:
+    """Чистка сразу на старте, если с последнего удавшегося прогона прошло больше
+    суток (или меток нет вовсе) — тот же приём, что `_catch_up_missed_backup`."""
+    try:
+        age = _retention_age_hours()
+        if age is not None and age < config.BACKUP_CATCHUP_HOURS:
+            return
+        logger.warning(
+            "Чистка ретеншна пропустила суточное окно (возраст %s) — запускаю сейчас",
+            "нет метки" if age is None else f"{age:.1f} ч",
+        )
+        if await _run_retention_cleanup():
+            _mark_retention_ok()
+    except Exception:
+        logger.exception("Catch-up retention cleanup failed")
 
 
 async def run_oauth_purge_job() -> None:

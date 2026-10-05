@@ -41,3 +41,14 @@
 изнутри не заметит, если лёг только вход Fly): UptimeRobot (https://uptimerobot.com): HTTP(s)-монитор на
 `https://training-log-bot.fly.dev/v1/health`, интервал 5 мин, alert contact —
 Telegram.
+
+## Реплика Litestream
+
+Раз в час (в цикле проверки бэкапа, `admin_tasks.run_backup_staleness_check`)
+бот спрашивает у `litestream wal` и `litestream snapshots`, когда в реплике
+появился самый свежий сегмент. Старше `REPLICA_STALE_ALERT_HOURS` (2 ч) или
+команда упала/зависла (`REPLICA_CHECK_TIMEOUT_SECONDS`) — тревога «Реплика
+Litestream не живая»; повтор — не чаще раза в `REPLICA_ALERT_REPEAT_HOURS` (6 ч).
+Нет бинаря `litestream` или пуст `BUCKET_NAME` — проверка молчит (локально, тесты).
+На старте прод (`APNS_ENV=production`) без `BUCKET_NAME` пишет `logger.error` —
+он приходит обычной тревогой из лога.

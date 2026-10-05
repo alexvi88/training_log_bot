@@ -1383,6 +1383,10 @@ async def _write_ai_comment(user_id: int, workout_id: int) -> Optional[str]:
         workout = await db.get_workout(workout_id)
         if workout is not None and workout["ai_comment"] is not None:
             return workout["ai_comment"]
+        # HARD-стоп по деньгам (платный вызов без личной квоты): фоновой задаче
+        # некому показать отказ, она просто не идёт к модели.
+        if await ai_limits.hard_stop_block() is not None:
+            return None
         comment = await ai_trainer.comment_on_workout(user_id, workout_id)
         await db.set_workout_ai_comment(workout_id, comment)
         return comment
@@ -1414,7 +1418,7 @@ def _ai_comment_task(user_id: int, workout_id: int) -> asyncio.Task:
     return task
 
 
-def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, workout) -> bool:
+async def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, workout) -> bool:
     """Запустить генерацию комментария в фоне — если он нужен и возможен.
 
     Условия те же, что у бота (`needs_ai_comment` в
@@ -1443,6 +1447,10 @@ def _spawn_ai_comment(request: Request, user_id: int, workout_id: int, user, wor
     if not user["ai_comments_enabled"] or not ai_trainer.is_configured():
         return False
     if not common.ai_consent_given(request, user):
+        return False
+    if workout_id not in _ai_comment_inflight and await ai_limits.hard_stop_block() is not None:
+        # Потолок по деньгам: автоматический комментарий не заказываем, и
+        # «pending» не обещаем — GET .../ai-comment всё равно отдал бы null.
         return False
     try:
         _ai_comment_task(user_id, workout_id)
@@ -1648,7 +1656,7 @@ async def finish_workout(request: Request) -> JSONResponse:
     # «🤖 Комментарий» в «тренер печатает…» секунд пятнадцать даже там, где
     # сервер ничего не заказывал (автокомментарии выключены, нет согласия),
     # и тап по ней в это время ничего не делал.
-    payload["ai_comment_pending"] = _spawn_ai_comment(request, user_id, workout_id, user, workout)
+    payload["ai_comment_pending"] = await _spawn_ai_comment(request, user_id, workout_id, user, workout)
     return JSONResponse(payload)
 
 

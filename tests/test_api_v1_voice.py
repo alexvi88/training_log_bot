@@ -52,7 +52,7 @@ def _audio_data_url(mime="audio/m4a", payload=b"not-really-audio-but-fine-its-mo
 
 
 def _fake_transcribe(text):
-    async def _fn(file_obj, user_id=None):
+    async def _fn(file_obj, user_id=None, duration_seconds=None):
         # То же, что и в боте: имя файла несёт расширение, по которому
         # провайдер понимает формат (api_v1_voice декодирует data URL и
         # выставляет buf.name сам, до вызова этой функции).
@@ -161,7 +161,7 @@ async def test_ai_voice_returns_error_on_empty_transcript(fresh_db, client_facto
 async def test_ai_voice_returns_502_when_provider_fails(fresh_db, client_factory, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
-    async def _boom(file_obj, user_id=None):
+    async def _boom(file_obj, user_id=None, duration_seconds=None):
         raise RuntimeError("provider is down")
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", _boom)
