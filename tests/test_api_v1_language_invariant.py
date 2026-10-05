@@ -712,3 +712,38 @@ async def test_every_route_is_walked(fresh_db, monkeypatch, tmp_path):
     )
     stale = sorted(set(SKIPPED) - all_routes)
     assert not stale, f"в SKIPPED лежат маршруты, которых больше нет: {stale}"
+
+
+@pytest.mark.parametrize("lang", ["en", "ru"])
+async def test_fresh_start_setup_and_history_have_no_foreign_language(fresh_db, monkeypatch, lang):
+    """Короткий путь «Составь мне программу» у чистого листа (без модели) и
+    видимая лента после опросника: ответ, вопросы, варианты и история — на
+    языке атлета, без служебной рамки модели."""
+    import ai_trainer
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "Built." if lang == "en" else "Собрал."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    await fresh_db.set_user_lang(111, lang)
+    client = _client()
+    w = _Walker(client, lang)
+    code = await fresh_db.issue_oauth_link_code(111, ttl_seconds=600, digits=8)
+    resp = await w.call("POST", "/auth/link", json={"code": code}, expect=200)
+    client.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+
+    seed = i18n.t_in(lang, "ai.screen.build_program_seed")
+    asked = (await w.call("POST", "/ai/ask", json={
+        "question": seed, "shown_question": i18n.t_in(lang, "ai.screen.build_program_intro"),
+    }, expect=200)).json()
+    assert asked["questions"]["total"] == 6
+    for idx in range(6):
+        await w.call("POST", "/ai/questions/answer", json={"question_index": idx, "answer": None}, expect=200)
+    history = (await w.call("GET", "/ai/history", expect=200)).json()["messages"]
+    assert all("propose_program" not in m["text"] for m in history)
+    await w.call("DELETE", "/ai/history", expect=200)
+    await w.call("GET", "/ai/conversations", expect=200)
+    assert not w.violations, "\n".join(w.violations)

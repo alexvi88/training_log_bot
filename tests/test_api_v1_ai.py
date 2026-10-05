@@ -2243,6 +2243,9 @@ async def test_ask_shown_question_is_what_history_and_title_show(
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     monkeypatch.setattr(ai_trainer, "ask", recording_ask)
     client = await _linked_client(fresh_db, client_factory)
+    # С целью в профиле это уже не «чистый лист» — иначе seed уходит на
+    # короткий путь без модели (см. тесты ниже), а здесь проверяется обычный.
+    await fresh_db.update_user(111, goal="набор массы")
     seed = i18n.t("ai.screen.build_program_seed")
     intro = i18n.t("ai.screen.build_program_intro")
 
@@ -2296,3 +2299,225 @@ async def test_ask_rejects_bad_shown_question(fresh_db, client_factory, monkeypa
     not_str = await client.post("/ai/ask", json={"question": "ok", "shown_question": 5})
     assert not_str.status_code == 400
     assert (await client.get("/ai/history")).json()["messages"] == []
+
+
+# ---------- чистый лист: «Составь мне программу» без вызова модели ----------
+
+
+def _forbidden_ask(calls: list):
+    async def ask(user_id, question, history, **kwargs):
+        calls.append(question)
+        return "модель не должна была вызываться"
+
+    return ask
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_fresh_start_seed_skips_model_and_returns_six_questions(
+    fresh_db, client_factory, monkeypatch, lang
+):
+    import i18n
+
+    calls: list[str] = []
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _forbidden_ask(calls))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, lang=lang)
+    seed = i18n.t_in(lang, "ai.screen.build_program_seed")
+    intro = i18n.t_in(lang, "ai.screen.build_program_intro")
+
+    resp = await client.post("/ai/ask", json={"question": seed, "shown_question": intro})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert calls == []
+    assert body["answer"] == i18n.t_in(lang, "ai.screen.setup_fresh.reply")
+    assert body["program"] is None and body["actions"] == []
+    assert body["questions"]["index"] == 0
+    assert body["questions"]["total"] == 6
+    assert body["questions"]["question"] == i18n.t_in(lang, "ai.screen.setup_goal.question")
+    state = await fresh_db.get_ai_setup_state(111)
+    assert len(state["questions"]) == 6
+    assert all(q["choices"] for q in state["questions"])
+    assert len(state["questions"]) <= ai_trainer.SETUP_MAX_QUESTIONS
+    # Квота не тронута: человек не теряет вопрос из «Осталось сегодня».
+    assert body["limits"]["question"]["used"] == 0
+    assert await fresh_db.get_ai_question_count_today(111) == 0
+
+    messages = (await client.get("/ai/history")).json()["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["text"] == intro
+    assert messages[1]["text"] == body["answer"]
+    wire = await fresh_db.get_ai_conversation_wire_history(111)
+    assert [m["content"] for m in wire] == [seed, body["answer"]]
+
+
+@pytest.mark.asyncio
+async def test_fresh_start_matches_seed_of_the_other_language(fresh_db, client_factory, monkeypatch):
+    """Приложение могло прислать seed своей локали, пока язык аккаунта другой."""
+    import i18n
+
+    calls: list[str] = []
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _forbidden_ask(calls))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, lang="ru")
+
+    resp = await client.post("/ai/ask", json={"question": i18n.t_in("en", "ai.screen.build_program_seed")})
+    assert resp.status_code == 200, resp.text
+    assert calls == []
+    assert resp.json()["questions"]["total"] == 6
+
+
+@pytest.mark.asyncio
+async def test_fresh_start_then_answers_make_one_model_turn_with_full_text(
+    fresh_db, client_factory, monkeypatch
+):
+    import i18n
+
+    seen: list[str] = []
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _forbidden_ask([]))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, lang="en")
+    seed = i18n.t_in("en", "ai.screen.build_program_seed")
+    await client.post("/ai/ask", json={"question": seed})
+
+    fake = _fake_ask_with_wire()
+
+    async def recording_ask(user_id, question, history, **kwargs):
+        seen.append(question)
+        return await fake(user_id, question, history, **kwargs)
+
+    monkeypatch.setattr(ai_trainer, "ask", recording_ask)
+    for idx in range(6):
+        resp = await client.post(
+            "/ai/questions/answer", json={"question_index": idx, "answer": None if idx == 5 else f"a{idx}"}
+        )
+        assert resp.status_code == 200, resp.text
+
+    # Модель получила полный текст с рамкой и исходной задачей, ровно один раз.
+    assert len(seen) == 1
+    assert "propose_program" in seen[0] and f"Original ask: {seed}" in seen[0]
+    # А человеку в ленте — только ответы.
+    texts = [m["text"] for m in (await client.get("/ai/history")).json()["messages"] if m["role"] == "user"]
+    assert texts[-1].startswith("Here are the answers:")
+    assert "propose_program" not in texts[-1] and "Original ask" not in texts[-1]
+    assert texts[-1].endswith(i18n.t_in("en", "ai.screen.setup_skipped_note"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setup", ["workout", "routine", "goal"])
+async def test_seed_with_history_programs_or_goal_goes_the_old_way(
+    fresh_db, client_factory, monkeypatch, setup
+):
+    import i18n
+
+    seen: list[str] = []
+    fake = _fake_ask_with_questions("Сколько дней в неделю?")
+
+    async def recording_ask(user_id, question, history, **kwargs):
+        seen.append(question)
+        return await fake(user_id, question, history, **kwargs)
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", recording_ask)
+    client = await _linked_client(fresh_db, client_factory)
+    if setup == "workout":
+        workout_id = await fresh_db.create_workout(111)
+        await fresh_db.finish_workout(workout_id)
+    elif setup == "routine":
+        await fresh_db.create_routine(111, "Моя программа")
+    else:
+        await fresh_db.update_user(111, goal="набор массы")
+
+    resp = await client.post("/ai/ask", json={"question": i18n.t("ai.screen.build_program_seed")})
+    assert resp.status_code == 200, resp.text
+    assert len(seen) == 1
+    assert await fresh_db.get_ai_question_count_today(111) == 1
+
+
+@pytest.mark.asyncio
+async def test_fresh_start_does_not_trigger_on_other_text_or_photo(fresh_db, client_factory, monkeypatch):
+    seen: list[str] = []
+    fake = _fake_ask_with_wire()
+
+    async def recording_ask(user_id, question, history, **kwargs):
+        seen.append(question)
+        return await fake(user_id, question, history, **kwargs)
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", recording_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"question": "Хочу собрать программу"})
+    assert resp.status_code == 200, resp.text
+    assert seen == ["Хочу собрать программу"]
+
+
+@pytest.mark.asyncio
+async def test_fresh_start_respects_busy_and_consent(fresh_db, client_factory, monkeypatch):
+    import api_v1_ai
+    import i18n
+
+    calls: list[str] = []
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _forbidden_ask(calls))
+    client = await _linked_client(fresh_db, client_factory)
+    api_v1_ai._busy.add(111)
+    try:
+        resp = await client.post("/ai/ask", json={"question": i18n.t("ai.screen.build_program_seed")})
+    finally:
+        api_v1_ai._busy.discard(111)
+    assert resp.status_code == 429
+    assert await fresh_db.get_ai_setup_state(111) is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_start_works_when_daily_question_quota_is_spent(fresh_db, client_factory, monkeypatch):
+    """Бесплатный путь не упирается в личную квоту: опросник доступен и при нуле."""
+    import i18n
+
+    monkeypatch.setattr(config, "AI_QUESTION_DAILY_LIMIT", 1)
+    ai_limits.reset_cache()
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _forbidden_ask([]))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.try_increment_ai_question_count(111, 1)
+
+    resp = await client.post("/ai/ask", json={"question": i18n.t("ai.screen.build_program_seed")})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["questions"]["total"] == 6
+
+
+# ---------- видимый текст служебных реплик в истории ----------
+
+
+@pytest.mark.asyncio
+async def test_history_and_archive_hide_setup_prompt(fresh_db, client_factory, monkeypatch):
+    import ai_setup_flow
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    setup = {
+        "questions": [{"question": "Сколько дней?", "choices": []}, {"question": "Травмы?", "choices": []}],
+        "answers": ["3 дня", None], "goal": "Хочу программу",
+    }
+    full = ai_setup_flow.setup_answers_text(setup)
+    assert "propose_program" in full
+    await fresh_db.add_ai_conversation_turn(111, full, "Собрал.", [{"role": "user", "content": full}])
+
+    messages = (await client.get("/ai/history")).json()["messages"]
+    shown = messages[0]["text"]
+    assert shown.startswith("Вот ответы:") and "— Сколько дней? — 3 дня" in shown
+    assert "propose_program" not in shown and "Исходная задача" not in shown
+    # Модели достался прежний текст целиком.
+    wire = await fresh_db.get_ai_conversation_wire_history(111)
+    assert wire[0]["content"] == full
+
+    assert (await client.delete("/ai/history")).status_code == 200
+    archived = (await client.get("/ai/conversations")).json()["conversations"][0]
+    assert "propose_program" not in archived["title"]
+    conv = (await client.get(f"/ai/conversations/{archived['id']}")).json()["messages"]
+    assert conv[0]["text"] == shown

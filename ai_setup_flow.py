@@ -130,3 +130,101 @@ def setup_enough_text(previous_goal: Optional[str]) -> str:
     if previous_goal:
         text = text + i18n.t("ai.screen.setup_original_goal", goal=previous_goal)
     return text
+
+
+# --- Короткий путь для чистого листа ------------------------------------------
+# У человека без тренировок, программ и цели в профиле смотреть модели не на что:
+# полный платный ход ради «задам пару вопросов» только держал на экране ожидание.
+# Вопросы тогда фиксированные — те же, что модель обычно задаёт, — а модель
+# подключается один раз, уже за программой, когда ответы собраны.
+
+_FRESH_QUESTIONS = (
+    ("days", ("2", "3", "4", "5")),
+    ("time", ("45", "60", "90")),
+    ("place", ("gym", "home_weights", "home_bare", "bar")),
+    ("experience", ("new", "year", "years", "veteran")),
+    ("injuries", ("none", "back", "knees", "shoulders")),
+)
+
+
+def fresh_start_questions() -> list[dict[str, Any]]:
+    """Шесть вопросов чистого листа на языке текущего контекста: цель — первой
+    (тот же `setup_goal_question`, что подставляется в обычном пути), дальше
+    дни, время, место и инвентарь, опыт, травмы. Не больше
+    `ai_trainer.SETUP_MAX_QUESTIONS` — иначе потолок молча срезал бы последний."""
+    import ai_trainer  # локально — цикл импортов, как в questions_with_goal
+
+    questions = [setup_goal_question()]
+    for slot, choices in _FRESH_QUESTIONS:
+        questions.append({
+            "question": i18n.t(f"ai.screen.setup_fresh.{slot}.question"),
+            "choices": [i18n.t(f"ai.screen.setup_fresh.{slot}.choice_{choice}") for choice in choices],
+        })
+    return questions[: ai_trainer.SETUP_MAX_QUESTIONS]
+
+
+def fresh_start_reply() -> str:
+    return i18n.t("ai.screen.setup_fresh.reply")
+
+
+def is_build_program_seed(text: str) -> bool:
+    """Это ровно текст кнопки «Составь мне программу» — на любом из двух
+    языков, а не только на языке аккаунта: приложение могло отправить seed
+    своей локали, пока язык в профиле другой."""
+    stripped = (text or "").strip()
+    return bool(stripped) and any(
+        stripped == i18n.t_in(lang, "ai.screen.build_program_seed").strip() for lang in i18n.SUPPORTED
+    )
+
+
+async def is_fresh_start(user_id: int) -> bool:
+    """Ни одной законченной тренировки, ни одной сохранённой программы и пустая
+    цель в профиле — смотреть модели не на что."""
+    user = await db.get_user(user_id)
+    if user is not None and (user["goal"] or "").strip():
+        return False
+    return await db.count_workouts(user_id) == 0 and await db.count_routines(user_id) == 0
+
+
+# --- Что из служебной реплики видит человек -----------------------------------
+# Модели уходит полный текст (`setup_answers_text`, `setup_enough_text`) и он же
+# лежит в wire-снимке разговора — переписывать его нельзя: историю с изменённым
+# префиксом кэш провайдера считает промахом. Поэтому фильтр стоит только на
+# выдаче клиенту (/v1 history, архив разговоров, заголовок архива).
+
+
+def _all_langs(key: str, **params: Any) -> list[str]:
+    return [i18n.t_in(lang, key, **params) for lang in i18n.SUPPORTED]
+
+
+def visible_user_text(text: str) -> str:
+    """Реплика пользователя в том виде, в каком её показывают клиенту.
+
+    Ответы на опросник — только заголовок и строки «вопрос — ответ» (с пометкой
+    про пропущенные); исходная задача и служебная рамка для модели отрезаются.
+    «Хватит спрашивать» — не слова человека вовсе, поэтому вместо
+    инструкции модели показываем короткую реплику (скрыть ход нельзя: пара
+    «вопрос — ответ» в ленте развалилась бы). Всё прочее возвращается как есть.
+    """
+    if not text:
+        return text
+    for lang in i18n.SUPPORTED:
+        enough = i18n.t_in(lang, "ai.screen.setup_enough_frame")
+        if text.startswith(enough):
+            return i18n.t_in(lang, "ai.screen.setup_enough_visible")
+        header = i18n.t_in(lang, "ai.screen.setup_answers_header")
+        frame = i18n.t_in(lang, "ai.screen.setup_answers_frame")
+        if not (text.startswith(header + "\n") and text.endswith(frame)):
+            continue
+        body = text[: len(text) - len(frame)].rstrip("\n")
+        note = i18n.t_in(lang, "ai.screen.setup_skipped_note")
+        has_note = body.endswith("\n" + note)
+        if has_note:
+            body = body[: len(body) - len(note) - 1]
+        goal_marker = i18n.t_in(lang, "ai.screen.setup_original_goal", goal="\0").split("\0")[0]
+        cut = body.find(goal_marker)
+        if cut != -1:
+            body = body[:cut]
+        body = body.rstrip("\n")
+        return body + ("\n" + note if has_note else "")
+    return text
