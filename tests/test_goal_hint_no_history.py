@@ -16,8 +16,8 @@ import i18n
 import progression_data
 from handlers.workout import _logging_hint
 
-RU_DEFAULT = "🎯 Цель: вес, с которым сделаешь 5–12 раз. Последние повторы — тяжело, но чисто."
-EN_DEFAULT = "🎯 Goal: a weight you can do 5–12 reps with. The last reps should be hard but clean."
+RU_DEFAULT = "🎯 Цель: вес, с которым сделаешь 5–12 раз. Последние повторы — тяжело, но чисто"
+EN_DEFAULT = "🎯 Goal: a weight you can do 5–12 reps with. The last reps should be hard but clean"
 
 
 # ---------- живой трекер в боте ----------

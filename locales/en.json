@@ -1230,7 +1230,7 @@
   "progress.total_reps": "total reps {n}",
   "progression.goal": "🎯 Goal: {goal}{reason}",
   "progression.goal_achieved": "✅ Goal hit: {goal}",
-  "progression.goal_no_history": "🎯 Goal: a weight you can do {min}–{max} reps with. The last reps should be hard but clean.",
+  "progression.goal_no_history": "🎯 Goal: a weight you can do {min}–{max} reps with. The last reps should be hard but clean",
   "progression.goal_reps": "{n} reps",
   "progression.goal_seconds": "{n} sec",
   "progression.reason_add_weight": " — hit {n} reps, adding weight",
