@@ -533,6 +533,10 @@ NEVER_LOCALIZED: dict[str, str] = {
         'JSON ({"error": "payload_too_large"}), человеческий текст под него '
         "рисует клиент — тот же случай, что api_v1_common.py ниже"
     ),
+    "no_store.py": (
+        "ASGI-мидлварь: Cache-Control: no-store на JSON-ответах /v1, "
+        "текста не формирует"
+    ),
     "server_timing.py": (
         "ASGI-мидлварь замера времени /v1: заголовок Server-Timing и строка "
         "журнала сервиса о медленном запросе, пользователю текста не отдаёт"
