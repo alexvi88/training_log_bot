@@ -4262,6 +4262,9 @@ async def _resolve_replaced_program(
     )
 
 
+CARRY_REPLACES_MAX_AGE_HOURS = 6
+
+
 async def carry_over_replaces(
     user_id: int, previous: Optional[dict[str, Any]], draft: dict[str, Any]
 ) -> dict[str, Any]:
@@ -4281,9 +4284,20 @@ async def carry_over_replaces(
     (она могла исчезнуть или измениться руками между правками); нет её больше —
     `replaces` не переносится.
 
+    Прошлый черновик должен быть не старше CARRY_REPLACES_MAX_AGE_HOURS
+    (`created_at` ставят обработчики при записи черновика).
+
     Возвращает тот же `draft`, дополненный `replaces`, либо его без изменений.
     """
     if draft.get("replaces") or not previous or not previous.get("replaces"):
+        return draft
+    # Только свежий прошлый черновик: вчерашнее превью — не «ещё раз поправь»,
+    # а другой разговор. Без метки времени (черновик до её появления) не переносим.
+    try:
+        age = db.utc_now_naive() - dt.datetime.fromisoformat(previous["created_at"])
+    except (KeyError, TypeError, ValueError):
+        return draft
+    if age > dt.timedelta(hours=CARRY_REPLACES_MAX_AGE_HOURS):
         return draft
     old_name = str(previous["replaces"].get("name") or "")
     same = {old_name.strip().lower(), str(previous.get("name") or "").strip().lower()} - {""}

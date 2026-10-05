@@ -1052,6 +1052,11 @@ def _utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 
 
+def utc_now_naive() -> dt.datetime:
+    """Тот же «сейчас», что пишет now_iso (naive UTC) — для сравнения с его метками."""
+    return _utc_now()
+
+
 def now_iso() -> str:
     return _utc_now().isoformat(timespec="seconds")
 
@@ -8619,9 +8624,21 @@ async def rename_routine(routine_id: int, name: str) -> None:
 
 
 async def replace_program_days(
-    user_id: int, program_id: int, plans: list[dict[str, Any]], delete_ids: list[int]
-) -> list[int]:
-    """Переписать дни программы одной транзакцией и вернуть id дней по порядку.
+    user_id: int,
+    program_id: int,
+    plans: list[dict[str, Any]],
+    delete_ids: list[int],
+    *,
+    rename_to: Optional[str] = None,
+    description: Optional[str] = None,
+    deload_every_weeks: Optional[int] = None,
+) -> tuple[list[int], bool]:
+    """Переписать программу одной транзакцией: (id дней по порядку, переименована ли).
+
+    В ту же транзакцию входят переименование (`rename_to`; занятое имя —
+    не ошибка, программа остаётся под прежним, флаг False), описание (только
+    если непустое) и разгрузка (пишется всегда: не прислали — её нет).
+    Откат возвращает программу целиком прежней.
 
     Каждый план — `{"routine_id": int | None, "name": str, "exercises":
     [(exercise_id, target, progression_json | None), ...]}`. День с `routine_id`
@@ -8633,6 +8650,26 @@ async def replace_program_days(
     async with _write_lock:
         db = conn()
         try:
+            renamed = False
+            if rename_to:
+                new_name = rename_to.strip()
+                try:
+                    await db.execute(
+                        "UPDATE programs SET name = ?, name_key = ? WHERE id = ?",
+                        (new_name, _program_key(new_name), program_id),
+                    )
+                    renamed = True
+                except aiosqlite.IntegrityError:
+                    pass
+            if description:
+                await db.execute(
+                    "UPDATE programs SET description = ? WHERE id = ?",
+                    (clean_program_description(description), program_id),
+                )
+            await db.execute(
+                "UPDATE programs SET deload_every_weeks = ? WHERE id = ?",
+                (clean_deload_every_weeks(deload_every_weeks), program_id),
+            )
             ids: list[int] = []
             for order, plan in enumerate(plans):
                 routine_id = plan.get("routine_id")
@@ -8668,7 +8705,7 @@ async def replace_program_days(
         except Exception:
             await db.rollback()
             raise
-    return ids
+    return ids, renamed
 
 
 async def delete_routine(routine_id: int) -> None:

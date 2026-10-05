@@ -82,7 +82,8 @@ async def test_second_edit_without_replaces_keeps_it_and_saves_into_same_program
 
 async def test_carry_over_matches_by_replaced_or_previous_draft_name(fresh_db, user_id):
     program_id, _ = await _saved_program(fresh_db, user_id)
-    _, previous = None, {
+    previous = {
+        "created_at": fresh_db.now_iso(),
         "name": "Сплит 4д",
         "replaces": (await ai_trainer._resolve_replaced_program(user_id, "Сплит"))[0],
     }
@@ -96,7 +97,7 @@ async def test_carry_over_matches_by_replaced_or_previous_draft_name(fresh_db, u
 async def test_carry_over_skips_other_name_explicit_replaces_and_deleted_program(fresh_db, user_id):
     program_id, _ = await _saved_program(fresh_db, user_id)
     replaces = (await ai_trainer._resolve_replaced_program(user_id, "Сплит"))[0]
-    previous = {"name": "Сплит", "replaces": replaces}
+    previous = {"name": "Сплит", "replaces": replaces, "created_at": fresh_db.now_iso()}
 
     other = await ai_trainer.carry_over_replaces(user_id, previous, {"name": "Фуллбоди"})
     assert not other.get("replaces")
@@ -108,10 +109,56 @@ async def test_carry_over_skips_other_name_explicit_replaces_and_deleted_program
     assert not (await ai_trainer.carry_over_replaces(
         user_id, {"name": "Сплит"}, {"name": "Сплит"}
     )).get("replaces")
+    # без метки времени — тоже не переносим
+    legacy = {"name": "Сплит", "replaces": replaces}
+    assert not (await ai_trainer.carry_over_replaces(user_id, legacy, {"name": "Сплит"})).get("replaces")
 
     await fresh_db.delete_program_by_id(program_id)
     gone = await ai_trainer.carry_over_replaces(user_id, previous, {"name": "Сплит"})
     assert not gone.get("replaces")
+
+
+async def test_stale_previous_draft_is_not_carried(fresh_db, user_id):
+    import datetime as dt
+
+    await _saved_program(fresh_db, user_id)
+    replaces = (await ai_trainer._resolve_replaced_program(user_id, "Сплит"))[0]
+    old = (fresh_db.utc_now_naive() - dt.timedelta(hours=7)).isoformat(timespec="seconds")
+    fresh = (fresh_db.utc_now_naive() - dt.timedelta(hours=5)).isoformat(timespec="seconds")
+
+    stale = await ai_trainer.carry_over_replaces(
+        user_id, {"name": "Сплит", "replaces": replaces, "created_at": old}, {"name": "Сплит"}
+    )
+    assert not stale.get("replaces")
+    ok = await ai_trainer.carry_over_replaces(
+        user_id, {"name": "Сплит", "replaces": replaces, "created_at": fresh}, {"name": "Сплит"}
+    )
+    assert ok["replaces"]["name"] == "Сплит"
+
+
+async def test_telegram_path_calls_carry_over_with_previous_draft(fresh_db, user_id, monkeypatch):
+    previous = {"id": "a", "name": "Сплит", "created_at": fresh_db.now_iso(), "days": [{}]}
+    seen = []
+    real = ai_trainer.carry_over_replaces
+
+    async def spy(uid, prev, draft):
+        seen.append((uid, prev, dict(draft)))
+        return await real(uid, prev, draft)
+
+    async def fake_ask(uid, question, history, on_program=None, **kwargs):
+        await ai_trainer.execute_tool(uid, "propose_program", _tool_input("Сплит", ["А"]), on_program=on_program)
+        return "Собрал."
+
+    monkeypatch.setattr(handler.ai_trainer, "carry_over_replaces", spy)
+    monkeypatch.setattr(handler.ai_trainer, "ask", fake_ask)
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    await state.update_data(ai_program_draft=previous)
+
+    await handler.ai_question(_make_chat_message(user_id, "собери"), state)
+
+    assert len(seen) == 1 and seen[0][1] == previous and seen[0][2]["name"] == "Сплит"
+    assert "created_at" in (await state.get_data())["ai_program_draft"]
 
 
 # ---------- 2. дни обновляются на месте ----------
@@ -258,3 +305,59 @@ def test_superseded_text_is_in_both_catalogs():
         with open(f"locales/{lang}.json", encoding="utf-8") as fh:
             catalog = json.load(fh)
         assert catalog["ai.screen.program_superseded"].strip()
+
+
+async def test_renamed_and_reordered_days_do_not_inherit_foreign_history(fresh_db, user_id):
+    program_id, (chest, back, legs) = await _saved_program(
+        fresh_db, user_id, days=("Грудь", "Спина", "Ноги")
+    )
+    await _finished_workout(fresh_db, user_id, back, "2026-09-01T10:00:00")
+
+    draft = await _draft_for(user_id, "Сплит", ["Ноги", "Верх", "Низ"])
+    await ai_program_actions.finalize_program_save(user_id, draft)
+
+    days = await fresh_db.list_program_days_by_id(program_id)
+    assert [d["name"] for d in days] == ["Ноги", "Верх", "Низ"]
+    assert days[0]["id"] == legs
+    assert not {chest, back} & {d["id"] for d in days}
+    history = await fresh_db.program_day_history(program_id)
+    assert set(history) <= {legs}
+
+
+def test_match_days_pairs_by_exercise_overlap():
+    old = [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}, {"id": 3, "name": "C"}]
+    new = [{"name": "X"}, {"name": "Y"}, {"name": "C"}]
+    got = ai_program_actions.match_days(new, old, [{20, 21}, {30}, {99}], {1: {10}, 2: {20, 21, 22}, 3: {99}})
+    assert got == [2, None, 3]
+
+
+async def test_replace_program_days_updates_and_deletes_in_one_transaction(fresh_db, user_id):
+    program_id, (a, b, c) = await _saved_program(fresh_db, user_id, days=("А", "Б", "В"))
+    ex = await fresh_db.get_or_create_user_exercise_by_name(user_id, TEMPLATE_A)
+
+    ids, renamed = await fresh_db.replace_program_days(
+        user_id, program_id,
+        [{"routine_id": b, "name": "Б2", "exercises": [(ex, "3×5", None)]}],
+        [a, c], rename_to="Новое имя", description="Описание", deload_every_weeks=4,
+    )
+
+    assert ids == [b] and renamed is True
+    days = await fresh_db.list_program_days_by_id(program_id)
+    assert [(d["id"], d["name"]) for d in days] == [(b, "Б2")]
+    program = await fresh_db.get_program(program_id)
+    assert (program["name"], program["description"], program["deload_every_weeks"]) == (
+        "Новое имя", "Описание", 4
+    )
+
+
+async def test_rollback_restores_name_description_and_deload(fresh_db, user_id):
+    program_id, (a, b) = await _saved_program(fresh_db, user_id)
+    with pytest.raises(Exception):  # noqa: B017 — NOT NULL exercise_id
+        await fresh_db.replace_program_days(
+            user_id, program_id,
+            [{"routine_id": a, "name": "Z", "exercises": [(None, None, None)]}],
+            [b], rename_to="Другое", description="Новое", deload_every_weeks=6,
+        )
+    program = await fresh_db.get_program(program_id)
+    assert program["name"] == "Сплит" and program["deload_every_weeks"] is None
+    assert [d["id"] for d in await fresh_db.list_program_days_by_id(program_id)] == [a, b]

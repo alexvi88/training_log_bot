@@ -1775,7 +1775,7 @@
   "ai.screen.program_superseded": "That's the old version — I've already reworked it. The fresh button is under my latest answer, hit that one.",
   "ai.screen.program_gone": "This offer isn't current anymore. If you saved it, the program's already in “🗂 Programs”; if not, ask the coach to put one together again.",
   "ai.screen.save_failed_new": "⚠️ Couldn't save the program — nothing got written. \nThe coach's offer is still live: hit the button again.",
-  "ai.screen.save_failed_replace": "⚠️ Couldn't update the program: some of the new days may have already been added next to the old ones — check “🗂 Programs” to see.\nThe coach's offer is still live: hit the button again.",
+  "ai.screen.save_failed_replace": "⚠️ Couldn't update the program — the old version is untouched.\nThe offer is still live: hit the button again.",
   "ai.screen.setup_hint_with_choices": "Tap an option or write your own. Don't know — just say so, we'll sort it out.",
   "ai.screen.setup_hint_text_only": "Answer in words. Don't know — just say so, we'll sort it out.",
   "ai.screen.setup_answers_frame": "These are the person's answers to your clarifying questions. If instead of answering they asked a counter-question or said they don't know, respond to that in your text, and if the program can't be built without this data, call ask_setup_questions again with ONLY the questions that are still open. If you have enough to go on, don't ask again — pick a sensible default and say so out loud. And in any case, except for asking again, on this same step BUILD the program by calling propose_program: without calling the tool, the person won't see the composition or a save button — your text alone isn't a program.",

@@ -657,6 +657,7 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
             turn["draft"] = await ai_trainer.carry_over_replaces(
                 user_id, await db.get_ai_program_draft(user_id), turn["draft"]
             )
+            turn["draft"]["created_at"] = db.now_iso()
             await db.set_ai_program_draft(user_id, draft_id, turn["draft"])
             program_json = _program_json(
                 draft_id, turn["draft"],

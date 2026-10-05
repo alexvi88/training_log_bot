@@ -2214,6 +2214,7 @@ async def _handle_question(
         # обязан не повторяться никогда; 8 hex-символов спокойно влезают в
         # 64 байта callback_data.
         program_draft["id"] = secrets.token_hex(4)
+        program_draft["created_at"] = db.now_iso()
         await state.update_data(ai_history=history, ai_program_draft=program_draft)
     else:
         await state.update_data(ai_history=history)
