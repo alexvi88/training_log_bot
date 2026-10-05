@@ -99,6 +99,51 @@ async def test_first_workout_ever_reports_new_achievements(fresh_db, client_fact
     assert rewards["milestone"]
 
 
+# Поля `rewards`, которые приложение разбирает как обязательную строку
+# (`WorkoutRewards` в iOS: tonnage, tonnage_equivalent). null в любом из них
+# роняет разбор всего ответа finish.
+_REQUIRED_STRINGS = ("tonnage", "tonnage_equivalent")
+
+
+def _assert_required_strings(rewards: dict) -> None:
+    for key in _REQUIRED_STRINGS:
+        assert isinstance(rewards[key], str), f"rewards.{key} = {rewards[key]!r}"
+    for badge in rewards["new_achievements"]:
+        for key in ("code", "name", "description"):
+            assert isinstance(badge[key], str), f"new_achievements[].{key}"
+    if rewards["rank_promotion"] is not None:
+        assert isinstance(rewards["rank_promotion"]["name"], str)
+
+
+@pytest.mark.asyncio
+async def test_light_workout_rewards_have_no_null_strings(fresh_db, client_factory):
+    """Лёгкая тренировка (0 кг x 5, тоннаж ниже порога шутки «как N холодильников»):
+    `tonnage_equivalent` приходит пустой строкой, а не null — иначе установленное
+    приложение не разбирало ответ finish целиком, показывало «обнови приложение»
+    и считало закрытую на сервере тренировку идущей. Повтор finish (replay) —
+    то же самое."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Подтягивания"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets",
+        json={"exercise_id": exercise_id, "weight": 0, "reps": 5},
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+    first = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert first.status_code == 200, first.text
+    assert "replayed" not in first.json()
+    _assert_required_strings(first.json()["rewards"])
+    assert first.json()["rewards"]["tonnage_equivalent"] == ""
+
+    replay = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["replayed"] is True
+    _assert_required_strings(replay.json()["rewards"])
+    assert replay.json()["rewards"]["tonnage_equivalent"] == ""
+
+
 @pytest.mark.asyncio
 async def test_backfilled_workout_has_no_milestone(fresh_db, client_factory):
     """Занесение задним числом вносится не по порядку, и «N-я тренировка» по
