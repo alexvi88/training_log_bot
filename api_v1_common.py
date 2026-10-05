@@ -115,6 +115,8 @@ ERROR_KEY_BY_CODE: dict[str, str] = {
     "question_limit_exceeded": "limit.question",
     "video_limit_exceeded": "limit.video.generic",
     "food_limit_exceeded": "limit.food.generic",
+    "voice_limit_exceeded": "limit.voice.generic",
+    "import_limit_exceeded": "limit.import.generic",
     "spend_limit_exceeded": "limit.spend_hard",
     "busy": "ai.screen.busy",
     "save_failed": "ai.screen.save_failed_new",

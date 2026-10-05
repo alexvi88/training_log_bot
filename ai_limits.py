@@ -51,12 +51,24 @@ KIND_SEARCH = "search"
 KIND_SEARCH_GLOBAL = "search_global"
 KIND_VIDEO = "video"
 KIND_FOOD = "food"
+KIND_VOICE = "voice"
+KIND_IMPORT = "import"
 KIND_SPEND_SOFT = "spend_soft"
 KIND_SPEND_HARD = "spend_hard"
 
 # Дорогие необязательные шаги: их SOFT-потолок выключает первыми, оставляя
 # тренера на связи. Вопрос сюда не входит намеренно — он и есть продукт.
 _EXTRAS = (KIND_SEARCH, KIND_SEARCH_GLOBAL, KIND_VIDEO, KIND_FOOD)
+
+# Виды, которые SOFT не выключает (голос — способ логировать подходы, импорт —
+# разовый переезд), но HARD-стоп по деньгам держит так же, как вопрос.
+_HARD_ONLY = (KIND_QUESTION, KIND_VOICE, KIND_IMPORT)
+
+# Счётчики этих видов живут в общей таблице db.ai_usage (по виду в ключе).
+_GENERIC_USAGE = {
+    KIND_VOICE: lambda: config.AI_VOICE_DAILY_LIMIT,
+    KIND_IMPORT: lambda: config.AI_IMPORT_DAILY_LIMIT,
+}
 
 
 @dataclass
@@ -177,10 +189,26 @@ def _food_text(reason: str) -> str:
     return i18n.t("limit.food.generic")
 
 
+def _voice_text(reason: str) -> str:
+    if reason == KIND_VOICE:
+        return i18n.t("limit.voice.exact", n=config.AI_VOICE_DAILY_LIMIT)
+    return i18n.t("limit.voice.generic")
+
+
+def _import_text(reason: str) -> str:
+    if reason == KIND_IMPORT:
+        return i18n.t("limit.import.exact", n=config.AI_IMPORT_DAILY_LIMIT)
+    return i18n.t("limit.import.generic")
+
+
 def _user_text(kind: str, reason: str) -> Optional[str]:
     """reason — из-за чего блок: сам вид лимита или ступень по деньгам."""
     if reason == KIND_SPEND_HARD:
         return _hard_stop_text()
+    if kind == KIND_VOICE:
+        return _voice_text(reason)
+    if kind == KIND_IMPORT:
+        return _import_text(reason)
     if kind == KIND_QUESTION:
         return _question_limit_text()
     if kind == KIND_VIDEO:
@@ -197,6 +225,8 @@ _KIND_TITLE_KEYS = {
     KIND_SEARCH_GLOBAL: "limit.preview.kind.search_global",
     KIND_VIDEO: "limit.preview.kind.video",
     KIND_FOOD: "limit.preview.kind.food",
+    KIND_VOICE: "limit.preview.kind.voice",
+    KIND_IMPORT: "limit.preview.kind.import",
     KIND_SPEND_SOFT: "limit.preview.kind.spend_soft",
     KIND_SPEND_HARD: "limit.preview.kind.spend_hard",
 }
@@ -247,6 +277,9 @@ async def _exhausted(user_id: int, kind: str) -> Optional[str]:
     elif kind == KIND_FOOD:
         used = await db.get_ai_food_count_today(user_id)
         limit = config.AI_FOOD_DAILY_LIMIT
+    elif kind in _GENERIC_USAGE:
+        used = await db.get_ai_usage_today(user_id, kind)
+        limit = _GENERIC_USAGE[kind]()
     else:
         return None
     if limit > 0 and used >= limit:
@@ -293,7 +326,7 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
     """
     reason = None
     level = await spend_level()
-    if level == KIND_SPEND_HARD and kind == KIND_QUESTION:
+    if level == KIND_SPEND_HARD and kind in _HARD_ONLY:
         # Единственный лимит, который не пропускает никого, включая свои
         # аккаунты: стоп-кран, который можно проехать, стоп-краном не является.
         spend = await daily_spend_usd()
@@ -313,6 +346,11 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
         log = f"{reason}: за сутки ~${await daily_spend_usd():.2f}"
 
     block = Block(kind=kind, log=log, user_text=_user_text(kind, reason))
+    if reason == KIND_SPEND_HARD:
+        # HARD-стоп не пропускает никого и никакой «Понятно» (расписка могла
+        # остаться от квоты или SOFT того же вида): стоп-кран, который можно
+        # проехать по старой расписке, стоп-краном не является.
+        return block
     if user_id in config.limit_preview_ids():
         if await db.has_limit_ack(user_id, kind, await ack_day(user_id, kind)):
             logger.info("limit %s пропущен: свой аккаунт %s уже нажал «Понятно»", kind, user_id)

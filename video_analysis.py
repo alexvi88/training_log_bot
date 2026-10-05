@@ -583,6 +583,16 @@ async def analyze(
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")
+    # Квота видео списывается ЗДЕСЬ, как только платный вызов состоялся, — а не
+    # у вызывающих после успешного разбора. Раньше мусор вместо JSON или
+    # оборванное рассуждение (деньги уже ушли, разбора нет) не стоили человеку
+    # ни одной попытки, и ролики можно было гонять бесконечно за наш счёт.
+    # Сбой ДО ответа провайдера (сеть, 4xx) сюда не доезжает и квоту не тратит.
+    if user_id is not None:
+        try:
+            await db.increment_ai_video_count(user_id)
+        except Exception:
+            logger.exception("failed to count video analysis attempt")
 
     raw = (response.choices[0].message.content or "").strip()
     payload = _strip_reasoning(raw)

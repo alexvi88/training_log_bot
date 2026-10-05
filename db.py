@@ -373,6 +373,18 @@ CREATE TABLE IF NOT EXISTS ai_food_usage (
     PRIMARY KEY (telegram_id, date)
 );
 
+-- Счётчики новых видов лимита (голос, текстовый импорт): одна таблица с видом в
+-- ключе вместо ai_<вид>_usage на каждый — новый платный шаг не должен тянуть за
+-- собой ещё одну таблицу и правку слияния аккаунтов. Сутки — календарные
+-- пользователя, как у остальных (db._quota_day).
+CREATE TABLE IF NOT EXISTS ai_usage (
+    telegram_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, kind, date)
+);
+
 -- «Понятно» на предупреждении о лимите (см. ai_limits.py): свои аккаунты видят
 -- потолок первый раз за сутки и дальше в этот день проходят сквозь него. Строка,
 -- а не флаг в памяти: перезапуск контейнера не должен показывать одно и то же
@@ -1605,6 +1617,18 @@ async def _migrate_schema() -> None:
     await _conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique "
         "ON routine_exercises (routine_id, exercise_id)"
+    )
+    # Обратный ход — «где стоит это упражнение»: usage_count в списках упражнений
+    # (list_user_exercises*), фильтр _VISIBLE_EXERCISE_FILTER, объединение дублей.
+    # Уникальные индексы выше ведут с block_id/routine_id, и поиск по exercise_id
+    # шёл полным обходом индекса на КАЖДУЮ строку списка (SCAN ... COVERING INDEX).
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_block_exercises_exercise "
+        "ON block_exercises (exercise_id, block_id)"
+    )
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_routine_exercises_exercise "
+        "ON routine_exercises (exercise_id)"
     )
 
     routine_cols = await _column_names("routines")
@@ -6585,6 +6609,40 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+async def list_all_sets_by_exercise_deduped(user_id: int) -> list[aiosqlite.Row]:
+    """То же, что `list_all_sets_by_exercise`, но подходы, неотличимые друг от друга
+    в пределах одной тренировки (одно упражнение, одна нагрузка, повторы и RPE),
+    свёрнуты в одну строку — первую по id. В питон едет в разы меньше строк
+    («3×5×100» три раза подряд — одна), а рекорды (hall_of_fame_data._top_lifts)
+    выходят те же:
+
+    * рекорд ищется строгим «больше», то есть повтор уже виденного подхода его
+      никогда не двигает, а выигрывает первый из равных;
+    * первый из равных — это строка с минимальным id среди неотличимых, и
+      порядок строк (упражнение, started_at, id первого подхода) задаёт тот же
+      порядок «кто раньше», что и у подходов целиком;
+    * число подходов и тоннаж в зале славы отсюда не берутся (их считает
+      `hall_of_fame_aggregates`).
+
+    Свёртка внутри тренировки, а не по всей истории, чтобы не терять порядок
+    между тренировками. Эталон точности — tests/test_hall_of_fame_dedupe.py.
+    """
+    cur = await conn().execute(
+        f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, s.rpe, e.id AS exercise_id, e.display_name, "
+        "       w.id AS workout_id, w.started_at, MIN(s.id) AS first_set_id "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "  AND e.is_archived = 0 AND e.is_template = 0 "
+        f"GROUP BY e.id, w.id, {LOAD_WEIGHT_SQL}, s.reps, s.rpe "
+        "ORDER BY e.id, w.started_at, first_set_id",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
 async def list_sets_by_exercise_since(user_id: int, since: str) -> list[aiosqlite.Row]:
     """Подходы за последние недели, по всем упражнениям сразу, старые первыми —
     с именем упражнения, группой и RPE.
@@ -9347,6 +9405,7 @@ async def log_cost_event(
     cached_tokens: int = 0,
     reasoning_tokens: int = 0,
     source: str = "bot",
+    audio_seconds: float = 0,
 ) -> None:
     """Строка в cost_events + строка в лог с ценой этого вызова.
 
@@ -9362,9 +9421,16 @@ async def log_cost_event(
 
     reasoning_tokens — внутренние размышления модели, отдельный billable тип у
     xAI: в completion_tokens они не входят и тарифицируются как выход.
+
+    audio_seconds — только для расшифровок: длительность записи, по ней и
+    считается цена (поминутный тариф). Хранится в `prompt_tokens` (у аудио токенов
+    нет, а своя колонка ради одного типа события — лишняя миграция); ноль значит
+    «длительности нет» — плоская ставка за вызов, как у строк до этой правки.
     """
     if event_type == "transcription":
-        price = config.TRANSCRIPTION_PRICE_USD_PER_CALL
+        audio_seconds = max(0, int(round(audio_seconds or 0)))
+        prompt_tokens = audio_seconds
+        price = config.transcription_price_usd(audio_seconds)
     elif event_type == "server_tool":
         price = config.SERVER_TOOL_PRICE_USD_PER_CALL
     else:
@@ -9468,6 +9534,27 @@ async def get_server_tool_count(date_str: str) -> dict[str, int]:
     return {(model or "unknown"): calls for model, calls in await cur.fetchall()}
 
 
+async def _transcription_cost_usd(start: str, end: str) -> float:
+    """Расшифровки за отрезок: строки с длительностью — поминутно, без неё — плоско."""
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(CASE WHEN prompt_tokens > 0 THEN prompt_tokens ELSE 0 END), 0), "
+        "COALESCE(SUM(CASE WHEN prompt_tokens > 0 THEN 0 ELSE 1 END), 0) "
+        "FROM cost_events WHERE event_type = 'transcription' AND created_at >= ? AND created_at < ?",
+        (start, end),
+    )
+    seconds, flat_calls = await cur.fetchone()
+    return (
+        seconds / 60 * config.TRANSCRIPTION_PRICE_USD_PER_MINUTE
+        + flat_calls * config.TRANSCRIPTION_PRICE_USD_PER_CALL
+    )
+
+
+async def get_transcription_cost_usd(date_str: str) -> float:
+    """Во сколько обошлись расшифровки за календарный день (для суточного отчёта)."""
+    start, end = _day_bounds(date_str)
+    return await _transcription_cost_usd(start, end)
+
+
 async def get_cost_total_usd(date_str: Optional[str] = None) -> float:
     """Во сколько обошлись сутки — все платные вызовы, одной суммой.
 
@@ -9494,12 +9581,12 @@ async def get_cost_total_usd(date_str: Optional[str] = None) -> float:
     total = 0.0
     for event_type, model, calls, prompt, completion, cached, reasoning in await cur.fetchall():
         if event_type == "transcription":
-            total += calls * config.TRANSCRIPTION_PRICE_USD_PER_CALL
+            continue  # считаем одним запросом ниже — у расшифровок цена по секундам
         elif event_type == "server_tool":
             total += calls * config.SERVER_TOOL_PRICE_USD_PER_CALL
         else:
             total += config.call_price_usd(model or "", prompt, completion, cached, reasoning)
-    return total
+    return total + await _transcription_cost_usd(start, end)
 
 
 async def prune_old_cost_events(retention_days: int) -> int:
@@ -9507,7 +9594,7 @@ async def prune_old_cost_events(retention_days: int) -> int:
     this table, and only ever one day back, so nothing needs it to grow forever."""
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
-        cur = await conn().execute("DELETE FROM cost_events WHERE date(created_at) < ?", (cutoff,))
+        cur = await conn().execute("DELETE FROM cost_events WHERE created_at < ?", (cutoff,))
         await conn().commit()
         return cur.rowcount
 
@@ -9890,7 +9977,7 @@ async def prune_old_funnel_events(retention_days: int) -> int:
     продуктовых событий (config.ANALYTICS_RETENTION_DAYS)."""
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
-        cur = await conn().execute("DELETE FROM funnel_events WHERE date(created_at) < ?", (cutoff,))
+        cur = await conn().execute("DELETE FROM funnel_events WHERE created_at < ?", (cutoff,))
         await conn().commit()
     return cur.rowcount
 
@@ -9903,7 +9990,7 @@ async def prune_old_user_events(retention_days: int) -> int:
     """
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
-        cur = await conn().execute("DELETE FROM user_events WHERE date(created_at) < ?", (cutoff,))
+        cur = await conn().execute("DELETE FROM user_events WHERE created_at < ?", (cutoff,))
         await conn().commit()
         return cur.rowcount
 
@@ -10003,7 +10090,7 @@ async def prune_old_diagnostics(retention_days: int) -> int:
     падение трёхмесячной сборки, которой ни у кого уже нет, чинить незачем."""
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
-        cur = await conn().execute("DELETE FROM diagnostics WHERE date(created_at) < ?", (cutoff,))
+        cur = await conn().execute("DELETE FROM diagnostics WHERE created_at < ?", (cutoff,))
         await conn().commit()
         return cur.rowcount
 
@@ -10036,6 +10123,30 @@ async def backup_to_file(dest_path: str) -> None:
             logger.warning("backup_to_file: VACUUM INTO collided with a live statement, retrying (%s)", exc)
     assert last_error is not None
     raise last_error
+
+
+def verify_backup_file(path: str) -> None:
+    """Проверить копию, прежде чем выдать её за бэкап: непустой файл и
+    `PRAGMA integrity_check` == ok на САМОЙ копии (не на рабочей базе).
+
+    Синхронная — зовётся через asyncio.to_thread со своим соединением: рабочее
+    соединение занято живой базой. Бросает RuntimeError с причиной; огрызок
+    (обрыв на полпути, полный диск) иначе выглядел бы свежим бэкапом, а возраст
+    последней копии считается по mtime файла.
+    """
+    size = os.path.getsize(path)
+    if size <= 0:
+        raise RuntimeError("backup file is empty")
+    check = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = check.execute("PRAGMA integrity_check").fetchall()
+    except sqlite3.Error as exc:  # не база вовсе / оборвана настолько, что не открыть
+        raise RuntimeError(f"backup is not a readable database: {exc}") from exc
+    finally:
+        check.close()
+    verdict = "; ".join(str(r[0]) for r in rows)
+    if verdict != "ok":
+        raise RuntimeError(f"backup integrity_check failed: {verdict[:300]}")
 
 
 # ---------- push notifications ----------
@@ -10339,6 +10450,27 @@ async def increment_ai_video_count(telegram_id: int) -> None:
             "INSERT INTO ai_video_usage (telegram_id, date, count) VALUES (?, ?, 1) "
             "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
             (telegram_id, today),
+        )
+        await conn().commit()
+
+
+async def get_ai_usage_today(telegram_id: int, kind: str) -> int:
+    """Сколько раз за сутки пользователя списан этот вид (таблица `ai_usage`)."""
+    cur = await conn().execute(
+        "SELECT count FROM ai_usage WHERE telegram_id = ? AND kind = ? AND date = ?",
+        (telegram_id, kind, await _quota_day(telegram_id)),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
+async def increment_ai_usage(telegram_id: int, kind: str) -> None:
+    today = await _quota_day(telegram_id)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_usage (telegram_id, kind, date, count) VALUES (?, ?, ?, 1) "
+            "ON CONFLICT (telegram_id, kind, date) DO UPDATE SET count = count + 1",
+            (telegram_id, kind, today),
         )
         await conn().commit()
 

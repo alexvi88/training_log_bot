@@ -34,7 +34,7 @@ def _fake_client(content: str):
 # ---------- ai_trainer.match_exercise_names_to_catalog ----------
 
 
-async def test_matches_confident_pairs_and_ignores_the_rest(monkeypatch):
+async def test_matches_confident_pairs_and_ignores_the_rest(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     client = _fake_client(json.dumps({
         "matches": [
@@ -51,7 +51,7 @@ async def test_matches_confident_pairs_and_ignores_the_rest(monkeypatch):
     assert result == {"Bench Press (Barbell)": "Жим штанги лёжа"}
 
 
-async def test_hallucinated_import_name_is_dropped(monkeypatch):
+async def test_hallucinated_import_name_is_dropped(fresh_db, monkeypatch):
     """Модель отвечает по своей схеме, но не обязана ограничиться тем, что
     реально прислали — имя не из запроса ничем не лучше выдумки."""
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
@@ -73,7 +73,7 @@ async def test_returns_empty_when_not_configured(monkeypatch):
     assert result == {}
 
 
-async def test_returns_empty_on_provider_error(monkeypatch):
+async def test_returns_empty_on_provider_error(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
     async def boom(**kwargs):
@@ -87,7 +87,7 @@ async def test_returns_empty_on_provider_error(monkeypatch):
     assert result == {}
 
 
-async def test_returns_empty_for_unparsable_response(monkeypatch):
+async def test_returns_empty_for_unparsable_response(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     client = _fake_client("не json вовсе")
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)

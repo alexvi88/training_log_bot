@@ -1338,6 +1338,7 @@ async def test_ask_video_full_scenario_with_own_exercise(fresh_db, client_factor
     async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
         assert exercise_hint == "Присед со штангой"
         assert mime_type == "video/mp4"
+        await fresh_db.increment_ai_video_count(user_id)  # квоту списывает сам analyze
         return _fake_analysis()
 
     monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
@@ -1656,6 +1657,7 @@ async def test_concurrent_video_asks_pay_for_analysis_only_once(fresh_db, client
         nonlocal analyze_calls
         analyze_calls += 1
         await release.wait()
+        await fresh_db.increment_ai_video_count(user_id)  # квоту списывает сам analyze
         return _fake_analysis()
 
     async def fake_ask(user_id, question, history, **kwargs):

@@ -217,7 +217,7 @@ async def test_voice_asks_before_logging(fresh_db, user_id, monkeypatch):
     state, _ex_id, block_id = await _setup(db, user_id)
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
-    async def _fake_transcribe(buf, uid):
+    async def _fake_transcribe(buf, uid, duration_seconds=None):
         return "пятьсот пятьдесят пять на пять"
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)

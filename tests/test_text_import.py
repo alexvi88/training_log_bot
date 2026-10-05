@@ -157,7 +157,7 @@ def test_ambiguous_numeric_dates_get_a_warning_naming_the_reading():
     assert text_import.date_warnings("03/09/2026\n25/09/2026", "ru") == []
 
 
-async def test_extract_stitches_date_across_chunks(monkeypatch):
+async def test_extract_stitches_date_across_chunks(fresh_db, monkeypatch):
     monkeypatch.setattr(text_import, "CHUNK_CHARS", 30)
     # Три строки по ~25 символов при куске в 30 — ровно три куска; ответы
     # раздаются по содержимому куска, а не по порядку: куски идут параллельно.
@@ -183,7 +183,7 @@ async def test_extract_stitches_date_across_chunks(monkeypatch):
     assert all(c["today"] == "2026-09-29" for c in completions.calls)
 
 
-async def test_extract_survives_garbage_answer(monkeypatch):
+async def test_extract_survives_garbage_answer(fresh_db, monkeypatch):
     completions = _install(monkeypatch, [])
 
     async def garbage(**kwargs):

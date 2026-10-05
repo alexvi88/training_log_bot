@@ -69,10 +69,13 @@ async def _top_lifts(
     weighted: list[tuple[tuple[str, float, int, float], int]] = []
     bodyweight: list[tuple[tuple[str, float, int, float], int]] = []
 
-    # One query for every set the user owns, then grouped here — the per-exercise
-    # version cost a round-trip per exercise ever created (see list_all_sets_by_exercise).
+    # One query for the whole screen, then grouped here — the per-exercise version
+    # cost a round-trip per exercise ever created. И не вся история: в Python
+    # приезжают только подходы-кандидаты в рекорд (см.
+    # db.list_all_sets_by_exercise_deduped) — на аккаунте в десятки тысяч подходов
+    # это сотни строк, а результат тот же, что по всем (его сверяет тест).
     by_exercise: dict[int, tuple[str, list[analytics.SetRow]]] = {}
-    for r in await db.list_all_sets_by_exercise(user_id):
+    for r in await db.list_all_sets_by_exercise_deduped(user_id):
         entry = by_exercise.get(r["exercise_id"])
         if entry is None:
             entry = by_exercise[r["exercise_id"]] = (r["display_name"], [])
@@ -106,8 +109,14 @@ async def _top_lifts(
     return [lift for lift, _ in ordered], [ex_id for _, ex_id in ordered]
 
 
-async def collect(user_id: int) -> HallOfFame:
+async def collect(user_id: int, *, with_lifts: bool = True) -> HallOfFame:
     """Зал славы пользователя — по всей истории целиком.
+
+    with_lifts=False — без самого дорогого куска (рекорды по упражнениям,
+    шутка-эквивалент, самая долгая тренировка): `top_lifts`/`top_lift_ids`
+    пусты, `tonnage_equivalent` None, `longest_workout_seconds` 0. Нужен
+    лестнице званий (api_v1_hall_of_fame.get_rank_ladder): ей от зала славы
+    нужны только `rank` и `per_week`, а не весь сбор второй раз.
 
     Пустая история (`total_workouts == 0`) не падает и не идёт отдельной
     веткой: все остальные поля у новичка честно нулевые/пустые, и вызывающий
@@ -122,8 +131,11 @@ async def collect(user_id: int) -> HallOfFame:
     agg = await db.hall_of_fame_aggregates(user_id)
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     best_streak = analytics.max_week_streak(dates)
-    top, top_ids = await _top_lifts(user_id, formula)
-    equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id, unit=unit)
+    top, top_ids = await _top_lifts(user_id, formula) if with_lifts else ([], [])
+    equivalent = (
+        formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id, unit=unit)
+        if with_lifts else None
+    )
     tonnage_kg = formatting.to_kg(agg["tonnage"], unit)
     per_week = analytics.workouts_per_week(dates, timeutil.user_today(user) if user else dt.date.today())
     rank = analytics.rank_for(total_workouts, tonnage_kg, per_week)
@@ -132,7 +144,9 @@ async def collect(user_id: int) -> HallOfFame:
         tonnage_kg=agg["tonnage"],
         tonnage_equivalent=equivalent,
         best_week_streak=best_streak,
-        longest_workout_seconds=await view_builder.longest_workout_seconds(user_id),
+        longest_workout_seconds=(
+            await view_builder.longest_workout_seconds(user_id) if with_lifts else 0.0
+        ),
         top_lifts=top,
         top_lift_ids=top_ids,
         unit=unit,

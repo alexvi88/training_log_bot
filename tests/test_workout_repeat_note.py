@@ -222,7 +222,7 @@ async def test_voice_logs_a_set(fresh_db, user_id, monkeypatch):
 
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
-    async def _fake_transcribe(buf, uid):
+    async def _fake_transcribe(buf, uid, duration_seconds=None):
         return "сто на восемь"
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
@@ -256,7 +256,7 @@ async def test_voice_record_set_reacts_with_fire(fresh_db, user_id, monkeypatch)
 
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
-    async def _fake_transcribe(buf, uid):
+    async def _fake_transcribe(buf, uid, duration_seconds=None):
         return "сто на восемь"  # clear e1RM record over the 50x5 baseline
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
@@ -283,7 +283,7 @@ async def test_voice_reaction_failure_does_not_break_logging(fresh_db, user_id, 
 
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
-    async def _fake_transcribe(buf, uid):
+    async def _fake_transcribe(buf, uid, duration_seconds=None):
         return "сто на восемь"
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
@@ -307,7 +307,7 @@ async def test_voice_unparseable_asks_to_retry(fresh_db, user_id, monkeypatch):
     state, ex_id, block_id, _ = await _setup_logging(db, user_id)
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
-    async def _fake_transcribe(buf, uid):
+    async def _fake_transcribe(buf, uid, duration_seconds=None):
         return "давай запиши что-нибудь"
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)

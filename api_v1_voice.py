@@ -58,8 +58,10 @@ from __future__ import annotations
 import io
 from typing import Optional
 
+import ai_limits
 import ai_trainer
 import api_v1_common as common
+import config
 from handlers.ai_trainer import MAX_VOICE_BYTES, MAX_VOICE_SECONDS
 
 ApiError = common.ApiError
@@ -122,13 +124,30 @@ async def transcribe(
         if duration > MAX_VOICE_SECONDS:
             raise ApiError(400, "voice_too_long", "voice note is too long", human=too_long_message)
 
+    # HARD-стоп по деньгам и суточная квота голоса — до декодирования и до похода
+    # к провайдеру: расшифровка стоит денег поминутно, а своего лимита у неё раньше
+    # не было вовсе. Для /v1 «показать предупреждение и пойти дальше» нет (клиент
+    # получил бы отказ вместо результата), поэтому preview пропускаем как шаг.
+    block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
+    if block is not None and not block.preview:
+        code = "spend_limit_exceeded" if block.kind == ai_limits.KIND_SPEND_HARD else "voice_limit_exceeded"
+        raise ApiError(429, code, "daily voice limit reached", human=block.user_text)
+
     data_url = common.require(body, "audio_data_url", str)
     raw, ext = _decode_audio_data_url(data_url, too_big_message=too_big_message)
+
+    # Длительности нет — по размеру файла отличаем фразу от лекции: проверить
+    # её иначе нечем (см. докстринг модуля), а оставить дыру значило бы, что
+    # `duration_seconds` достаточно просто не присылать.
+    if (duration is None or duration <= 0) and len(raw) > config.VOICE_NO_DURATION_MAX_BYTES:
+        raise ApiError(400, "voice_too_long", "voice note is too long", human=too_long_message)
 
     buf = io.BytesIO(raw)
     buf.name = f"voice.{ext}"
     try:
-        transcript: Optional[str] = await ai_trainer.transcribe_voice(buf, user_id)
+        transcript: Optional[str] = await ai_trainer.transcribe_voice(
+            buf, user_id, duration_seconds=duration
+        )
     except Exception as exc:
         raise ApiError(
             502, "voice_transcribe_failed", "transcription failed", human=transcribe_failed_message

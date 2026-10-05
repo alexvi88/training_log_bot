@@ -2289,6 +2289,9 @@ async def import_notes_go(callback: CallbackQuery, state: FSMContext):
         result = await text_import.extract_sets(
             user_id, text, timeutil.user_today(user), lang=user["lang"]
         )
+    except ai_trainer.LimitBlocked as e:
+        await ai_limits.reply(callback.message, e.block)
+        return
     except Exception:
         logger.exception("notes import failed for user %s", user_id)
         await callback.message.answer(

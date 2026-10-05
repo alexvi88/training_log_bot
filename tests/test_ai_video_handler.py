@@ -107,7 +107,7 @@ async def test_video_analyzed_and_handed_to_trainer(wired):
     kwargs = wired.handle.await_args.kwargs
     assert "присед" in kwargs["video_context"]
     assert kwargs["history_question"] == "[прислал видео подхода]"
-    db.increment_ai_video_count.assert_awaited_once()
+    # Квоту видео списывает сам video_analysis.analyze (тест — в test_video_analysis.py).
 
 
 async def test_caption_becomes_the_question(wired):
@@ -159,7 +159,7 @@ async def test_preview_block_still_analyzes_video(monkeypatch, wired):
 
     wired.analyze.assert_awaited_once()
     wired.handle.assert_awaited_once()
-    db.increment_ai_video_count.assert_awaited_once()
+    # Квоту видео списывает сам video_analysis.analyze (тест — в test_video_analysis.py).
     message.reply.assert_awaited()
 
 

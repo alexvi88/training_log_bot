@@ -138,10 +138,10 @@ async def get_rank_ladder(request: Request) -> JSONResponse:
     if user is None:
         raise ApiError(404, "not_found", "user not found")
     with i18n.use_lang(user["lang"]):
-        # Тот же сбор, что и у /hall-of-fame — level и per_week уже посчитаны
-        # там одним расчётом (analytics.rank_for/workouts_per_week), второй раз
-        # считать их здесь незачем.
-        hof = await hall_of_fame_data.collect(user_id)
+        # Тот же сбор, что и у /hall-of-fame, — level и per_week считает один
+        # расчёт (analytics.rank_for/workouts_per_week), но без рекордов по
+        # упражнениям: лестнице они не нужны, а стоят целого прохода по истории.
+        hof = await hall_of_fame_data.collect(user_id, with_lifts=False)
         return JSONResponse(
             {
                 "ranks": [_rank_rung_json(rank) for rank in analytics.RANKS],

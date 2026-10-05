@@ -640,7 +640,7 @@ async def test_l6_bot_reads_pasted_notes_after_consent(fresh_db, user_id, monkey
     assert await _q(fresh_db, "SELECT note FROM exercise_notes") == [{"note": "последний тяжело"}]
 
 
-async def test_l7_name_matching_goes_through_paid_call(monkeypatch):
+async def test_l7_name_matching_goes_through_paid_call(fresh_db, monkeypatch):
     import ai_limits
 
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)

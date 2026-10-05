@@ -49,6 +49,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, Telegra
 from aiogram.types import FSInputFile
 
 import acquisition
+import ai_limits
 import ai_trainer
 import analytics
 import apns
@@ -419,6 +420,11 @@ async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:
     """Personalized AI weekly digest, or None to fall back to the static rotation copy."""
     if not config.AI_WEEKLY_DIGEST_ENABLED or not ai_trainer.is_configured():
         return None
+    # Зовётся из цикла по всем атлетам: HARD-стоп по деньгам проверяем на КАЖДОЙ
+    # итерации (потолок мог сработать посреди рассылки), а не один раз до неё.
+    # Уйти в статичный текст ротации — штатный путь.
+    if await ai_limits.hard_stop_block() is not None:
+        return None
     try:
         return await ai_trainer.weekly_digest(telegram_id)
     except Exception:
@@ -752,8 +758,13 @@ async def _send_daily_pushes(bot: Bot) -> None:
                 logger.exception("Failed to build push for user %s", telegram_id)
                 continue
             if decision is not None:
-                await _deliver(bot, telegram_id, decision, local_date)
-                await asyncio.sleep(SEND_DELAY)
+                try:
+                    await _deliver(bot, telegram_id, decision, local_date)
+                    await asyncio.sleep(SEND_DELAY)
+                except Exception:
+                    # Один сбой доставки (база, Telegram, битая клавиатура) не должен
+                    # обрывать рассылку остальным: раньше исключение улетало из цикла.
+                    logger.exception("Failed to deliver push for user %s", telegram_id)
 
     for telegram_id, created_at, local_date in due_newbies:
         user = await db.get_user(telegram_id)
@@ -764,8 +775,11 @@ async def _send_daily_pushes(bot: Bot) -> None:
                 logger.exception("Failed to build newbie push for user %s", telegram_id)
                 continue
             if decision is not None:
-                await _deliver(bot, telegram_id, decision, local_date)
-                await asyncio.sleep(SEND_DELAY)
+                try:
+                    await _deliver(bot, telegram_id, decision, local_date)
+                    await asyncio.sleep(SEND_DELAY)
+                except Exception:
+                    logger.exception("Failed to deliver newbie push for user %s", telegram_id)
 
     try:
         await _maybe_send_admin_funnel_digest(bot)

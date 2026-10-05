@@ -5,6 +5,19 @@ BOT_TOKEN = os.getenv("TG_TOKEN", "")
 
 DB_PATH = os.getenv("DB_PATH", "/data/training_log.db")
 
+# Бакет Tigris для непрерывной репликации Litestream (litestream.yml, start.sh).
+# Его выставляет `fly storage create`; пустой — start.sh Litestream не запускает.
+BUCKET_NAME = os.getenv("BUCKET_NAME", "")
+# Где лежит конфиг Litestream в контейнере (Dockerfile копирует его сюда).
+LITESTREAM_CONFIG_PATH = os.getenv("LITESTREAM_CONFIG_PATH", "/etc/litestream.yml")
+# Реплика «протухла»: самый свежий снапшот/сегмент WAL старше стольких часов.
+# WAL уходит в хранилище в течение секунд, так что два часа — уже не лаг, а поломка.
+REPLICA_STALE_ALERT_HOURS = float(os.getenv("REPLICA_STALE_ALERT_HOURS", "2"))
+# Не чаще раза в столько часов повторять одну и ту же тревогу о реплике.
+REPLICA_ALERT_REPEAT_HOURS = float(os.getenv("REPLICA_ALERT_REPEAT_HOURS", "6"))
+# Сколько ждать ответа `litestream snapshots/wal` (ходит в хранилище по сети).
+REPLICA_CHECK_TIMEOUT_SECONDS = float(os.getenv("REPLICA_CHECK_TIMEOUT_SECONDS", "60"))
+
 # FSM state survives restarts by persisting to this file instead of memory.
 FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
 
@@ -741,6 +754,52 @@ SERVER_TOOL_PRICE_USD_PER_CALL = float(os.getenv("SERVER_TOOL_PRICE_USD_PER_CALL
 # per-second price. Override via TRANSCRIPTION_PRICE_USD_PER_CALL.
 TRANSCRIPTION_PRICE_USD_PER_CALL = float(os.getenv("TRANSCRIPTION_PRICE_USD_PER_CALL", "0.006"))
 
+# Расшифровка тарифицируется ПОМИНУТНО (OpenAI берёт за длительность аудио), поэтому
+# цена события считается по секундам записи, а плоская ставка выше остаётся только
+# для строк, у которых длительности нет (старый лог до этой правки и случаи, когда
+# клиент её не прислал и оценить не по чему). Ставка взята верхняя — как у whisper-1
+# ($0.006/мин): mini-модель стоит вдвое дешевле, и потолок по деньгам лучше
+# перелетит в сторону запаса, чем недосчитает.
+TRANSCRIPTION_PRICE_USD_PER_MINUTE = float(os.getenv("TRANSCRIPTION_PRICE_USD_PER_MINUTE", "0.006"))
+
+# Длиннее — явно не короткая фраза: дороже распознавать (поминутный тариф) и дольше
+# ждать. Одно число на бот (handlers/ai_trainer, handlers/workout) и на /v1.
+MAX_VOICE_SECONDS = 300
+
+# Сколько в сутки на человека голосовых расшифровок (вопрос тренеру + подходы
+# голосом). Щедро: голосом логируют подходы между подходами, это не «вопрос».
+# Цена — копейки, а потолок нужен от цикла в клиенте, а не от живого человека.
+AI_VOICE_DAILY_LIMIT = int(os.getenv("AI_VOICE_DAILY_LIMIT", "100"))
+
+# Голос по HTTP без `duration_seconds`: длительности взять неоткуда, поэтому
+# отказываем по размеру. Фраза до MAX_VOICE_SECONDS в m4a/ogg — не больше пары
+# мегабайт; больше без заявленной длительности — лекция, а не подход.
+VOICE_NO_DURATION_MAX_BYTES = int(os.getenv("VOICE_NO_DURATION_MAX_BYTES", str(2 * 1024 * 1024)))
+
+# Байт в секунду для оценки длительности по размеру файла (≈96 кбит/с — с запасом
+# вверх по длительности, то есть по цене).
+VOICE_ESTIMATE_BYTES_PER_SECOND = 12_000
+
+# Сколько в сутки на человека разборов текстового импорта (AI-сопоставление
+# названий упражнений, text_import / ai_trainer.ai_match_*). Импорт — разовое
+# действие при переезде, десять в сутки хватает с запасом на повторные попытки.
+AI_IMPORT_DAILY_LIMIT = int(os.getenv("AI_IMPORT_DAILY_LIMIT", "10"))
+
+
+# Оценка цены поиска, оборванного таймаутом/отменой (ai_trainer._web_search_findings):
+# usage от оборванного sample() не приходит, а токены агентов на поиске и сам вызов
+# инструмента всё равно набегают. Плоская прикидка по типичному поиску из
+# LLM_COSTS.md, а не ноль: потолок по деньгам лучше слегка перелетит.
+SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS = int(os.getenv("SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS", "8000"))
+SEARCH_ABORT_ESTIMATE_COMPLETION_TOKENS = int(os.getenv("SEARCH_ABORT_ESTIMATE_COMPLETION_TOKENS", "1000"))
+
+
+def transcription_price_usd(audio_seconds: float = 0) -> float:
+    """Цена одной расшифровки: по длительности, а без неё — плоская ставка за вызов."""
+    if audio_seconds and audio_seconds > 0:
+        return audio_seconds / 60 * TRANSCRIPTION_PRICE_USD_PER_MINUTE
+    return TRANSCRIPTION_PRICE_USD_PER_CALL
+
 # --- Суточный потолок расходов: страховка от разорения (см. ai_limits.py) ---
 #
 # Личные квоты держат одного человека, но умножаются на число пришедших: сто
@@ -998,5 +1057,11 @@ APNS_BUNDLE_ID = os.getenv("APNS_BUNDLE_ID", "com.trainingdiary.ios")
 # (тот и другой сервер принимают только свои токены, но дефолт стоит выбрать
 # осторожный, а не самый частый).
 APNS_ENV = os.getenv("APNS_ENV", "sandbox")
+
+
+def is_production() -> bool:
+    """Боевой инстанс: так же, как это уже различает apns.py (APNS_ENV=production
+    выставлен только на проде, локально и в тестах — sandbox)."""
+    return APNS_ENV == "production"
 
 

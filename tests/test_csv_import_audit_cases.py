@@ -249,7 +249,7 @@ async def test_backdated_started_at_stays_on_the_file_date(fresh_db, tz):
 
 
 @pytest.mark.asyncio
-async def test_alias_matching_is_batched(monkeypatch):
+async def test_alias_matching_is_batched(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     batches: list[list[str]] = []
 

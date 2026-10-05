@@ -25,6 +25,7 @@ fun_bot, см. его grok.py, где нет своих function tools вовс�
 """
 
 import asyncio
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -33,7 +34,7 @@ import re
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
-from openai import AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI
 from xai_sdk import AsyncClient as AsyncXAIClient
 from xai_sdk.chat import assistant as xai_assistant
 from xai_sdk.chat import image as xai_image
@@ -299,6 +300,55 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, sourc
         logger.exception("failed to log llm cost event")
 
 
+# Что считается «оборвали после отправки»: таймаут клиента/обёртки и отмена задачи.
+# Запрос к этому моменту УЖЕ ушёл провайдеру, и токены промпта он обычно успевает
+# посчитать, а usage до нас не доехал — без записи такой вызов невидим и для
+# потолка по деньгам, и для отчёта (так стрим уже был закрыт, а нестриминг — нет).
+_ABORT_ERRORS = (asyncio.TimeoutError, asyncio.CancelledError, APITimeoutError)
+
+# Когда у вызова нет под рукой messages (например, фабрика собирает их внутри),
+# берём типичный размер нашего запроса, а не ноль: ноль означал бы «бесплатно».
+_ABORT_FALLBACK_PROMPT_TOKENS = 2000
+
+
+async def _log_aborted_call(
+    user_id: Optional[int],
+    model: str,
+    *,
+    messages: Optional[list[dict[str, Any]]] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: int = 0,
+    server_tool_calls: int = 0,
+    source: str = "bot",
+) -> None:
+    """Оценка цены вызова, оборванного таймаутом/отменой: токены промпта по длине
+    запроса (~4 символа на токен, как у стрима), выход — не считаем."""
+    if prompt_tokens is None:
+        prompt_tokens = (
+            _estimate_tokens_from_messages(messages) if messages else _ABORT_FALLBACK_PROMPT_TOKENS
+        )
+    try:
+        await db.log_cost_event(
+            user_id, "llm_call", model=model,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, source=source,
+        )
+        for _ in range(server_tool_calls):
+            await db.log_cost_event(user_id, "server_tool", model="web_search", source=source)
+    except Exception:
+        logger.exception("failed to log aborted llm cost event")
+
+
+@contextlib.asynccontextmanager
+async def _bill_if_aborted(user_id: Optional[int], model: str, **estimate: Any):
+    """`async with` вокруг платного вызова: таймаут или отмена → cost-событие по
+    оценке (см. _log_aborted_call), исключение летит дальше как летело."""
+    try:
+        yield
+    except _ABORT_ERRORS:
+        await _log_aborted_call(user_id, model, **estimate)
+        raise
+
+
 class LimitBlocked(Exception):
     """Настоящий (не preview) отказ ai_limits.check внутри paid_call.
 
@@ -320,6 +370,7 @@ async def paid_call(
     model: str = config.GROK_MODEL,
     source: str = "bot",
     on_block: Optional[Callable[[ai_limits.Block], Awaitable[None]]] = None,
+    messages: Optional[list[dict[str, Any]]] = None,
 ) -> Any:
     """Единая обёртка «проверить лимит → вызвать модель → залогировать цену»
     для НЕстримящих платных вызовов (`client.chat.completions.create`, один
@@ -353,6 +404,10 @@ async def paid_call(
     `analyze_food` кидает `ValueError` на битом JSON уже ПОСЛЕ того, как
     деньги потрачены, и без `finally` такой вызов остался бы невидим и в
     логе, и в дневном отчёте.
+
+    Таймаут и отмена (`_ABORT_ERRORS`) тоже не остаются бесплатными: ответа нет,
+    а запрос ушёл, поэтому пишется оценка по длине `messages` (передай их, если
+    они у тебя есть; без них — типичный размер, `_ABORT_FALLBACK_PROMPT_TOKENS`).
     """
     if kind is not None:
         block = await ai_limits.check(user_id, kind)
@@ -364,7 +419,8 @@ async def paid_call(
                 raise LimitBlocked(block)
     response = None
     try:
-        response = await coro_factory()
+        async with _bill_if_aborted(user_id, model, messages=messages, source=source):
+            response = await coro_factory()
         return response
     finally:
         if response is not None:
@@ -408,11 +464,31 @@ def _get_audio_client() -> AsyncOpenAI:
     return _audio_client
 
 
-async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
+def _voice_seconds(file_obj: Any, duration_seconds: Optional[float]) -> int:
+    """Длительность записи для цены: заявленная (Telegram/клиент) или, когда её нет,
+    оценка по размеру файла. Ноль — взять неоткуда (цена пойдёт плоской ставкой)."""
+    if duration_seconds and duration_seconds > 0:
+        return int(round(duration_seconds))
+    try:
+        size = file_obj.getbuffer().nbytes
+    except Exception:
+        return 0
+    return max(1, size // config.VOICE_ESTIMATE_BYTES_PER_SECOND) if size else 0
+
+
+async def transcribe_voice(
+    file_obj: Any, user_id: Optional[int] = None, duration_seconds: Optional[float] = None
+) -> str:
     """Голосовое сообщение (файл в формате Telegram, OGG/Opus) → распознанный текст.
 
     file_obj — объект с методом .read() и атрибутом .name (например BytesIO с
     выставленным именем), как того требует OpenAI SDK для audio.transcriptions.
+
+    Лимиты (квота голоса, HARD-стоп по деньгам, длина) проверяет вызывающая
+    сторона ДО скачивания файла — `ai_limits.check(user_id, KIND_VOICE)`. Здесь
+    только учёт: попытка списывается из квоты, как только платный вызов ушёл
+    (успех это или нет), а цена пишется по длительности записи —
+    расшифровка тарифицируется поминутно.
 
     Язык распознавания передаётся явно, а не оставляется на автодетект: без него
     английская речь про железо («two twenty five for five») стабильно
@@ -423,15 +499,25 @@ async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
     ошибки нет, просто ничего не происходит.
     """
     client = _get_audio_client()
-    response = await client.audio.transcriptions.create(
-        model=config.OPENAI_TRANSCRIBE_MODEL,
-        file=file_obj,
-        language=i18n.get_lang(),
-    )
-    # У аудио API не возвращает токенов, поэтому цена берётся плоской ставкой за
-    # вызов (config.TRANSCRIPTION_PRICE_USD_PER_CALL) — и в отчёте, и в логе.
+    seconds = _voice_seconds(file_obj, duration_seconds)
     try:
-        await db.log_cost_event(user_id, "transcription", model=config.OPENAI_TRANSCRIBE_MODEL)
+        response = await client.audio.transcriptions.create(
+            model=config.OPENAI_TRANSCRIBE_MODEL,
+            file=file_obj,
+            language=i18n.get_lang(),
+        )
+    finally:
+        if user_id is not None:
+            try:
+                await db.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+            except Exception:
+                logger.exception("failed to count voice usage")
+    # У аудио API не возвращает токенов, поэтому цена берётся по длительности
+    # записи (config.transcription_price_usd) — и в отчёте, и в логе.
+    try:
+        await db.log_cost_event(
+            user_id, "transcription", model=config.OPENAI_TRANSCRIBE_MODEL, audio_seconds=seconds
+        )
     except Exception:
         logger.exception("failed to log transcription cost event")
     return (response.text or "").strip()
@@ -1231,22 +1317,24 @@ async def fact_check_post(
             {"type": "image_url", "image_url": {"url": image_data_url}},
         ]
     client = _get_client()
-    response = await client.chat.completions.create(
-        model=config.GROK_MODEL,
-        max_tokens=700,
-        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        # Свой scope кэша: системный промпт с основным чатом почти не пересекается,
-        # и под общим conv-id этот вызов вытеснял бы тёплый слот основного диалога
-        # (см. _cache_headers).
-        extra_headers=_cache_headers(user_id, scope="fact_check"),
-        messages=[
-            # Хендлер уже выставил язык через middleware (см. _with_language_tail) —
-            # разбор поста происходит синхронно внутри обработки апдейта, отдельного
-            # похода в базу за lang тут не нужно.
-            {"role": "system", "content": _with_language_tail(FACT_CHECK_SYSTEM_PROMPT)},
-            {"role": "user", "content": content},
-        ],
-    )
+    messages = [
+        # Хендлер уже выставил язык через middleware (см. _with_language_tail) —
+        # разбор поста происходит синхронно внутри обработки апдейта, отдельного
+        # похода в базу за lang тут не нужно.
+        {"role": "system", "content": _with_language_tail(FACT_CHECK_SYSTEM_PROMPT)},
+        {"role": "user", "content": content},
+    ]
+    async with _bill_if_aborted(user_id, config.GROK_MODEL, messages=messages):
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=700,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            # Свой scope кэша: системный промпт с основным чатом почти не пересекается,
+            # и под общим conv-id этот вызов вытеснял бы тёплый слот основного диалога
+            # (см. _cache_headers).
+            extra_headers=_cache_headers(user_id, scope="fact_check"),
+            messages=messages,
+        )
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or i18n.t("ai.factcheck.empty")
@@ -1424,7 +1512,7 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     """
     if not is_configured():
         return None
-    if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
+    if await ai_limits.hard_stop_block() is not None:
         return None
     user = await db.get_user(user_id)
     if user is None:
@@ -1566,6 +1654,9 @@ async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Option
     дайджест, см. paid_call).
     """
     if not is_configured():
+        return None
+    # Суточный разбор для админа — платный вызов без квоты: на HARD-стопе молчит.
+    if await ai_limits.hard_stop_block() is not None:
         return None
     client = _get_client()
     try:
@@ -3207,6 +3298,13 @@ async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dic
     """
     if not names or not is_configured():
         return {}
+    # Личная суточная квота импорта (KIND_IMPORT, общая с разбором текста). Исчерпана —
+    # пусто, а не ошибка: имена остаются «новыми», и человек разрешит их руками.
+    block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
+    if block is not None and not block.preview:
+        logger.info("AI import matching skipped for user %s: %s", user_id, block.log)
+        return {}
+    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
     rest = list(dict.fromkeys(names))
     result: dict[str, str] = {}
     catalog_flat = [name for group_names in _CATALOG_BY_GROUP.values() for name in group_names]
@@ -3324,6 +3422,11 @@ async def guess_exercise_groups(user_id: int, names: list[str]) -> dict[str, str
     личной квоты, как match_exercise_names_to_catalog: HARD-стоп по деньгам,
     paid_call. Модель недоступна или ответ не разобрать — пусто."""
     if not names or not is_configured():
+        return {}
+    # Часть того же импорта, что и match_exercise_names_to_catalog: квоту здесь только
+    # проверяем (списывает её сопоставление имён), чтобы один импорт не стоил две.
+    block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
+    if block is not None and not block.preview:
         return {}
     groups = [name for name, _emoji, _order in seed_data.MUSCLE_GROUP_PRESETS if name != seed_data.OTHER_GROUP_NAME]
     result: dict[str, str] = {}
@@ -6358,12 +6461,13 @@ async def _completion_round(
     """
     tools_kwarg = {"tools": TOOLS} if include_tools else {}
     if on_chunk is None:
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL, max_tokens=2048, messages=messages,
-            extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
-            extra_headers=_cache_headers(user_id),
-            **tools_kwarg,
-        )
+        async with _bill_if_aborted(user_id, config.GROK_MODEL, messages=messages):
+            response = await client.chat.completions.create(
+                model=config.GROK_MODEL, max_tokens=2048, messages=messages,
+                extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+                extra_headers=_cache_headers(user_id),
+                **tools_kwarg,
+            )
         await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
         m = response.choices[0].message
         return (m.content or ""), list(m.tool_calls or []), _reasoning_of(m)
@@ -6946,7 +7050,13 @@ async def _web_search_findings(
                 else {}
             ),
         )
-        response = await chat_session.sample()
+        async with _bill_if_aborted(
+            user_id, config.GROK_SEARCH_MODEL,
+            prompt_tokens=config.SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS,
+            completion_tokens=config.SEARCH_ABORT_ESTIMATE_COMPLETION_TOKENS,
+            server_tool_calls=1,
+        ):
+            response = await chat_session.sample()
     except Exception:
         # Сколько именно ждали до обрыва — то, по чему потом и подбирается
         # бюджет: без этой цифры «поиск отвалился» не отличить от «поиск

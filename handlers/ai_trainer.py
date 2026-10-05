@@ -149,7 +149,7 @@ DRAFT_MIN_CHARS = 280
 MAX_VOICE_BYTES = 20 * 1024 * 1024
 
 # Длиннее — явно не короткий вопрос, дороже распознавать и дольше ждать ответ.
-MAX_VOICE_SECONDS = 300
+MAX_VOICE_SECONDS = config.MAX_VOICE_SECONDS
 
 def _intro_text() -> str:
     return i18n.t("ai.screen.intro")
@@ -2868,9 +2868,8 @@ async def _analyze_video_and_answer(
         await message.reply(i18n.t("ai.screen.video_analysis_failed"))
         return
 
-    # Квота тратится только за разбор, который получился, — как и дневной
-    # счётчик вопросов, который списывается лишь при готовом ответе.
-    await db.increment_ai_video_count(user_id)
+    # Квота видео списана внутри video_analysis.analyze — за каждый состоявшийся
+    # платный вызов, даже если разбор не получился (см. там же).
 
     asked = caption or (i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else "")
     question = asked or _default_video_question()
@@ -3076,15 +3075,18 @@ async def ai_voice_question(message: Message, state: FSMContext):
         # в _handle_question: человек с выбранной квотой ответа не получал, но
         # каждое голосовое всё равно уезжало в распознавание и стоило нам своих
         # $0.006 — платный вызов без единого шанса дойти до ответа.
-        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
-        if block is not None:
-            logger.info("AI voice blocked for user %s: %s", user_id, block.log)
-            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
-            # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня:
-            # расшифровка и ответ всё равно идут, см. тот же комментарий у
-            # video-хендлера чуть выше по файлу.
-            if not block.preview:
-                return
+        # Сначала голос (его квота и HARD-стоп по деньгам — расшифровка стоит
+        # денег сама по себе), потом вопрос.
+        for kind in (ai_limits.KIND_VOICE, ai_limits.KIND_QUESTION):
+            block = await ai_limits.check(user_id, kind)
+            if block is not None:
+                logger.info("AI voice blocked for user %s: %s", user_id, block.log)
+                await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
+                # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня:
+                # расшифровка и ответ всё равно идут, см. тот же комментарий у
+                # video-хендлера чуть выше по файлу.
+                if not block.preview:
+                    return
 
         voice_file = await _download_voice_as_file(message)
         if voice_file is None:
@@ -3094,7 +3096,9 @@ async def ai_voice_question(message: Message, state: FSMContext):
             return
 
         try:
-            question = await ai_trainer.transcribe_voice(voice_file, user_id)
+            question = await ai_trainer.transcribe_voice(
+                voice_file, user_id, duration_seconds=message.voice.duration
+            )
         except Exception:
             logger.exception("AI trainer voice transcription failed for user %s", user_id)
             await message.reply(i18n.t("ai.screen.voice_transcribe_failed"))

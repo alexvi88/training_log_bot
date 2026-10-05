@@ -41,8 +41,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import ai_limits
 import ai_trainer
 import config
+import db
 import i18n
 
 logger = logging.getLogger(__name__)
@@ -296,6 +298,14 @@ async def extract_sets(
     наверх — ручка отвечает на него 502, а не наполовину пустым импортом.
     `lang` — язык атлета (users.lang), от него порядок числовых дат; None —
     язык текущего запроса (i18n.get_lang() в момент вызова)."""
+    # Личная суточная квота разборов текста (ai_limits.KIND_IMPORT) и HARD-стоп
+    # по деньгам — один раз на весь текст, а не на кусок: платных вызовов тут
+    # столько, сколько кусков, и без квоты одно и то же можно гонять кругами.
+    # Отказ — ai_trainer.LimitBlocked, его показывает вызывающая сторона.
+    block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
+    if block is not None and not block.preview:
+        raise ai_trainer.LimitBlocked(block)
+    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
     gate = asyncio.Semaphore(_PARALLEL)
     date_order = numeric_date_order(lang if lang is not None else i18n.get_lang())
 
