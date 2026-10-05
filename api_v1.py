@@ -1434,11 +1434,15 @@ async def _finish_rewards_json(
             "sets": sum(len(block.sets) for block in blocks),
             "exercises": len(blocks),
             "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"])),
+            # Пустая строка, а не null, когда сравнивать нечего (тоннаж ниже
+            # 150 кг): в уже выпущенных сборках приложения поле обязательное
+            # (`String`), и null ронял разбор всего ответа finish — тренировка
+            # на сервере закрыта, а человек видел «обнови приложение».
             "tonnage_equivalent": _plain(
                 formatting.format_tonnage_equivalent(
                     tonnage, seed=workout["id"], unit=user["unit"]
                 )
-            ),
+            ) or "",
             "new_achievements": [
                 {
                     "code": achievements.BY_CODE[code].code,
