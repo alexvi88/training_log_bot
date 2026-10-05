@@ -238,3 +238,11 @@ def test_metrics_table_and_csv():
     csv_text = admin.metrics_csv(["active_users", "ai_cost_usd"], rows).decode()
     assert csv_text.splitlines() == ["day,active_users,ai_cost_usd", "2026-09-01,5,", "2026-09-02,6,0.25"]
     assert "пустая" in admin.format_metrics_table([])
+
+
+def test_plan_offer_event_keeps_only_action():
+    for action in ("shown", "accept", "later"):
+        assert product_metrics.clean_props(
+            "plan_offer", {"action": action, "text": "что ввёл человек", "screen": "x"}
+        ) == {"action": action}
+    assert product_metrics.clean_props("plan_offer", {}) == {}
