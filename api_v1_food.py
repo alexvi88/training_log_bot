@@ -30,6 +30,13 @@ import timeutil
 
 ApiError = common.ApiError
 
+# Потолок одной записи дневника: 1e308 — «конечное число», но сумма за день
+# после него даёт inf, и ответ перестаёт быть JSON. Граммы — тот же потолок,
+# что у разбора еды моделью (ai_trainer.MAX_FOOD_GRAMS); ккал на запись шире
+# потолка модели на один продукт (10000), потому что запись — целый приём пищи.
+MAX_ENTRY_KCAL = 20000.0
+MAX_ENTRY_GRAMS = ai_trainer.MAX_FOOD_GRAMS
+
 # Тот же замок, что у бота (busy_lock.py, handlers/ai_trainer._busy) — один
 # разбор еды на пользователя одновременно. Без него два быстрых фото тарелки
 # подряд (двойной тап, ретрай) оба проходят `ai_limits.check` до того, как
@@ -103,10 +110,10 @@ async def add_entry(request: Request) -> JSONResponse:
     description = str(common.require(body, "name", str)).strip()
     if not description:
         raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
-    calories = common.optional_non_negative_number(body, "kcal")
-    protein = common.optional_non_negative_number(body, "protein")
-    fat = common.optional_non_negative_number(body, "fat")
-    carbs = common.optional_non_negative_number(body, "carbs")
+    calories = common.optional_non_negative_number(body, "kcal", MAX_ENTRY_KCAL)
+    protein = common.optional_non_negative_number(body, "protein", MAX_ENTRY_GRAMS)
+    fat = common.optional_non_negative_number(body, "fat", MAX_ENTRY_GRAMS)
+    carbs = common.optional_non_negative_number(body, "carbs", MAX_ENTRY_GRAMS)
     eaten_on_raw = common.optional_str(body, "eaten_on")
     eaten_on = _parse_date(eaten_on_raw, user)
     # Съесть что-то завтра нельзя — та же проверка, что у занесения

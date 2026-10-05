@@ -110,9 +110,12 @@ def _records_json(book: Optional[analytics.GoldBook], is_bodyweight: bool) -> Op
     """
     if book is None:
         return None
+    # best_e1rm == 0 и у упражнения с весом: e1RM считается только до
+    # analytics.counts_for_e1rm повторов, и если все подходы длиннее (15, 20…),
+    # лучшего «по e1RM» нет — тогда лучший по повторам, а не «0×0».
     best_set = (
         formatting.format_set(book.max_reps_weight, book.max_reps)
-        if is_bodyweight
+        if is_bodyweight or book.best_e1rm == 0
         else formatting.format_set(book.best_e1rm_weight, book.best_e1rm_reps)
     )
     return {

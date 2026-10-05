@@ -23,6 +23,17 @@ import db
 import formatting
 import timeutil
 
+# Ячейка, начинающаяся с этих знаков, в Excel/Sheets/Numbers исполняется как
+# формула («=HYPERLINK(…)», «@SUM(…)»): имя упражнения заводит пользователь, а
+# файл он открывает — и пересылает — в таблице. Ведущий апостроф делает ячейку
+# текстом; импорт (handlers.csv_import._unescape_formula_cell) его снимает.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def escape_formula_cell(value: str) -> str:
+    return "'" + value if value.startswith(FORMULA_PREFIXES) else value
+
+
 CSV_HEADER = ["started_at", "exercise", "round_index", "weight", "reps", "rpe"]
 
 
@@ -55,7 +66,7 @@ async def build_csv(user_id: int) -> bytes:
             dt.datetime.fromisoformat(r["started_at"]), user
         )
         writer.writerow([
-            local_started_at.isoformat(), r["exercise"], r["round_index"], r["weight"], r["reps"],
+            local_started_at.isoformat(), escape_formula_cell(str(r["exercise"])), r["round_index"], r["weight"], r["reps"],
             "" if r["rpe"] is None else formatting.format_weight(r["rpe"]),
         ])
     return buf.getvalue().encode("utf-8-sig")

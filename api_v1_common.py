@@ -26,6 +26,7 @@ import db
 import exercise_descriptions
 import exercise_media
 import exercise_photos
+import formatting
 import i18n
 import parser
 import timeutil
@@ -271,7 +272,9 @@ def optional_str(body: dict[str, Any], key: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise ApiError(400, "bad_request", f"field {key} must be str")
-    value = value.strip()
+    # Управляющие символы (NUL, ESC…) — вон, переводы строк остаются: через
+    # эту функцию идут и описания/заметки (formatting.strip_control_chars).
+    value = formatting.strip_control_chars(value, keep_newlines=True).strip()
     return value or None
 
 
@@ -547,12 +550,16 @@ def client_moment(
 # отвергающий то же самое, — это один и тот же подход, который клиент может
 # записать, но не может поправить.
 
-def optional_non_negative_number(body: dict[str, Any], key: str) -> Optional[float]:
+def optional_non_negative_number(
+    body: dict[str, Any], key: str, maximum: float | None = None
+) -> Optional[float]:
     """Необязательное неотрицательное конечное число из тела (ккал, БЖУ):
     None, если поля нет или оно null. `True` — не число (bool в Python —
     подкласс int, и без явной проверки `"protein": true` ложилось в базу как
     1 г белка), NaN/Infinity (их принимает json.loads) — тоже, отрицательное
-    — опечатка, а не «съел минус 9000 ккал»."""
+    — опечатка, а не «съел минус 9000 ккал». `maximum` — потолок по месту
+    (ккал и граммы — разные): 1e308 конечное число, но в сумме за день уже
+    даёт inf в JSON-ответе."""
     value = body.get(key)
     if value is None:
         return None
@@ -563,6 +570,11 @@ def optional_non_negative_number(body: dict[str, Any], key: str) -> Optional[flo
     if value < 0:
         raise ApiError(
             400, "bad_request", f"{key} must not be negative", key="api.error.number_negative"
+        )
+    if maximum is not None and value > maximum:
+        raise ApiError(
+            400, "bad_request", f"{key} must be at most {maximum:g}",
+            key="api.error.number_too_big", max=f"{maximum:g}",
         )
     return value
 

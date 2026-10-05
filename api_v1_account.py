@@ -480,6 +480,9 @@ async def update_workout_set(request: Request) -> JSONResponse:
     # весовой клуб) могли зависеть именно от этого подхода.
     await on_workout_edited(workout_id)
     updated = await db.get_set(set_id)
+    if updated is None:
+        # Параллельное удаление подхода между update_set и чтением.
+        raise ApiError(404, "not_found", "set not found")
     return JSONResponse(_set_json(updated))
 
 

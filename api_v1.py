@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import functools
 import html
 import logging
 import re
+import sqlite3
 from typing import Any, Optional
 
 from starlette.applications import Starlette
@@ -540,7 +542,7 @@ def _exercise_name(body: dict[str, Any]) -> str:
     _suspicious_name_reason). Переспросить REST не может, так что здесь это
     отказ: без него /v1 заводил упражнение с названием в 5000 символов, и оно
     разваливало каждую карточку и список."""
-    name = str(_require(body, "name", str)).strip()
+    name = formatting.strip_control_chars(str(_require(body, "name", str))).strip()
     if not name:
         raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
@@ -558,6 +560,8 @@ def _note_field(body: dict[str, Any]) -> Optional[str]:
     note = body.get("note")
     if note is not None and not isinstance(note, str):
         raise ApiError(400, "bad_request", "note must be a string or null")
+    if note is not None:
+        note = formatting.strip_control_chars(note, keep_newlines=True)
     if note is not None and len(note) > config.MAX_WORKOUT_NOTE_LENGTH:
         raise ApiError(
             400, "bad_request",
@@ -1004,6 +1008,30 @@ async def discard_backfill_workout(request: Request) -> JSONResponse:
     return JSONResponse({"discarded": True})
 
 
+def _translate_write_race(handler):
+    """Запись подхода, обогнанная удалением или закрытием тренировки.
+
+    Проверка `_require_open` и сама вставка — не одна транзакция: между ними
+    приложение успевало удалить или закончить тренировку, и вставка падала на
+    внешнем ключе голым 500. Здесь это то же, что и проверка выше, только
+    поздно: 404 (тренировки нет) или 409 `workout_finished`. Любая другая
+    IntegrityError — настоящая, её не глотаем."""
+
+    @functools.wraps(handler)
+    async def wrapper(request: Request) -> JSONResponse:
+        try:
+            return await handler(request)
+        except sqlite3.IntegrityError:
+            workout = await db.get_workout(int(request.path_params["workout_id"]))
+            if workout is None:
+                raise ApiError(404, "not_found", "workout not found") from None
+            _require_open(workout)
+            raise
+
+    return wrapper
+
+
+@_translate_write_race
 async def log_set(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
@@ -1045,6 +1073,7 @@ async def log_set(request: Request) -> JSONResponse:
     return JSONResponse({**_set_json(row), "is_record": is_record}, status_code=201)
 
 
+@_translate_write_race
 async def log_sets_from_text(request: Request) -> JSONResponse:
     """Подход (или несколько) одной строкой — «100 8», «100 8, 100 7, 95 8»,
     «100x8x3», «8», «100 8 @9», «80 кг 8 раз».
@@ -1129,6 +1158,7 @@ async def _store_parsed_sets(
     return created
 
 
+@_translate_write_race
 async def log_set_from_voice(request: Request) -> JSONResponse:
     """Тот же подход, что `log_sets_from_text`, только голосом («сто на
     восемь» вместо «100 8») — HTTP-версия `handlers/workout.py::log_set_voice`.
