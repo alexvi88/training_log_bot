@@ -922,7 +922,7 @@ def test_logging_hint_instruction_can_be_hidden():
     from handlers.workout import _logging_hint
 
     with_instruction = _logging_hint(None, has_sets=False, show_instruction=True)
-    without = _logging_hint(None, has_sets=False, show_instruction=False)
+    without = _logging_hint(None, has_sets=False, show_instruction=False, show_progression=False)
     assert "Вес и повторы" in with_instruction
     assert without == ""
 

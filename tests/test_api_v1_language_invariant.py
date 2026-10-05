@@ -448,6 +448,9 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("PATCH", f"/workouts/{wid}/exercises/{forked_id}/note", json={"note": text["note"]}, expect=200)
     await w.call("PATCH", f"/workouts/{wid}/note", json={"note": text["note"]}, expect=200)
     await w.call("DELETE", f"/workouts/{wid}/exercises/{own_id}/last-set", expect=200)
+    # Упражнение без единого подхода: «🎯 Цель» с диапазоном повторов из настроек.
+    no_history = (await w.call("GET", f"/workouts/{wid}/exercises/{own_id}/next-target", expect=200)).json()
+    assert no_history["hint"]["no_history"] is True
     await w.call("GET", f"/exercises/{forked_id}/superset-partners?workout_id={wid}", expect=200)
     await w.call("GET", f"/exercises/next-suggestions?last_finished_id={forked_id}", expect=200)
     await w.call("POST", f"/workouts/{wid}/finish", json={}, expect=200)
