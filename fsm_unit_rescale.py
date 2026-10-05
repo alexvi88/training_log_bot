@@ -74,7 +74,7 @@ def weight_cache_updates(data: dict, factor: float) -> dict:
     # Взвешивание, ждущее «да» (handlers/bodyweight), — то же самое.
     bw_pending = data.get("bw_pending_weight")
     if isinstance(bw_pending, (int, float)) and not isinstance(bw_pending, bool):
-        updates["bw_pending_weight"] = round(bw_pending * factor, 1)
+        updates["bw_pending_weight"] = db.convert_weight(bw_pending, factor)
 
     # Кнопки «↩️ Отменить» под ответами тренера: откат удалённого взвешивания
     # хранит сам вес (db.scale_ai_undo_weights).

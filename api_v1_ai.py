@@ -163,7 +163,7 @@ import secrets
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse
 from starlette.routing import Route
 
 import ai_limits
@@ -184,6 +184,7 @@ import program_mentions
 import running_texts
 import timeutil
 import video_analysis
+from api_v1_common import JSONResponse
 from handlers import ai_trainer as ai_trainer_handlers
 from handlers.ai_trainer import MAX_IMAGE_BYTES
 

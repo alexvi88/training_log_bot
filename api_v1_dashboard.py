@@ -20,13 +20,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import coach_greeting
 import dashboard_data
 import i18n
-from api_v1_common import authed_user, query_excluded_workouts
+from api_v1_common import JSONResponse, authed_user, query_excluded_workouts
 
 
 def _tile_json(tile: tuple) -> dict[str, Any]:
