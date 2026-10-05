@@ -489,6 +489,7 @@ NEVER_LOCALIZED: dict[str, str] = {
     "handlers/admin.py": "админ-панель бота, аудитория — один человек (ADMIN_ID)",
     "admin_tasks.py": "ежедневная админ-задача (статистика + бэкап), уходит только ADMIN_ID",
     "ops_alerts.py": "тревоги об ошибках и сбоях, уходят только ADMIN_ID",
+    "review_watch.py": "зеркало действий ревьюера App Review, уходит только ADMIN_ID",
     "product_metrics.py": "продуктовая аналитика и суточная сводка — машинные имена, текста для атлета нет",
     "acquisition.py": "разбор источников трафика и воронка /growth — админская аналитика",
     "exercise_alternatives.py": (

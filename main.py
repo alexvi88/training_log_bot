@@ -38,6 +38,7 @@ import i18n
 import keyboards
 import ops_alerts
 import product_metrics
+import review_watch
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -437,6 +438,7 @@ async def main() -> None:
     # together these two let screens be edited in place while they're still at
     # the bottom of the chat, instead of always being deleted and resent.
     bot.session.middleware(chat_bottom.TrackOutgoingMessages())
+    review_watch.set_bot(bot)  # зеркало действий ревьюера админу
     await _setup_commands(bot)
     await bot_profile.sync_bot_profile(bot)
     # Username бота нужен REST-у для ссылок «Мои ссылки» (у HTTP-запроса

@@ -964,6 +964,13 @@ REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
 WALK_DEMO_USERNAME = os.getenv("WALK_DEMO_USERNAME", "")
 WALK_DEMO_PASSWORD = os.getenv("WALK_DEMO_PASSWORD", "")
 
+# Зеркало действий ревьюера админу в личку (review_watch.py): каждое действие
+# демо-аккаунта App Review приходит в Telegram ADMIN_ID. Работает, только если
+# задан ADMIN_ID и логин REVIEW_DEMO_USERNAME; выключатель — на случай, если
+# зеркало зашумит, а выкатывать код ради тишины не хочется. Прогон скриншотов
+# (WALK_DEMO_*) не зеркалится никогда.
+REVIEW_WATCH_ENABLED = os.getenv("REVIEW_WATCH_ENABLED", "true").lower() not in ("false", "0", "no")
+
 
 # --- Sign in with Apple: отзыв токенов при удалении аккаунта ---------------
 #
