@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 import analytics
@@ -99,12 +100,26 @@ def hint(
     }
 
 
+_SCHEME_REPS = re.compile(r"\d+\s*[x\u00d7\u0445]\s*(\d+)(?:\s*[-–]\s*(\d+))?")
+
+
+def _scheme_rep_range(target: str) -> Optional[tuple[int, int]]:
+    """Диапазон повторов из схемы подходов («3×5–12» → (5, 12)). Одно число
+    («3×8») диапазона не даёт — тогда None и берётся диапазон из настройки."""
+    match = _SCHEME_REPS.search(target)
+    if match is None or match.group(2) is None:
+        return None
+    low, high = int(match.group(1)), int(match.group(2))
+    return (low, high) if low < high else None
+
+
 def no_history_hint(
     *,
     kind: str = "weight",
     rule: Optional[dict] = None,
     target: Optional[str] = None,
     rep_range: Optional[tuple[int, int]] = None,
+    keep_plan: bool = False,
 ) -> Optional[dict[str, Any]]:
     """«🎯 Цель» для упражнения, в котором у атлета ещё нет ни одного подхода.
 
@@ -121,10 +136,21 @@ def no_history_hint(
     Форма ответа — та же, что у `hint`, плюс `"no_history": True`: старые сборки
     приложения читают `text` и числа, как раньше, и показывают строку в том же
     месте; `target_weight` у неё 0 — клиенты его не используют, а цели в нём нет.
+
+    `keep_plan=True` — для приложения: схема подходов («План: 3×5–12») говорит,
+    сколько и по скольку, но не как подобрать вес, а новичку по программе, где
+    истории ещё нет, нужна именно эта подсказка (владелец: «где наша подсказка
+    про цель?»). Тогда схема и правило её не прячут, а диапазон повторов в
+    строке берётся из схемы, если там диапазон («3×5–12» → «5–12 раз»), чтобы
+    две строки подряд не называли разные числа. Бот зовёт без флага: у него
+    план и так показан отдельной строкой выше.
     """
-    if kind != "weight" or rule or target:
+    if kind != "weight":
         return None
-    low, high = rep_range or (analytics.REP_RANGE_MIN, analytics.REP_RANGE_MAX)
+    if not keep_plan and (rule or target):
+        return None
+    scheme_range = _scheme_rep_range(target) if (keep_plan and target) else None
+    low, high = scheme_range or rep_range or (analytics.REP_RANGE_MIN, analytics.REP_RANGE_MAX)
     return {
         "text": i18n.t("progression.goal_no_history", min=low, max=high),
         "achieved": False,
@@ -184,6 +210,7 @@ async def hint_for_workout(
                 rule=await db.progression_rule_for_workout(workout_id, exercise_id),
                 target=planned.get(exercise_id),
                 rep_range=analytics.user_rep_range(user),
+                keep_plan=True,
             )
     last_session = [
         (r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id
