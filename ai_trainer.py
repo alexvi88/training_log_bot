@@ -3297,13 +3297,9 @@ async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dic
     """
     if not names or not is_configured():
         return {}
-    # Личная суточная квота импорта (KIND_IMPORT) — здесь только проверка: единицу
-    # тратит разбор текста (text_import.extract_sets), по одной на импорт. Исчерпана —
-    # пусто, а не ошибка: имена остаются «новыми», и человек разрешит их руками.
-    block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
-    if block is not None and not block.preview:
-        logger.info("AI import matching skipped for user %s: %s", user_id, block.log)
-        return {}
+    # Квота импорта (ai_limits.KIND_IMPORT) здесь НЕ проверяется и не списывается: одна
+    # единица на весь импорт, её держит вызывающий (handlers.csv_import.refine_with_model
+    # для CSV, text_import.extract_sets для заметок).
     rest = list(dict.fromkeys(names))
     result: dict[str, str] = {}
     catalog_flat = [name for group_names in _CATALOG_BY_GROUP.values() for name in group_names]
@@ -3422,11 +3418,8 @@ async def guess_exercise_groups(user_id: int, names: list[str]) -> dict[str, str
     paid_call. Модель недоступна или ответ не разобрать — пусто."""
     if not names or not is_configured():
         return {}
-    # Часть того же импорта, что и match_exercise_names_to_catalog: квоту здесь только
-    # проверяем (списывает её сопоставление имён), чтобы один импорт не стоил две.
-    block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
-    if block is not None and not block.preview:
-        return {}
+    # Часть того же импорта, что и match_exercise_names_to_catalog: квоту KIND_IMPORT не
+    # проверяет и не списывает — единицу на импорт держит вызывающий.
     groups = [name for name, _emoji, _order in seed_data.MUSCLE_GROUP_PRESETS if name != seed_data.OTHER_GROUP_NAME]
     result: dict[str, str] = {}
     rest = list(dict.fromkeys(names))

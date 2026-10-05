@@ -1178,7 +1178,7 @@ def _pick_template(name: str, groups, rows, texts_of) -> Optional[object]:
 
 
 async def match_exercise_names(
-    user_id: int, names: list[str], *, use_model: bool = False,
+    user_id: int, names: list[str], *, use_model: bool = False, charge: bool = True,
 ) -> dict[str, NameMatch]:
     """Единственный резолв имён импорта — бот, /v1/import/csv (предпросмотр и
     коммит) и заметки идут через него, поэтому показанное и записанное
@@ -1274,7 +1274,7 @@ async def match_exercise_names(
             plain.append(name)
 
     if use_model and plain:
-        await refine_with_model(user_id, out, plain, identity_owner)
+        await refine_with_model(user_id, out, plain, identity_owner, charge=charge)
     return {n: out[n] for n in unique}
 
 
@@ -1298,20 +1298,33 @@ _MODEL_MATCH_CACHE_SIZE = 4096
 
 async def refine_with_model(
     user_id: int, matches: dict[str, NameMatch], names: list[str],
-    identity_owner: Optional[dict[str, int]] = None,
+    identity_owner: Optional[dict[str, int]] = None, *, charge: bool = True,
 ) -> None:
     """Имена, которые иначе стали бы «новым как есть», — модели: какое это
     движение каталога. Совпало с идентичностью, которая у атлета уже есть, —
     имя ложится в его упражнение; нет — новое заводится, привязанным к
     шаблону (группа, фото, техника). Платный вызов — через
     ai_trainer.match_exercise_names_to_catalog (paid_call и HARD-стоп по
-    деньгам внутри); модель недоступна — имена остаются новыми."""
+    деньгам внутри); модель недоступна — имена остаются новыми.
+
+    Квота KIND_IMPORT — ОДНА единица на импорт, что бы он ни звал (сопоставление
+    имён и угадывание групп — оба внутри одного импорта): здесь check до вызова
+    модели и списание после её ответа. charge=False — единицу уже списал разбор
+    заметок (text_import.extract_sets), ни проверки, ни списания. Исчерпано —
+    имена остаются как без модели (новыми), файл всё равно грузится."""
     ask = [n for n in names if (user_id, n) not in _MODEL_MATCH_CACHE]
+    if ask and charge:
+        block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
+        if block is not None and not block.preview:
+            logger.info("AI import matching skipped for user %s: %s", user_id, block.log)
+            return
     found = {n: _MODEL_MATCH_CACHE[(user_id, n)] for n in names if (user_id, n) in _MODEL_MATCH_CACHE}
     if ask:
         # Модель не настроена — match_exercise_names_to_catalog ответит пустым,
         # и такой пустой ответ не запоминаем.
         answers = await ai_trainer.match_exercise_names_to_catalog(user_id, ask)
+        if charge and ai_trainer.is_configured():
+            await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
         for name in ask:
             found[name] = answers.get(name)
             if ai_trainer.is_configured():
@@ -1845,7 +1858,8 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             await event.message.answer(progress_text)
         else:
             await event.answer(progress_text)
-        await refine_with_model(user_id, matches, plain)
+        # Заметки уже стоили единицу в text_import.extract_sets — второй не берём.
+        await refine_with_model(user_id, matches, plain, charge=not stats.get("from_notes"))
     decisions = default_decisions(matches)
     choices = {
         name: {"candidates": m.candidates, "template": m.template_name}

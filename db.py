@@ -10559,7 +10559,7 @@ async def record_limit_ack(telegram_id: int, kind: str, date_str: str) -> None:
 async def prune_old_ai_usage(keep_days: int = 30) -> int:
     """Счётчики квот голоса/импорта/провальных видео (`ai_usage`) старше месяца:
     читаются они только за сегодня, таблица иначе растёт вечно."""
-    cutoff = (dt.date.today() - dt.timedelta(days=keep_days)).isoformat()
+    cutoff = (dt.date.fromisoformat(_utc_day()) - dt.timedelta(days=keep_days)).isoformat()
     async with _write_lock:
         cur = await conn().execute("DELETE FROM ai_usage WHERE date < ?", (cutoff,))
         await conn().commit()

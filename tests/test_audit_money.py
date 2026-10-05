@@ -488,7 +488,7 @@ async def test_text_import_has_daily_quota(fresh_db, user_id, monkeypatch):
     assert err.value.block.kind == ai_limits.KIND_IMPORT
 
 
-async def test_ai_name_matching_only_checks_import_quota_and_never_spends_it(fresh_db, user_id, monkeypatch):
+async def test_ai_trainer_matching_layer_neither_checks_nor_spends_import_quota(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "AI_IMPORT_DAILY_LIMIT", 1)
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     reply = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({"matches": []})))])
@@ -501,8 +501,8 @@ async def test_ai_name_matching_only_checks_import_quota_and_never_spends_it(fre
     assert await db.get_ai_usage_today(user_id, ai_limits.KIND_IMPORT) == 0
 
     await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)  # единица текстового импорта
-    assert await ai_trainer.match_exercise_names_to_catalog(user_id, ["Row"]) == {}
-    assert create.await_count == 2
+    await ai_trainer.match_exercise_names_to_catalog(user_id, ["Row"])
+    assert create.await_count == 3  # ai_trainer-слой квоту не проверяет: её держит refine_with_model
 
 
 async def test_text_import_spends_one_unit_after_the_provider_answered(fresh_db, user_id, monkeypatch):
@@ -523,7 +523,7 @@ async def test_text_import_spends_one_unit_after_the_provider_answered(fresh_db,
 def test_import_limit_text_does_not_lie_about_csv():
     import i18n
 
-    for lang, needle in (("ru", "вручную"), ("en", "by hand")):
+    for lang, needle in (("ru", "новыми"), ("en", "new exercises")):
         for key in ("limit.import.exact", "limit.import.generic"):
             text = i18n.t_in(lang, key, n=10)
             assert "CSV" in text and needle in text
@@ -561,3 +561,89 @@ async def test_rest_text_convert_quota_is_429(fresh_db, monkeypatch):
     assert resp.status_code == 429, resp.text
     assert resp.json()["error"] == "import_limit_exceeded"
     assert resp.json()["message"]
+
+
+# ---------- 4. одна единица квоты на один импорт ----------
+
+
+def _alias_client(monkeypatch, groups=True):
+    """Модель, которая на любой вызов отвечает пустыми совпадениями и группами."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    def create(**kwargs):
+        schema = json.dumps(kwargs.get("response_format", {}))
+        body = {"groups": []} if "import_name" in schema and "group" in schema else {"matches": []}
+        reply = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(body)))], usage=None
+        )
+        return reply
+
+    calls = AsyncMock(side_effect=create)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _novita_client(calls))
+    return calls
+
+
+async def _unit(user_id):
+    return await db.get_ai_usage_today(user_id, ai_limits.KIND_IMPORT)
+
+
+async def test_csv_import_spends_exactly_one_unit_for_matching_and_groups(fresh_db, user_id, monkeypatch):
+    from handlers import csv_import
+
+    monkeypatch.setattr(config, "AI_IMPORT_DAILY_LIMIT", 1)
+    calls = _alias_client(monkeypatch)
+    csv_import._MODEL_MATCH_CACHE.clear()
+    csv_import._MODEL_GROUP_CACHE.clear()
+    matches = {"Zzz Qqq": csv_import.NameMatch(via="new")}
+
+    await csv_import.refine_with_model(user_id, matches, ["Zzz Qqq"])
+
+    assert calls.await_count == 2  # и сопоставление, и группы — в одном импорте
+    assert await _unit(user_id) == 1
+
+
+async def test_csv_import_without_units_skips_ai_but_keeps_names(fresh_db, user_id, monkeypatch):
+    from handlers import csv_import
+
+    monkeypatch.setattr(config, "AI_IMPORT_DAILY_LIMIT", 1)
+    calls = _alias_client(monkeypatch)
+    csv_import._MODEL_MATCH_CACHE.clear()
+    csv_import._MODEL_GROUP_CACHE.clear()
+    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
+    matches = {"Zzz Qqq": csv_import.NameMatch(via="new")}
+
+    await csv_import.refine_with_model(user_id, matches, ["Zzz Qqq"])
+
+    calls.assert_not_awaited()
+    assert matches["Zzz Qqq"].via == "new"  # файл грузится, имя заведётся новым
+    assert await _unit(user_id) == 1
+
+
+async def test_text_import_with_last_unit_goes_through_whole_import_and_spends_one(fresh_db, user_id, monkeypatch):
+    import datetime as dt
+
+    from handlers import csv_import
+
+    monkeypatch.setattr(config, "AI_IMPORT_DAILY_LIMIT", 1)
+    calls = _alias_client(monkeypatch)
+    csv_import._MODEL_MATCH_CACHE.clear()
+    csv_import._MODEL_GROUP_CACHE.clear()
+    monkeypatch.setattr(text_import, "_extract_chunk", AsyncMock(return_value=([], 0, [])))
+
+    await text_import.extract_sets(user_id, "заметки", dt.date(2026, 1, 1), lang="ru")  # единица ушла
+    assert await _unit(user_id) == 1
+    matches = {"Zzz Qqq": csv_import.NameMatch(via="new")}
+    await csv_import.refine_with_model(user_id, matches, ["Zzz Qqq"], charge=False)
+
+    assert calls.await_count == 2  # сопоставление и группы прошли без проверки
+    assert await _unit(user_id) == 1  # и не списали второй раз
+
+
+async def test_prune_ai_usage_boundary_follows_utc_day(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(db, "_utc_day", lambda: "2026-03-31")
+    for day in ("2026-02-28", "2026-03-01", "2026-03-02"):
+        await db.conn().execute(
+            "INSERT INTO ai_usage (telegram_id, kind, date, count) VALUES (?, 'voice', ?, 1)", (user_id, day)
+        )
+    await db.conn().commit()
+    assert await db.prune_old_ai_usage(30) == 1  # граница 2026-03-01 (UTC-сутки минус 30), строго старше
