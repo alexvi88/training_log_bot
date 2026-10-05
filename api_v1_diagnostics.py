@@ -136,6 +136,31 @@ def _meta(value: Any) -> Optional[str]:
     return value[:_MAX_META_LEN] or None
 
 
+_STORAGE_FIELDS = ("store", "op", "error")
+_STORAGE_MAX_LEN = 120
+
+
+def _storage_failure_payload(payload: dict) -> dict:
+    """Что приложение реально шлёт в `storage_failure` (CrashReporter.storageFailure):
+    `store`, `op`, `error` и `diagnosticMetaData`. Остальное отбрасывается, строки
+    обрезаются: это клиентский вид, и принимать в базу произвольный JSON с
+    телефона незачем."""
+    clean: dict[str, Any] = {}
+    for key in _STORAGE_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, str):
+            clean[key] = value[:_STORAGE_MAX_LEN]
+    meta = payload.get("diagnosticMetaData")
+    if isinstance(meta, dict):
+        clean["diagnosticMetaData"] = {
+            k: v for k, v in meta.items()
+            if k in ("appVersion", "appBuildVersion", "osVersion", "deviceType")
+            and isinstance(v, str)
+        }
+    # Пустой словарь не годится: payload обязан быть непустым объектом.
+    return clean or {"error": "empty"}
+
+
 async def submit_diagnostic(request: Request) -> JSONResponse:
     raw = await request.body()
     if len(raw) > MAX_BODY_BYTES:
@@ -167,6 +192,8 @@ async def submit_diagnostic(request: Request) -> JSONResponse:
         os_version=_meta(meta.get("osVersion")) or _meta(body.get("os_version")),
         device=_meta(meta.get("deviceType")) or _meta(body.get("device")),
     )
+    if kind == "storage_failure":
+        payload = _storage_failure_payload(payload)
     diagnostic_id = await db.log_diagnostic(
         payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")), **fields
     )

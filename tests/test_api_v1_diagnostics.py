@@ -187,3 +187,20 @@ async def test_storage_failure_report_is_accepted(fresh_db, client):
     (row,) = await _rows()
     assert row["kind"] == "storage_failure"
     assert json.loads(row["payload"])["store"] == "pending_sets"
+
+
+async def test_storage_failure_payload_is_whitelisted_and_truncated(fresh_db, client):
+    resp = await client.post("/diagnostics", json={
+        "kind": "storage_failure",
+        "payload": {
+            "store": "pending_sets", "op": "decode", "error": "x" * 500,
+            "sets": [{"weight": 100}], "note": "секрет",
+            "diagnosticMetaData": {"appVersion": "1.5", "token": "abc"},
+        },
+    })
+    assert resp.status_code == 201, resp.text
+    (row,) = await _rows()
+    saved = json.loads(row["payload"])
+    assert set(saved) == {"store", "op", "error", "diagnosticMetaData"}
+    assert len(saved["error"]) == 120
+    assert saved["diagnosticMetaData"] == {"appVersion": "1.5"}

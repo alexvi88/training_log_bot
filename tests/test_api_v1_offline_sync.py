@@ -389,13 +389,17 @@ async def test_set_created_at_too_old_is_ignored_not_rejected(fresh_db, client_f
 
 
 @pytest.mark.asyncio
-async def test_set_created_at_garbage_is_400_and_nothing_written(fresh_db, client_factory):
+async def test_set_created_at_garbage_is_ignored_and_set_is_written_now(fresh_db, client_factory):
+    """Мусор в поле — не 400: очередь приложения считает 400 окончательным и
+    потеряла бы подход. Пишется «сейчас», как у `finished_at`."""
     client = await _linked_client(fresh_db, client_factory)
     wid, ex = await _offline_workout(client)
+    t0 = _moment()
     resp = await client.post(f"/workouts/{wid}/sets", json={
         "exercise_id": ex, "weight": 80, "reps": 8, "created_at": "вчера"})
-    assert resp.status_code == 400
-    assert await _count(fresh_db, "SELECT COUNT(*) FROM sets") == 0
+    assert resp.status_code == 201, resp.text
+    assert await _count(fresh_db, "SELECT COUNT(*) FROM sets") == 1
+    assert await _set_created_at(fresh_db, resp.json()["id"]) >= t0
 
 
 @pytest.mark.asyncio
@@ -478,3 +482,83 @@ async def test_new_set_into_finished_workout_is_still_409(fresh_db, client_facto
         "exercise_id": ex, "weight": 70, "reps": 8, "idempotency_key": "k-9"})
     assert cross.status_code == 409
     assert await _count(fresh_db, "SELECT COUNT(*) FROM sets") == 2
+
+
+@pytest.mark.asyncio
+async def test_voice_retry_into_finished_workout_is_replayed_before_transcription(
+    fresh_db, client_factory, monkeypatch
+):
+    """Повтор голосового подхода в закрытую тренировку не платит за расшифровку."""
+    import api_v1_voice
+
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    body = {"exercise_id": ex, "text": "100 8", "idempotency_key": "v-1"}
+    first = await client.post(f"/workouts/{wid}/sets/parse", json=body)
+    assert first.status_code == 201
+    await client.post(f"/workouts/{wid}/finish", json={})
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("транскрипция вызвана на повторе")
+
+    monkeypatch.setattr(api_v1_voice, "transcribe", boom)
+    retry = await client.post(f"/workouts/{wid}/sets/voice", json={
+        "exercise_id": ex, "audio_data_url": "data:audio/m4a;base64,AAAA", "idempotency_key": "v-1"})
+    assert retry.status_code == 201, retry.text
+    assert [s["id"] for s in retry.json()["sets"]] == [s["id"] for s in first.json()["sets"]]
+    # Новый ключ в закрытую — по-прежнему 409, и тоже без расшифровки.
+    late = await client.post(f"/workouts/{wid}/sets/voice", json={
+        "exercise_id": ex, "audio_data_url": "data:audio/m4a;base64,AAAA", "idempotency_key": "v-2"})
+    assert late.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_replay_never_returns_someone_elses_set(fresh_db, client_factory):
+    """Тот же ключ от другого пользователя и из другой тренировки — не повтор."""
+    a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    wa, exa = await _offline_workout(a)
+    wb, exb = await _offline_workout(b)
+    await a.post(f"/workouts/{wa}/sets", json={
+        "exercise_id": exa, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    await a.post(f"/workouts/{wa}/finish", json={})
+    await b.post(f"/workouts/{wb}/sets", json={"exercise_id": exb, "weight": 50, "reps": 5})
+    await b.post(f"/workouts/{wb}/finish", json={})
+    # b пробует тот же ключ в СВОЮ закрытую тренировку: подхода под его user_id нет.
+    resp = await b.post(f"/workouts/{wb}/sets", json={
+        "exercise_id": exb, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    assert resp.status_code == 409
+    # b пробует тренировку a — чужая: 404, подход не отдаётся.
+    steal = await b.post(f"/workouts/{wa}/sets", json={
+        "exercise_id": exb, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    assert steal.status_code == 404
+    # a с тем же ключом в другую свою закрытую тренировку — 409, не чужой подход.
+    wa2, exa2 = await _offline_workout(a)
+    await a.post(f"/workouts/{wa2}/sets", json={"exercise_id": exa2, "weight": 50, "reps": 5})
+    await a.post(f"/workouts/{wa2}/finish", json={})
+    cross = await a.post(f"/workouts/{wa2}/sets", json={
+        "exercise_id": exa2, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    assert cross.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_adoption_by_second_device_is_remembered_after_close(fresh_db, client_factory):
+    """Два устройства: первое привязало свою метку к шедшей тренировке, второе
+    пришло со своей. После закрытия повтор старта второго с той же меткой не
+    заводит дубль и остаётся `adopted`."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid = (await client.post("/workouts/active")).json()["id"]
+    first = str(uuid.uuid4())
+    second = str(uuid.uuid4())
+    assert (await client.post("/workouts/active", json={"client_id": first})).json()["adopted"] is True
+    resp = await client.post("/workouts/active", json={"client_id": second})
+    assert resp.json()["id"] == wid
+    assert resp.json()["adopted"] is True
+    ex = (await client.post("/exercises", json={"name": "Жим"})).json()["id"]
+    await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 50, "reps": 5})
+    assert (await client.post(f"/workouts/{wid}/finish", json={})).status_code == 200
+    again = await client.post("/workouts/active", json={"client_id": second})
+    assert again.status_code == 200
+    assert again.json()["id"] == wid
+    assert again.json()["adopted"] is True
+    assert await _count(fresh_db, "SELECT COUNT(*) FROM workouts") == 1

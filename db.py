@@ -290,6 +290,16 @@ CREATE INDEX IF NOT EXISTS idx_sets_created ON sets (created_at);
 -- почти всегда NULL. user_id — свой, а не через sets->block->workout: только
 -- он даёт "уникально в пределах пользователя", а не глобально, одним индексом
 -- на месте, без JOIN на каждую проверку.
+-- Метки клиента (client_id), которые сервер привязал к УЖЕ шедшей тренировке с
+-- другой меткой (начата на другом устройстве): без записи повтор старта с той
+-- же меткой после закрытия той тренировки завёл бы вторую.
+CREATE TABLE IF NOT EXISTS adopted_client_ids (
+    user_id INTEGER NOT NULL,
+    client_id TEXT NOT NULL,
+    workout_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, client_id)
+);
+
 CREATE TABLE IF NOT EXISTS set_write_attempts (
     user_id INTEGER NOT NULL,
     idempotency_key TEXT NOT NULL,
@@ -4528,6 +4538,14 @@ async def get_or_create_workout_by_client_id(
         if row is not None:
             return row["id"], False, bool(row["client_adopted"])
         cur = await db.execute(
+            "SELECT w.id FROM adopted_client_ids a JOIN workouts w ON w.id = a.workout_id "
+            "WHERE a.user_id = ? AND a.client_id = ?",
+            (user_id, client_id),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"], False, True
+        cur = await db.execute(
             "SELECT id, client_id FROM workouts WHERE user_id = ? AND status = 'active' "
             "ORDER BY id LIMIT 1",
             (user_id,),
@@ -4539,7 +4557,14 @@ async def get_or_create_workout_by_client_id(
                     "UPDATE workouts SET client_id = ?, client_adopted = 1 WHERE id = ?",
                     (client_id, row["id"]),
                 )
-                await db.commit()
+            else:
+                # Метка занята другим устройством — свою запоминаем отдельно.
+                await db.execute(
+                    "INSERT OR IGNORE INTO adopted_client_ids (user_id, client_id, workout_id) "
+                    "VALUES (?, ?, ?)",
+                    (user_id, client_id, row["id"]),
+                )
+            await db.commit()
             return row["id"], False, True
         program_id = await _program_id_for_routine(routine_id)
         cur = await db.execute(

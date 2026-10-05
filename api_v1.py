@@ -1220,8 +1220,16 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    _require_open(workout)
     body = await _json_body(request)
+    # Повтор уже записанной попытки в закрытую тренировку — ДО расшифровки:
+    # платить за транскрипцию ради ответа «уже записано» незачем.
+    replay = await _replay_into_finished(workout, user_id, body)
+    if replay is not None:
+        return JSONResponse(
+            {"sets": [_set_json(r) for r in replay], "transcript": "", "dropped_sets": 0},
+            status_code=201,
+        )
+    _require_open(workout)
     exercise_id = _require(body, "exercise_id", int)
     idempotency_key = common.optional_str(body, "idempotency_key")
     await _owned_exercise(exercise_id, user_id)

@@ -443,11 +443,12 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
                  expect=400)
     await w.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": forked_id, "weight": 100, "reps": 0},
                  expect=400)
-    # Время подхода с телефона: тексты ошибок поля `created_at` — на языке атлета.
+    # Время подхода с телефона: мусор в `created_at` не отказ (очередь приложения
+    # сочла бы 400 окончательным и потеряла подход) — подход пишется «сейчас».
     await w.call("POST", f"/workouts/{wid}/sets",
-                 json={"exercise_id": forked_id, "weight": 100, "reps": 5, "created_at": "вчера"}, expect=400)
+                 json={"exercise_id": forked_id, "weight": 100, "reps": 5, "created_at": "вчера"}, expect=201)
     await w.call("POST", f"/workouts/{wid}/sets/parse",
-                 json={"exercise_id": forked_id, "text": "100 8", "created_at": "вчера"}, expect=400)
+                 json={"exercise_id": forked_id, "text": "100 8", "created_at": "вчера"}, expect=201)
     await w.call("POST", f"/workouts/{wid}/sets/parse", json={"exercise_id": forked_id, "text": "100 8"},
                  expect=201)
     await w.call("POST", f"/workouts/{wid}/sets/parse", json={"exercise_id": forked_id, "text": "???"},
