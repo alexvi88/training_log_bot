@@ -1039,16 +1039,15 @@ async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_
     draft["replaces"] = {"kind": "program", "id": program_id, "name": "Верх/низ", "routine_ids": [old_day]}
     await state.update_data(ai_program_draft=draft)
 
-    real_create = db_module.create_routine_from_program
-    calls = {"n": 0}
+    real_replace = db_module.replace_program_days
 
-    async def flaky_create(*args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise RuntimeError("boom")
-        return await real_create(*args, **kwargs)
+    async def flaky_replace(*args, **kwargs):
+        # Транзакция откатывается целиком — как падение посреди записи.
+        with pytest.raises(Exception):  # noqa: B017 — NOT NULL exercise_id посреди записи
+            await real_replace(args[0], args[1], [{"routine_id": None, "name": "x", "exercises": [(None, None, None)]}], [])
+        raise RuntimeError("boom")
 
-    monkeypatch.setattr(db_module, "create_routine_from_program", flaky_create)
+    monkeypatch.setattr(db_module, "replace_program_days", flaky_replace)
 
     callback = _make_callback(user_id, "ai:prog:save:1")
     await ai_trainer.ai_program_save(callback, state)

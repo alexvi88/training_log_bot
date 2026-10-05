@@ -1052,6 +1052,11 @@ def _utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 
 
+def utc_now_naive() -> dt.datetime:
+    """Тот же «сейчас», что пишет now_iso (naive UTC) — для сравнения с его метками."""
+    return _utc_now()
+
+
 def now_iso() -> str:
     return _utc_now().isoformat(timespec="seconds")
 
@@ -8616,6 +8621,91 @@ async def rename_routine(routine_id: int, name: str) -> None:
     async with _write_lock:
         await conn().execute("UPDATE routines SET name = ? WHERE id = ?", (name, routine_id))
         await conn().commit()
+
+
+async def replace_program_days(
+    user_id: int,
+    program_id: int,
+    plans: list[dict[str, Any]],
+    delete_ids: list[int],
+    *,
+    rename_to: Optional[str] = None,
+    description: Optional[str] = None,
+    deload_every_weeks: Optional[int] = None,
+) -> tuple[list[int], bool]:
+    """Переписать программу одной транзакцией: (id дней по порядку, переименована ли).
+
+    В ту же транзакцию входят переименование (`rename_to`; занятое имя —
+    не ошибка, программа остаётся под прежним, флаг False), описание (только
+    если непустое) и разгрузка (пишется всегда: не прислали — её нет).
+    Откат возвращает программу целиком прежней.
+
+    Каждый план — `{"routine_id": int | None, "name": str, "exercises":
+    [(exercise_id, target, progression_json | None), ...]}`. День с `routine_id`
+    обновляется НА МЕСТЕ (имя, порядок, состав) — id остаётся тем же, поэтому
+    `workouts.routine_id`, «следующий день» и список последних программ не
+    теряют историю; без `routine_id` день создаётся. `delete_ids` — лишние
+    старые дни. Падение посередине откатывает всё: старая версия цела.
+    """
+    async with _write_lock:
+        db = conn()
+        try:
+            renamed = False
+            if rename_to:
+                new_name = rename_to.strip()
+                try:
+                    await db.execute(
+                        "UPDATE programs SET name = ?, name_key = ? WHERE id = ?",
+                        (new_name, _program_key(new_name), program_id),
+                    )
+                    renamed = True
+                except aiosqlite.IntegrityError:
+                    pass
+            if description:
+                await db.execute(
+                    "UPDATE programs SET description = ? WHERE id = ?",
+                    (clean_program_description(description), program_id),
+                )
+            await db.execute(
+                "UPDATE programs SET deload_every_weeks = ? WHERE id = ?",
+                (clean_deload_every_weeks(deload_every_weeks), program_id),
+            )
+            ids: list[int] = []
+            for order, plan in enumerate(plans):
+                routine_id = plan.get("routine_id")
+                if routine_id is None:
+                    cur = await db.execute(
+                        "INSERT INTO routines (user_id, name, created_at, program_id, day_order) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (user_id, plan["name"], now_iso(), program_id, order),
+                    )
+                    routine_id = cur.lastrowid
+                else:
+                    await db.execute(
+                        "UPDATE routines SET name = ?, day_order = ? WHERE id = ? AND program_id = ?",
+                        (plan["name"], order, routine_id, program_id),
+                    )
+                    await db.execute(
+                        "DELETE FROM routine_exercises WHERE routine_id = ?", (routine_id,)
+                    )
+                for index, (exercise_id, target, progression) in enumerate(plan["exercises"]):
+                    await db.execute(
+                        "INSERT INTO routine_exercises "
+                        "(routine_id, exercise_id, order_index, target, progression) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (routine_id, exercise_id, index, target, progression),
+                    )
+                ids.append(routine_id)
+            for old_id in delete_ids:
+                await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (old_id,))
+                await db.execute(
+                    "DELETE FROM routines WHERE id = ? AND program_id = ?", (old_id, program_id)
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return ids, renamed
 
 
 async def delete_routine(routine_id: int) -> None:

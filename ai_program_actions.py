@@ -48,6 +48,86 @@ async def create_program_day(user_id: int, day: dict[str, Any], program_id: int)
     return routine_id
 
 
+def match_days(
+    new_days: list[dict[str, Any]],
+    old_days: list[Any],
+    new_ex_ids: Optional[list[set[int]]] = None,
+    old_ex_ids: Optional[dict[int, set[int]]] = None,
+) -> list[Optional[int]]:
+    """Для каждого нового дня — id старого дня, который он обновляет, или None.
+
+    Сначала по имени без регистра и пробелов. Из несовпавших по имени пара
+    подставляется по порядку, только если (а) несовпавших ровно по одному с
+    каждой стороны (это переименование), либо (б) состав упражнений совпадает
+    хотя бы наполовину (по exercise_id). Иначе — новый день: слепая подстановка
+    по порядку склеила бы историю чужого дня с переименованным и переставленным.
+    """
+    def key(name: str) -> str:
+        return name.strip().lower()
+
+    by_name = {key(old["name"]): old["id"] for old in reversed(old_days)}
+    taken: set[int] = set()
+    result: list[Optional[int]] = []
+    for day in new_days:
+        old_id = by_name.get(key(day["name"]))
+        if old_id is not None and old_id not in taken:
+            taken.add(old_id)
+            result.append(old_id)
+        else:
+            result.append(None)
+
+    free_old = [old["id"] for old in old_days if old["id"] not in taken]
+    free_new = [i for i, r in enumerate(result) if r is None]
+    if len(free_old) == 1 and len(free_new) == 1:
+        result[free_new[0]] = free_old[0]
+    elif new_ex_ids is not None and old_ex_ids is not None:
+        for i in free_new:
+            mine = new_ex_ids[i]
+            best, best_share = None, 0.5
+            for old_id in free_old:
+                theirs = old_ex_ids.get(old_id, set())
+                union = mine | theirs
+                share = len(mine & theirs) / len(union) if union else 0.0
+                if share >= best_share and old_id not in taken:
+                    best, best_share = old_id, share
+            if best is not None:
+                taken.add(best)
+                result[i] = best
+    return result
+
+
+async def _plan_days_in_place(
+    user_id: int, days: list[dict[str, Any]], old_days: list[Any]
+) -> list[dict[str, Any]]:
+    """Планы дней для db.replace_program_days: упражнения заранее
+    резолвятся в id (дубли и неразрешимые имена отбрасываются, как в
+    db.create_routine_from_program), чтобы сама запись была одной транзакцией."""
+    resolved: list[list[tuple[int, Optional[str], Optional[str]]]] = []
+    for day in days:
+        seen: set[int] = set()
+        exercises = []
+        for item in day["items"]:
+            ex_id = await db.get_or_create_user_exercise_by_name(user_id, item["name"])
+            if ex_id is None or ex_id in seen:
+                continue
+            seen.add(ex_id)
+            progression = item.get("progression")
+            exercises.append((
+                ex_id, item.get("target"),
+                json.dumps(progression, ensure_ascii=False) if progression else None,
+            ))
+        resolved.append(exercises)
+    old_ex_ids = {
+        old["id"]: {row["exercise_id"] for row in await db.list_routine_exercises(old["id"])}
+        for old in old_days
+    }
+    matches = match_days(days, old_days, [{e[0] for e in ex} for ex in resolved], old_ex_ids)
+    return [
+        {"routine_id": old_id, "name": day["name"], "exercises": exercises}
+        for day, old_id, exercises in zip(days, matches, resolved, strict=True)
+    ]
+
+
 async def save_into_existing_program(
     user_id: int, draft: dict[str, Any], program: Any
 ) -> dict[str, Any]:
@@ -71,25 +151,24 @@ async def save_into_existing_program(
     # текущего живого имени: сравнение с live-именем спутало бы «модель хочет
     # переименовать» с «пользователь успел переименовать руками сам».
     resolved_name = (draft.get("replaces") or {}).get("name") or program["name"]
-    target_name = program["name"]
     renamed_by_trainer = draft["name"].strip().lower() != resolved_name.strip().lower()
-    if renamed_by_trainer and await db.rename_program_by_id(program["id"], draft["name"]):
-        target_name = draft["name"]
-    if draft.get("description"):
-        await db.set_program_description(program["id"], draft["description"])
-    # Правка — программа целиком (propose_program), и разгрузка тоже: не
-    # прислал — её больше нет, ровно как с правилами прогрессии упражнений.
-    await db.set_program_deload(program["id"], draft.get("deload_every_weeks"))
 
-    # Сначала новые дни, потом удаление старых: падение посередине оставляет
-    # лишние новые дни рядом со старой программой — хуже, чем идеально, но
-    # старая версия цела и есть с чем попробовать снова, а не пусто с обеих
-    # сторон. Отсюда же — здесь нет отката: это чужая для черновика программа,
-    # с данными пользователя внутри, стирать её обрубком нельзя.
-    for day in days:
-        await create_program_day(user_id, day, program_id=program["id"])
-    for old in old_days:
-        await db.delete_routine(old["id"])
+    # Дни обновляются НА МЕСТЕ: id дня — то, на что ссылаются тренировки
+    # (workouts.routine_id), «следующий день» и адхеренс. Сопоставление — по
+    # имени дня (как formatting.build_program_changes), потом осторожно по
+    # порядку (см. match_days). Имя, описание, разгрузка и дни пишутся одной
+    # транзакцией (db.replace_program_days): упало — программа целиком прежняя.
+    # Разгрузка — часть программы целиком: не прислал — её больше нет.
+    plans = await _plan_days_in_place(user_id, days, old_days)
+    matched = {plan["routine_id"] for plan in plans if plan["routine_id"] is not None}
+    _, renamed = await db.replace_program_days(
+        user_id, program["id"], plans,
+        [old["id"] for old in old_days if old["id"] not in matched],
+        rename_to=draft["name"] if renamed_by_trainer else None,
+        description=draft.get("description"),
+        deload_every_weeks=draft.get("deload_every_weeks"),
+    )
+    target_name = draft["name"] if renamed else program["name"]
 
     final_days = await db.list_program_days_by_id(program["id"])
     return {
