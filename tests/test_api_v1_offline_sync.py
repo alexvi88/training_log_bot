@@ -209,16 +209,40 @@ async def test_offline_sets_retry_and_finish_with_client_times(fresh_db, client_
 
 
 @pytest.mark.asyncio
-async def test_finish_rejects_bad_finished_at(fresh_db, client_factory):
+async def test_finish_before_start_is_clamped_to_start(fresh_db, client_factory):
+    """Часы телефона ушли назад (конец «раньше» начала): не 400 — очередь
+    приложения считала его окончательным, — а конец ровно в момент начала."""
     client = await _linked_client(fresh_db, client_factory)
     ex = (await client.post("/exercises", json={"name": "Жим"})).json()["id"]
     wid = (await client.post(
         "/workouts/active", json={"client_id": str(uuid.uuid4()), "started_at": _ago(hours=3)}
     )).json()["id"]
     await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 80, "reps": 8})
-    before = await client.post(f"/workouts/{wid}/finish", json={"finished_at": _ago(hours=5)})
-    assert before.status_code == 400
-    assert (await client.get(f"/workouts/{wid}")).json()["status"] == "active"
+    started = (await client.get(f"/workouts/{wid}")).json()["started_at"]
+    fin = await client.post(f"/workouts/{wid}/finish", json={"finished_at": _ago(hours=13)})
+    assert fin.status_code == 200, fin.text
+    body = fin.json()
+    assert body["status"] == "finished"
+    assert body["finished_at"][:19] == started[:19]
+
+
+@pytest.mark.asyncio
+async def test_v1_json_is_not_cached_on_the_phone(fresh_db, client_factory):
+    """JSON /v1 — Cache-Control: no-store: URLCache приложения иначе отдавал
+    старый GET /workouts/active как свежий, когда часы телефона ушли назад, и
+    закрытая тренировка снова вставала на экран как идущая."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid = (await client.post("/workouts/active", json={})).json()["id"]
+    for path in ("/workouts/active", f"/workouts/{wid}", "/me"):
+        resp = await client.get(path)
+        assert resp.status_code == 200, (path, resp.text)
+        assert resp.headers.get("cache-control") == "no-store", path
+    await client.post(f"/workouts/{wid}/finish", json={})
+    gone = await client.get("/workouts/active")
+    assert gone.headers.get("cache-control") == "no-store"
+    err = await client.get("/workouts/999999")
+    assert err.status_code == 404
+    assert err.headers.get("cache-control") == "no-store"
 
 
 @pytest.mark.asyncio

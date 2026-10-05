@@ -70,6 +70,7 @@ import formatting
 import history_search_data
 import i18n
 import mcp_oauth
+import no_store
 import parser
 import review_demo
 import seed_data
@@ -1599,11 +1600,11 @@ async def finish_workout(request: Request) -> JSONResponse:
     # тренировка, начатая вчера в зале без сети, закончилась бы в момент
     # синхронизации и растянулась в истории на сутки.
     client_finished = common.client_moment(body, "finished_at", clamp_future=True)
+    # Конец раньше начала — часы телефона ушли назад. Не отказ (очередь
+    # приложения считает 400 окончательным и уносила конец в архив), а
+    # подтяжка к началу — так же, как set_created_at подтягивает подход.
     if client_finished is not None and client_finished < started_at:
-        raise ApiError(
-            400, "bad_request", "finished_at is before started_at",
-            key="input.finished_before_started",
-        )
+        client_finished = started_at
     if workout["status"] == "backfill":
         finished_at = workout["started_at"]
     elif client_finished is not None and not backdated:
@@ -2183,6 +2184,9 @@ def build_app() -> Starlette:
         middleware=[
             # Снаружи всего — чтобы в замер вошли и сжатие, и лог действий.
             Middleware(server_timing.ServerTimingMiddleware, routes=routes),
+            # JSON не кэшируется на телефоне: иначе при часах телефона назад
+            # URLCache отдавал старый ответ как свежий (см. no_store).
+            Middleware(no_store.NoStoreJsonMiddleware),
             # JSON истории, прогресса, каталога упражнений — десятки килобайт
             # одинаковых ключей, и по мобильной сети сжатый ответ приходит
             # заметно быстрее. Меньше килобайта не жмём: заголовки дороже
