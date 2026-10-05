@@ -174,3 +174,33 @@ async def test_admin_summary_groups_by_version(fresh_db, client):
     assert "1.4 (57)" in text and "падения: 2" in text and "зависания: 1" in text
     assert "sig 11" in text
     assert "не пришло" in admin.format_crash_report([], [], 7)
+
+
+async def test_storage_failure_report_is_accepted(fresh_db, client):
+    """Клиент сам шлёт `storage_failure`, когда файл офлайн-очереди не прочитался или не записался."""
+    resp = await client.post("/diagnostics", json={
+        "kind": "storage_failure",
+        "payload": {"store": "pending_sets", "op": "read", "error": "DecodingError"},
+        "app_version": "1.5", "build": "60", "os_version": "18.0", "device": "iPhone16,1",
+    })
+    assert resp.status_code == 201, resp.text
+    (row,) = await _rows()
+    assert row["kind"] == "storage_failure"
+    assert json.loads(row["payload"])["store"] == "pending_sets"
+
+
+async def test_storage_failure_payload_is_whitelisted_and_truncated(fresh_db, client):
+    resp = await client.post("/diagnostics", json={
+        "kind": "storage_failure",
+        "payload": {
+            "store": "pending_sets", "op": "decode", "error": "x" * 500,
+            "sets": [{"weight": 100}], "note": "секрет",
+            "diagnosticMetaData": {"appVersion": "1.5", "token": "abc"},
+        },
+    })
+    assert resp.status_code == 201, resp.text
+    (row,) = await _rows()
+    saved = json.loads(row["payload"])
+    assert set(saved) == {"store", "op", "error", "diagnosticMetaData"}
+    assert len(saved["error"]) == 120
+    assert saved["diagnosticMetaData"] == {"appVersion": "1.5"}

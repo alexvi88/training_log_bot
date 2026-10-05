@@ -247,3 +247,318 @@ async def test_migration_adds_column_and_unique_index(fresh_db):
     cur = await fresh_db.conn().execute("PRAGMA index_list(workouts)")
     names = {r["name"]: r["unique"] for r in await cur.fetchall()}
     assert names.get("idx_workouts_user_client") == 1
+
+
+# ---------- adopted: чужая шедшая тренировка ----------
+
+
+@pytest.mark.asyncio
+async def test_start_reports_adopted_for_existing_active_workout(fresh_db, client_factory):
+    """Тренировка идёт (начата в боте): офлайн-старт по client_id усыновляет её, и
+    приложению об этом говорят — иначе его досылка закроет её за человека."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid = (await client.post("/workouts/active")).json()["id"]
+    cid = str(uuid.uuid4())
+    first = await client.post("/workouts/active", json={"client_id": cid, "started_at": _ago(hours=2)})
+    assert first.status_code == 200
+    assert first.json()["id"] == wid
+    assert first.json()["adopted"] is True
+    # Повтор после потерянного ответа находится уже по метке — признак не теряется.
+    again = await client.post("/workouts/active", json={"client_id": cid})
+    assert again.json()["id"] == wid
+    assert again.json()["adopted"] is True
+    # Метка на чужой шедшей тренировке с другой меткой — тоже «чужая».
+    other = await client.post("/workouts/active", json={"client_id": str(uuid.uuid4())})
+    assert other.json()["id"] == wid
+    assert other.json()["adopted"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_reports_not_adopted_for_own_workout(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    cid = str(uuid.uuid4())
+    first = await client.post("/workouts/active", json={"client_id": cid})
+    assert first.status_code == 201
+    assert first.json()["adopted"] is False
+    again = await client.post("/workouts/active", json={"client_id": cid})
+    assert again.json()["adopted"] is False
+
+
+@pytest.mark.asyncio
+async def test_adopted_absent_without_client_id(fresh_db, client_factory):
+    """Старый клиент и обычный старт признака не получают: ответ прежний."""
+    client = await _linked_client(fresh_db, client_factory)
+    assert "adopted" not in (await client.post("/workouts/active")).json()
+
+
+@pytest.mark.asyncio
+async def test_adopted_workout_still_takes_sets(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    ex = (await client.post("/exercises", json={"name": "Жим"})).json()["id"]
+    wid = (await client.post("/workouts/active")).json()["id"]
+    adopted = await client.post("/workouts/active", json={"client_id": str(uuid.uuid4())})
+    assert adopted.json()["adopted"] is True
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "idempotency_key": "off-1"})
+    assert resp.status_code == 201
+    assert (await client.get(f"/workouts/{wid}")).json()["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_migration_adds_client_adopted_column(fresh_db):
+    cur = await fresh_db.conn().execute("PRAGMA table_info(workouts)")
+    assert "client_adopted" in {r["name"] for r in await cur.fetchall()}
+
+
+# ---------- created_at подхода ----------
+
+
+async def _set_created_at(fresh_db, set_id):
+    cur = await fresh_db.conn().execute("SELECT created_at FROM sets WHERE id = ?", (set_id,))
+    return dt.datetime.fromisoformat((await cur.fetchone())["created_at"])
+
+
+def _moment(**kw) -> dt.datetime:
+    return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(**kw)).replace(tzinfo=None, microsecond=0)
+
+
+async def _offline_workout(client, hours=3):
+    ex = (await client.post("/exercises", json={"name": "Жим"})).json()["id"]
+    wid = (await client.post(
+        "/workouts/active", json={"client_id": str(uuid.uuid4()), "started_at": _ago(hours=hours)}
+    )).json()["id"]
+    return wid, ex
+
+
+@pytest.mark.asyncio
+async def test_set_created_at_within_workout_is_kept(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    want = _moment(hours=1)
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "created_at": want.isoformat() + "Z"})
+    assert resp.status_code == 201, resp.text
+    assert await _set_created_at(fresh_db, resp.json()["id"]) == want
+    assert resp.json()["created_at"].startswith(want.isoformat()[:16])
+
+
+@pytest.mark.asyncio
+async def test_set_created_at_offset_is_converted_to_utc(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    want = _moment(hours=1)
+    local = (want + dt.timedelta(hours=3)).isoformat() + "+03:00"
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "created_at": local})
+    assert await _set_created_at(fresh_db, resp.json()["id"]) == want
+
+
+@pytest.mark.asyncio
+async def test_set_created_at_in_future_is_clamped_to_now(fresh_db, client_factory):
+    """Часы телефона убежали вперёд: подход не теряется 400-й, встаёт на «сейчас»."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    t0 = _moment()
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "created_at": _ago(hours=-5)})
+    assert resp.status_code == 201, resp.text
+    got = await _set_created_at(fresh_db, resp.json()["id"])
+    assert t0 <= got <= t0 + dt.timedelta(minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_set_created_at_before_start_is_pulled_to_start(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client, hours=3)
+    started = dt.datetime.fromisoformat((await client.get(f"/workouts/{wid}")).json()["started_at"])
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "created_at": _ago(hours=6)})
+    assert resp.status_code == 201, resp.text
+    assert await _set_created_at(fresh_db, resp.json()["id"]) == started
+
+
+@pytest.mark.asyncio
+async def test_set_created_at_too_old_is_ignored_not_rejected(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    t0 = _moment()
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "created_at": _ago(days=30)})
+    assert resp.status_code == 201, resp.text
+    assert await _set_created_at(fresh_db, resp.json()["id"]) >= t0
+
+
+@pytest.mark.asyncio
+async def test_set_created_at_garbage_is_ignored_and_set_is_written_now(fresh_db, client_factory):
+    """Мусор в поле — не 400: очередь приложения считает 400 окончательным и
+    потеряла бы подход. Пишется «сейчас», как у `finished_at`."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    t0 = _moment()
+    resp = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "created_at": "вчера"})
+    assert resp.status_code == 201, resp.text
+    assert await _count(fresh_db, "SELECT COUNT(*) FROM sets") == 1
+    assert await _set_created_at(fresh_db, resp.json()["id"]) >= t0
+
+
+@pytest.mark.asyncio
+async def test_set_without_created_at_is_now(fresh_db, client_factory):
+    """Старый клиент поля не шлёт — поведение прежнее."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    t0 = _moment()
+    resp = await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 80, "reps": 8})
+    got = await _set_created_at(fresh_db, resp.json()["id"])
+    assert t0 <= got <= t0 + dt.timedelta(minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_parse_sets_take_created_at(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    want = _moment(hours=1)
+    resp = await client.post(f"/workouts/{wid}/sets/parse", json={
+        "exercise_id": ex, "text": "100 8, 100 7", "created_at": want.isoformat() + "Z"})
+    assert resp.status_code == 201, resp.text
+    sets = resp.json()["sets"]
+    assert len(sets) == 2
+    for item in sets:
+        assert await _set_created_at(fresh_db, item["id"]) == want
+
+
+# ---------- повтор подхода в закрытую тренировку ----------
+
+
+@pytest.mark.asyncio
+async def test_retry_of_recorded_set_into_finished_workout_is_replayed(fresh_db, client_factory):
+    """Подход записан, ответ потерялся, тренировку закончили — повтор с тем же
+    ключом получает записанный подход, а не 409: приложение не должно считать
+    лежащий в истории подход потерянным."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    body = {"exercise_id": ex, "weight": 80, "reps": 8, "idempotency_key": "k-1"}
+    first = await client.post(f"/workouts/{wid}/sets", json=body)
+    assert first.status_code == 201
+    assert (await client.post(f"/workouts/{wid}/finish", json={})).status_code == 200
+    retry = await client.post(f"/workouts/{wid}/sets", json=body)
+    assert retry.status_code == 201
+    assert retry.json()["id"] == first.json()["id"]
+    assert await _count(fresh_db, "SELECT COUNT(*) FROM sets") == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_of_recorded_line_into_finished_workout_is_replayed(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    body = {"exercise_id": ex, "text": "100 8, 100 7", "idempotency_key": "line-1"}
+    first = await client.post(f"/workouts/{wid}/sets/parse", json=body)
+    await client.post(f"/workouts/{wid}/finish", json={})
+    retry = await client.post(f"/workouts/{wid}/sets/parse", json=body)
+    assert retry.status_code == 201
+    assert [s["id"] for s in retry.json()["sets"]] == [s["id"] for s in first.json()["sets"]]
+
+
+@pytest.mark.asyncio
+async def test_new_set_into_finished_workout_is_still_409(fresh_db, client_factory):
+    """Повтор не открывает закрытую тренировку: новый ключ, чужой ключ и подход без
+    ключа — по-прежнему 409."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 80, "reps": 8, "idempotency_key": "k-1"})
+    await client.post(f"/workouts/{wid}/finish", json={})
+    for extra in ({"idempotency_key": "k-2"}, {}):
+        late = await client.post(f"/workouts/{wid}/sets", json={
+            "exercise_id": ex, "weight": 80, "reps": 8, **extra})
+        assert late.status_code == 409
+        assert late.json()["error"] == "workout_finished"
+    # Тот же ключ, но к другой (закрытой) тренировке — не повтор.
+    other_wid = (await client.post("/workouts/active", json={"client_id": str(uuid.uuid4())})).json()["id"]
+    await client.post(f"/workouts/{other_wid}/sets", json={
+        "exercise_id": ex, "weight": 70, "reps": 8, "idempotency_key": "k-9"})
+    await client.post(f"/workouts/{other_wid}/finish", json={})
+    cross = await client.post(f"/workouts/{wid}/sets", json={
+        "exercise_id": ex, "weight": 70, "reps": 8, "idempotency_key": "k-9"})
+    assert cross.status_code == 409
+    assert await _count(fresh_db, "SELECT COUNT(*) FROM sets") == 2
+
+
+@pytest.mark.asyncio
+async def test_voice_retry_into_finished_workout_is_replayed_before_transcription(
+    fresh_db, client_factory, monkeypatch
+):
+    """Повтор голосового подхода в закрытую тренировку не платит за расшифровку."""
+    import api_v1_voice
+
+    client = await _linked_client(fresh_db, client_factory)
+    wid, ex = await _offline_workout(client)
+    body = {"exercise_id": ex, "text": "100 8", "idempotency_key": "v-1"}
+    first = await client.post(f"/workouts/{wid}/sets/parse", json=body)
+    assert first.status_code == 201
+    await client.post(f"/workouts/{wid}/finish", json={})
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("транскрипция вызвана на повторе")
+
+    monkeypatch.setattr(api_v1_voice, "transcribe", boom)
+    retry = await client.post(f"/workouts/{wid}/sets/voice", json={
+        "exercise_id": ex, "audio_data_url": "data:audio/m4a;base64,AAAA", "idempotency_key": "v-1"})
+    assert retry.status_code == 201, retry.text
+    assert [s["id"] for s in retry.json()["sets"]] == [s["id"] for s in first.json()["sets"]]
+    # Новый ключ в закрытую — по-прежнему 409, и тоже без расшифровки.
+    late = await client.post(f"/workouts/{wid}/sets/voice", json={
+        "exercise_id": ex, "audio_data_url": "data:audio/m4a;base64,AAAA", "idempotency_key": "v-2"})
+    assert late.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_replay_never_returns_someone_elses_set(fresh_db, client_factory):
+    """Тот же ключ от другого пользователя и из другой тренировки — не повтор."""
+    a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    wa, exa = await _offline_workout(a)
+    wb, exb = await _offline_workout(b)
+    await a.post(f"/workouts/{wa}/sets", json={
+        "exercise_id": exa, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    await a.post(f"/workouts/{wa}/finish", json={})
+    await b.post(f"/workouts/{wb}/sets", json={"exercise_id": exb, "weight": 50, "reps": 5})
+    await b.post(f"/workouts/{wb}/finish", json={})
+    # b пробует тот же ключ в СВОЮ закрытую тренировку: подхода под его user_id нет.
+    resp = await b.post(f"/workouts/{wb}/sets", json={
+        "exercise_id": exb, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    assert resp.status_code == 409
+    # b пробует тренировку a — чужая: 404, подход не отдаётся.
+    steal = await b.post(f"/workouts/{wa}/sets", json={
+        "exercise_id": exb, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    assert steal.status_code == 404
+    # a с тем же ключом в другую свою закрытую тренировку — 409, не чужой подход.
+    wa2, exa2 = await _offline_workout(a)
+    await a.post(f"/workouts/{wa2}/sets", json={"exercise_id": exa2, "weight": 50, "reps": 5})
+    await a.post(f"/workouts/{wa2}/finish", json={})
+    cross = await a.post(f"/workouts/{wa2}/sets", json={
+        "exercise_id": exa2, "weight": 80, "reps": 8, "idempotency_key": "same"})
+    assert cross.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_adoption_by_second_device_is_remembered_after_close(fresh_db, client_factory):
+    """Два устройства: первое привязало свою метку к шедшей тренировке, второе
+    пришло со своей. После закрытия повтор старта второго с той же меткой не
+    заводит дубль и остаётся `adopted`."""
+    client = await _linked_client(fresh_db, client_factory)
+    wid = (await client.post("/workouts/active")).json()["id"]
+    first = str(uuid.uuid4())
+    second = str(uuid.uuid4())
+    assert (await client.post("/workouts/active", json={"client_id": first})).json()["adopted"] is True
+    resp = await client.post("/workouts/active", json={"client_id": second})
+    assert resp.json()["id"] == wid
+    assert resp.json()["adopted"] is True
+    ex = (await client.post("/exercises", json={"name": "Жим"})).json()["id"]
+    await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 50, "reps": 5})
+    assert (await client.post(f"/workouts/{wid}/finish", json={})).status_code == 200
+    again = await client.post("/workouts/active", json={"client_id": second})
+    assert again.status_code == 200
+    assert again.json()["id"] == wid
+    assert again.json()["adopted"] is True
+    assert await _count(fresh_db, "SELECT COUNT(*) FROM workouts") == 1

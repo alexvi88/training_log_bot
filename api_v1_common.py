@@ -578,6 +578,38 @@ def client_moment(
     return min(moment, now)
 
 
+def set_created_at(body: dict[str, Any], workout) -> str | None:
+    """Момент подхода с телефона (`created_at`, ISO 8601) для записи, сделанной
+    без связи и досланной позже, — в формате базы (наивный UTC, секунды), или
+    `None`, когда поля нет: тогда подход встаёт на «сейчас» сервера, как у
+    старых сборок.
+
+    Любой отказ по самому полю — не повод отказывать подходу: офлайн-очередь
+    приложения считает 400 окончательным и снимает подход, то есть теряет его.
+    Поэтому будущее подрезается до «сейчас» (часы телефона убежали), а не ISO
+    и момент старше OFFLINE_MAX_AGE_DAYS (7 дней — дальше сервер времени с
+    телефона не верит, как у `started_at`) просто не учитываются: подход
+    пишется «сейчас», как у `finished_at`. Раньше начала тренировки подход не
+    бывает — подтягивается к `started_at`."""
+    try:
+        moment = client_moment(body, "created_at", clamp_future=True)
+    except ApiError as exc:
+        if exc.key in ("input.moment_too_old", "input.moment_invalid"):
+            return None
+        raise
+    if moment is None:
+        return None
+    try:
+        started = dt.datetime.fromisoformat(workout["started_at"])
+    except (TypeError, ValueError):
+        started = None
+    if started is not None:
+        if started.tzinfo is not None:
+            started = started.astimezone(dt.timezone.utc).replace(tzinfo=None)
+        moment = max(moment, started)
+    return moment.isoformat(timespec="seconds")
+
+
 # ---------- числа подхода ----------
 #
 # Границы — те же, что у parser.py, которым разбирается строка «100 8» и в

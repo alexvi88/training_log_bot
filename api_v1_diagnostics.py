@@ -9,7 +9,7 @@ MetricKit отдаёт приложению те же диагностики (`M
 **Тело** — одна диагностика на запрос:
 
     {"kind": "crash" | "hang" | "cpu_exception" | "disk_write_exception"
-             | "keychain_save_failed",
+             | "keychain_save_failed" | "storage_failure",
      "payload": {...},              # diagnostic.jsonRepresentation() как есть
      "app_version": "1.4", "build": "57", "os_version": "17.5.1",
      "device": "iPhone15,2"}
@@ -74,7 +74,15 @@ MAX_BODY_BYTES = 256 * 1024
 # Токен тогда живёт только в памяти, и на следующем холодном старте человека
 # выкидывает на экран входа. Payload — `{"osStatus": <код>, "account": ...}`,
 # без токена и без данных атлета: нужно знать масштаб на живых устройствах.
-KINDS = frozenset({"crash", "hang", "cpu_exception", "disk_write_exception", "keychain_save_failed"})
+#
+# `storage_failure` — тоже клиентский: файл офлайн-очереди или локальной
+# тренировки на телефоне не прочитался или не записался (подходы без связи
+# под угрозой). Payload — `{"store": "pending_sets" | "local_workout" | ..., "op":
+# "read" | "write" | "decode", "error": <тип ошибки, без данных атлета>}`.
+KINDS = frozenset({
+    "crash", "hang", "cpu_exception", "disk_write_exception", "keychain_save_failed",
+    "storage_failure",
+})
 
 RATE_WINDOW_SECONDS = 3600
 RATE_LIMIT_PER_IP = 60
@@ -128,6 +136,31 @@ def _meta(value: Any) -> Optional[str]:
     return value[:_MAX_META_LEN] or None
 
 
+_STORAGE_FIELDS = ("store", "op", "error")
+_STORAGE_MAX_LEN = 120
+
+
+def _storage_failure_payload(payload: dict) -> dict:
+    """Что приложение реально шлёт в `storage_failure` (CrashReporter.storageFailure):
+    `store`, `op`, `error` и `diagnosticMetaData`. Остальное отбрасывается, строки
+    обрезаются: это клиентский вид, и принимать в базу произвольный JSON с
+    телефона незачем."""
+    clean: dict[str, Any] = {}
+    for key in _STORAGE_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, str):
+            clean[key] = value[:_STORAGE_MAX_LEN]
+    meta = payload.get("diagnosticMetaData")
+    if isinstance(meta, dict):
+        clean["diagnosticMetaData"] = {
+            k: v for k, v in meta.items()
+            if k in ("appVersion", "appBuildVersion", "osVersion", "deviceType")
+            and isinstance(v, str)
+        }
+    # Пустой словарь не годится: payload обязан быть непустым объектом.
+    return clean or {"error": "empty"}
+
+
 async def submit_diagnostic(request: Request) -> JSONResponse:
     raw = await request.body()
     if len(raw) > MAX_BODY_BYTES:
@@ -159,6 +192,8 @@ async def submit_diagnostic(request: Request) -> JSONResponse:
         os_version=_meta(meta.get("osVersion")) or _meta(body.get("os_version")),
         device=_meta(meta.get("deviceType")) or _meta(body.get("device")),
     )
+    if kind == "storage_failure":
+        payload = _storage_failure_payload(payload)
     diagnostic_id = await db.log_diagnostic(
         payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")), **fields
     )

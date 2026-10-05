@@ -1309,30 +1309,36 @@
    "fields": {
     "discarded": {
      "type": "Bool",
-     "optional": true
+     "optional": true,
+     "lenient": true
     },
     "rewards": {
      "type": "WorkoutRewards",
-     "optional": true
+     "optional": true,
+     "lenient": true
     },
     "aiCommentPending": {
      "type": "Bool",
-     "optional": true
+     "optional": true,
+     "lenient": true
     },
     "startedAt": {
      "type": "String",
-     "optional": true
+     "optional": true,
+     "lenient": true
     },
     "finishedAt": {
      "type": "String",
-     "optional": true
+     "optional": true,
+     "lenient": true
     },
     "routineId": {
      "type": "Int",
      "optional": true,
-     "default": true
+     "lenient": true
     }
-   }
+   },
+   "custom_init": true
   },
   "FlexibleID": {
    "file": "TrainingLog/Models/ParityModels.swift",
@@ -2984,6 +2990,11 @@
     "routineId": {
      "type": "Int",
      "optional": true
+    },
+    "adopted": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3084,7 +3095,7 @@
     },
     "tonnageEquivalent": {
      "type": "String",
-     "optional": false
+     "optional": true
     },
     "newAchievements": {
      "type": "[WorkoutRewards.Achievement]",
@@ -3979,5 +3990,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "ec81d0415d190f2c087a201b12bcb88af6a1c9fe"
+ "_ios_commit": "50a691d1d816763f87ec6fc12750ad4a06a14d5f"
 }
