@@ -48,6 +48,55 @@ async def create_program_day(user_id: int, day: dict[str, Any], program_id: int)
     return routine_id
 
 
+def match_days(new_days: list[dict[str, Any]], old_days: list[Any]) -> list[Optional[int]]:
+    """Для каждого нового дня — id старого дня, который он обновляет, или None.
+
+    По имени без регистра и пробелов; не нашедшие пару идут по порядку среди
+    оставшихся старых, но только если число дней не изменилось.
+    """
+    def key(name: str) -> str:
+        return name.strip().lower()
+
+    by_name = {key(old["name"]): old["id"] for old in reversed(old_days)}
+    taken: set[int] = set()
+    result: list[Optional[int]] = []
+    for day in new_days:
+        old_id = by_name.get(key(day["name"]))
+        if old_id is not None and old_id not in taken:
+            taken.add(old_id)
+            result.append(old_id)
+        else:
+            result.append(None)
+    if len(new_days) == len(old_days):
+        leftovers = iter([old["id"] for old in old_days if old["id"] not in taken])
+        result = [r if r is not None else next(leftovers, None) for r in result]
+    return result
+
+
+async def _plan_days_in_place(
+    user_id: int, days: list[dict[str, Any]], old_days: list[Any]
+) -> list[dict[str, Any]]:
+    """Планы дней для db.replace_program_days: упражнения заранее
+    резолвятся в id (дубли и неразрешимые имена отбрасываются, как в
+    db.create_routine_from_program), чтобы сама запись была одной транзакцией."""
+    plans = []
+    for day, old_id in zip(days, match_days(days, old_days), strict=True):
+        seen: set[int] = set()
+        exercises = []
+        for item in day["items"]:
+            ex_id = await db.get_or_create_user_exercise_by_name(user_id, item["name"])
+            if ex_id is None or ex_id in seen:
+                continue
+            seen.add(ex_id)
+            progression = item.get("progression")
+            exercises.append((
+                ex_id, item.get("target"),
+                json.dumps(progression, ensure_ascii=False) if progression else None,
+            ))
+        plans.append({"routine_id": old_id, "name": day["name"], "exercises": exercises})
+    return plans
+
+
 async def save_into_existing_program(
     user_id: int, draft: dict[str, Any], program: Any
 ) -> dict[str, Any]:
@@ -81,15 +130,19 @@ async def save_into_existing_program(
     # прислал — её больше нет, ровно как с правилами прогрессии упражнений.
     await db.set_program_deload(program["id"], draft.get("deload_every_weeks"))
 
-    # Сначала новые дни, потом удаление старых: падение посередине оставляет
-    # лишние новые дни рядом со старой программой — хуже, чем идеально, но
-    # старая версия цела и есть с чем попробовать снова, а не пусто с обеих
-    # сторон. Отсюда же — здесь нет отката: это чужая для черновика программа,
-    # с данными пользователя внутри, стирать её обрубком нельзя.
-    for day in days:
-        await create_program_day(user_id, day, program_id=program["id"])
-    for old in old_days:
-        await db.delete_routine(old["id"])
+    # Дни обновляются НА МЕСТЕ: id дня — то, на что ссылаются тренировки
+    # (workouts.routine_id), «следующий день» и адхеренс. Снести дни и завести
+    # такие же заново значило обнулить историю программы. Сопоставление —
+    # сначала по имени дня (как formatting.build_program_changes), потом, если
+    # число дней не изменилось, по порядку (переименованный день остаётся тем
+    # же днём). Лишние старые удаляются, недостающие создаются. Всё пишется
+    # одной транзакцией (db.replace_program_days): упало — старая версия цела.
+    plans = await _plan_days_in_place(user_id, days, old_days)
+    matched = {plan["routine_id"] for plan in plans if plan["routine_id"] is not None}
+    await db.replace_program_days(
+        user_id, program["id"], plans,
+        [old["id"] for old in old_days if old["id"] not in matched],
+    )
 
     final_days = await db.list_program_days_by_id(program["id"])
     return {

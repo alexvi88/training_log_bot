@@ -8618,6 +8618,59 @@ async def rename_routine(routine_id: int, name: str) -> None:
         await conn().commit()
 
 
+async def replace_program_days(
+    user_id: int, program_id: int, plans: list[dict[str, Any]], delete_ids: list[int]
+) -> list[int]:
+    """Переписать дни программы одной транзакцией и вернуть id дней по порядку.
+
+    Каждый план — `{"routine_id": int | None, "name": str, "exercises":
+    [(exercise_id, target, progression_json | None), ...]}`. День с `routine_id`
+    обновляется НА МЕСТЕ (имя, порядок, состав) — id остаётся тем же, поэтому
+    `workouts.routine_id`, «следующий день» и список последних программ не
+    теряют историю; без `routine_id` день создаётся. `delete_ids` — лишние
+    старые дни. Падение посередине откатывает всё: старая версия цела.
+    """
+    async with _write_lock:
+        db = conn()
+        try:
+            ids: list[int] = []
+            for order, plan in enumerate(plans):
+                routine_id = plan.get("routine_id")
+                if routine_id is None:
+                    cur = await db.execute(
+                        "INSERT INTO routines (user_id, name, created_at, program_id, day_order) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (user_id, plan["name"], now_iso(), program_id, order),
+                    )
+                    routine_id = cur.lastrowid
+                else:
+                    await db.execute(
+                        "UPDATE routines SET name = ?, day_order = ? WHERE id = ? AND program_id = ?",
+                        (plan["name"], order, routine_id, program_id),
+                    )
+                    await db.execute(
+                        "DELETE FROM routine_exercises WHERE routine_id = ?", (routine_id,)
+                    )
+                for index, (exercise_id, target, progression) in enumerate(plan["exercises"]):
+                    await db.execute(
+                        "INSERT INTO routine_exercises "
+                        "(routine_id, exercise_id, order_index, target, progression) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (routine_id, exercise_id, index, target, progression),
+                    )
+                ids.append(routine_id)
+            for old_id in delete_ids:
+                await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (old_id,))
+                await db.execute(
+                    "DELETE FROM routines WHERE id = ? AND program_id = ?", (old_id, program_id)
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return ids
+
+
 async def delete_routine(routine_id: int) -> None:
     """Delete one day. If it was the last day of its program, the program goes
     too — an empty program is a row nothing can be done with, and it would sit

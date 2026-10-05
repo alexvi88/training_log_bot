@@ -653,6 +653,10 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
             # собрал план, спрашивать вводные поздно и незачем.
             await db.clear_ai_setup_state(user_id)
             draft_id = secrets.token_hex(4)
+            # Повторная правка превью — replaces переезжает из прошлого черновика.
+            turn["draft"] = await ai_trainer.carry_over_replaces(
+                user_id, await db.get_ai_program_draft(user_id), turn["draft"]
+            )
             await db.set_ai_program_draft(user_id, draft_id, turn["draft"])
             program_json = _program_json(
                 draft_id, turn["draft"],
