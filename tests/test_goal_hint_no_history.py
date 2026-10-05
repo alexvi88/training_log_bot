@@ -157,14 +157,32 @@ async def test_api_with_history_is_as_before(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
-async def test_api_program_scheme_wins(fresh_db, client_factory):
+async def test_api_program_scheme_still_gets_the_line(fresh_db, client_factory):
+    """Новичок по программе: схема («3×6–12») не говорит, как подобрать вес, —
+    строка про цель остаётся, а диапазон повторов в ней берётся из схемы."""
     client = await _client(fresh_db, client_factory)
     ex_id, workout_id = await _setup(routine=True)
-    assert await _hint(client, workout_id, ex_id) is None
+    routine_id = (await db.get_workout(workout_id))["routine_id"]
+    entry = (await db.list_routine_exercises(routine_id))[0]
+    await db.set_routine_exercise_target(entry["id"], "3×5–12")
+    hint = await _hint(client, workout_id, ex_id)
+    assert hint is not None and hint["no_history"] is True
+    assert "сделаешь 5–12 раз" in hint["text"]
 
 
 @pytest.mark.asyncio
-async def test_api_program_rule_wins(fresh_db, client_factory):
+async def test_api_program_scheme_without_a_range_uses_the_settings_range(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    ex_id, workout_id = await _setup(routine=True)
+    routine_id = (await db.get_workout(workout_id))["routine_id"]
+    entry = (await db.list_routine_exercises(routine_id))[0]
+    await db.set_routine_exercise_target(entry["id"], "3×8")
+    hint = await _hint(client, workout_id, ex_id)
+    assert hint is not None and "сделаешь 5–12 раз" in hint["text"]
+
+
+@pytest.mark.asyncio
+async def test_api_program_rule_still_gets_the_line(fresh_db, client_factory):
     client = await _client(fresh_db, client_factory)
     ex_id, workout_id = await _setup(routine=True)
     routine_id = (await db.get_workout(workout_id))["routine_id"]
@@ -175,7 +193,8 @@ async def test_api_program_rule_wins(fresh_db, client_factory):
     await db.set_routine_exercise_progression(
         entry["id"], json.dumps({"rule": "double_progression", "reps_top": 8, "step": 2.5})
     )
-    assert await _hint(client, workout_id, ex_id) is None
+    hint = await _hint(client, workout_id, ex_id)
+    assert hint is not None and hint["no_history"] is True
 
 
 @pytest.mark.asyncio
@@ -197,5 +216,11 @@ async def test_api_no_line_when_the_toggle_is_off(fresh_db, client_factory):
 
 def test_no_history_hint_unit():
     assert progression_data.no_history_hint(kind="timed") is None
+    # Бот зовёт без keep_plan: схема и правило у него главнее общей строки.
     assert progression_data.no_history_hint(target="3×5") is None
     assert progression_data.no_history_hint(rule={"rule": "linear_load"}) is None
+    # Приложение — с keep_plan: строка остаётся, диапазон из схемы.
+    hint = progression_data.no_history_hint(target="3×6–10", keep_plan=True)
+    assert hint is not None and "6–10" in hint["text"]
+    assert progression_data.no_history_hint(target="3×8", keep_plan=True) is not None
+    assert progression_data.no_history_hint(kind="timed", target="3×30", keep_plan=True) is None
