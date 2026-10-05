@@ -27,6 +27,7 @@ from typing import Any, Optional
 import ai_limits
 import apple_signin
 import db
+import review_watch
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,8 @@ def _forget_caches(user_id: int) -> None:
     # Суточный расход — общий на всех, но в нём была и доля снесённого; пусть
     # пересчитается по тому, что осталось.
     ai_limits.reset_cache()
+    # Удалили аккаунт ревьюера — зеркало админу не должно держать его старый id.
+    review_watch.invalidate_cache()
 
 
 async def delete_account(user_id: int, storage: Optional[Any] = None) -> dict[str, int]:

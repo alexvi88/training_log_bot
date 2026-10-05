@@ -33,6 +33,7 @@ import analytics
 import config
 import exercise_photos
 import i18n
+import review_watch
 import search_terms
 from seed_data import (
     ABS_GROUP_NAME,
@@ -9702,6 +9703,9 @@ async def log_user_event(
             (telegram_id, kind, content, payload, source, now_iso()),
         )
         await conn().commit()
+    # Зеркало ревьюера админу (review_watch.py): после записи и вне замка, в
+    # очередь, без сети; сама глотает свои сбои.
+    await review_watch.on_event(telegram_id, kind, content, source)
 
 
 async def count_unhandled_callbacks_by_prefix(since_iso: str) -> list[aiosqlite.Row]:

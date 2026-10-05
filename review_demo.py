@@ -40,6 +40,7 @@ import achievement_sync
 import config
 import db
 import i18n
+import review_watch
 import timeutil
 
 PROVIDER = "review_demo"
@@ -159,6 +160,9 @@ async def ensure_demo_user(lang: Optional[str] = None, username: Optional[str] =
             await db.set_user_lang(user_id, i18n.normalize(lang))
         if await db.count_workouts(user_id) == 0 and await db.count_workouts(user_id, "active") == 0:
             await seed_history(user_id)
+    # Аккаунт мог только что пересоздаться (ревьюер удалил прежний): id в кэше
+    # зеркала для админа (review_watch) больше не верен.
+    review_watch.invalidate_cache()
     return user_id
 
 

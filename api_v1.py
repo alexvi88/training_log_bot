@@ -319,6 +319,17 @@ async def auth_password(request: Request) -> JSONResponse:
     else:
         lang = None
     user_id = await review_demo.ensure_demo_user(lang, demo_username)
+    if demo_username == config.REVIEW_DEMO_USERNAME.strip():
+        # Вход ревьюера — в ту же ленту, откуда его зеркалит review_watch; IP
+        # нужен владельцу, чтобы отличить Apple от своих запусков. Сбой записи
+        # не должен ломать вход.
+        try:
+            await db.log_user_event(
+                user_id, api_v1_activity.KIND_API_ACTION,
+                f"ревьюер вошёл в приложение ({ip})", source="ios",
+            )
+        except Exception:
+            logger.warning("review login event failed", exc_info=True)
     return await _issue_token_response(user_id)
 
 
