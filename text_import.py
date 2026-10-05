@@ -305,7 +305,6 @@ async def extract_sets(
     block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
     if block is not None and not block.preview:
         raise ai_trainer.LimitBlocked(block)
-    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
     gate = asyncio.Semaphore(_PARALLEL)
     date_order = numeric_date_order(lang if lang is not None else i18n.get_lang())
 
@@ -314,6 +313,8 @@ async def extract_sets(
             return await _extract_chunk(user_id, piece, today, date_order)
 
     answers = await asyncio.gather(*(one(piece) for piece in _chunks(text)))
+    # Единица квоты — после ответа провайдера, одна на весь текстовый импорт.
+    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
     rows = [row for chunk_rows, _, _ in answers for row in chunk_rows]
     stitched, undated = _stitch_dates(rows)
     return ExtractResult(

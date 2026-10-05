@@ -53,6 +53,9 @@ KIND_VIDEO = "video"
 KIND_FOOD = "food"
 KIND_VOICE = "voice"
 KIND_IMPORT = "import"
+# Не вид лимита для check(): счётчик провальных разборов видео (после ответа
+# провайдера), по нему check(KIND_VIDEO) отказывает с отдельным текстом.
+KIND_VIDEO_FAIL = "video_fail"
 KIND_SPEND_SOFT = "spend_soft"
 KIND_SPEND_HARD = "spend_hard"
 
@@ -107,6 +110,7 @@ def reset_cache() -> None:
     """Забыть посчитанное — для тестов и для ручного «пересчитай сейчас»."""
     global _cached
     _cached = None
+    _warned_on.clear()
 
 
 async def daily_spend_usd() -> float:
@@ -178,6 +182,8 @@ def __getattr__(name: str):
 
 
 def _video_text(reason: str) -> str:
+    if reason == KIND_VIDEO_FAIL:
+        return i18n.t("limit.video.failed")
     if reason == KIND_VIDEO:
         return i18n.t("limit.video.exact", n=config.AI_VIDEO_DAILY_LIMIT)
     return i18n.t("limit.video.generic")
@@ -287,6 +293,20 @@ async def _exhausted(user_id: int, kind: str) -> Optional[str]:
     return None
 
 
+_warned_on: dict[str, str] = {}  # вид → сутки UTC, за которые warning уже писали
+
+
+def _warn_once_a_day(key: str, message: str, *args) -> None:
+    """HARD-стоп проверяется на каждый платный шаг — warning на каждый превратил бы
+    лог (и тревоги из лога) в поток. Раз в сутки на вид."""
+    day = db._utc_day()
+    if _warned_on.get(key) == day:
+        logger.info(message, *args)
+        return
+    _warned_on[key] = day
+    logger.warning(message, *args)
+
+
 async def ack_day(user_id: int, kind: str) -> str:
     """Сутки, за которые действует расписка «Понятно».
 
@@ -330,7 +350,7 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
         # Единственный лимит, который не пропускает никого, включая свои
         # аккаунты: стоп-кран, который можно проехать, стоп-краном не является.
         spend = await daily_spend_usd()
-        logger.warning("AI hard stop: за сутки ~$%.2f, тренер молчит до полуночи UTC", spend)
+        _warn_once_a_day(kind, "AI hard stop: за сутки ~$%.2f, тренер молчит до полуночи UTC", spend)
         return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_hard_stop_text())
     if level is not None and kind in _EXTRAS:
         # HARD включает в себя SOFT: до вопросов дело дошло, значит и дорогие
@@ -338,9 +358,17 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
         reason = level
     if reason is None:
         exhausted = await _exhausted(user_id, kind)
+        reason = kind
+        if exhausted is None and kind == KIND_VIDEO:
+            # Мягкий счётчик провальных разборов (config.AI_VIDEO_FAIL_DAILY_LIMIT):
+            # деньги за них уже ушли, а основная квота их не считает.
+            failed = await db.get_ai_usage_today(user_id, KIND_VIDEO_FAIL)
+            limit = config.AI_VIDEO_FAIL_DAILY_LIMIT
+            if limit > 0 and failed >= limit:
+                exhausted = f"{KIND_VIDEO_FAIL}: {failed} из {limit} за сутки"
+                reason = KIND_VIDEO_FAIL
         if exhausted is None:
             return None
-        reason = kind
         log = exhausted
     else:
         log = f"{reason}: за сутки ~${await daily_spend_usd():.2f}"
@@ -375,7 +403,9 @@ async def hard_stop_block() -> Optional[Block]:
     if level != KIND_SPEND_HARD:
         return None
     spend = await daily_spend_usd()
-    logger.warning("AI hard stop: за сутки ~$%.2f, платный шаг без личной квоты пропущен", spend)
+    _warn_once_a_day(
+        "no_quota", "AI hard stop: за сутки ~$%.2f, платный шаг без личной квоты пропущен", spend
+    )
     return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_hard_stop_text())
 
 

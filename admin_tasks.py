@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from contextlib import suppress
 from typing import Optional
 
@@ -315,6 +316,23 @@ async def replica_age_hours() -> Optional[float]:
     return (dt.datetime.now(dt.timezone.utc) - newest).total_seconds() / 3600
 
 
+def _db_written_since_replica(age_hours: float) -> bool:
+    """Писалась ли база после последней метки реплики (+5 минут запаса).
+
+    Litestream кладёт новый сегмент, только когда в базе что-то изменилось: ночью,
+    пока все спят, «последний сегмент старше двух часов» — норма, а не поломка.
+    Сравниваем с mtime файла базы и -wal. Узнать нельзя (файлов нет) — считаем, что
+    писалась: лучше лишняя тревога, чем пропущенная."""
+    mtimes = []
+    for path in (config.DB_PATH, config.DB_PATH + "-wal"):
+        with suppress(OSError):
+            mtimes.append(os.path.getmtime(path))
+    if not mtimes:
+        return True
+    replica_at = time.time() - age_hours * 3600
+    return max(mtimes) > replica_at + 300
+
+
 async def check_replica_health() -> Optional[str]:
     """Один проход проверки: текст тревоги или None (всё хорошо / нечем проверить /
     тревога уже была недавно). Тревога повторяется не чаще
@@ -330,7 +348,7 @@ async def check_replica_health() -> Optional[str]:
     else:
         if age is None:
             return None
-        if age > config.REPLICA_STALE_ALERT_HOURS:
+        if age > config.REPLICA_STALE_ALERT_HOURS and _db_written_since_replica(age):
             problem = (
                 f"последний снапшот/WAL в реплике старше {age:.1f} ч "
                 f"(порог {config.REPLICA_STALE_ALERT_HOURS:g} ч)"
@@ -648,6 +666,7 @@ async def _run_retention_cleanup() -> bool:
         ("import_batches", lambda: db.prune_old_import_batches(config.IMPORT_BATCH_RETENTION_DAYS)),
         ("exercise_merges", lambda: db.prune_old_exercise_merges(config.MERGE_JOURNAL_RETENTION_DAYS)),
         ("limit_acks", lambda: db.prune_old_limit_acks()),
+        ("ai_usage", lambda: db.prune_old_ai_usage()),
         # Архив прошлых разговоров с тренером: текущий не трогается никогда, см.
         # db.prune_old_ai_conversations.
         ("ai_conversations", lambda: db.prune_old_ai_conversations(config.AI_CONVERSATION_RETENTION_DAYS)),

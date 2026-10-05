@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from openai import AsyncOpenAI
 
+import ai_limits
 import config
 import db
 import i18n
@@ -489,6 +490,26 @@ def pose_summary_block(pose_summary: str) -> str:
     )
 
 
+async def _count_attempt(user_id: Optional[int], *, ok: bool) -> None:
+    """Учёт попытки после ОТВЕТА провайдера (деньги уже ушли).
+
+    Валидный разбор тратит основную квоту видео. Провал (мусор вместо JSON,
+    оборванное рассуждение) основную квоту не наказывает, а считается отдельным
+    мягким счётчиком (`ai_limits.KIND_VIDEO_FAIL`, config.AI_VIDEO_FAIL_DAILY_LIMIT):
+    без него ролики можно было бы гонять за наш счёт бесконечно. Сбой ДО ответа
+    провайдера (сеть, 4xx) сюда не доезжает и ничего не тратит.
+    """
+    if user_id is None:
+        return
+    try:
+        if ok:
+            await db.increment_ai_video_count(user_id)
+        else:
+            await db.increment_ai_usage(user_id, ai_limits.KIND_VIDEO_FAIL)
+    except Exception:
+        logger.exception("failed to count video analysis attempt")
+
+
 async def analyze(
     video_bytes: bytes,
     user_id: Optional[int],
@@ -583,17 +604,6 @@ async def analyze(
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")
-    # Квота видео списывается ЗДЕСЬ, как только платный вызов состоялся, — а не
-    # у вызывающих после успешного разбора. Раньше мусор вместо JSON или
-    # оборванное рассуждение (деньги уже ушли, разбора нет) не стоили человеку
-    # ни одной попытки, и ролики можно было гонять бесконечно за наш счёт.
-    # Сбой ДО ответа провайдера (сеть, 4xx) сюда не доезжает и квоту не тратит.
-    if user_id is not None:
-        try:
-            await db.increment_ai_video_count(user_id)
-        except Exception:
-            logger.exception("failed to count video analysis attempt")
-
     raw = (response.choices[0].message.content or "").strip()
     payload = _strip_reasoning(raw)
     try:
@@ -609,8 +619,10 @@ async def analyze(
             completion_tokens,
             raw[:300],
         )
+        await _count_attempt(user_id, ok=False)
         return None
     if not isinstance(parsed, dict):
+        await _count_attempt(user_id, ok=False)
         return None
     # Что модель на самом деле написала по каждой точке — до всякой чистки.
     # Без этой строки нельзя отличить «не увидела круглую спину» от «увидела и
@@ -625,7 +637,9 @@ async def analyze(
                 item.get("point"), item.get("verdict"),
                 str(item.get("what_i_see") or "")[:200],
             )
-    return _sanitize(parsed)
+    result = _sanitize(parsed)
+    await _count_attempt(user_id, ok=result is not None)
+    return result
 
 
 def to_context_block(analysis: dict[str, Any]) -> str:

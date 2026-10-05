@@ -6625,7 +6625,7 @@ async def list_all_sets_by_exercise_deduped(user_id: int) -> list[aiosqlite.Row]
       `hall_of_fame_aggregates`).
 
     Свёртка внутри тренировки, а не по всей истории, чтобы не терять порядок
-    между тренировками. Эталон точности — tests/test_hall_of_fame_dedupe.py.
+    между тренировками. Эталон точности — tests/test_audit_performance.py::test_top_lifts_identical_to_the_full_history_version.
     """
     cur = await conn().execute(
         f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, s.rpe, e.id AS exercise_id, e.display_name, "
@@ -10554,6 +10554,16 @@ async def record_limit_ack(telegram_id: int, kind: str, date_str: str) -> None:
             (telegram_id, kind, date_str),
         )
         await conn().commit()
+
+
+async def prune_old_ai_usage(keep_days: int = 30) -> int:
+    """Счётчики квот голоса/импорта/провальных видео (`ai_usage`) старше месяца:
+    читаются они только за сегодня, таблица иначе растёт вечно."""
+    cutoff = (dt.date.today() - dt.timedelta(days=keep_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM ai_usage WHERE date < ?", (cutoff,))
+        await conn().commit()
+        return cur.rowcount
 
 
 async def prune_old_limit_acks(keep_days: int = 7) -> int:

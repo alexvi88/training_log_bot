@@ -486,8 +486,8 @@ async def transcribe_voice(
 
     Лимиты (квота голоса, HARD-стоп по деньгам, длина) проверяет вызывающая
     сторона ДО скачивания файла — `ai_limits.check(user_id, KIND_VOICE)`. Здесь
-    только учёт: попытка списывается из квоты, как только платный вызов ушёл
-    (успех это или нет), а цена пишется по длительности записи —
+    только учёт: квота списывается, когда провайдер ОТВЕТИЛ (как у видео; сбой до
+    ответа её не тратит), а цена пишется по длительности записи —
     расшифровка тарифицируется поминутно.
 
     Язык распознавания передаётся явно, а не оставляется на автодетект: без него
@@ -500,18 +500,17 @@ async def transcribe_voice(
     """
     client = _get_audio_client()
     seconds = _voice_seconds(file_obj, duration_seconds)
-    try:
-        response = await client.audio.transcriptions.create(
-            model=config.OPENAI_TRANSCRIBE_MODEL,
-            file=file_obj,
-            language=i18n.get_lang(),
-        )
-    finally:
-        if user_id is not None:
-            try:
-                await db.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
-            except Exception:
-                logger.exception("failed to count voice usage")
+    # Провайдер не ответил (сеть, таймаут, 4xx) — исключение летит выше, квота не тратится.
+    response = await client.audio.transcriptions.create(
+        model=config.OPENAI_TRANSCRIBE_MODEL,
+        file=file_obj,
+        language=i18n.get_lang(),
+    )
+    if user_id is not None:
+        try:
+            await db.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+        except Exception:
+            logger.exception("failed to count voice usage")
     # У аудио API не возвращает токенов, поэтому цена берётся по длительности
     # записи (config.transcription_price_usd) — и в отчёте, и в логе.
     try:
@@ -3298,13 +3297,13 @@ async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dic
     """
     if not names or not is_configured():
         return {}
-    # Личная суточная квота импорта (KIND_IMPORT, общая с разбором текста). Исчерпана —
+    # Личная суточная квота импорта (KIND_IMPORT) — здесь только проверка: единицу
+    # тратит разбор текста (text_import.extract_sets), по одной на импорт. Исчерпана —
     # пусто, а не ошибка: имена остаются «новыми», и человек разрешит их руками.
     block = await ai_limits.check(user_id, ai_limits.KIND_IMPORT)
     if block is not None and not block.preview:
         logger.info("AI import matching skipped for user %s: %s", user_id, block.log)
         return {}
-    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)
     rest = list(dict.fromkeys(names))
     result: dict[str, str] = {}
     catalog_flat = [name for group_names in _CATALOG_BY_GROUP.values() for name in group_names]

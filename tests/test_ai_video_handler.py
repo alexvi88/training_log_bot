@@ -81,6 +81,7 @@ def wired(monkeypatch):
     monkeypatch.setattr(config, "NOVITA_API_KEY", "test-key")
     monkeypatch.setattr(db, "get_ai_video_count_today", AsyncMock(return_value=0))
     monkeypatch.setattr(db, "increment_ai_video_count", AsyncMock())
+    monkeypatch.setattr(db, "get_ai_usage_today", AsyncMock(return_value=0))
     monkeypatch.setattr(db, "get_ai_question_count_today", AsyncMock(return_value=0))
     analyze = AsyncMock(return_value={
         "exercise": "присед", "reps_seen": 3,

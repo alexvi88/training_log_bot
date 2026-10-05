@@ -56,6 +56,7 @@ HTTP-загрузки его взять неоткуда: в проекте не
 from __future__ import annotations
 
 import io
+import math
 from typing import Optional
 
 import ai_limits
@@ -121,8 +122,12 @@ async def transcribe(
     if duration is not None:
         if not isinstance(duration, (int, float)) or isinstance(duration, bool):
             raise ApiError(400, "bad_request", "duration_seconds must be a number")
+        if not math.isfinite(duration):
+            raise ApiError(400, "bad_request", "duration_seconds must be a finite number")
         if duration > MAX_VOICE_SECONDS:
             raise ApiError(400, "voice_too_long", "voice note is too long", human=too_long_message)
+        if duration <= 0:
+            duration = None
 
     # HARD-стоп по деньгам и суточная квота голоса — до декодирования и до похода
     # к провайдеру: расшифровка стоит денег поминутно, а своего лимита у неё раньше
@@ -136,11 +141,14 @@ async def transcribe(
     data_url = common.require(body, "audio_data_url", str)
     raw, ext = _decode_audio_data_url(data_url, too_big_message=too_big_message)
 
-    # Длительности нет — по размеру файла отличаем фразу от лекции: проверить
-    # её иначе нечем (см. докстринг модуля), а оставить дыру значило бы, что
-    # `duration_seconds` достаточно просто не присылать.
-    if (duration is None or duration <= 0) and len(raw) > config.VOICE_NO_DURATION_MAX_BYTES:
+    # Заявленной длительности верить нельзя (duration_seconds=1 при 20 МБ): длину
+    # оцениваем и по размеру файла (config.VOICE_ESTIMATE_BYTES_PER_SECOND, живая
+    # запись iOS AAC ~4 КБ/с), и за длительность берём бо́льшую из двух — и для
+    # отказа, и для цены.
+    estimate = len(raw) / config.VOICE_ESTIMATE_BYTES_PER_SECOND
+    if estimate > MAX_VOICE_SECONDS:
         raise ApiError(400, "voice_too_long", "voice note is too long", human=too_long_message)
+    duration = max(duration or 0, estimate)
 
     buf = io.BytesIO(raw)
     buf.name = f"voice.{ext}"

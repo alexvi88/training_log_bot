@@ -771,14 +771,10 @@ MAX_VOICE_SECONDS = 300
 # Цена — копейки, а потолок нужен от цикла в клиенте, а не от живого человека.
 AI_VOICE_DAILY_LIMIT = int(os.getenv("AI_VOICE_DAILY_LIMIT", "100"))
 
-# Голос по HTTP без `duration_seconds`: длительности взять неоткуда, поэтому
-# отказываем по размеру. Фраза до MAX_VOICE_SECONDS в m4a/ogg — не больше пары
-# мегабайт; больше без заявленной длительности — лекция, а не подход.
-VOICE_NO_DURATION_MAX_BYTES = int(os.getenv("VOICE_NO_DURATION_MAX_BYTES", str(2 * 1024 * 1024)))
-
-# Байт в секунду для оценки длительности по размеру файла (≈96 кбит/с — с запасом
-# вверх по длительности, то есть по цене).
-VOICE_ESTIMATE_BYTES_PER_SECOND = 12_000
+# Байт в секунду для оценки длительности по размеру файла. iOS пишет AAC ~32 кбит/с
+# (≈4 КБ/с): запись в 300 с — около 1,2 МБ и должна проходить; берём 5 КБ/с, чтобы
+# честная запись с запасом не упиралась в оценку, а 20 МБ «на одну секунду» — упиралась.
+VOICE_ESTIMATE_BYTES_PER_SECOND = 5_000
 
 # Сколько в сутки на человека разборов текстового импорта (AI-сопоставление
 # названий упражнений, text_import / ai_trainer.ai_match_*). Импорт — разовое
@@ -792,6 +788,13 @@ AI_IMPORT_DAILY_LIMIT = int(os.getenv("AI_IMPORT_DAILY_LIMIT", "10"))
 # LLM_COSTS.md, а не ноль: потолок по деньгам лучше слегка перелетит.
 SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS = int(os.getenv("SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS", "8000"))
 SEARCH_ABORT_ESTIMATE_COMPLETION_TOKENS = int(os.getenv("SEARCH_ABORT_ESTIMATE_COMPLETION_TOKENS", "1000"))
+
+
+# Сколько в сутки на человека ПРОВАЛЬНЫХ разборов видео (провайдер ответил, а разбора
+# нет: мусор вместо JSON, оборванное рассуждение). Основную квоту видео сбой не
+# тратит, но деньги за него уже ушли — отдельный мягкий счётчик не даёт гонять
+# такие ролики бесконечно.
+AI_VIDEO_FAIL_DAILY_LIMIT = int(os.getenv("AI_VIDEO_FAIL_DAILY_LIMIT", "3"))
 
 
 def transcription_price_usd(audio_seconds: float = 0) -> float:

@@ -8,6 +8,7 @@
 
 import asyncio
 import base64
+import datetime as dt
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -81,13 +82,13 @@ async def test_transcribe_voice_logs_duration_and_counts_attempt(fresh_db, user_
     assert await db.get_ai_usage_today(user_id, ai_limits.KIND_VOICE) == 1
 
 
-async def test_voice_attempt_counts_even_when_provider_fails(fresh_db, user_id, monkeypatch):
+async def test_voice_quota_not_spent_when_provider_never_answered(fresh_db, user_id, monkeypatch):
     create = AsyncMock(side_effect=RuntimeError("down"))
     client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create)))
     monkeypatch.setattr(ai_trainer, "_get_audio_client", lambda: client)
     with pytest.raises(RuntimeError):
         await ai_trainer.transcribe_voice(SimpleNamespace(name="v.ogg"), user_id, duration_seconds=5)
-    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_VOICE) == 1
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_VOICE) == 0
 
 
 async def test_voice_daily_quota_blocks(fresh_db, user_id, monkeypatch):
@@ -215,18 +216,60 @@ async def test_api_voice_daily_quota_is_429(fresh_db, monkeypatch):
     transcribe.assert_not_awaited()
 
 
-async def test_api_voice_without_duration_and_big_file_is_refused(fresh_db, monkeypatch):
+async def _post_voice(client, payload, **extra):
+    return await client.post("/ai/voice", json={"audio_data_url": _audio_url(payload), **extra})
+
+
+async def test_api_voice_big_file_is_refused_with_or_without_a_lying_duration(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
     transcribe = AsyncMock(return_value="x")
     monkeypatch.setattr(ai_trainer, "transcribe_voice", transcribe)
     client = await _linked_client()
-    big = b"\0" * (config.VOICE_NO_DURATION_MAX_BYTES + 1)
+    big = b"\0" * (20 * 1024 * 1024)
 
-    resp = await client.post("/ai/voice", json={"audio_data_url": _audio_url(big)})
+    for extra in ({}, {"duration_seconds": 1}, {"duration_seconds": 0}):
+        resp = await _post_voice(client, big, **extra)
+        assert resp.status_code == 400, extra
+        assert resp.json()["error"] == "voice_too_long"
+    transcribe.assert_not_awaited()
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+async def test_api_voice_non_finite_duration_is_400(fresh_db, monkeypatch, bad):
+    monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
+    transcribe = AsyncMock(return_value="x")
+    monkeypatch.setattr(ai_trainer, "transcribe_voice", transcribe)
+    client = await _linked_client()
+    body = '{"audio_data_url": "%s", "duration_seconds": %s}' % (
+        _audio_url(b"abc"), {"nan": "NaN"}.get(str(bad), "Infinity" if bad > 0 else "-Infinity"),
+    )
+
+    resp = await client.post("/ai/voice", content=body, headers={"Content-Type": "application/json"})
 
     assert resp.status_code == 400
-    assert resp.json()["error"] == "voice_too_long"
     transcribe.assert_not_awaited()
+
+
+async def test_api_voice_live_ios_recording_passes_and_is_priced_by_the_larger_duration(fresh_db, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
+    seen = {}
+
+    async def fake(buf, user_id, duration_seconds=None):
+        seen["d"] = duration_seconds
+        return "сто на восемь"
+
+    monkeypatch.setattr(ai_trainer, "transcribe_voice", fake)
+    client = await _linked_client()
+    ios_300s = b"\0" * 1_200_000  # AAC 32 кбит/с, 300 секунд
+
+    resp = await _post_voice(client, ios_300s, duration_seconds=300)
+    assert resp.status_code == 200, resp.text
+    assert seen["d"] == pytest.approx(300, abs=60)
+
+    # Заявлено 5 секунд, а файл на ~240 с — платим за большее.
+    resp = await _post_voice(client, ios_300s, duration_seconds=5)
+    assert resp.status_code == 200
+    assert seen["d"] > 200
 
 
 # ---------- 2. автокомментарий ----------
@@ -299,14 +342,33 @@ def _novita_client(create):
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
 
-async def test_video_quota_counts_paid_call_even_when_answer_is_garbage(fresh_db, user_id, monkeypatch):
+async def test_video_garbage_answer_does_not_spend_main_quota_but_counts_soft_fails(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "NOVITA_API_KEY", "k")
+    monkeypatch.setattr(config, "AI_VIDEO_FAIL_DAILY_LIMIT", 2)
     create = AsyncMock(return_value=_novita_response("это не JSON"))
     monkeypatch.setattr(video_analysis, "_get_client", lambda: _novita_client(create))
 
     assert await video_analysis.analyze(b"bytes", user_id) is None
+    assert await db.get_ai_video_count_today(user_id) == 0  # основную квоту сбой не наказывает
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_VIDEO_FAIL) == 1
+    assert await ai_limits.check(user_id, ai_limits.KIND_VIDEO) is None
+
+    assert await video_analysis.analyze(b"bytes", user_id) is None
+    block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
+    assert block is not None and block.log.startswith("video_fail")
+    assert "не разбирается" in block.user_text
+    assert await db.get_ai_video_count_today(user_id) == 0
+
+
+async def test_video_valid_answer_spends_main_quota(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "NOVITA_API_KEY", "k")
+    create = AsyncMock(return_value=_novita_response(json.dumps({"exercise": "присед"})))
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: _novita_client(create))
+
+    assert await video_analysis.analyze(b"bytes", user_id) is not None
 
     assert await db.get_ai_video_count_today(user_id) == 1
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_VIDEO_FAIL) == 0
 
 
 async def test_video_quota_not_spent_when_provider_never_answered(fresh_db, user_id, monkeypatch):
@@ -426,7 +488,7 @@ async def test_text_import_has_daily_quota(fresh_db, user_id, monkeypatch):
     assert err.value.block.kind == ai_limits.KIND_IMPORT
 
 
-async def test_ai_name_matching_stops_when_import_quota_is_gone(fresh_db, user_id, monkeypatch):
+async def test_ai_name_matching_only_checks_import_quota_and_never_spends_it(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "AI_IMPORT_DAILY_LIMIT", 1)
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     reply = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({"matches": []})))])
@@ -434,9 +496,57 @@ async def test_ai_name_matching_stops_when_import_quota_is_gone(fresh_db, user_i
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: _novita_client(create))
 
     await ai_trainer.match_exercise_names_to_catalog(user_id, ["Bench"])
-    assert create.await_count == 1
-    assert await ai_trainer.match_exercise_names_to_catalog(user_id, ["Squat"]) == {}
-    assert create.await_count == 1  # второй импорт за сутки до модели не дошёл
+    await ai_trainer.match_exercise_names_to_catalog(user_id, ["Squat"])
+    assert create.await_count == 2
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_IMPORT) == 0
+
+    await db.increment_ai_usage(user_id, ai_limits.KIND_IMPORT)  # единица текстового импорта
+    assert await ai_trainer.match_exercise_names_to_catalog(user_id, ["Row"]) == {}
+    assert create.await_count == 2
+
+
+async def test_text_import_spends_one_unit_after_the_provider_answered(fresh_db, user_id, monkeypatch):
+    import datetime as dt
+
+    chunk = AsyncMock(return_value=([], 0, []))
+    monkeypatch.setattr(text_import, "_extract_chunk", chunk)
+    monkeypatch.setattr(text_import, "_chunks", lambda text: ["a", "b", "c"])
+    await text_import.extract_sets(user_id, "x", dt.date(2026, 1, 1), lang="ru")
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_IMPORT) == 1  # не по числу кусков
+
+    chunk.side_effect = RuntimeError("provider down")
+    with pytest.raises(RuntimeError):
+        await text_import.extract_sets(user_id, "x", dt.date(2026, 1, 1), lang="ru")
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_IMPORT) == 1  # сбой не списал
+
+
+def test_import_limit_text_does_not_lie_about_csv():
+    import i18n
+
+    for lang, needle in (("ru", "вручную"), ("en", "by hand")):
+        for key in ("limit.import.exact", "limit.import.generic"):
+            text = i18n.t_in(lang, key, n=10)
+            assert "CSV" in text and needle in text
+
+
+async def test_hard_and_quota_warnings_are_logged_once_a_day(fresh_db, user_id, hard_stop, caplog):
+    for _ in range(5):
+        await ai_limits.hard_stop_block()
+        await ai_limits.check(user_id, ai_limits.KIND_VOICE)
+    warnings = [r for r in caplog.records if r.levelname == "WARNING" and "AI hard stop" in r.message]
+    assert len(warnings) == 2  # по одному на вид: «без квоты» и «голос»
+
+
+async def test_retention_prunes_old_ai_usage(fresh_db, user_id):
+    old = (dt.date.today() - dt.timedelta(days=40)).isoformat()
+    await db.conn().execute(
+        "INSERT INTO ai_usage (telegram_id, kind, date, count) VALUES (?, 'voice', ?, 3)", (user_id, old)
+    )
+    await db.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+    await db.conn().commit()
+
+    assert await db.prune_old_ai_usage() == 1
+    assert await db.get_ai_usage_today(user_id, ai_limits.KIND_VOICE) == 1
 
 
 async def test_rest_text_convert_quota_is_429(fresh_db, monkeypatch):

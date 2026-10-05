@@ -35,7 +35,7 @@ async def test_one_failing_prune_does_not_stop_the_others(fresh_db, tmp_path, mo
         "prune_old_cost_events", "prune_old_user_events", "prune_old_funnel_events",
         "prune_old_analytics_events", "prune_old_diagnostics", "prune_old_behaviour_digests",
         "prune_old_weekly_digests", "prune_old_import_batches", "prune_old_exercise_merges",
-        "prune_old_limit_acks", "prune_old_ai_conversations", "prune_old_pushes",
+        "prune_old_limit_acks", "prune_old_ai_usage", "prune_old_ai_conversations", "prune_old_pushes",
         "delete_shared_items_older_than",
     ]
     for name in names:
@@ -167,7 +167,15 @@ WAL_TABLE = (
 )
 
 
-def _fresh_replica_state(monkeypatch):
+def _fresh_replica_state(monkeypatch, tmp_path=None, db_age_hours=0.0):
+    import time as _time
+
+    if tmp_path is not None:
+        path = tmp_path / "training_log.db"
+        path.write_bytes(b"x")
+        stamp = _time.time() - db_age_hours * 3600
+        os.utime(path, (stamp, stamp))
+        monkeypatch.setattr(config, "DB_PATH", str(path))
     monkeypatch.setattr(admin_tasks, "_replica_alerted_at", None)
     monkeypatch.setattr(config, "BUCKET_NAME", "bucket")
     monkeypatch.setattr(admin_tasks, "_litestream_binary", lambda: "/usr/bin/litestream")
@@ -201,8 +209,8 @@ async def test_fresh_replica_is_fine(monkeypatch):
     assert await admin_tasks.check_replica_health() is None
 
 
-async def test_stale_replica_alerts_and_is_throttled(monkeypatch):
-    _fresh_replica_state(monkeypatch)
+async def test_stale_replica_alerts_and_is_throttled(monkeypatch, tmp_path):
+    _fresh_replica_state(monkeypatch, tmp_path)
     monkeypatch.setattr(
         admin_tasks, "_run_litestream",
         AsyncMock(return_value=WAL_TABLE.format(created=_iso(5))),
@@ -215,8 +223,8 @@ async def test_stale_replica_alerts_and_is_throttled(monkeypatch):
     assert await admin_tasks.check_replica_health() is not None
 
 
-async def test_replica_recovery_resets_the_throttle(monkeypatch):
-    _fresh_replica_state(monkeypatch)
+async def test_replica_recovery_resets_the_throttle(monkeypatch, tmp_path):
+    _fresh_replica_state(monkeypatch, tmp_path)
     run = AsyncMock(return_value=WAL_TABLE.format(created=_iso(5)))
     monkeypatch.setattr(admin_tasks, "_run_litestream", run)
     assert await admin_tasks.check_replica_health() is not None
@@ -224,6 +232,34 @@ async def test_replica_recovery_resets_the_throttle(monkeypatch):
     assert await admin_tasks.check_replica_health() is None
     run.return_value = WAL_TABLE.format(created=_iso(5))
     assert await admin_tasks.check_replica_health() is not None  # снова поломка — снова тревога
+
+
+async def test_idle_database_at_night_does_not_alert(monkeypatch, tmp_path):
+    # Реплика 5 часов назад, а база не писалась с тех пор (ночь) — это норма.
+    _fresh_replica_state(monkeypatch, tmp_path, db_age_hours=6)
+    monkeypatch.setattr(
+        admin_tasks, "_run_litestream", AsyncMock(return_value=WAL_TABLE.format(created=_iso(5)))
+    )
+    assert await admin_tasks.check_replica_health() is None
+
+
+async def test_write_after_last_replica_stamp_alerts(monkeypatch, tmp_path):
+    _fresh_replica_state(monkeypatch, tmp_path, db_age_hours=1)  # писали час назад, реплика — 5 ч
+    monkeypatch.setattr(
+        admin_tasks, "_run_litestream", AsyncMock(return_value=WAL_TABLE.format(created=_iso(5)))
+    )
+    assert await admin_tasks.check_replica_health() is not None
+
+
+async def test_wal_file_mtime_counts_as_a_write(monkeypatch, tmp_path):
+    import time as _time
+
+    _fresh_replica_state(monkeypatch, tmp_path, db_age_hours=6)
+    (tmp_path / "training_log.db-wal").write_bytes(b"w")  # свежий -wal
+    assert admin_tasks._db_written_since_replica(5) is True
+    stamp = _time.time() - 6 * 3600
+    os.utime(tmp_path / "training_log.db-wal", (stamp, stamp))
+    assert admin_tasks._db_written_since_replica(5) is False
 
 
 async def test_failing_litestream_command_alerts(monkeypatch):
