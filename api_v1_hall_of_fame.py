@@ -18,7 +18,6 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import analytics
@@ -26,7 +25,7 @@ import db
 import formatting
 import hall_of_fame_data
 import i18n
-from api_v1_common import ApiError, authed_user_id
+from api_v1_common import ApiError, JSONResponse, authed_user_id
 
 
 def _lift_json(

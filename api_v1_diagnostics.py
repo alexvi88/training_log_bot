@@ -57,13 +57,13 @@ import time
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import api_v1_common as common
 import db
 import ops_alerts
 import review_demo
+from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
 

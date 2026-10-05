@@ -19,21 +19,25 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import ai_trainer
+import analytics
 import api_v1_common as common
 import config
 import db
 import formatting
 import i18n
 import seed_data
+from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
+_PROGRESSION_RULES = ai_trainer.PROGRESSION_RULES
 _authed_user_id = common.authed_user_id
 _json_body = common.json_body
 _require = common.require
@@ -79,7 +83,7 @@ async def _owned_exercise(exercise_id: int, user_id: int):
 def _clean_name(raw: str) -> str:
     """Тот же потолок длины, которым бот режет имена программ и дней
     (config.MAX_PROGRAM_NAME_LENGTH — общий, отдельного под routine нет)."""
-    name = raw.strip()
+    name = formatting.strip_control_chars(raw).strip()
     if not name:
         raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
     if len(name) > config.MAX_PROGRAM_NAME_LENGTH:
@@ -157,6 +161,68 @@ def _routine_list_json(row) -> dict[str, Any]:
     return data
 
 
+# Правило прогрессии — плоский объект из пары скаляров (rule, step, reps_top…).
+# Потолки: не больше 16 полей и 1 КБ в JSON, строки до 64 символов.
+_PROGRESSION_MAX_KEYS = 16
+_PROGRESSION_MAX_JSON_BYTES = 1024
+_PROGRESSION_MAX_STR = 64
+
+
+def _progression_is_sane(rule: Any) -> bool:
+    """Плоский объект, где нет NaN/Infinity, вложенных структур и раздутых
+    строк. Одно место и для записи (400), и для чтения уже записанного
+    (молча игнорируем): NaN, проскочивший раньше, ронял JSONResponse 500-й."""
+    if not isinstance(rule, dict) or len(rule) > _PROGRESSION_MAX_KEYS:
+        return False
+    for key, value in rule.items():
+        if not isinstance(key, str) or len(key) > _PROGRESSION_MAX_STR:
+            return False
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                return False
+        elif isinstance(value, str):
+            if len(value) > _PROGRESSION_MAX_STR:
+                return False
+        elif value is not None and not isinstance(value, (bool, int)):
+            return False
+    return True
+
+
+def _stored_progression_json(raw: Any) -> dict[str, Any] | None:
+    """routine_exercises.progression для ответа: битое, не-объект или с NaN —
+    как «правила нет», а не 500."""
+    if not raw:
+        return None
+    try:
+        rule = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return rule if _progression_is_sane(rule) else None
+
+
+def _validated_progression(progression: dict[str, Any], unit: str) -> dict[str, Any]:
+    """Схема правила при записи: размер и скаляры (_progression_is_sane),
+    `step` — конечное число > 0 и не больше потолка шага в единицах атлета
+    (analytics.progression_max_step), `rule` — из ai_trainer-списка правил."""
+    bad = ApiError(
+        400, "bad_request", "progression is malformed", key="api.error.progression_invalid"
+    )
+    if not _progression_is_sane(progression):
+        raise bad
+    if len(json.dumps(progression, ensure_ascii=False).encode("utf-8")) > _PROGRESSION_MAX_JSON_BYTES:
+        raise bad
+    step = progression.get("step")  # null — «шага нет», как у iOS без поля
+    if step is not None and (
+        isinstance(step, bool) or not isinstance(step, (int, float))
+        or step <= 0 or step > analytics.progression_max_step(unit)
+    ):
+        raise bad
+    rule = progression.get("rule")
+    if rule is not None and (not isinstance(rule, str) or rule not in _PROGRESSION_RULES):
+        raise bad
+    return progression
+
+
 def _routine_exercise_json(row, display_name: str | None = None) -> dict[str, Any]:
     """`row` — либо строка из db.list_routine_exercises (с display_name уже в
     join), либо голая db.get_routine_exercise/get_routine_exercise-подобная
@@ -173,7 +239,7 @@ def _routine_exercise_json(row, display_name: str | None = None) -> dict[str, An
         "display_name": name,
         "order_index": row["order_index"],
         "target": row["target"],
-        "progression": json.loads(progression) if progression else None,
+        "progression": _stored_progression_json(progression),
     }
 
 
@@ -487,6 +553,9 @@ async def update_routine_exercise(request: Request) -> JSONResponse:
         progression = body["progression"]
         if progression is not None and not isinstance(progression, dict):
             raise ApiError(400, "bad_request", "progression must be an object or null")
+        if progression is not None:
+            user = await db.get_user(user_id)
+            progression = _validated_progression(progression, user["unit"])
         await db.set_routine_exercise_progression(
             item_id, json.dumps(progression) if progression is not None else None
         )

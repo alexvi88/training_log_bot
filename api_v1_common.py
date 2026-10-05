@@ -19,13 +19,14 @@ import uuid
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse as _StarletteJSONResponse
 
 import config
 import db
 import exercise_descriptions
 import exercise_media
 import exercise_photos
+import formatting
 import i18n
 import parser
 import timeutil
@@ -56,6 +57,31 @@ def ai_consent_given(request: Request, user: Any) -> bool:
     ):
         return True
     return user is not None and bool(user["ai_consent_at"])
+
+def _round_floats(value: Any) -> Any:
+    """Все дробные в ответе — до 2 знаков.
+
+    Вес хранится с 8 знаками (db.convert_weight: иначе круг кг↔lb дрейфует), а
+    приложение сравнивает и подставляет сырой Double (`abs(delta) >= 0.05`,
+    lastWeight живой активности уходит обратно в подход) — хвост
+    «61.23496133» ему показывать незачем. Два знака ниже любой цены блина.
+    """
+    if isinstance(value, float):
+        return round(value, 2) if math.isfinite(value) else value
+    if isinstance(value, dict):
+        return {k: _round_floats(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_round_floats(v) for v in value]
+    return value
+
+
+class JSONResponse(_StarletteJSONResponse):
+    """JSONResponse `/v1`: дробные округляются до 2 знаков (_round_floats).
+    Все модули api_v1_* берут этот класс отсюда, а не из starlette."""
+
+    def render(self, content: Any) -> bytes:
+        return super().render(_round_floats(content))
+
 
 class ApiError(Exception):
     """Ошибка `/v1`: машинный `code`, машинная `message` и человеческий текст.
@@ -271,7 +297,9 @@ def optional_str(body: dict[str, Any], key: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise ApiError(400, "bad_request", f"field {key} must be str")
-    value = value.strip()
+    # Управляющие символы (NUL, ESC…) — вон, переводы строк остаются: через
+    # эту функцию идут и описания/заметки (formatting.strip_control_chars).
+    value = formatting.strip_control_chars(value, keep_newlines=True).strip()
     return value or None
 
 
@@ -547,12 +575,16 @@ def client_moment(
 # отвергающий то же самое, — это один и тот же подход, который клиент может
 # записать, но не может поправить.
 
-def optional_non_negative_number(body: dict[str, Any], key: str) -> Optional[float]:
+def optional_non_negative_number(
+    body: dict[str, Any], key: str, maximum: float | None = None
+) -> Optional[float]:
     """Необязательное неотрицательное конечное число из тела (ккал, БЖУ):
     None, если поля нет или оно null. `True` — не число (bool в Python —
     подкласс int, и без явной проверки `"protein": true` ложилось в базу как
     1 г белка), NaN/Infinity (их принимает json.loads) — тоже, отрицательное
-    — опечатка, а не «съел минус 9000 ккал»."""
+    — опечатка, а не «съел минус 9000 ккал». `maximum` — потолок по месту
+    (ккал и граммы — разные): 1e308 конечное число, но в сумме за день уже
+    даёт inf в JSON-ответе."""
     value = body.get(key)
     if value is None:
         return None
@@ -563,6 +595,11 @@ def optional_non_negative_number(body: dict[str, Any], key: str) -> Optional[flo
     if value < 0:
         raise ApiError(
             400, "bad_request", f"{key} must not be negative", key="api.error.number_negative"
+        )
+    if maximum is not None and value > maximum:
+        raise ApiError(
+            400, "bad_request", f"{key} must be at most {maximum:g}",
+            key="api.error.number_too_big", max=f"{maximum:g}",
         )
     return value
 

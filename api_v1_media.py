@@ -27,7 +27,7 @@ import os
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse
 from starlette.routing import Route
 
 import api_v1_ai
@@ -37,6 +37,7 @@ import exercise_descriptions
 import exercise_media
 import exercise_photos
 import i18n
+from api_v1_common import JSONResponse
 from handlers.ai_trainer import MAX_IMAGE_BYTES
 
 ApiError = common.ApiError

@@ -50,7 +50,6 @@ import re
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import ai_limits
@@ -63,6 +62,7 @@ import formatting
 import i18n
 import text_import
 import timeutil
+from api_v1_common import JSONResponse
 from handlers import csv_import as bot_csv_import
 from handlers.csv_import import (
     REQUIRED_FIELDS,

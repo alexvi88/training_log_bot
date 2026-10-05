@@ -43,7 +43,7 @@ import os
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse
 from starlette.routing import Route
 
 import api_v1_common as common
@@ -54,6 +54,7 @@ import config
 import db
 import i18n
 import push_ios
+from api_v1_common import JSONResponse
 
 logger = logging.getLogger(__name__)
 

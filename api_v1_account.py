@@ -16,7 +16,6 @@ import logging
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import account_deletion
@@ -27,6 +26,7 @@ import config
 import db
 import fsm_unit_rescale
 import i18n
+from api_v1_common import JSONResponse
 from workout_edit_data import move_workout_to_date, on_workout_edited
 
 logger = logging.getLogger(__name__)
@@ -480,6 +480,9 @@ async def update_workout_set(request: Request) -> JSONResponse:
     # весовой клуб) могли зависеть именно от этого подхода.
     await on_workout_edited(workout_id)
     updated = await db.get_set(set_id)
+    if updated is None:
+        # Параллельное удаление подхода между update_set и чтением.
+        raise ApiError(404, "not_found", "set not found")
     return JSONResponse(_set_json(updated))
 
 

@@ -119,7 +119,7 @@ async def test_scale_bodyweight_logs(user_id):
     await dbmod.add_bodyweight_log(user_id, 100.0, logged_at="2026-01-01T10:00:00")
     await dbmod.scale_bodyweight_logs(user_id, 2.20462)
     latest = await dbmod.get_latest_bodyweight(user_id)
-    assert latest["weight"] == pytest.approx(220.5)  # rounded to 1 decimal
+    assert latest["weight"] == pytest.approx(220.462, abs=1e-4)  # convert_weight, не 1 знак
 
 
 # ---------- screen text ----------
@@ -208,7 +208,7 @@ async def test_scale_user_set_weights_converts_nonzero_only(user_id):
     await dbmod.scale_user_set_weights(user_id, dbmod.config.LB_PER_KG)
 
     weights = sorted(s["weight"] for s in await dbmod.list_sets_for_block(block_id))
-    assert weights == [0.0, pytest.approx(220.5)]  # zero untouched, 100 -> 220.5
+    assert weights == [0.0, pytest.approx(220.462, abs=1e-4)]  # zero untouched, 100 -> 220.462 (4 знака)
 
 
 # ---------- chart period window ----------

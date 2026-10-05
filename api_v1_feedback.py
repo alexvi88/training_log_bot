@@ -86,7 +86,6 @@ import re
 from typing import Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import ai_limits
@@ -101,6 +100,7 @@ import db
 import formatting
 import i18n
 import push_ios
+from api_v1_common import JSONResponse
 from handlers.ai_trainer import MAX_IMAGE_BYTES
 
 logger = logging.getLogger(__name__)

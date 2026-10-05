@@ -8,6 +8,7 @@ import datetime as dt
 import functools
 import io
 import logging
+import math
 import re
 from contextlib import suppress
 from html import escape
@@ -522,6 +523,18 @@ def _parse_row_date(
     return date
 
 
+def _unescape_formula_cell(text: str) -> str:
+    """Обратное к csv_export.escape_formula_cell: снимает ровно один ведущий
+    апостроф, если за ним знак формулы или ещё один такой апостроф-защита:
+    «'=cmd» → «=cmd», «''-5 drop» → «'-5 drop». «'Тяга» остаётся как есть."""
+    if text[:1] == "'" and text[1:2] != "":
+        import csv_export
+
+        if csv_export.needs_formula_escape(text[1:]):
+            return text[1:]
+    return text
+
+
 # Запятая-разделитель тысяч: ровно три цифры в каждой группе после первой
 # ("1,200", "1,234,000.5") — так группирует английский/американский экспорт.
 # Десятичная запятая ("100,5") этому не соответствует почти никогда: дробная
@@ -540,7 +553,12 @@ def _parse_number(text: str) -> float:
     """
     text = text.strip()
     text = text.replace(",", "") if _THOUSANDS_COMMA_RE.match(text) else text.replace(",", ".")
-    return float(text.replace(" ", "").replace("\xa0", ""))
+    value = float(text.replace(" ", "").replace("\xa0", ""))
+    # «nan» и «inf» float() принимает как числа: дальше они проходят любые
+    # сравнения и ломают int()/превью — для всех ячеек это просто «не число».
+    if not math.isfinite(value):
+        raise ValueError(f"not a finite number: {text!r}")
+    return value
 
 
 # Фунты в весе — не косметика заголовка, а другая величина: без пересчёта
@@ -960,7 +978,9 @@ def _parse_set_row(
     ParseError — уже с номером строки («Строка N: …»)."""
     try:
         date_val = _parse_row_date(row[mapping["date"]], today, month_first=month_first)
-        name = row[mapping["exercise"]].strip()
+        name = formatting.strip_control_chars(
+            _unescape_formula_cell(row[mapping["exercise"]].strip())
+        ).strip()
         weight_text = row[mapping["weight"]].strip()
         try:
             weight = _parse_number(weight_text) * weight_factor if weight_text else None
@@ -1704,7 +1724,7 @@ async def run_import(
 ) -> dict:
     """Сохранение импорта целиком — один путь у бота и REST: завести решённые
     упражнения, открыть пачку, записать тренировки, пометить значки.
-    Возвращает {"batch_id", "imported", "failed", "sets", "achievements",
+    Возвращает {"batch_id" (None, если ничего не записалось), "imported", "failed", "sets", "achievements",
     "resolved"}."""
     names = [e["name"] for w in workouts for e in w["entries"]]
     batch_id = await db.create_import_batch(user_id, source)
@@ -1713,7 +1733,13 @@ async def run_import(
     imported, failed = await apply_import(
         user_id, workouts, resolved, batch_id=batch_id, report=report,
     )
-    await db.finish_import_batch(batch_id, imported, report.get("sets", 0))
+    if imported:
+        await db.finish_import_batch(batch_id, imported, report.get("sets", 0))
+    else:
+        # Полный провал: пустая пачка отменять нечего, а клиенту её id был бы
+        # ссылкой в никуда.
+        await db.discard_import_batch(user_id, batch_id)
+        batch_id = None
     return {
         "batch_id": batch_id,
         "imported": imported,

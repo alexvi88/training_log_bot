@@ -389,7 +389,7 @@ async def _state_program_week(fresh_db, lang: str) -> list[_Walker]:
     routine = (await w.call("GET", f"/routines/{day['id']}", expect=200)).json()
     item = routine["exercises"][0]
     await w.call("PATCH", f"/routine-exercises/{item['id']}",
-                 json={"progression": {"rule": "double", "step": 2.5, "reps_top": 12}}, expect=200)
+                 json={"progression": {"rule": "double_progression", "step": 2.5, "reps_top": 12}}, expect=200)
     await w.call("PATCH", f"/routine-exercises/{item['id']}", json={"target": "3×8"}, expect=200)
     await w.call("GET", f"/routines/{day['id']}", expect=200)
     await w.call("GET", f"/programs/{pid}", expect=200)
@@ -535,7 +535,23 @@ async def _state_import(fresh_db, lang: str, monkeypatch) -> list[_Walker]:
     # Без модели имена сопоставляются без сетевого вызова (иначе импорт ходит к настоящему xAI).
     with monkeypatch.context() as m:
         m.setattr(ai_trainer, "is_configured", lambda: False)
-        return await _import_flow(fresh_db, lang)
+        walkers = await _import_flow(fresh_db, lang)
+        # Полный провал записи: batch_id приходит null (в модели приложения
+        # `batchId: FlexibleID?`), ничего не записано, пачки в списке нет.
+        from handlers import csv_import as bot_csv_import
+
+        async def _nothing_written(*args, **kwargs):
+            return 0, 1
+
+        m.setattr(bot_csv_import, "apply_import", _nothing_written)
+        failed = (await walkers[0].call(
+            "POST", "/import/csv",
+            json={"csv": "date,exercise,weight,reps\n2026-03-12,Barbell Bench Press,100,5\n"},
+            expect=200,
+        )).json()
+        assert failed["batch_id"] is None and failed["workouts_imported"] == 0
+        await walkers[0].call("GET", "/import/batches", expect=200)
+        return walkers
 
 
 async def _import_flow(fresh_db, lang: str) -> list[_Walker]:

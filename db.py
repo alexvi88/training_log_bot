@@ -5841,6 +5841,22 @@ async def get_or_create_single_block_for_exercise(workout_id: int, exercise_id: 
         return block_id
 
 
+async def block_accepts_sets(block_id: int | None) -> bool:
+    """Можно ли дописать подход в блок: блок есть, его тренировка есть и не
+    закончена. Бот держит block_id в FSM, а тренировку за это время могли
+    закрыть или удалить из приложения — append_set тогда падал на FK/молча
+    писал в закрытую."""
+    if block_id is None:
+        return False
+    cur = await conn().execute(
+        "SELECT w.status FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+        "WHERE b.id = ?",
+        (block_id,),
+    )
+    row = await cur.fetchone()
+    return row is not None and row["status"] != "finished"
+
+
 async def get_block(block_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM workout_blocks WHERE id = ?", (block_id,))
     return await cur.fetchone()
@@ -11099,8 +11115,9 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
     """Multiply every stored bodyweight by `factor` — used when a user switches units."""
     async with _write_lock:
         await conn().execute(
-            "UPDATE bodyweight_logs SET weight = ROUND(weight * ?, 1) WHERE telegram_id = ?",
-            (factor, telegram_id),
+            f"UPDATE bodyweight_logs SET weight = {_convert_weight_sql('weight')} "
+            "WHERE telegram_id = ?",
+            (factor, factor, factor, factor, telegram_id),
         )
         await conn().commit()
 
@@ -11201,25 +11218,57 @@ async def count_food_days(telegram_id: int) -> int:
     return count
 
 
+_WEIGHT_GRID = 0.05
+_WEIGHT_SNAP_TOLERANCE = 1e-6
+_WEIGHT_DECIMALS = 8
+
+
+def convert_weight(value: float, factor: float) -> float:
+    """Вес при смене кг↔lb без дрейфа: хранится с 8 знаками, а не с 1.
+
+    ROUND(…, 1) на каждом переключении съедал по ~0.05 (135 lb → кг → lb =
+    134.9, 1.25 кг → 1.30) и накапливался. Показ и так округляет сам. Чтобы
+    круг возвращал ровно исходное, результат в пределах 1e-6 от сетки 0.05
+    (в неё попадают все блины и шаги 0.25/0.5/1.25/2.5) берётся с сетки:
+    ошибка округления промежуточной единицы (~1e-8) на обратном пути гасится.
+    Допуск намеренно в сотни раз меньше шага сетки — настоящий вес рядом с
+    сеткой не «прилипает».
+    """
+    raw = value * factor
+    snapped = round(round(raw / _WEIGHT_GRID) * _WEIGHT_GRID, 2)
+    if abs(raw - snapped) < _WEIGHT_SNAP_TOLERANCE:
+        return snapped
+    return round(raw, _WEIGHT_DECIMALS)
+
+
+def _convert_weight_sql(column: str) -> str:
+    """SQL-зеркало convert_weight (параметр — factor, подставляется 4 раза)."""
+    snapped = f"ROUND(ROUND({column} * ? / {_WEIGHT_GRID}, 0) * {_WEIGHT_GRID}, 2)"
+    return (
+        f"CASE WHEN ABS({column} * ? - {snapped}) < {_WEIGHT_SNAP_TOLERANCE} "
+        f"THEN {snapped} ELSE ROUND({column} * ?, {_WEIGHT_DECIMALS}) END"
+    )
+
+
 async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
     """Convert every logged set weight for a user by `factor` (bodyweight 0-sets untouched)."""
     async with _write_lock:
         await conn().execute(
-            "UPDATE sets SET weight = ROUND(weight * ?, 1) "
+            f"UPDATE sets SET weight = {_convert_weight_sql('weight')} "
             "WHERE weight != 0 AND block_id IN ("
             "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
             "  WHERE w.user_id = ?)",
-            (factor, telegram_id),
+            (factor, factor, factor, factor, telegram_id),
         )
         # Снимок собственного веса живёт в тех же единицах, что и вес подхода,
         # поэтому конвертируется вместе с ним — иначе после смены кг↔lb
         # подтягивания разом «потяжелели» бы вдвое.
         await conn().execute(
-            "UPDATE sets SET load_weight = ROUND(load_weight * ?, 1) "
+            f"UPDATE sets SET load_weight = {_convert_weight_sql('load_weight')} "
             "WHERE load_weight IS NOT NULL AND block_id IN ("
             "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
             "  WHERE w.user_id = ?)",
-            (factor, telegram_id),
+            (factor, factor, factor, factor, telegram_id),
         )
         await conn().commit()
 
@@ -11252,7 +11301,7 @@ async def scale_progression_steps(user_id: int, factor: float) -> None:
             continue
         if rule.get("step_unit") == "sec":
             continue  # шаг в секундах (планка) от кг/lb не зависит
-        rule["step"] = round(step * factor, 2)
+        rule["step"] = convert_weight(step, factor)
         updates.append((json.dumps(rule, ensure_ascii=False), row["id"]))
     if not updates:
         return
@@ -11293,7 +11342,7 @@ def scale_draft_progression_steps(draft: Any, factor: float) -> bool:
                     continue
                 if rule.get("step_unit") == "sec":
                     continue  # шаг в секундах (планка) от кг/lb не зависит
-                rule["step"] = round(step * factor, 2)
+                rule["step"] = convert_weight(step, factor)
                 changed = True
 
     if isinstance(draft, dict):
@@ -11356,9 +11405,9 @@ def scale_ai_undo_weights(undo: Any, factor: float) -> bool:
     if kind == "bodyweight_restore":
         weight = undo.get("weight")
         if isinstance(weight, (int, float)) and not isinstance(weight, bool):
-            # ROUND(…, 1) — как у scale_bodyweight_logs: откат вернёт ровно
+            # convert_weight — как у scale_bodyweight_logs: откат вернёт ровно
             # то число, что стоит у соседних, уже пересчитанных взвешиваний.
-            undo["weight"] = round(weight * factor, 1)
+            undo["weight"] = convert_weight(weight, factor)
             return True
     return False
 
@@ -11800,6 +11849,19 @@ async def finish_import_batch(batch_id: str, workouts: int, sets: int) -> None:
     async with _write_lock:
         await conn().execute(
             "UPDATE import_batches SET workouts = ?, sets = ? WHERE id = ?", (workouts, sets, batch_id)
+        )
+        await conn().commit()
+
+
+async def discard_import_batch(user_id: int, batch_id: str) -> None:
+    """Снести пачку, в которую ничего не записалось (полный провал импорта):
+    завести упражнения она успела, а показывать такую в «что загружал» нечем.
+    Упражнения, значки и сама строка уходят — как после отмены, только без
+    следа."""
+    await undo_import_batch(user_id, batch_id)
+    async with _write_lock:
+        await conn().execute(
+            "DELETE FROM import_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
         )
         await conn().commit()
 
