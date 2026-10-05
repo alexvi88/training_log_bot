@@ -731,6 +731,43 @@ def _claim_turn_or_429(user_id: int, lang: str) -> None:
             raise ApiError(429, "busy", "another request is in flight", key="ai.screen.busy")
 
 
+async def _fresh_start_response(
+    user_id: int, lang: str, seed: str, history: list, *, shown_question: Optional[str],
+) -> dict[str, Any]:
+    """«Составь мне программу» у человека с чистым листом — без вызова модели.
+
+    Смотреть ей не на что (ни тренировок, ни программ, ни цели), а полный
+    платный ход до первого вопроса был просто долгим ожиданием. Вместо него:
+    реплика человека и короткий ответ тренера ложатся в историю, опросник
+    ставится из фиксированного набора (`ai_setup_flow.fresh_start_questions`),
+    ответ — той же формы, что у `_turn_response`. Модель подключится один раз,
+    когда ответы соберутся (`answer_setup_question`).
+
+    Бесплатный путь: ни `ai_limits.check`, ни `try_increment_ai_question_count`,
+    ни cost-события — человек не теряет вопрос из «Осталось вопросов сегодня»,
+    а дневной потолок по деньгам не вправе его запирать. В wire-снимок кладём
+    ровно эту пару (поверх прежней истории), чтобы финальный ход модели видел
+    цельный разговор."""
+    with i18n.use_lang(lang):
+        reply = ai_setup_flow.fresh_start_reply()
+        state = {
+            "questions": ai_setup_flow.fresh_start_questions(), "answers": [], "idx": 0,
+            "goal_asked": True, "goal": seed, "rounds": 1,
+        }
+        questions_json = _question_json(state)
+    wire = [*history, {"role": "user", "content": seed}, {"role": "assistant", "content": reply}]
+    await db.add_ai_conversation_turn(user_id, shown_question or seed, reply, wire)
+    await db.set_ai_setup_state(user_id, state)
+    return {
+        "answer": reply,
+        "program": None,
+        "questions": questions_json,
+        "actions": [],
+        "mentions": {"exercises": [], "programs": []},
+        "limits": await _limits_json(user_id),
+    }
+
+
 async def ask_question(request: Request) -> JSONResponse:
     """Один вопрос тренеру → ответ плюс черновик программы/опросник/упоминания
     (см. `_turn_response`). Порядок ровно как в handlers/ai_trainer.py
@@ -816,6 +853,14 @@ async def ask_question(request: Request) -> JSONResponse:
         # (см. db.ai_conversation_turns и докстринг модуля). Пусто у нового
         # разговора или сразу после DELETE /ai/history.
         history = await db.get_ai_conversation_wire_history(user_id)
+        if (
+            image_data_url is None
+            and ai_setup_flow.is_build_program_seed(question)
+            and await ai_setup_flow.is_fresh_start(user_id)
+        ):
+            return JSONResponse(await _fresh_start_response(
+                user_id, lang, question, history, shown_question=shown_question,
+            ))
         turn = await _run_turn(
             user_id, question, history,
             image_data_url=image_data_url, saved_image_path=saved_image_path,
@@ -1382,7 +1427,8 @@ def _history_messages(turns: list[Any]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     for row in turns:
         user_message: dict[str, Any] = {
-            "role": "user", "text": row["question"], "created_at": row["created_at"],
+            "role": "user", "text": ai_setup_flow.visible_user_text(row["question"]),
+            "created_at": row["created_at"],
         }
         if row["image_path"]:
             user_message["image_url"] = f"/ai/history/{row['id']}/image"
@@ -1496,7 +1542,7 @@ def _conversation_json(row: Any) -> dict[str, Any]:
     """Одна строка списка разговоров. `title` — первый вопрос человека,
     обрезанный: своего имени у разговора нет, а просить модель придумать его —
     платный вызов на каждое открытие списка."""
-    title = (row["first_question"] or "").strip().replace("\n", " ")
+    title = ai_setup_flow.visible_user_text(row["first_question"] or "").strip().replace("\n", " ")
     if len(title) > CONVERSATION_TITLE_CHARS:
         title = title[: CONVERSATION_TITLE_CHARS - 1].rstrip() + "…"
     return {

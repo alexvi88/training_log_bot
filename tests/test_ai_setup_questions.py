@@ -642,3 +642,105 @@ async def test_button_from_an_abandoned_questionnaire_does_not_answer_the_live_o
     assert setup["idx"] == 0
     cb.answer.assert_awaited()
     assert cb.answer.await_args.kwargs.get("show_alert") is True
+
+
+# ---------- видимый текст служебных реплик (чистая функция) ----------
+
+
+def _setup(**over):
+    base = {
+        "questions": [
+            {"question": "Сколько дней?", "choices": []},
+            {"question": "Травмы?", "choices": []},
+        ],
+        "answers": ["3 дня", "нет"],
+        "goal": "Хочу собрать программу",
+    }
+    base.update(over)
+    return base
+
+
+def test_visible_user_text_strips_frame_and_original_ask_ru_and_en():
+    import ai_setup_flow
+    import i18n
+
+    for lang, header in (("ru", "Вот ответы:"), ("en", "Here are the answers:")):
+        with i18n.use_lang(lang):
+            full = ai_setup_flow.setup_answers_text(_setup())
+            shown = ai_setup_flow.visible_user_text(full)
+        assert shown == f"{header}\n— Сколько дней? — 3 дня\n— Травмы? — нет"
+        assert "propose_program" not in shown
+
+
+def test_visible_user_text_keeps_skipped_note_and_cuts_goal():
+    import ai_setup_flow
+    import i18n
+
+    for lang in ("ru", "en"):
+        with i18n.use_lang(lang):
+            full = ai_setup_flow.setup_answers_text(_setup(answers=["3 дня", None]))
+            shown = ai_setup_flow.visible_user_text(full)
+            note = i18n.t("ai.screen.setup_skipped_note")
+            skipped_line = i18n.t("ai.screen.setup_line_skipped", question="Травмы?")
+        assert shown.endswith("\n" + note)
+        assert skipped_line in shown
+        assert "propose_program" not in shown
+        assert "Хочу собрать программу" not in shown
+
+
+def test_visible_user_text_works_across_languages_and_without_goal():
+    """Реплика, записанная при языке ru, режется и при текущем en: узнаём по обоим."""
+    import ai_setup_flow
+    import i18n
+
+    with i18n.use_lang("ru"):
+        full = ai_setup_flow.setup_answers_text(_setup(goal=None))
+    with i18n.use_lang("en"):
+        shown = ai_setup_flow.visible_user_text(full)
+    assert shown == "Вот ответы:\n— Сколько дней? — 3 дня\n— Травмы? — нет"
+
+
+def test_visible_user_text_replaces_enough_prompt_with_short_line():
+    import ai_setup_flow
+    import i18n
+
+    for lang in ("ru", "en"):
+        with i18n.use_lang(lang):
+            full = ai_setup_flow.setup_enough_text("Хочу программу")
+            shown = ai_setup_flow.visible_user_text(full)
+            assert shown == i18n.t("ai.screen.setup_enough_visible")
+            assert ai_setup_flow.visible_user_text(ai_setup_flow.setup_enough_text(None)) == shown
+
+
+def test_visible_user_text_leaves_other_text_alone():
+    import ai_setup_flow
+
+    for text in ("", "как мой прогресс", "Вот ответы: я думаю, что...", "Here are the answers:\nnot a frame"):
+        assert ai_setup_flow.visible_user_text(text) == text
+
+
+def test_fresh_start_questions_are_six_with_choices_and_goal_first():
+    import ai_setup_flow
+    import i18n
+
+    for lang in ("ru", "en"):
+        with i18n.use_lang(lang):
+            questions = ai_setup_flow.fresh_start_questions()
+            assert questions[0] == ai_setup_flow.setup_goal_question()
+        assert len(questions) == 6 <= ai_trainer_module.SETUP_MAX_QUESTIONS
+        for question in questions:
+            assert 0 < len(question["question"]) <= ai_trainer_module.SETUP_QUESTION_LIMIT
+            assert 0 < len(question["choices"]) <= ai_trainer_module.SETUP_MAX_CHOICES
+            assert all(len(c) <= ai_trainer_module.SETUP_CHOICE_LIMIT for c in question["choices"])
+
+
+def test_is_build_program_seed_matches_both_languages_only_exactly():
+    import ai_setup_flow
+    import i18n
+
+    for lang in ("ru", "en"):
+        seed = i18n.t_in(lang, "ai.screen.build_program_seed")
+        assert ai_setup_flow.is_build_program_seed(seed)
+        assert ai_setup_flow.is_build_program_seed(f"  {seed}\n")
+        assert not ai_setup_flow.is_build_program_seed(seed + " И ещё про ноги")
+    assert not ai_setup_flow.is_build_program_seed("")
