@@ -1,0 +1,3983 @@
+{
+ "_about": "Снимок Swift-моделей приложения. Генерируется scripts/ios_contract.py — руками не править.",
+ "decoder": {
+  "keys": "convertFromSnakeCase",
+  "dates": "deferredToDate"
+ },
+ "types": {
+  "AIAnswer": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "answer": {
+     "type": "String",
+     "optional": true
+    },
+    "program": {
+     "type": "AIProgramDraft",
+     "optional": true
+    },
+    "questions": {
+     "type": "AISetupQuestion",
+     "optional": true
+    },
+    "actions": {
+     "type": "[AIUndoAction]",
+     "optional": true
+    },
+    "mentions": {
+     "type": "AIMentions",
+     "optional": false
+    },
+    "limits": {
+     "type": "AILimits",
+     "optional": false
+    }
+   }
+  },
+  "AIConversationSummary": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "turns": {
+     "type": "Int",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "lastAt": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "AIConversationsResponse": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "conversations": {
+     "type": "[AIConversationSummary]",
+     "optional": false
+    },
+    "current": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "AIHistoryMessage": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "role": {
+     "type": "String",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": true
+    },
+    "imageUrl": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "AIHistoryResponse": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "messages": {
+     "type": "[AIHistoryMessage]",
+     "optional": false
+    }
+   }
+  },
+  "AILimits": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "question": {
+     "type": "AIQuota",
+     "optional": false
+    },
+    "blocked": {
+     "type": "Bool",
+     "optional": false
+    },
+    "blockReason": {
+     "type": "String",
+     "optional": true
+    },
+    "resetsAt": {
+     "type": "String",
+     "optional": true
+    },
+    "configured": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "AIMentionExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "displayName": {
+     "type": "String",
+     "optional": false
+    },
+    "isTemplate": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "AIMentionProgram": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "AIMentions": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exercises": {
+     "type": "[AIMentionExercise]",
+     "optional": false
+    },
+    "programs": {
+     "type": "[AIMentionProgram]",
+     "optional": false
+    }
+   }
+  },
+  "AIPendingState": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "program": {
+     "type": "AIProgramDraft",
+     "optional": true
+    },
+    "questions": {
+     "type": "AISetupQuestion",
+     "optional": true
+    },
+    "actions": {
+     "type": "[AIUndoAction]",
+     "optional": true
+    }
+   }
+  },
+  "AIProgramDay": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "items": {
+     "type": "[AIProgramItem]",
+     "optional": false
+    }
+   }
+  },
+  "AIProgramDraft": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "draftId": {
+     "type": "String",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": true
+    },
+    "label": {
+     "type": "String",
+     "optional": false
+    },
+    "replacing": {
+     "type": "Bool",
+     "optional": false
+    },
+    "canTrainNow": {
+     "type": "Bool",
+     "optional": false
+    },
+    "days": {
+     "type": "[AIProgramDay]",
+     "optional": false
+    },
+    "notes": {
+     "type": "[String]",
+     "optional": false
+    },
+    "weeklySets": {
+     "type": "[AIProgramWeeklySets]",
+     "optional": true
+    },
+    "deloadEveryWeeks": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "AIProgramItem": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "sets": {
+     "type": "Int",
+     "optional": true
+    },
+    "repsMin": {
+     "type": "Int",
+     "optional": true
+    },
+    "repsMax": {
+     "type": "Int",
+     "optional": true
+    },
+    "target": {
+     "type": "String",
+     "optional": true
+    },
+    "progression": {
+     "type": "AIProgression",
+     "optional": true
+    }
+   }
+  },
+  "AIProgramSaveResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "programId": {
+     "type": "Int",
+     "optional": false
+    },
+    "dayCount": {
+     "type": "Int",
+     "optional": false
+    },
+    "replacing": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "AIProgramWeeklySets": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "group": {
+     "type": "String",
+     "optional": false
+    },
+    "sets": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "AIProgression": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "rule": {
+     "type": "String",
+     "optional": true
+    },
+    "step": {
+     "type": "Double",
+     "optional": true
+    },
+    "repsTop": {
+     "type": "Int",
+     "optional": true
+    },
+    "stepUnit": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "topRepsMin": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "topRepsMax": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "backoffSets": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "backoffPct": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "AIQuota": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "used": {
+     "type": "Int",
+     "optional": false
+    },
+    "limit": {
+     "type": "Int",
+     "optional": true
+    },
+    "remaining": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "AISetupQuestion": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "index": {
+     "type": "Int",
+     "optional": false
+    },
+    "total": {
+     "type": "Int",
+     "optional": false
+    },
+    "question": {
+     "type": "String",
+     "optional": false
+    },
+    "choices": {
+     "type": "[String]",
+     "optional": false
+    },
+    "skipLabel": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "AIThinkingTexts": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "topic": {
+     "type": "String",
+     "optional": false
+    },
+    "texts": {
+     "type": "[String]",
+     "optional": false
+    },
+    "intervalSeconds": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "AITrainPlan": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "items": {
+     "type": "[AITrainPlanItem]",
+     "optional": false
+    }
+   }
+  },
+  "AITrainPlanItem": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "displayName": {
+     "type": "String",
+     "optional": false
+    },
+    "target": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "AITrainResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "workout": {
+     "type": "Workout",
+     "optional": false
+    },
+    "plan": {
+     "type": "AITrainPlan",
+     "optional": false
+    }
+   }
+  },
+  "AIUndoAction": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "key": {
+     "type": "String",
+     "optional": false
+    },
+    "label": {
+     "type": "String",
+     "optional": false
+    },
+    "kind": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "APIClient.historyCalendar().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "days": {
+     "type": "[String:[Int]]",
+     "optional": false
+    }
+   }
+  },
+  "APIClient.nextTarget().Response": {
+   "file": "TrainingLog/Networking/APIClient.swift",
+   "fields": {
+    "hint": {
+     "type": "ProgressionHint",
+     "optional": true
+    }
+   }
+  },
+  "APIClient.reorderProgramDay().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "days": {
+     "type": "[Routine]",
+     "optional": false
+    }
+   }
+  },
+  "APIClient.reorderRoutineExercise().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "exercises": {
+     "type": "[RoutineExercise]",
+     "optional": false
+    }
+   }
+  },
+  "APIClient.requestWorkoutAIComment().Response": {
+   "file": "TrainingLog/Networking/APIClient.swift",
+   "fields": {
+    "comment": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "APIClient.supersetPartners().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "partners": {
+     "type": "[SupersetPartner]",
+     "optional": false
+    }
+   }
+  },
+  "APIClient.transcribeVoice().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "question": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "APIClient.undoAction().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "message": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "APIClient.updateExerciseNote().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "note": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "APIClient.workoutAIComment().Response": {
+   "file": "TrainingLog/Networking/APIClient.swift",
+   "fields": {
+    "comment": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "Achievement": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": true
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": false
+    },
+    "goal": {
+     "type": "String",
+     "optional": true
+    },
+    "earned": {
+     "type": "Bool",
+     "optional": false
+    },
+    "earnedAt": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "AchievementProgress": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": true
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": false
+    },
+    "goal": {
+     "type": "String",
+     "optional": true
+    },
+    "current": {
+     "type": "Double",
+     "optional": false
+    },
+    "target": {
+     "type": "Double",
+     "optional": false
+    },
+    "remaining": {
+     "type": "Double",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": true
+    },
+    "remainingText": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "AchievementStats": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "maxSets": {
+     "type": "Int",
+     "optional": true
+    },
+    "maxTonnage": {
+     "type": "Double",
+     "optional": true
+    },
+    "maxExercises": {
+     "type": "Int",
+     "optional": true
+    },
+    "maxBwReps": {
+     "type": "Int",
+     "optional": true
+    },
+    "distinctGroups": {
+     "type": "Int",
+     "optional": true
+    },
+    "hasSuperset": {
+     "type": "Bool",
+     "optional": true
+    },
+    "earlyWorkouts": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "AthleteProfile": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "experience": {
+     "type": "String",
+     "optional": true
+    },
+    "goal": {
+     "type": "String",
+     "optional": true
+    },
+    "equipment": {
+     "type": "[String]",
+     "optional": true
+    },
+    "limitations": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "BlockExercise": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "displayName": {
+     "type": "String",
+     "optional": false
+    },
+    "sets": {
+     "type": "[SetLog]",
+     "optional": false
+    },
+    "recordText": {
+     "type": "String",
+     "optional": true
+    },
+    "hasRecord": {
+     "type": "Bool",
+     "optional": true
+    },
+    "note": {
+     "type": "String",
+     "optional": true
+    },
+    "previousSetsText": {
+     "type": "String",
+     "optional": true
+    },
+    "e1rmText": {
+     "type": "String",
+     "optional": true
+    },
+    "groupTag": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "BodyweightEntry": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "loggedAt": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CatalogDay": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "exercises": {
+     "type": "[CatalogExercise]",
+     "optional": false
+    }
+   }
+  },
+  "CatalogExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "target": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "CatalogProgram": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "key": {
+     "type": "String",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "meta": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": false
+    },
+    "days": {
+     "type": "[CatalogDay]",
+     "optional": false
+    }
+   }
+  },
+  "CoachGreeting": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": true
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": true
+    },
+    "until": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "Dashboard": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "headline": {
+     "type": "String",
+     "optional": false
+    },
+    "rank": {
+     "type": "Dashboard.Rank",
+     "optional": false
+    },
+    "tiles": {
+     "type": "[Dashboard.Tile]",
+     "optional": false
+    },
+    "volume": {
+     "type": "Dashboard.Volume",
+     "optional": false
+    },
+    "lifts": {
+     "type": "Dashboard.Lifts",
+     "optional": false
+    },
+    "excludedWorkoutIds": {
+     "type": "[Int]",
+     "optional": true
+    },
+    "coachGreeting": {
+     "type": "CoachGreeting",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "Dashboard.Lifts": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "note": {
+     "type": "String",
+     "optional": false
+    },
+    "tiles": {
+     "type": "[Dashboard.Lifts.Tile]",
+     "optional": false
+    }
+   }
+  },
+  "Dashboard.Lifts.Tile": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "growth": {
+     "type": "String",
+     "optional": false
+    },
+    "detail": {
+     "type": "String",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "Dashboard.Rank": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "level": {
+     "type": "Int",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "Dashboard.Tile": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "label": {
+     "type": "String",
+     "optional": false
+    },
+    "value": {
+     "type": "String",
+     "optional": false
+    },
+    "sub": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "Dashboard.Volume": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "rows": {
+     "type": "[Dashboard.Volume.Row]",
+     "optional": false
+    }
+   }
+  },
+  "Dashboard.Volume.Row": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "group": {
+     "type": "String",
+     "optional": false
+    },
+    "sets": {
+     "type": "Int",
+     "optional": false
+    },
+    "status": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "Exercise": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "displayName": {
+     "type": "String",
+     "optional": false
+    },
+    "originalName": {
+     "type": "String",
+     "optional": true
+    },
+    "primaryGroupId": {
+     "type": "Int",
+     "optional": true
+    },
+    "equipment": {
+     "type": "String",
+     "optional": true
+    },
+    "unilateral": {
+     "type": "Bool",
+     "optional": false
+    },
+    "attachment": {
+     "type": "String",
+     "optional": true
+    },
+    "bodyweightLoad": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": true
+    },
+    "hasDescription": {
+     "type": "Bool",
+     "optional": true
+    },
+    "isArchived": {
+     "type": "Bool",
+     "optional": false
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true
+    },
+    "hasPhoto": {
+     "type": "Bool",
+     "optional": true
+    },
+    "setCount": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "ExerciseAlternative": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "templateId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ExerciseDescription": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "description": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseMedia": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "images": {
+     "type": "[String]",
+     "optional": false
+    },
+    "animation": {
+     "type": "String",
+     "optional": true
+    },
+    "hasMedia": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseMergeResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "mergeId": {
+     "type": "FlexibleID",
+     "optional": true,
+     "lenient": true
+    }
+   },
+   "custom_init": true,
+   "flatten": [
+    "Exercise"
+   ]
+  },
+  "ExerciseMergeUndoResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "restoredExerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "movedBackSets": {
+     "type": "Int",
+     "optional": true
+    },
+    "message": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ExerciseProgressEntry": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "workoutId": {
+     "type": "Int",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "reps": {
+     "type": "Int",
+     "optional": false
+    },
+    "rpe": {
+     "type": "Double",
+     "optional": true
+    },
+    "loadWeight": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseProgressSeries": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "metric": {
+     "type": "String",
+     "optional": false
+    },
+    "metricLabel": {
+     "type": "String",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": true
+    },
+    "points": {
+     "type": "[ExerciseProgressSeries.Point]",
+     "optional": false
+    },
+    "trend": {
+     "type": "ExerciseProgressSeries.Trend",
+     "optional": true
+    },
+    "records": {
+     "type": "ExerciseProgressSeries.Records",
+     "optional": true
+    },
+    "comparison": {
+     "type": "ExerciseProgressSeries.Comparison",
+     "optional": true
+    },
+    "hasRpe": {
+     "type": "Bool",
+     "optional": true
+    },
+    "excludedWorkoutIds": {
+     "type": "[Int]",
+     "optional": true
+    }
+   },
+   "custom_init": true
+  },
+  "ExerciseProgressSeries.Comparison": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "delta": {
+     "type": "Double",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseProgressSeries.Point": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "workoutId": {
+     "type": "Int",
+     "optional": false
+    },
+    "value": {
+     "type": "Double",
+     "optional": false
+    },
+    "topSet": {
+     "type": "String",
+     "optional": true
+    },
+    "sets": {
+     "type": "Int",
+     "optional": false
+    },
+    "note": {
+     "type": "String",
+     "optional": true
+    },
+    "setsText": {
+     "type": "String",
+     "optional": true
+    },
+    "maxWeight": {
+     "type": "Double",
+     "optional": true
+    },
+    "tonnage": {
+     "type": "Double",
+     "optional": true
+    }
+   }
+  },
+  "ExerciseProgressSeries.Records": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "bestWeight": {
+     "type": "Double",
+     "optional": false
+    },
+    "bestSet": {
+     "type": "String",
+     "optional": false
+    },
+    "bestE1Rm": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseProgressSeries.Trend": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "slopePerWeek": {
+     "type": "Double",
+     "optional": false
+    },
+    "totalChange": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseTemplateDetail": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "groupId": {
+     "type": "Int",
+     "optional": true
+    },
+    "description": {
+     "type": "String",
+     "optional": true
+    },
+    "media": {
+     "type": "ExerciseMedia",
+     "optional": false
+    }
+   }
+  },
+  "ExerciseTemplateSummary": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "groupId": {
+     "type": "Int",
+     "optional": true
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "FinishResponse": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "discarded": {
+     "type": "Bool",
+     "optional": true
+    },
+    "rewards": {
+     "type": "WorkoutRewards",
+     "optional": true
+    },
+    "aiCommentPending": {
+     "type": "Bool",
+     "optional": true
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "finishedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "routineId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "FlexibleID": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "kind": "scalar",
+   "accepts": [
+    "str",
+    "int"
+   ],
+   "reason": "init(from:) через singleValueContainer: строка или целое"
+  },
+  "HallOfFame": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "totalWorkouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "rank": {
+     "type": "HallOfFame.Rank",
+     "optional": true
+    },
+    "tonnage": {
+     "type": "HallOfFame.Tonnage",
+     "optional": false
+    },
+    "bestWeekStreak": {
+     "type": "Int",
+     "optional": false
+    },
+    "longestWorkoutSeconds": {
+     "type": "Double",
+     "optional": false
+    },
+    "topLifts": {
+     "type": "[HallOfFame.Lift]",
+     "optional": false
+    }
+   }
+  },
+  "HallOfFame.Lift": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "isBodyweight": {
+     "type": "Bool",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": true
+    },
+    "reps": {
+     "type": "Int",
+     "optional": false
+    },
+    "e1rm": {
+     "type": "Double",
+     "optional": true
+    },
+    "record": {
+     "type": "String",
+     "optional": false
+    },
+    "withBodyweight": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "HallOfFame.Rank": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "level": {
+     "type": "Int",
+     "optional": false
+    },
+    "gapText": {
+     "type": "String",
+     "optional": true
+    },
+    "nextName": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "HallOfFame.Tonnage": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "value": {
+     "type": "Double",
+     "optional": false
+    },
+    "equivalent": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ImportAchievement": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ImportBatch": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "batchId": {
+     "type": "FlexibleID",
+     "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "source": {
+     "type": "String",
+     "optional": true
+    },
+    "workouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "sets": {
+     "type": "Int",
+     "optional": false
+    },
+    "canUndo": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "ImportBatchesResponse": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "batches": {
+     "type": "[ImportBatch]",
+     "optional": false
+    }
+   }
+  },
+  "ImportDateRange": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "from": {
+     "type": "String",
+     "optional": false
+    },
+    "to": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ImportExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "status": {
+     "type": "String",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "ImportExerciseCandidate": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ImportPreview": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "workoutCount": {
+     "type": "Int",
+     "optional": false
+    },
+    "setCount": {
+     "type": "Int",
+     "optional": false
+    },
+    "dateRange": {
+     "type": "ImportDateRange",
+     "optional": true
+    },
+    "exercises": {
+     "type": "[ImportExercise]",
+     "optional": false
+    },
+    "duplicateDates": {
+     "type": "[String]",
+     "optional": false
+    },
+    "rowsSkipped": {
+     "type": "Int",
+     "optional": true
+    },
+    "rowsSkippedWarmup": {
+     "type": "Int",
+     "optional": true
+    },
+    "rowsSkippedNoLoad": {
+     "type": "Int",
+     "optional": true
+    },
+    "dateOrder": {
+     "type": "String",
+     "optional": true
+    },
+    "dateOrderAmbiguous": {
+     "type": "Bool",
+     "optional": true
+    },
+    "unrecognizedExercises": {
+     "type": "[ImportUnrecognizedExercise]",
+     "optional": true
+    },
+    "source": {
+     "type": "String",
+     "optional": true
+    },
+    "fileUnit": {
+     "type": "String",
+     "optional": true
+    },
+    "accountUnit": {
+     "type": "String",
+     "optional": true
+    },
+    "weightWarning": {
+     "type": "ImportWeightWarning",
+     "optional": true
+    },
+    "workouts": {
+     "type": "[ImportWorkoutRow]",
+     "optional": true
+    },
+    "workoutsTruncated": {
+     "type": "Bool",
+     "optional": true
+    },
+    "newWorkouts": {
+     "type": "Int",
+     "optional": true
+    },
+    "newSets": {
+     "type": "Int",
+     "optional": true
+    },
+    "allDuplicates": {
+     "type": "Bool",
+     "optional": true
+    },
+    "skipped": {
+     "type": "[ImportSkippedGroup]",
+     "optional": true
+    },
+    "warnings": {
+     "type": "[ImportWarning]",
+     "optional": true
+    }
+   }
+  },
+  "ImportResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "workoutsImported": {
+     "type": "Int",
+     "optional": false
+    },
+    "setsImported": {
+     "type": "Int",
+     "optional": false
+    },
+    "workoutsSkippedDuplicate": {
+     "type": "Int",
+     "optional": false
+    },
+    "workoutsFailed": {
+     "type": "Int",
+     "optional": false
+    },
+    "workoutsSkippedUnresolvedExercise": {
+     "type": "Int",
+     "optional": false
+    },
+    "skippedExercises": {
+     "type": "[String]",
+     "optional": false
+    },
+    "rowsSkipped": {
+     "type": "Int",
+     "optional": true
+    },
+    "rowsSkippedWarmup": {
+     "type": "Int",
+     "optional": true
+    },
+    "rowsSkippedNoLoad": {
+     "type": "Int",
+     "optional": true
+    },
+    "batchId": {
+     "type": "FlexibleID",
+     "optional": true
+    },
+    "achievementsUnlocked": {
+     "type": "LenientCount",
+     "optional": true
+    },
+    "achievements": {
+     "type": "[ImportAchievement]",
+     "optional": true
+    }
+   }
+  },
+  "ImportSkippedGroup": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "reason": {
+     "type": "String",
+     "optional": false
+    },
+    "count": {
+     "type": "Int",
+     "optional": false
+    },
+    "label": {
+     "type": "String",
+     "optional": true
+    },
+    "examples": {
+     "type": "[String]",
+     "optional": true
+    }
+   }
+  },
+  "ImportTextConversion": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "csv": {
+     "type": "String",
+     "optional": false
+    },
+    "setCount": {
+     "type": "Int",
+     "optional": false
+    },
+    "undatedSets": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "ImportUndoResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "removedWorkouts": {
+     "type": "Int",
+     "optional": true
+    },
+    "removedSets": {
+     "type": "Int",
+     "optional": true
+    },
+    "removedExercises": {
+     "type": "Int",
+     "optional": true
+    },
+    "message": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ImportUnrecognizedExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "suggestedExerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "candidates": {
+     "type": "[ImportExerciseCandidate]",
+     "optional": true
+    },
+    "needsChoice": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "ImportWarning": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "message": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ImportWeightWarning": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ImportWorkoutEntry": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "sets": {
+     "type": "Int",
+     "optional": false
+    },
+    "topWeightKg": {
+     "type": "Double",
+     "optional": false
+    },
+    "topWeightLb": {
+     "type": "Double",
+     "optional": false
+    },
+    "topReps": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "ImportWorkoutRow": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "entries": {
+     "type": "[ImportWorkoutEntry]",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": true
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "finishedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "duplicate": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "LenientCount": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "kind": "lenient",
+   "reason": "init(from:) через singleValueContainer: число, список или что угодно (иначе nil)"
+  },
+  "LinkResponse": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "token": {
+     "type": "String",
+     "optional": false
+    },
+    "userId": {
+     "type": "Int",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "lang": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "LoggedSets": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "sets": {
+     "type": "[SetLog]",
+     "optional": false
+    }
+   }
+  },
+  "Me": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "userId": {
+     "type": "Int",
+     "optional": false
+    },
+    "username": {
+     "type": "String",
+     "optional": true
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "lang": {
+     "type": "String",
+     "optional": false
+    },
+    "telegramLinked": {
+     "type": "Bool",
+     "optional": true
+    },
+    "appStoreUrl": {
+     "type": "String",
+     "optional": true
+    },
+    "isSupportAdmin": {
+     "type": "Bool",
+     "optional": true
+    },
+    "supportUnread": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "MuscleGroup": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": true
+    },
+    "daysAgo": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "MyShare": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "token": {
+     "type": "String",
+     "optional": false
+    },
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "url": {
+     "type": "String",
+     "optional": true
+    },
+    "startParam": {
+     "type": "String",
+     "optional": true
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": true
+    },
+    "opens": {
+     "type": "Int",
+     "optional": true
+    },
+    "takenCount": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "MySharesResponse": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "items": {
+     "type": "[MyShare]",
+     "optional": false
+    }
+   }
+  },
+  "NextExerciseSuggestions": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "suggested": {
+     "type": "SuggestedExercise",
+     "optional": true
+    },
+    "recent": {
+     "type": "[SuggestedExercise]",
+     "optional": false
+    }
+   }
+  },
+  "Program": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "source": {
+     "type": "String",
+     "optional": true
+    },
+    "dayCount": {
+     "type": "Int",
+     "optional": true
+    },
+    "lastTrainedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "sourceRef": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "ProgramDetail": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": true
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "source": {
+     "type": "String",
+     "optional": true
+    },
+    "sourceRef": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "days": {
+     "type": "[Routine]",
+     "optional": false
+    },
+    "deloadEveryWeeks": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "unarchived": {
+     "type": "[UnarchivedExercise]",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "ProgressionHint": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "achieved": {
+     "type": "Bool",
+     "optional": false
+    },
+    "targetWeight": {
+     "type": "Double",
+     "optional": false
+    },
+    "targetReps": {
+     "type": "Int",
+     "optional": false
+    },
+    "isBodyweight": {
+     "type": "Bool",
+     "optional": false
+    },
+    "isDeload": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
+    },
+    "role": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "RankLadder": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "ranks": {
+     "type": "[RankLadder.Rung]",
+     "optional": false
+    },
+    "currentLevel": {
+     "type": "Int",
+     "optional": false
+    },
+    "perWeek": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "RankLadder.Rung": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "level": {
+     "type": "Int",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "minWorkouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "minTonnageKg": {
+     "type": "Double",
+     "optional": false
+    },
+    "minPerWeek": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "Routine": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "programId": {
+     "type": "Int",
+     "optional": true
+    },
+    "programName": {
+     "type": "String",
+     "optional": true
+    },
+    "dayOrder": {
+     "type": "Int",
+     "optional": true
+    },
+    "exerciseCount": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "RoutineDetail": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "programId": {
+     "type": "Int",
+     "optional": true
+    },
+    "programName": {
+     "type": "String",
+     "optional": true
+    },
+    "exercises": {
+     "type": "[RoutineExercise]",
+     "optional": false
+    },
+    "formerProgramId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "formerPosition": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "RoutineExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "routineId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "displayName": {
+     "type": "String",
+     "optional": false
+    },
+    "orderIndex": {
+     "type": "Int",
+     "optional": false
+    },
+    "target": {
+     "type": "String",
+     "optional": true
+    },
+    "progression": {
+     "type": "AIProgression",
+     "optional": true
+    }
+   }
+  },
+  "SetLog": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "roundIndex": {
+     "type": "Int",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "reps": {
+     "type": "Int",
+     "optional": false
+    },
+    "rpe": {
+     "type": "Double",
+     "optional": true
+    },
+    "loadWeight": {
+     "type": "Double",
+     "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "isGold": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "Settings": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "lang": {
+     "type": "String",
+     "optional": false
+    },
+    "tzOffset": {
+     "type": "Int",
+     "optional": false
+    },
+    "tzSetByUser": {
+     "type": "Bool",
+     "optional": true
+    },
+    "tzFollowsDevice": {
+     "type": "Bool",
+     "optional": true
+    },
+    "e1rmFormula": {
+     "type": "String",
+     "optional": true
+    },
+    "pushesEnabled": {
+     "type": "Bool",
+     "optional": true
+    },
+    "aiCommentsEnabled": {
+     "type": "Bool",
+     "optional": true
+    },
+    "progressionHintEnabled": {
+     "type": "Bool",
+     "optional": true
+    },
+    "showExtraStats": {
+     "type": "Bool",
+     "optional": true
+    },
+    "aiConsent": {
+     "type": "Bool",
+     "optional": true
+    },
+    "lockScreenUsed": {
+     "type": "Bool",
+     "optional": true
+    },
+    "repRangeMin": {
+     "type": "Int",
+     "optional": true
+    },
+    "repRangeMax": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "ShareCard": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "token": {
+     "type": "String",
+     "optional": false
+    },
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "startParam": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "ShareImportResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "programId": {
+     "type": "Int",
+     "optional": true
+    },
+    "routineId": {
+     "type": "Int",
+     "optional": true
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "days": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "SharePreview": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "token": {
+     "type": "String",
+     "optional": false
+    },
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "isOwn": {
+     "type": "Bool",
+     "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": true
+    },
+    "program": {
+     "type": "SharedProgram",
+     "optional": true
+    },
+    "routine": {
+     "type": "SharedRoutine",
+     "optional": true
+    },
+    "exercise": {
+     "type": "SharedExercise",
+     "optional": true
+    }
+   }
+  },
+  "ShareRevokeResult": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "revoked": {
+     "type": "Bool",
+     "optional": false
+    },
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "takenCount": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "SharedDay": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "exercises": {
+     "type": "[SharedExerciseRef]",
+     "optional": false
+    }
+   }
+  },
+  "SharedExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "group": {
+     "type": "String",
+     "optional": true
+    },
+    "description": {
+     "type": "String",
+     "optional": true
+    },
+    "hasPhoto": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "SharedExerciseRef": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "target": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "SharedProgram": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": true
+    },
+    "days": {
+     "type": "[SharedDay]",
+     "optional": false
+    },
+    "daysInCard": {
+     "type": "Int",
+     "optional": true
+    },
+    "totalDays": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "SharedRoutine": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "exercises": {
+     "type": "[SharedExerciseRef]",
+     "optional": false
+    }
+   }
+  },
+  "SuggestedExercise": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "SupersetPartner": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "SupportMessage": {
+   "file": "TrainingLog/Models/SupportModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "from": {
+     "type": "String",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "photoUrl": {
+     "type": "String",
+     "optional": true
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "SupportMessageResponse": {
+   "file": "TrainingLog/Models/SupportModels.swift",
+   "fields": {
+    "message": {
+     "type": "SupportMessage",
+     "optional": false
+    }
+   }
+  },
+  "SupportMessagesResponse": {
+   "file": "TrainingLog/Models/SupportModels.swift",
+   "fields": {
+    "messages": {
+     "type": "[SupportMessage]",
+     "optional": false
+    },
+    "unread": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "SupportThread": {
+   "file": "TrainingLog/Models/SupportModels.swift",
+   "fields": {
+    "userId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": true
+    },
+    "lastText": {
+     "type": "String",
+     "optional": false
+    },
+    "lastFrom": {
+     "type": "String",
+     "optional": false
+    },
+    "lastAt": {
+     "type": "String",
+     "optional": false
+    },
+    "unread": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "SupportThreadsResponse": {
+   "file": "TrainingLog/Models/SupportModels.swift",
+   "fields": {
+    "threads": {
+     "type": "[SupportThread]",
+     "optional": false
+    }
+   }
+  },
+  "TelegramLinkCode": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "ttlMinutes": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "UnarchivedExercise": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "weekStart": {
+     "type": "String",
+     "optional": false
+    },
+    "weekEnd": {
+     "type": "String",
+     "optional": false
+    },
+    "closed": {
+     "type": "Bool",
+     "optional": false
+    },
+    "verdict": {
+     "type": "WeeklySummary.Verdict",
+     "optional": false
+    },
+    "workouts": {
+     "type": "WeeklySummary.Workouts",
+     "optional": false
+    },
+    "tonnage": {
+     "type": "WeeklySummary.Tonnage",
+     "optional": false
+    },
+    "records": {
+     "type": "WeeklySummary.Records",
+     "optional": false
+    },
+    "volume": {
+     "type": "WeeklySummary.Volume",
+     "optional": false
+    },
+    "topLift": {
+     "type": "WeeklySummary.TopLift",
+     "optional": true
+    },
+    "streakWeeks": {
+     "type": "Int",
+     "optional": false
+    },
+    "hint": {
+     "type": "String",
+     "optional": true
+    },
+    "nextDay": {
+     "type": "WeeklySummary.NextDay",
+     "optional": true
+    },
+    "coachText": {
+     "type": "WeeklySummary.CoachText",
+     "optional": true
+    }
+   }
+  },
+  "WeeklySummary.CoachText": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "writtenAt": {
+     "type": "String",
+     "optional": false
+    },
+    "stale": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.NextDay": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "programId": {
+     "type": "Int",
+     "optional": false
+    },
+    "programName": {
+     "type": "String",
+     "optional": false
+    },
+    "routineId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "exercises": {
+     "type": "[String]",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Records": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "count": {
+     "type": "Int",
+     "optional": false
+    },
+    "items": {
+     "type": "[WeeklySummary.Records.Item]",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Records.Item": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "best": {
+     "type": "String",
+     "optional": false
+    },
+    "e1rm": {
+     "type": "Double",
+     "optional": false
+    },
+    "gain": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Tonnage": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "this": {
+     "type": "Double",
+     "optional": false
+    },
+    "last": {
+     "type": "Double",
+     "optional": false
+    },
+    "label": {
+     "type": "String",
+     "optional": false
+    },
+    "lastLabel": {
+     "type": "String",
+     "optional": true
+    },
+    "deltaPct": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "WeeklySummary.TopLift": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "growth": {
+     "type": "String",
+     "optional": false
+    },
+    "detail": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Verdict": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "greeting": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "body": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Volume": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "min": {
+     "type": "Int",
+     "optional": false
+    },
+    "max": {
+     "type": "Int",
+     "optional": false
+    },
+    "rows": {
+     "type": "[WeeklySummary.Volume.Row]",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Volume.Row": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "group": {
+     "type": "String",
+     "optional": false
+    },
+    "sets": {
+     "type": "Int",
+     "optional": false
+    },
+    "last": {
+     "type": "Int",
+     "optional": false
+    },
+    "status": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Workouts": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "this": {
+     "type": "Int",
+     "optional": false
+    },
+    "last": {
+     "type": "Int",
+     "optional": true
+    },
+    "usual": {
+     "type": "Int",
+     "optional": true
+    },
+    "days": {
+     "type": "[Bool]",
+     "optional": false
+    }
+   }
+  },
+  "Workout": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "status": {
+     "type": "String",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "finishedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "note": {
+     "type": "String",
+     "optional": true
+    },
+    "blocks": {
+     "type": "[WorkoutBlock]",
+     "optional": true
+    },
+    "routineId": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "WorkoutBlock": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "type": {
+     "type": "String",
+     "optional": false
+    },
+    "exercises": {
+     "type": "[BlockExercise]",
+     "optional": false
+    }
+   }
+  },
+  "WorkoutDateChange": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "status": {
+     "type": "String",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "finishedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "note": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "WorkoutHistoryItem": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "status": {
+     "type": "String",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "finishedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "note": {
+     "type": "String",
+     "optional": true
+    },
+    "exerciseNames": {
+     "type": "[String]",
+     "optional": false
+    },
+    "setCount": {
+     "type": "Int",
+     "optional": false
+    },
+    "routineId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "WorkoutRewards": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "sets": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercises": {
+     "type": "Int",
+     "optional": false
+    },
+    "tonnage": {
+     "type": "String",
+     "optional": false
+    },
+    "tonnageEquivalent": {
+     "type": "String",
+     "optional": false
+    },
+    "newAchievements": {
+     "type": "[WorkoutRewards.Achievement]",
+     "optional": false
+    },
+    "rankPromotion": {
+     "type": "WorkoutRewards.RankPromotion",
+     "optional": true
+    },
+    "milestone": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "WorkoutRewards.Achievement": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "WorkoutRewards.RankPromotion": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "level": {
+     "type": "Int",
+     "optional": false
+    },
+    "emoji": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "WorkoutSearchItem": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "exerciseNames": {
+     "type": "[String]",
+     "optional": false
+    },
+    "setCount": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "WorkoutSearchPage": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "items": {
+     "type": "[WorkoutSearchItem]",
+     "optional": false
+    },
+    "total": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "WorkoutVisits": {
+   "file": "TrainingLog/Features/History/MonthlyWorkoutBars.swift",
+   "fields": {
+    "today": {
+     "type": "String",
+     "optional": false
+    },
+    "days": {
+     "type": "[String:Int]",
+     "optional": false
+    },
+    "excludedWorkoutIds": {
+     "type": "[Int]",
+     "optional": true
+    }
+   }
+  }
+ },
+ "endpoints": [
+  {
+   "swift": "APIClient.requestTelegramLinkCode",
+   "method": "POST",
+   "path": "/account/telegram-link-code",
+   "root": "TelegramLinkCode",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.achievements",
+   "method": "GET",
+   "path": "/achievements",
+   "root": "[Achievement]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.nearestAchievements",
+   "method": "GET",
+   "path": "/achievements/nearest",
+   "root": "[AchievementProgress]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.achievementStats",
+   "method": "GET",
+   "path": "/achievements/stats",
+   "root": "AchievementStats",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.askCoach",
+   "method": "POST",
+   "path": "/ai/ask",
+   "root": "AIAnswer",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.aiConversations",
+   "method": "GET",
+   "path": "/ai/conversations",
+   "root": "AIConversationsResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.aiConversation",
+   "method": "GET",
+   "path": "/ai/conversations/{}",
+   "root": "AIHistoryResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.aiHistory",
+   "method": "GET",
+   "path": "/ai/history",
+   "root": "AIHistoryResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.aiLimits",
+   "method": "GET",
+   "path": "/ai/limits",
+   "root": "AILimits",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.aiPending",
+   "method": "GET",
+   "path": "/ai/pending",
+   "root": "AIPendingState",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.saveProgram",
+   "method": "POST",
+   "path": "/ai/program/save",
+   "root": "AIProgramSaveResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.trainFromProgramDraft",
+   "method": "POST",
+   "path": "/ai/program/train",
+   "root": "AITrainResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.answerSetupQuestion",
+   "method": "POST",
+   "path": "/ai/questions/answer",
+   "root": "AIAnswer",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.aiThinkingTexts",
+   "method": "GET",
+   "path": "/ai/thinking",
+   "root": "AIThinkingTexts",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.undoAction",
+   "method": "POST",
+   "path": "/ai/undo",
+   "root": "APIClient.undoAction().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.askCoachAboutVideo",
+   "method": "POST",
+   "path": "/ai/video",
+   "root": "AIAnswer",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.transcribeVoice",
+   "method": "POST",
+   "path": "/ai/voice",
+   "root": "APIClient.transcribeVoice().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.authApple",
+   "method": "POST",
+   "path": "/auth/apple",
+   "root": "LinkResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.link",
+   "method": "POST",
+   "path": "/auth/link",
+   "root": "LinkResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.authPassword",
+   "method": "POST",
+   "path": "/auth/password",
+   "root": "LinkResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.bodyweight",
+   "method": "GET",
+   "path": "/bodyweight",
+   "root": "[BodyweightEntry]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.addBodyweight",
+   "method": "POST",
+   "path": "/bodyweight",
+   "root": "BodyweightEntry",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.dashboard",
+   "method": "GET",
+   "path": "/dashboard",
+   "root": "Dashboard",
+   "nullable": true
+  },
+  {
+   "swift": "APIClient.exerciseTemplates",
+   "method": "GET",
+   "path": "/exercise-templates",
+   "root": "[ExerciseTemplateSummary]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exerciseTemplate",
+   "method": "GET",
+   "path": "/exercise-templates/{}",
+   "root": "ExerciseTemplateDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.addExerciseTemplate",
+   "method": "POST",
+   "path": "/exercise-templates/{}/add",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.archivedExercises",
+   "method": "GET",
+   "path": "/exercises",
+   "root": "[Exercise]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exercises",
+   "method": "GET",
+   "path": "/exercises",
+   "root": "[Exercise]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.createExercise",
+   "method": "POST",
+   "path": "/exercises",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.mergeExercises",
+   "method": "POST",
+   "path": "/exercises/merge",
+   "root": "ExerciseMergeResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.undoExerciseMerge",
+   "method": "POST",
+   "path": "/exercises/merges/{}/undo",
+   "root": "ExerciseMergeUndoResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.nextExerciseSuggestions",
+   "method": "GET",
+   "path": "/exercises/next-suggestions",
+   "root": "NextExerciseSuggestions",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateExercise",
+   "method": "PATCH",
+   "path": "/exercises/{}",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exerciseAlternatives",
+   "method": "GET",
+   "path": "/exercises/{}/alternatives",
+   "root": "[ExerciseAlternative]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.archiveExercise",
+   "method": "POST",
+   "path": "/exercises/{}/archive",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exerciseDescription",
+   "method": "GET",
+   "path": "/exercises/{}/description",
+   "root": "ExerciseDescription",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exerciseMedia",
+   "method": "GET",
+   "path": "/exercises/{}/media",
+   "root": "ExerciseMedia",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exerciseProgress",
+   "method": "GET",
+   "path": "/exercises/{}/progress",
+   "root": "[ExerciseProgressEntry]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exerciseProgressSessions",
+   "method": "GET",
+   "path": "/exercises/{}/progress/sessions",
+   "root": "ExerciseProgressSeries",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.supersetPartners",
+   "method": "GET",
+   "path": "/exercises/{}/superset-partners",
+   "root": "APIClient.supersetPartners().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.unarchiveExercise",
+   "method": "POST",
+   "path": "/exercises/{}/unarchive",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.hallOfFame",
+   "method": "GET",
+   "path": "/hall-of-fame",
+   "root": "HallOfFame",
+   "nullable": true
+  },
+  {
+   "swift": "APIClient.rankLadder",
+   "method": "GET",
+   "path": "/hall-of-fame/rank-ladder",
+   "root": "RankLadder",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.importBatches",
+   "method": "GET",
+   "path": "/import/batches",
+   "root": "ImportBatchesResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.undoImportBatch",
+   "method": "POST",
+   "path": "/import/batches/{}/undo",
+   "root": "ImportUndoResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.importCSV",
+   "method": "POST",
+   "path": "/import/csv",
+   "root": "ImportResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.previewImport",
+   "method": "POST",
+   "path": "/import/csv/preview",
+   "root": "ImportPreview",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.convertImportText",
+   "method": "POST",
+   "path": "/import/text/convert",
+   "root": "ImportTextConversion",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.requestMcpLinkCode",
+   "method": "POST",
+   "path": "/mcp/link-code",
+   "root": "TelegramLinkCode",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.me",
+   "method": "GET",
+   "path": "/me",
+   "root": "Me",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.muscleGroups",
+   "method": "GET",
+   "path": "/muscle-groups",
+   "root": "[MuscleGroup]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.createMuscleGroup",
+   "method": "POST",
+   "path": "/muscle-groups",
+   "root": "MuscleGroup",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.clearAthleteProfile",
+   "method": "DELETE",
+   "path": "/profile",
+   "root": "AthleteProfile",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.athleteProfile",
+   "method": "GET",
+   "path": "/profile",
+   "root": "AthleteProfile",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.programs",
+   "method": "GET",
+   "path": "/programs",
+   "root": "[Program]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.createProgram",
+   "method": "POST",
+   "path": "/programs",
+   "root": "ProgramDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.programCatalog",
+   "method": "GET",
+   "path": "/programs/catalog",
+   "root": "[CatalogProgram]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.addCatalogProgram",
+   "method": "POST",
+   "path": "/programs/catalog/{}",
+   "root": "ProgramDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.program",
+   "method": "GET",
+   "path": "/programs/{}",
+   "root": "ProgramDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.renameProgram",
+   "method": "PATCH",
+   "path": "/programs/{}",
+   "root": "ProgramDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.setProgramDeload",
+   "method": "PATCH",
+   "path": "/programs/{}",
+   "root": "ProgramDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.addProgramDay",
+   "method": "POST",
+   "path": "/programs/{}/days",
+   "root": "Routine",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.mergeProgram",
+   "method": "POST",
+   "path": "/programs/{}/merge",
+   "root": "ProgramDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.nextProgramDay",
+   "method": "GET",
+   "path": "/programs/{}/next-day",
+   "root": "Routine",
+   "nullable": true
+  },
+  {
+   "swift": "APIClient.setRoutineExerciseProgression",
+   "method": "PATCH",
+   "path": "/routine-exercises/{}",
+   "root": "RoutineExercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.setRoutineExerciseTarget",
+   "method": "PATCH",
+   "path": "/routine-exercises/{}",
+   "root": "RoutineExercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.reorderRoutineExercise",
+   "method": "POST",
+   "path": "/routine-exercises/{}/reorder",
+   "root": "APIClient.reorderRoutineExercise().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.standaloneRoutines",
+   "method": "GET",
+   "path": "/routines",
+   "root": "[Routine]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.createRoutine",
+   "method": "POST",
+   "path": "/routines",
+   "root": "Routine",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.routine",
+   "method": "GET",
+   "path": "/routines/{}",
+   "root": "RoutineDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.detachRoutineFromProgram",
+   "method": "PATCH",
+   "path": "/routines/{}",
+   "root": "RoutineDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.renameRoutine",
+   "method": "PATCH",
+   "path": "/routines/{}",
+   "root": "RoutineDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.attachRoutine",
+   "method": "POST",
+   "path": "/routines/{}/attach",
+   "root": "RoutineDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.addRoutineExercise",
+   "method": "POST",
+   "path": "/routines/{}/exercises",
+   "root": "RoutineExercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.reorderProgramDay",
+   "method": "POST",
+   "path": "/routines/{}/reorder",
+   "root": "APIClient.reorderProgramDay().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.settings",
+   "method": "GET",
+   "path": "/settings",
+   "root": "Settings",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateSettings",
+   "method": "PATCH",
+   "path": "/settings",
+   "root": "Settings",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.shareExercise",
+   "method": "POST",
+   "path": "/share/exercises/{}",
+   "root": "ShareCard",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.myShares",
+   "method": "GET",
+   "path": "/share/mine",
+   "root": "MySharesResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.shareProgram",
+   "method": "POST",
+   "path": "/share/programs/{}",
+   "root": "ShareCard",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.shareRoutine",
+   "method": "POST",
+   "path": "/share/routines/{}",
+   "root": "ShareCard",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.revokeShare",
+   "method": "DELETE",
+   "path": "/share/{}",
+   "root": "ShareRevokeResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.sharePreview",
+   "method": "GET",
+   "path": "/share/{}",
+   "root": "SharePreview",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.importShare",
+   "method": "POST",
+   "path": "/share/{}/import",
+   "root": "ShareImportResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.supportMessages",
+   "method": "GET",
+   "path": "/support/messages",
+   "root": "SupportMessagesResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.sendSupportMessage",
+   "method": "POST",
+   "path": "/support/messages",
+   "root": "SupportMessageResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.supportThreads",
+   "method": "GET",
+   "path": "/support/threads",
+   "root": "SupportThreadsResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.supportThreadMessages",
+   "method": "GET",
+   "path": "/support/threads/{}/messages",
+   "root": "SupportMessagesResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.replyToSupportThread",
+   "method": "POST",
+   "path": "/support/threads/{}/messages",
+   "root": "SupportMessageResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.weeklySummary",
+   "method": "GET",
+   "path": "/weekly-summary",
+   "root": "WeeklySummary",
+   "nullable": true
+  },
+  {
+   "swift": "APIClient.workoutHistory",
+   "method": "GET",
+   "path": "/workouts",
+   "root": "[WorkoutHistoryItem]",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.activeWorkout",
+   "method": "GET",
+   "path": "/workouts/active",
+   "root": "Workout",
+   "nullable": true
+  },
+  {
+   "swift": "APIClient.startWorkout",
+   "method": "POST",
+   "path": "/workouts/active",
+   "root": "Workout",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.startWorkoutReportingCreation",
+   "method": "POST",
+   "path": "/workouts/active",
+   "root": "Workout",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.backfillWorkout",
+   "method": "GET",
+   "path": "/workouts/backfill",
+   "root": "Workout",
+   "nullable": true
+  },
+  {
+   "swift": "APIClient.startBackfill",
+   "method": "POST",
+   "path": "/workouts/backfill",
+   "root": "Workout",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.historyCalendar",
+   "method": "GET",
+   "path": "/workouts/calendar",
+   "root": "APIClient.historyCalendar().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.searchWorkouts",
+   "method": "GET",
+   "path": "/workouts/search",
+   "root": "WorkoutSearchPage",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.workoutVisits",
+   "method": "GET",
+   "path": "/workouts/visits",
+   "root": "WorkoutVisits",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.workout",
+   "method": "GET",
+   "path": "/workouts/{}",
+   "root": "Workout",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.workoutAIComment",
+   "method": "GET",
+   "path": "/workouts/{}/ai-comment",
+   "root": "APIClient.workoutAIComment().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.requestWorkoutAIComment",
+   "method": "POST",
+   "path": "/workouts/{}/ai-comment",
+   "root": "APIClient.requestWorkoutAIComment().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateWorkoutDate",
+   "method": "PATCH",
+   "path": "/workouts/{}/date",
+   "root": "WorkoutDateChange",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.nextTarget",
+   "method": "GET",
+   "path": "/workouts/{}/exercises/{}/next-target",
+   "root": "APIClient.nextTarget().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateExerciseNote",
+   "method": "PATCH",
+   "path": "/workouts/{}/exercises/{}/note",
+   "root": "APIClient.updateExerciseNote().Response",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.addWorkoutSet",
+   "method": "POST",
+   "path": "/workouts/{}/exercises/{}/sets",
+   "root": "SetLog",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.finishWorkout",
+   "method": "POST",
+   "path": "/workouts/{}/finish",
+   "root": "FinishResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateWorkoutNote",
+   "method": "PATCH",
+   "path": "/workouts/{}/note",
+   "root": "Workout",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.repeatWorkout",
+   "method": "POST",
+   "path": "/workouts/{}/repeat",
+   "root": "Workout",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.createRoutineFromWorkout",
+   "method": "POST",
+   "path": "/workouts/{}/routines",
+   "root": "RoutineDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.logSet",
+   "method": "POST",
+   "path": "/workouts/{}/sets",
+   "root": "SetLog",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.logSets",
+   "method": "POST",
+   "path": "/workouts/{}/sets/parse",
+   "root": "LoggedSets",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateSet",
+   "method": "PATCH",
+   "path": "/workouts/{}/sets/{}",
+   "root": "SetLog",
+   "nullable": false
+  }
+ ],
+ "_ios_commit": "ec81d0415d190f2c087a201b12bcb88af6a1c9fe"
+}
