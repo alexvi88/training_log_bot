@@ -2521,3 +2521,42 @@ async def test_history_and_archive_hide_setup_prompt(fresh_db, client_factory, m
     assert "propose_program" not in archived["title"]
     conv = (await client.get(f"/ai/conversations/{archived['id']}")).json()["messages"]
     assert conv[0]["text"] == shown
+
+
+@pytest.mark.asyncio
+async def test_second_edit_without_replaces_program_still_replaces(fresh_db, client_factory, monkeypatch):
+    """Повторная правка превью без replaces_program: replaces переносится из
+    прошлого черновика, сохранение идёт в ту же программу без конфликта имён."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program("Фуллбоди"))
+    client = await _linked_client(fresh_db, client_factory)
+    first = await client.post(
+        "/ai/program/save", json={"draft_id": await _ask_and_get_draft_id(client)}
+    )
+    program_id = first.json()["program_id"]
+
+    calls = iter([True, False])
+
+    async def fake_ask(user_id, question, history, on_program=None, **kwargs):
+        tool_input = {
+            "name": "Фуллбоди",
+            "description": "Описание.",
+            "days": [{"name": "День 1", "exercises": [{"name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 8}]}],
+        }
+        if next(calls):
+            tool_input["replaces_program"] = "Фуллбоди"
+        await ai_trainer.execute_tool(user_id, "propose_program", tool_input, on_program=on_program)
+        return "Поправил."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    await client.post("/ai/ask", json={"question": "поправь"})
+    resp = await client.post("/ai/ask", json={"question": "ещё раз"})
+    program = resp.json()["program"]
+    assert program["replacing"] is True
+
+    saved = await client.post("/ai/program/save", json={"draft_id": program["draft_id"]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["replacing"] is True
+    assert saved.json()["program_id"] == program_id
+    programs = await fresh_db.list_programs(111)
+    assert len([p for p in programs if p["name"] == "Фуллбоди"]) == 1

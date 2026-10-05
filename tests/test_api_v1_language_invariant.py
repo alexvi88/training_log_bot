@@ -158,6 +158,9 @@ class _Walker:
         self.lang = lang
         self.walked: set[str] = set()
         self.violations: list[str] = []
+        # Каждый JSON-ответ как есть — для контрактного теста с моделями
+        # приложения (test_api_v1_ios_contract), он идёт тем же сценарием.
+        self.responses: list[dict[str, Any]] = []
 
     async def call(self, method: str, path: str, *, expect: int | tuple[int, ...] | None = None, **kwargs):
         route = _route_for(method, path.split("?")[0])
@@ -172,6 +175,9 @@ class _Walker:
         if route in NON_JSON or not resp.headers.get("content-type", "").startswith("application/json"):
             return resp
         body = resp.json()
+        self.responses.append({
+            "method": method, "route": route, "path": path, "status": resp.status_code, "body": body,
+        })
         for v in language_violations(body, self.lang):
             self.violations.append(f"{method} {path} [{resp.status_code}]: {v}")
         return resp
@@ -360,6 +366,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     w = _Walker(client, lang)
     w.walked |= anon_walker.walked
     w.violations += anon_walker.violations
+    w.responses += anon_walker.responses
     resp = await w.call("POST", "/auth/link", json={"code": code}, expect=200)
     client.headers["Authorization"] = f"Bearer {resp.json()['token']}"
 

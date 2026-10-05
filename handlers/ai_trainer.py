@@ -1366,7 +1366,13 @@ async def _program_draft(
         or draft.get("id") is None
         or str(draft.get("id")) != draft_id
     ):
-        await callback.answer(_program_gone_text(), show_alert=True)
+        # Живой черновик есть, но кнопка не его — это старая версия, которую
+        # тренер уже переделал: говорим именно это, а не «неактуально».
+        superseded = bool(draft and draft.get("days") and draft.get("id") is not None)
+        await callback.answer(
+            i18n.t("ai.screen.program_superseded") if superseded else _program_gone_text(),
+            show_alert=True,
+        )
         return None
     return draft
 
@@ -2193,6 +2199,12 @@ async def _handle_question(
     # Черновик по-прежнему пропадает — но только явно: по ai:prog:save или
     # ai:prog:drop, либо будучи заменённым новым предложением здесь же.
     if program_draft:
+        # Повторная правка превью правки сохранённой программы: модель часто не
+        # передаёт replaces_program второй раз — переносим из прошлого черновика.
+        previous_draft = (await state.get_data()).get("ai_program_draft")
+        program_draft.update(
+            await ai_trainer.carry_over_replaces(user_id, previous_draft, dict(program_draft))
+        )
         # 5.2: id в callback_data — то, чем кнопка под ЭТИМ ответом отличается
         # от кнопки под более старым. Случайный токен, а не счётчик в FSM:
         # счётчик не входил в _WORKOUT_SCAFFOLD_KEYS и гиб при каждом походе в
@@ -2202,6 +2214,7 @@ async def _handle_question(
         # обязан не повторяться никогда; 8 hex-символов спокойно влезают в
         # 64 байта callback_data.
         program_draft["id"] = secrets.token_hex(4)
+        program_draft["created_at"] = db.now_iso()
         await state.update_data(ai_history=history, ai_program_draft=program_draft)
     else:
         await state.update_data(ai_history=history)
