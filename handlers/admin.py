@@ -604,6 +604,7 @@ _KIND_LABELS = {
     "cpu_exception": "перерасход CPU",
     "disk_write_exception": "запись на диск",
     "keychain_save_failed": "Keychain не сохранил вход",
+    "storage_failure": "сбой файла очереди на телефоне",
 }
 
 

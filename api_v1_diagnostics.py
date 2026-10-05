@@ -9,7 +9,7 @@ MetricKit отдаёт приложению те же диагностики (`M
 **Тело** — одна диагностика на запрос:
 
     {"kind": "crash" | "hang" | "cpu_exception" | "disk_write_exception"
-             | "keychain_save_failed",
+             | "keychain_save_failed" | "storage_failure",
      "payload": {...},              # diagnostic.jsonRepresentation() как есть
      "app_version": "1.4", "build": "57", "os_version": "17.5.1",
      "device": "iPhone15,2"}
@@ -74,7 +74,15 @@ MAX_BODY_BYTES = 256 * 1024
 # Токен тогда живёт только в памяти, и на следующем холодном старте человека
 # выкидывает на экран входа. Payload — `{"osStatus": <код>, "account": ...}`,
 # без токена и без данных атлета: нужно знать масштаб на живых устройствах.
-KINDS = frozenset({"crash", "hang", "cpu_exception", "disk_write_exception", "keychain_save_failed"})
+#
+# `storage_failure` — тоже клиентский: файл офлайн-очереди или локальной
+# тренировки на телефоне не прочитался или не записался (подходы без связи
+# под угрозой). Payload — `{"store": "pending_sets" | "local_workout" | ..., "op":
+# "read" | "write" | "decode", "error": <тип ошибки, без данных атлета>}`.
+KINDS = frozenset({
+    "crash", "hang", "cpu_exception", "disk_write_exception", "keychain_save_failed",
+    "storage_failure",
+})
 
 RATE_WINDOW_SECONDS = 3600
 RATE_LIMIT_PER_IP = 60

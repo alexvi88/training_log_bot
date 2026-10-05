@@ -296,6 +296,7 @@ _CRASH_KIND_LABELS = {
     "cpu_exception": "Перерасход CPU",
     "disk_write_exception": "Запись на диск",
     "keychain_save_failed": "Keychain не сохранил вход",
+    "storage_failure": "Файл очереди на телефоне не прочитался или не записался",
 }
 
 

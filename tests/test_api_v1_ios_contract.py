@@ -668,20 +668,24 @@ def test_swift_key_matches_foundation():
 
 
 def test_checker_catches_the_original_bug():
-    """Тот самый случай: null у обязательной String во вложенном объекте."""
+    """Тот самый класс бага: null у обязательной String во вложенном объекте.
+
+    Исходный случай был с `tonnageEquivalent`; приложение сделало его
+    необязательным (iOS #703), и пример переехал на `tonnage` — всё ещё
+    обязательную строку в том же объекте. Проверяется сам `WorkoutRewards`:
+    в `FinishResponse` блок итогов читается терпимо (`rewards` — `lenient`)."""
     checker = Checker(MANIFEST)
-    rewards = {"sets": 1, "exercises": 1, "tonnage": "0 kg", "tonnage_equivalent": None, "new_achievements": []}
-    body = {"rewards": rewards, "ai_comment_pending": True}
-    problems = checker.check(body, "FinishResponse")
-    assert [(p[0], p[1]) for p in problems] == [("$.rewards.tonnageEquivalent", "null")]
+    rewards = {"sets": 1, "exercises": 1, "tonnage": None, "tonnage_equivalent": None, "new_achievements": []}
+    problems = checker.check(rewards, "WorkoutRewards")
+    assert [(p[0], p[1]) for p in problems] == [("$.tonnage", "null")]
     # Оба других класса: нет ключа и неверный тип (bool — не Int).
-    del rewards["tonnage_equivalent"]
+    del rewards["tonnage"]
     rewards["sets"] = True
-    kinds = {(p[0], p[1].split(":")[0]) for p in checker.check(body, "FinishResponse")}
-    assert kinds == {("$.rewards.tonnageEquivalent", "missing"), ("$.rewards.sets", "тип")}
+    kinds = {(p[0], p[1].split(":")[0]) for p in checker.check(rewards, "WorkoutRewards")}
+    assert kinds == {("$.tonnage", "missing"), ("$.sets", "тип")}
     # Необязательное поле null и лишний ключ сервера — не расхождение.
-    rewards.update(sets=1, tonnage_equivalent="", milestone=None, extra=1)
-    assert checker.check(body, "FinishResponse") == []
+    rewards.update(sets=1, tonnage="0 kg", tonnage_equivalent=None, milestone=None, extra=1)
+    assert checker.check(rewards, "WorkoutRewards") == []
 
 
 def test_every_client_path_has_a_server_route():
