@@ -16,7 +16,6 @@ import logging
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import account_deletion
@@ -27,6 +26,7 @@ import config
 import db
 import fsm_unit_rescale
 import i18n
+from api_v1_common import JSONResponse
 from workout_edit_data import move_workout_to_date, on_workout_edited
 
 logger = logging.getLogger(__name__)

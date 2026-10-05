@@ -23,7 +23,6 @@ from __future__ import annotations
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import api_v1_common as common
@@ -34,6 +33,7 @@ import exercise_descriptions
 import exercise_media
 import i18n
 import seed_data
+from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
 _authed_user_id = common.authed_user_id

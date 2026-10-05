@@ -32,7 +32,6 @@ import datetime as dt
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import analytics
@@ -43,7 +42,7 @@ import keyboards
 import progress_data
 import progression_data
 import timeutil
-from api_v1_common import ApiError, authed_user, authed_user_id, query_excluded_workouts, query_int
+from api_v1_common import ApiError, JSONResponse, authed_user, authed_user_id, query_excluded_workouts, query_int
 
 # Потолок `limit`. Бот под кнопкой «все» шлёт 9999 (keyboards.progress_chart_keyboard),
 # так что потолок обязан быть выше — иначе «все» молча превратилось бы в «часть».

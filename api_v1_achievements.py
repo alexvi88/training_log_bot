@@ -34,7 +34,6 @@ from __future__ import annotations
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import achievement_sync
@@ -43,7 +42,7 @@ import config
 import db
 import formatting
 import i18n
-from api_v1_common import authed_user, query_int
+from api_v1_common import JSONResponse, authed_user, query_int
 
 
 def _achievement_json(a: "achievements.Achievement", earned_at: str | None) -> dict[str, Any]:

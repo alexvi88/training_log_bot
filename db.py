@@ -11025,8 +11025,9 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
     """Multiply every stored bodyweight by `factor` — used when a user switches units."""
     async with _write_lock:
         await conn().execute(
-            "UPDATE bodyweight_logs SET weight = ROUND(weight * ?, 1) WHERE telegram_id = ?",
-            (factor, telegram_id),
+            f"UPDATE bodyweight_logs SET weight = {_convert_weight_sql('weight')} "
+            "WHERE telegram_id = ?",
+            (factor, factor, factor, factor, telegram_id),
         )
         await conn().commit()
 
@@ -11127,25 +11128,35 @@ async def count_food_days(telegram_id: int) -> int:
     return count
 
 
+_WEIGHT_GRID = 0.05
+_WEIGHT_SNAP_TOLERANCE = 1e-6
+_WEIGHT_DECIMALS = 8
+
+
 def convert_weight(value: float, factor: float) -> float:
-    """Вес при смене кг↔lb: 4 знака, а не 1, чтобы круг кг→lb→кг не дрейфовал.
+    """Вес при смене кг↔lb без дрейфа: хранится с 8 знаками, а не с 1.
 
     ROUND(…, 1) на каждом переключении съедал по ~0.05 (135 lb → кг → lb =
-    134.9, 1.25 кг → 1.30) и накапливался. Показ и так округляет сам. Если
-    результат в пределах 0.0005 от «круглого» (2 знака) — берём круглое: так
-    ошибка округления до 4 знаков в промежуточной единице не просачивается на
-    обратном пути, и 135 lb возвращаются ровно 135.0.
+    134.9, 1.25 кг → 1.30) и накапливался. Показ и так округляет сам. Чтобы
+    круг возвращал ровно исходное, результат в пределах 1e-6 от сетки 0.05
+    (в неё попадают все блины и шаги 0.25/0.5/1.25/2.5) берётся с сетки:
+    ошибка округления промежуточной единицы (~1e-8) на обратном пути гасится.
+    Допуск намеренно в сотни раз меньше шага сетки — настоящий вес рядом с
+    сеткой не «прилипает».
     """
     raw = value * factor
-    snapped = round(raw, 2)
-    return snapped if abs(raw - snapped) < 0.0005 else round(raw, 4)
+    snapped = round(round(raw / _WEIGHT_GRID) * _WEIGHT_GRID, 2)
+    if abs(raw - snapped) < _WEIGHT_SNAP_TOLERANCE:
+        return snapped
+    return round(raw, _WEIGHT_DECIMALS)
 
 
 def _convert_weight_sql(column: str) -> str:
-    """SQL-зеркало convert_weight (параметр — factor, подставляется 3 раза)."""
+    """SQL-зеркало convert_weight (параметр — factor, подставляется 4 раза)."""
+    snapped = f"ROUND(ROUND({column} * ? / {_WEIGHT_GRID}, 0) * {_WEIGHT_GRID}, 2)"
     return (
-        f"CASE WHEN ABS({column} * ? - ROUND({column} * ?, 2)) < 0.0005 "
-        f"THEN ROUND({column} * ?, 2) ELSE ROUND({column} * ?, 4) END"
+        f"CASE WHEN ABS({column} * ? - {snapped}) < {_WEIGHT_SNAP_TOLERANCE} "
+        f"THEN {snapped} ELSE ROUND({column} * ?, {_WEIGHT_DECIMALS}) END"
     )
 
 
@@ -11304,9 +11315,9 @@ def scale_ai_undo_weights(undo: Any, factor: float) -> bool:
     if kind == "bodyweight_restore":
         weight = undo.get("weight")
         if isinstance(weight, (int, float)) and not isinstance(weight, bool):
-            # ROUND(…, 1) — как у scale_bodyweight_logs: откат вернёт ровно
+            # convert_weight — как у scale_bodyweight_logs: откат вернёт ровно
             # то число, что стоит у соседних, уже пересчитанных взвешиваний.
-            undo["weight"] = round(weight * factor, 1)
+            undo["weight"] = convert_weight(weight, factor)
             return True
     return False
 

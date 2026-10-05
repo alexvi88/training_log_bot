@@ -30,13 +30,12 @@ import uuid
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import db
 import i18n
 import review_demo
-from api_v1_common import ApiError
+from api_v1_common import ApiError, JSONResponse
 
 # Белый список шагов. Меняется вместе с приложением (FunnelTracker.swift в
 # training_log_bot_ios) — новый шаг сначала сюда, иначе сервер его отвергнет.

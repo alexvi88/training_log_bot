@@ -21,7 +21,7 @@ import datetime as dt
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.routing import Route
 
 import api_v1_common as common
@@ -29,6 +29,7 @@ import csv_export
 import db
 import timeutil
 import workout_card
+from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
 _authed_user_id = common.authed_user_id

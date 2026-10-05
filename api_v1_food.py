@@ -16,7 +16,6 @@ import datetime as dt
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import ai_limits
@@ -27,6 +26,7 @@ import config
 import db
 import i18n
 import timeutil
+from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
 

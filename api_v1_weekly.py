@@ -15,14 +15,13 @@ from __future__ import annotations
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import analytics
 import i18n
 import timeutil
 import weekly_summary
-from api_v1_common import ApiError, authed_user, parse_date
+from api_v1_common import ApiError, JSONResponse, authed_user, parse_date
 
 
 def summary_json(s: weekly_summary.WeeklySummary) -> dict[str, Any]:

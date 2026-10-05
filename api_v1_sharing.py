@@ -25,11 +25,11 @@ import json
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import api_v1_common as common
 import db
+from api_v1_common import JSONResponse
 from handlers import sharing
 
 ApiError = common.ApiError

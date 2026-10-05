@@ -24,7 +24,6 @@ import sqlite3
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import ai_trainer
@@ -35,6 +34,7 @@ import db
 import formatting
 import i18n
 import seed_data
+from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
 _PROGRESSION_RULES = ai_trainer.PROGRESSION_RULES
@@ -211,8 +211,8 @@ def _validated_progression(progression: dict[str, Any], unit: str) -> dict[str, 
         raise bad
     if len(json.dumps(progression, ensure_ascii=False).encode("utf-8")) > _PROGRESSION_MAX_JSON_BYTES:
         raise bad
-    if "step" in progression:
-        step = progression["step"]
+    step = progression.get("step")
+    if step is not None:  # step: null — «шага нет», как у iOS без поля
         if (
             isinstance(step, bool) or not isinstance(step, (int, float))
             or step <= 0 or step > analytics.progression_max_step(unit)

@@ -119,7 +119,7 @@ async def test_scale_bodyweight_logs(user_id):
     await dbmod.add_bodyweight_log(user_id, 100.0, logged_at="2026-01-01T10:00:00")
     await dbmod.scale_bodyweight_logs(user_id, 2.20462)
     latest = await dbmod.get_latest_bodyweight(user_id)
-    assert latest["weight"] == pytest.approx(220.5)  # rounded to 1 decimal
+    assert latest["weight"] == pytest.approx(220.462, abs=1e-4)  # convert_weight, не 1 знак
 
 
 # ---------- screen text ----------

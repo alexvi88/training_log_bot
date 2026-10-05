@@ -33,7 +33,6 @@ from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import achievement_sync
@@ -78,6 +77,7 @@ import server_timing
 import timeutil
 import view_builder
 import voice_parse
+from api_v1_common import JSONResponse
 from workout_edit_data import on_workout_edited
 
 logger = logging.getLogger(__name__)

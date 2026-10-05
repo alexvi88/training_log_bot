@@ -259,3 +259,63 @@ async def test_note_keeps_newline_drops_nul(fresh_db, client_factory):
     resp = await client.patch(f"/workouts/{wid}/note", json={"note": "строка1\x00\nстрока2\x1b"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["note"] == "строка1\nстрока2"
+
+
+# ---------- 5: реальные формы правил (AI-тренер, каталог, iOS AIProgression) ----------
+
+REAL_RULES = [
+    {"rule": "double_progression", "step": 2.5, "reps_top": 12},
+    {"rule": "double_progression", "reps_top": 12},
+    {"rule": "linear_load", "step": 2.5},
+    {"rule": "linear_load", "step": 0.25},
+    {"rule": "top_set_backoff", "step": 2.5, "top_reps_min": 3, "top_reps_max": 5,
+     "backoff_sets": 3, "backoff_pct": 85},
+    {"rule": "top_set_backoff", "top_reps_min": 1, "top_reps_max": 5, "backoff_sets": 3, "backoff_pct": 85},
+    # упражнения на время: шаг в секундах, потолок — тот же общий (15 сек ≪ 25)
+    {"rule": "double_progression", "reps_top": 60, "step": 5, "step_unit": "sec"},
+    {"rule": "double_progression", "reps_top": 60, "step": 15, "step_unit": "sec"},
+    # iOS при копировании дня шлёт всё, что пришло, возможно с null
+    {"rule": "linear_load", "step": None, "reps_top": None, "step_unit": None},
+    {"rule": None, "step": 2.5},
+]
+
+
+@pytest.mark.parametrize("rule", REAL_RULES)
+async def test_real_progression_shapes_are_accepted(fresh_db, client_factory, rule):
+    client = await _client(fresh_db, client_factory)
+    _, item_id = await _routine_item(fresh_db, client)
+    resp = await client.patch(f"/routine-exercises/{item_id}", json={"progression": rule})
+    assert resp.status_code == 200, resp.text
+
+
+async def test_lb_athlete_stored_step_roundtrips_through_patch(fresh_db, client_factory):
+    """Шаг 2.5 кг после перехода на lb = 5.5116 — его же приложение шлёт назад
+    при копировании дня; потолок для lb выше кг-шного."""
+    import analytics
+    import db as dbmod
+
+    client = await _client(fresh_db, client_factory)
+    await fresh_db.update_user(111, unit="lb")
+    _, item_id = await _routine_item(fresh_db, client)
+    top = analytics.progression_max_step("lb")
+    for step in (dbmod.convert_weight(2.5, 2.20462), top):
+        resp = await client.patch(
+            f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": step}}
+        )
+        assert resp.status_code == 200, resp.text
+
+
+async def test_ai_clean_progression_output_is_always_accepted(fresh_db, client_factory):
+    import ai_trainer
+
+    client = await _client(fresh_db, client_factory)
+    _, item_id = await _routine_item(fresh_db, client)
+    raws = [
+        {"rule": "double_progression", "reps_top": 10, "step": 99},
+        {"rule": "linear_load", "step": 1000},
+        {"rule": "top_set_backoff", "top_reps_min": 9, "top_reps_max": 1, "backoff_sets": 50, "backoff_pct": 5},
+    ]
+    for raw in raws:
+        cleaned = ai_trainer._clean_progression(raw, "kg")
+        resp = await client.patch(f"/routine-exercises/{item_id}", json={"progression": cleaned})
+        assert resp.status_code == 200, (cleaned, resp.text)

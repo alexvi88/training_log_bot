@@ -19,7 +19,7 @@ import uuid
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse as _StarletteJSONResponse
 
 import config
 import db
@@ -57,6 +57,31 @@ def ai_consent_given(request: Request, user: Any) -> bool:
     ):
         return True
     return user is not None and bool(user["ai_consent_at"])
+
+def _round_floats(value: Any) -> Any:
+    """Все дробные в ответе — до 2 знаков.
+
+    Вес хранится с 8 знаками (db.convert_weight: иначе круг кг↔lb дрейфует), а
+    приложение сравнивает и подставляет сырой Double (`abs(delta) >= 0.05`,
+    lastWeight живой активности уходит обратно в подход) — хвост
+    «61.23496133» ему показывать незачем. Два знака ниже любой цены блина.
+    """
+    if isinstance(value, float):
+        return round(value, 2) if math.isfinite(value) else value
+    if isinstance(value, dict):
+        return {k: _round_floats(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_round_floats(v) for v in value]
+    return value
+
+
+class JSONResponse(_StarletteJSONResponse):
+    """JSONResponse `/v1`: дробные округляются до 2 знаков (_round_floats).
+    Все модули api_v1_* берут этот класс отсюда, а не из starlette."""
+
+    def render(self, content: Any) -> bytes:
+        return super().render(_round_floats(content))
+
 
 class ApiError(Exception):
     """Ошибка `/v1`: машинный `code`, машинная `message` и человеческий текст.
