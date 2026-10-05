@@ -347,3 +347,143 @@ async def test_ai_clean_progression_output_is_always_accepted(fresh_db, client_f
         cleaned = ai_trainer._clean_progression(raw, "kg")
         resp = await client.patch(f"/routine-exercises/{item_id}", json={"progression": cleaned})
         assert resp.status_code == 200, (cleaned, resp.text)
+
+
+# ---------- округлённое число вернулось от клиента: хранимое точное не затираем ----------
+
+async def _unit_switch(client, unit):
+    resp = await client.patch("/settings", json={"unit": unit})
+    assert resp.status_code == 200, resp.text
+
+
+async def test_set_edit_echoing_rounded_weight_keeps_exact_value(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    await _unit_switch(client, "lb")
+    wid, ex_id = await _open_workout_with_exercise(fresh_db, client)
+    created = (await client.post(
+        f"/workouts/{wid}/sets", json={"exercise_id": ex_id, "weight": 135, "reps": 5}
+    )).json()
+    await fresh_db.finish_workout(wid)
+    await _unit_switch(client, "kg")
+    shown = (await client.get(f"/exercises/{ex_id}/progress")).json()
+    kg_shown = shown[0]["weight"]
+    assert kg_shown == round(135 / 2.20462, 2)  # клиент видит округлённое
+    # правка только повторов: приложение шлёт вес как показали
+    resp = await client.patch(
+        f"/workouts/{wid}/sets/{created['id']}", json={"weight": kg_shown, "reps": 6}
+    )
+    assert resp.status_code == 200, resp.text
+    await _unit_switch(client, "lb")
+    cur = await fresh_db.conn().execute("SELECT weight FROM sets WHERE id = ?", (created["id"],))
+    assert (await cur.fetchone())["weight"] == 135
+
+
+async def test_set_edit_with_a_real_new_weight_is_stored_as_sent(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    wid, ex_id = await _open_workout_with_exercise(fresh_db, client)
+    created = (await client.post(
+        f"/workouts/{wid}/sets", json={"exercise_id": ex_id, "weight": 60, "reps": 5}
+    )).json()
+    resp = await client.patch(f"/workouts/{wid}/sets/{created['id']}", json={"weight": 62.5})
+    assert resp.status_code == 200
+    cur = await fresh_db.conn().execute("SELECT weight FROM sets WHERE id = ?", (created["id"],))
+    assert (await cur.fetchone())["weight"] == 62.5
+
+
+async def test_progression_step_echoed_back_keeps_exact(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    _, item_id = await _routine_item(fresh_db, client)
+    await client.patch(
+        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": 2.5}}
+    )
+    await _unit_switch(client, "lb")
+    cur = await fresh_db.conn().execute("SELECT progression FROM routine_exercises WHERE id = ?", (item_id,))
+    stored_lb = json.loads((await cur.fetchone())["progression"])["step"]
+    assert stored_lb == pytest.approx(5.51155, abs=1e-5)
+    # приложение вернуло показанное 5.51 тому же пункту
+    resp = await client.patch(
+        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": 5.51}}
+    )
+    assert resp.status_code == 200, resp.text
+    await _unit_switch(client, "kg")
+    cur = await fresh_db.conn().execute("SELECT progression FROM routine_exercises WHERE id = ?", (item_id,))
+    assert json.loads((await cur.fetchone())["progression"])["step"] == 2.5
+
+
+async def test_copied_day_step_without_stored_value_restores_exact_image(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    await _unit_switch(client, "lb")
+    _, item_id = await _routine_item(fresh_db, client)  # новый пункт: шага ещё нет
+    resp = await client.patch(
+        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": 5.51}}
+    )
+    assert resp.status_code == 200, resp.text
+    await _unit_switch(client, "kg")
+    cur = await fresh_db.conn().execute("SELECT progression FROM routine_exercises WHERE id = ?", (item_id,))
+    assert json.loads((await cur.fetchone())["progression"])["step"] == 2.5
+
+
+@pytest.mark.parametrize("step", [2.5, 5, 1.25, 5.5, 7.37])
+async def test_round_native_or_odd_steps_are_not_touched(fresh_db, client_factory, step):
+    client = await _client(fresh_db, client_factory)
+    await _unit_switch(client, "lb")
+    _, item_id = await _routine_item(fresh_db, client)
+    await client.patch(
+        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": step}}
+    )
+    cur = await fresh_db.conn().execute("SELECT progression FROM routine_exercises WHERE id = ?", (item_id,))
+    assert json.loads((await cur.fetchone())["progression"])["step"] == step
+
+
+async def test_bodyweight_edit_echoing_rounded_keeps_exact(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    await fresh_db.conn().execute(
+        "INSERT INTO bodyweight_logs (telegram_id, weight, logged_at) VALUES (111, 61.23496133, '2026-01-01T10:00:00')"
+    )
+    await fresh_db.conn().commit()
+    log_id = (await client.get("/bodyweight")).json()[0]["id"]
+    resp = await client.patch(f"/bodyweight/{log_id}", json={"weight": 61.23})
+    assert resp.status_code == 200, resp.text
+    cur = await fresh_db.conn().execute("SELECT weight FROM bodyweight_logs WHERE id = ?", (log_id,))
+    assert (await cur.fetchone())["weight"] == 61.23496133
+
+
+# ---------- _round_floats / JSONResponse ----------
+
+async def test_round_floats_walks_nested_structures():
+    import api_v1_common as common
+
+    out = common._round_floats({"a": [1.23456, (2.0049, {"b": 3.999})], "c": {"d": 61.23496133}})
+    assert out == {"a": [1.23, [2.0, {"b": 4.0}]], "c": {"d": 61.23}}
+
+
+async def test_round_floats_leaves_bool_int_str_none_and_nonfinite():
+    import math
+
+    import api_v1_common as common
+
+    out = common._round_floats({"t": True, "f": False, "i": 7, "s": "1.23456", "n": None})
+    assert out == {"t": True, "f": False, "i": 7, "s": "1.23456", "n": None}
+    assert out["t"] is True and out["f"] is False
+    nan, inf = common._round_floats(float("nan")), common._round_floats(float("-inf"))
+    assert math.isnan(nan) and inf == float("-inf")
+
+
+async def test_round_floats_normalizes_negative_zero():
+    import math
+
+    import api_v1_common as common
+
+    for raw in (-0.0, -0.001, -0.0049):
+        out = common._round_floats(raw)
+        assert out == 0.0 and math.copysign(1.0, out) == 1.0
+    assert common.JSONResponse({"x": -0.001}).body == b'{"x":0.0}'
+
+
+async def test_json_response_rounds_in_body():
+    import api_v1_common as common
+
+    body = json.loads(common.JSONResponse({"w": [61.23496133], "ok": True}).body)
+    assert body == {"w": [61.23], "ok": True}
+    with pytest.raises(ValueError):  # NaN по-прежнему не JSON (starlette: allow_nan=False)
+        common.JSONResponse({"w": float("nan")})

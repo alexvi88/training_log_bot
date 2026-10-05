@@ -2015,6 +2015,9 @@ async def update_bodyweight(request: Request) -> JSONResponse:
     log_id = int(request.path_params["log_id"])
     body = await _json_body(request)
     weight = common.bodyweight_value(_require(body, "weight", (int, float)))
+    stored = await db.get_bodyweight_log(log_id)
+    if stored is not None and stored["telegram_id"] == user_id:
+        weight = common.keep_exact(weight, stored["weight"])
     updated = await db.update_bodyweight_log(log_id, user_id, weight)
     if not updated:
         raise ApiError(404, "not_found", "bodyweight entry not found")
