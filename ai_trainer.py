@@ -1391,6 +1391,23 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 """
 
 
+async def _background_ai_allowed(user) -> bool:
+    """Можно ли фоновому вызову модели (без заголовка запроса) отдать данные этого
+    атлета — то же правило, что у интерактивного тренера в `/v1`
+    (api_v1_common.ai_consent_given, App Store 5.1.2(i), users.ai_consent_at).
+
+    В фоне заголовка `X-AI-Consent-Flow` нет, поэтому согласие обязательно там,
+    где клиент — приложение: аккаунт без Telegram (Apple ID), аккаунт с iOS-токеном
+    пушей, или включён config.AI_CONSENT_REQUIRED. Чисто телеграмный атлет листа
+    согласия не видит — бот AI не запирает, и дайджест ему идёт как раньше.
+    """
+    if user["ai_consent_at"]:
+        return True
+    if config.AI_CONSENT_REQUIRED or not user["telegram_linked"]:
+        return False
+    return not await db.get_push_tokens(user["telegram_id"])
+
+
 async def weekly_digest(user_id: int) -> Optional[str]:
     """A short, personalized weekly wrap-up in the coach voice, or None if unavailable.
 
@@ -1409,6 +1426,8 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         return None
     user = await db.get_user(user_id)
     if user is None:
+        return None
+    if not await _background_ai_allowed(user):
         return None
 
     with i18n.use_lang(user["lang"]):

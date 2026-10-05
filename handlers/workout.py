@@ -308,7 +308,7 @@ async def _idle_view(
         # logged this workout so the shortcuts never repeat today's own list.
         exclude = done_ids + ((suggested[0],) if suggested else ())
         cooldown = (
-            dt.datetime.now() - dt.timedelta(days=_SUGGEST_COOLDOWN_DAYS)
+            timeutil.utc_now() - dt.timedelta(days=_SUGGEST_COOLDOWN_DAYS)
         ).isoformat(timespec="seconds")
         last_finished = data.get("last_finished_exercise_id")
         rows = []
@@ -1105,7 +1105,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
     await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
-        if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
+        if (timeutil.utc_now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
             user = await db.get_user(message.from_user.id)
             # Каждый вход в меню (в том числе кнопкой «🏠 Меню») раньше
             # перепоказывал это предупреждение заново — тренировка не

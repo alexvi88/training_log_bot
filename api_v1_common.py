@@ -504,11 +504,18 @@ def client_id(body: dict[str, Any], key: str = "client_id") -> str | None:
         ) from exc
 
 
-def client_moment(body: dict[str, Any], key: str) -> dt.datetime | None:
+def client_moment(
+    body: dict[str, Any], key: str, *, clamp_future: bool = False
+) -> dt.datetime | None:
     """Необязательный момент времени с телефона (ISO 8601) как наивный UTC —
     так время лежит в базе. Со смещением («Z», «+03:00») переводится в UTC,
     без смещения читается как UTC. Не из будущего (дальше запаса на часы) и не
-    старше OFFLINE_MAX_AGE_DAYS."""
+    старше OFFLINE_MAX_AGE_DAYS.
+
+    `clamp_future=True` — момент из будущего не отвергается, а подрезается до
+    «сейчас» сервера: так у `finished_at` при завершении тренировки. Отказ тут
+    теряет финиш целиком (приложение считает 400 окончательным), а телефон с
+    убежавшими часами — не вина человека."""
     raw = optional_str(body, key)
     if raw is None:
         return None
@@ -521,8 +528,8 @@ def client_moment(body: dict[str, Any], key: str) -> dt.datetime | None:
     if moment.tzinfo is not None:
         moment = moment.astimezone(dt.timezone.utc).replace(tzinfo=None)
     moment = moment.replace(microsecond=0)
-    now = dt.datetime.now()
-    if moment > now + OFFLINE_FUTURE_SLACK:
+    now = timeutil.utc_now()
+    if moment > now + OFFLINE_FUTURE_SLACK and not clamp_future:
         raise ApiError(400, "bad_request", f"{key} is in the future", key="input.moment_in_future")
     if moment < now - dt.timedelta(days=OFFLINE_MAX_AGE_DAYS):
         raise ApiError(

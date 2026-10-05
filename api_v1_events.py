@@ -33,6 +33,7 @@ from starlette.routing import Route
 import api_v1_common as common
 import db
 import product_metrics
+import timeutil
 
 ApiError = common.ApiError
 
@@ -54,7 +55,7 @@ def event_time(value: Any, now: Optional[dt.datetime] = None) -> Optional[str]:
     if at.tzinfo is None:
         return None
     at = at.astimezone().replace(tzinfo=None)
-    now = now or dt.datetime.now()
+    now = now or timeutil.utc_now()
     if at > now + _FUTURE_SKEW or at < now - dt.timedelta(days=MAX_AGE_DAYS):
         return None
     return min(at, now).isoformat(timespec="seconds")

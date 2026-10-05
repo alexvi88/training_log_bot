@@ -39,6 +39,8 @@ from starlette.requests import Request
 import achievement_sync
 import config
 import db
+import i18n
+import timeutil
 
 PROVIDER = "review_demo"
 
@@ -119,8 +121,12 @@ def check_credentials(username: str, password: str) -> Optional[str]:
     постоянное время: и логин, и пароль сравниваются всегда и со всеми
     заданными парами — без короткого замыкания, чтобы по времени ответа нельзя
     было угадать даже правильный логин."""
+    # strip(): пароль копируют из App Store Connect, и вместе с ним в поле
+    # легко попадает пробел или перевод строки; логин — по той же причине.
+    username, password = username.strip(), password.strip()
     matched: Optional[str] = None
     for demo_user, demo_password in config.demo_accounts():
+        demo_user, demo_password = demo_user.strip(), demo_password.strip()
         user_ok = hmac.compare_digest(username.encode("utf-8"), demo_user.encode("utf-8"))
         pass_ok = hmac.compare_digest(password.encode("utf-8"), demo_password.encode("utf-8"))
         if user_ok & pass_ok:
@@ -133,8 +139,13 @@ async def ensure_demo_user(lang: Optional[str] = None, username: Optional[str] =
     заполнить историей, если тренировок у него ещё нет. Аккаунт ключуется
     логином, так что у App Review и у прогона скриншотов (config.WALK_DEMO_*)
     аккаунты разные. Язык — только для НОВОГО аккаунта (дефолт английский:
-    ревьюеры Apple читают по-английски); существующему язык не переписываем —
-    его могли переключить в настройках."""
+    ревьюеры Apple читают по-английски).
+
+    Если клиент язык прислал (`lang` в теле или `Accept-Language`), то на КАЖДОМ
+    входе он записывается в users.lang через db.set_user_lang — единственную
+    точку записи, она же переводит каталожные копии. Иначе аккаунт, заведённый
+    когда-то русским, показывал бы англоязычному ревьюеру русский интерфейс.
+    Это только для демо-аккаунтов: ensure_demo_user зовёт один вход по паролю."""
     username = username or config.REVIEW_DEMO_USERNAME
     async with _get_lock():
         user_id = await db.resolve_auth_identity(PROVIDER, username)
@@ -144,6 +155,8 @@ async def ensure_demo_user(lang: Optional[str] = None, username: Optional[str] =
             user = await db.create_app_only_user(language_code=lang or "en")
             user_id = user["telegram_id"]
             await db.link_auth_identity(user_id, PROVIDER, username)
+        elif lang:
+            await db.set_user_lang(user_id, i18n.normalize(lang))
         if await db.count_workouts(user_id) == 0 and await db.count_workouts(user_id, "active") == 0:
             await seed_history(user_id)
     return user_id
@@ -232,7 +245,7 @@ async def seed_history(user_id: int, today: Optional[dt.date] = None) -> int:
     handlers/csv_import.apply_import.
     """
     tz_offset = await db.user_tz_offset(user_id)
-    days = _session_days(today or dt.datetime.now().date())
+    days = _session_days(today or timeutil.utc_now().date())
     ids = await _exercise_ids(user_id)
 
     def local(day: dt.date, hour: int, minute: int = 0) -> dt.datetime:
@@ -246,7 +259,7 @@ async def seed_history(user_id: int, today: Optional[dt.date] = None) -> int:
     first = days[0] - dt.timedelta(days=1)
     for i, weight in enumerate(weights):
         day = first + dt.timedelta(days=7 * i)
-        if day >= (today or dt.datetime.now().date()):
+        if day >= (today or timeutil.utc_now().date()):
             break
         await db.add_bodyweight_log(user_id, weight, _iso(local(day, 8, 15)))
 

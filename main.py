@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import time
 from contextlib import suppress
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
@@ -15,6 +17,12 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+
+# Серверные метки времени — UTC (db.now_iso). На Fly.io TZ=UTC стоит в Dockerfile;
+# на Amvera переменную не задать из amvera.yaml, поэтому фиксируем её здесь.
+os.environ["TZ"] = "UTC"
+if hasattr(time, "tzset"):
+    time.tzset()
 
 import account_deletion
 import activity_log

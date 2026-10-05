@@ -306,8 +306,15 @@ async def auth_password(request: Request) -> JSONResponse:
     if demo_username is None:
         review_demo.record_failure(ip)
         raise ApiError(401, "invalid_credentials", "wrong username or password")
+    # Язык — из тела, иначе из Accept-Language (если заголовок есть): без
+    # сигнала язык не трогаем, новый аккаунт заводится английским.
     raw_lang = body.get("lang")
-    lang = raw_lang.strip() if isinstance(raw_lang, str) and raw_lang.strip() else None
+    if isinstance(raw_lang, str) and raw_lang.strip():
+        lang = raw_lang.strip()
+    elif request.headers.get("accept-language"):
+        lang = i18n.lang_from_accept_language(request.headers["accept-language"])
+    else:
+        lang = None
     user_id = await review_demo.ensure_demo_user(lang, demo_username)
     return await _issue_token_response(user_id)
 
@@ -773,7 +780,7 @@ async def next_exercise_suggestions(request: Request) -> JSONResponse:
 
     suggested = await _suggested_next_exercise(user_id, last_finished_id, done_ids)
     exclude = done_ids + ((suggested["id"],) if suggested else ())
-    cooldown = (dt.datetime.now() - dt.timedelta(days=_SUGGESTION_COOLDOWN_DAYS)).isoformat(timespec="seconds")
+    cooldown = (timeutil.utc_now() - dt.timedelta(days=_SUGGESTION_COOLDOWN_DAYS)).isoformat(timespec="seconds")
     rows: list = []
     if last_finished_id is not None:
         rows = await db.list_common_followups(
@@ -1501,7 +1508,7 @@ async def finish_workout(request: Request) -> JSONResponse:
     # `finished_at` — реальный конец офлайн-тренировки с телефона: без него
     # тренировка, начатая вчера в зале без сети, закончилась бы в момент
     # синхронизации и растянулась в истории на сутки.
-    client_finished = common.client_moment(body, "finished_at")
+    client_finished = common.client_moment(body, "finished_at", clamp_future=True)
     if client_finished is not None and client_finished < started_at:
         raise ApiError(
             400, "bad_request", "finished_at is before started_at",
