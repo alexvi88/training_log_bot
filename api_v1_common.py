@@ -86,21 +86,6 @@ def keep_exact(sent: float, stored: float | None) -> float:
     return sent
 
 
-def restore_converted_weight(sent: float, unit: str) -> float:
-    """То же для случая, когда хранимого значения рядом нет (копия дня: iOS
-    шлёт шаг исходного упражнения в новый пункт). Число не с сетки 0.05 и в
-    пределах 0.006 от точного образа ровного веса другой единицы — это наш же
-    округлённый 5.51 от 2.5 кг (5.51155): возвращаем точный образ. Ровные
-    числа (2.5, 5, 1.25) не трогаем — они и так настоящие."""
-    grid = 0.05
-    if abs(sent - round(sent / grid) * grid) < 1e-6:
-        return sent
-    to_other = 1 / config.LB_PER_KG if unit == "lb" else config.LB_PER_KG
-    ground = round(round(sent * to_other / grid) * grid, 2)
-    exact = db.convert_weight(ground, 1 / to_other)
-    return exact if abs(exact - sent) <= 0.006 else sent
-
-
 class JSONResponse(_StarletteJSONResponse):
     """JSONResponse `/v1`: дробные округляются до 2 знаков (_round_floats).
     Все модули api_v1_* берут этот класс отсюда, а не из starlette."""

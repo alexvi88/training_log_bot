@@ -410,17 +410,28 @@ async def test_progression_step_echoed_back_keeps_exact(fresh_db, client_factory
     assert json.loads((await cur.fetchone())["progression"])["step"] == 2.5
 
 
-async def test_copied_day_step_without_stored_value_restores_exact_image(fresh_db, client_factory):
+@pytest.mark.parametrize("step", [2.27, 4.54, 1.13])
+async def test_manual_kg_step_without_stored_progression_is_kept_as_sent(fresh_db, client_factory, step):
     client = await _client(fresh_db, client_factory)
-    await _unit_switch(client, "lb")
-    _, item_id = await _routine_item(fresh_db, client)  # новый пункт: шага ещё нет
-    resp = await client.patch(
-        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": 5.51}}
+    _, item_id = await _routine_item(fresh_db, client)
+    await client.patch(
+        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": step}}
     )
-    assert resp.status_code == 200, resp.text
-    await _unit_switch(client, "kg")
     cur = await fresh_db.conn().execute("SELECT progression FROM routine_exercises WHERE id = ?", (item_id,))
-    assert json.loads((await cur.fetchone())["progression"])["step"] == 2.5
+    assert json.loads((await cur.fetchone())["progression"])["step"] == step
+
+
+async def test_step_of_other_unit_is_not_compared_with_stored(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory)
+    _, item_id = await _routine_item(fresh_db, client)
+    await fresh_db.set_routine_exercise_progression(
+        item_id, json.dumps({"rule": "double_progression", "step": 5.0000001, "step_unit": "sec"})
+    )
+    await client.patch(
+        f"/routine-exercises/{item_id}", json={"progression": {"rule": "linear_load", "step": 5.0}}
+    )
+    cur = await fresh_db.conn().execute("SELECT progression FROM routine_exercises WHERE id = ?", (item_id,))
+    assert json.loads((await cur.fetchone())["progression"])["step"] == 5.0
 
 
 @pytest.mark.parametrize("step", [2.5, 5, 1.25, 5.5, 7.37])
@@ -487,3 +498,18 @@ async def test_json_response_rounds_in_body():
     assert body == {"w": [61.23], "ok": True}
     with pytest.raises(ValueError):  # NaN по-прежнему не JSON (starlette: allow_nan=False)
         common.JSONResponse({"w": float("nan")})
+
+
+async def test_bodyweight_patch_of_foreign_entry_is_404(fresh_db, client_factory):
+    mine = await _client(fresh_db, client_factory)
+    await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await fresh_db.conn().execute(
+        "INSERT INTO bodyweight_logs (telegram_id, weight, logged_at) VALUES (222, 61.23496133, '2026-01-01T10:00:00')"
+    )
+    await fresh_db.conn().commit()
+    cur = await fresh_db.conn().execute("SELECT id FROM bodyweight_logs WHERE telegram_id = 222")
+    log_id = (await cur.fetchone())["id"]
+    resp = await mine.patch(f"/bodyweight/{log_id}", json={"weight": 61.23})
+    assert resp.status_code == 404
+    cur = await fresh_db.conn().execute("SELECT weight FROM bodyweight_logs WHERE id = ?", (log_id,))
+    assert (await cur.fetchone())["weight"] == 61.23496133
