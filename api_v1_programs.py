@@ -223,6 +223,23 @@ def _validated_progression(progression: dict[str, Any], unit: str) -> dict[str, 
     return progression
 
 
+async def _restore_exact_step(item_id: int, progression: dict[str, Any], unit: str) -> dict[str, Any]:
+    """Шаг мы отдаём округлённым до 2 знаков, а клиент шлёт его обратно (в том
+    числе копией дня в новый пункт). Если у пункта уже есть шаг и пришло его
+    округление — остаётся хранимый; если сравнить не с чем — см.
+    common.restore_converted_weight."""
+    step = progression.get("step")
+    if step is None or isinstance(step, bool) or progression.get("step_unit") == "sec":
+        return progression
+    stored = _stored_progression_json((await db.get_routine_exercise(item_id))["progression"])
+    stored_step = (stored or {}).get("step")
+    if isinstance(stored_step, (int, float)) and not isinstance(stored_step, bool):
+        exact = common.keep_exact(step, stored_step)
+    else:
+        exact = common.restore_converted_weight(step, unit)
+    return {**progression, "step": exact}
+
+
 def _routine_exercise_json(row, display_name: str | None = None) -> dict[str, Any]:
     """`row` — либо строка из db.list_routine_exercises (с display_name уже в
     join), либо голая db.get_routine_exercise/get_routine_exercise-подобная
@@ -556,6 +573,7 @@ async def update_routine_exercise(request: Request) -> JSONResponse:
         if progression is not None:
             user = await db.get_user(user_id)
             progression = _validated_progression(progression, user["unit"])
+            progression = await _restore_exact_step(item_id, progression, user["unit"])
         await db.set_routine_exercise_progression(
             item_id, json.dumps(progression) if progression is not None else None
         )

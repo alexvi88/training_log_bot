@@ -25,6 +25,7 @@ import achievements
 import ai_limits
 import ai_trainer
 import config
+import csv_export
 import db
 import formatting
 import i18n
@@ -527,11 +528,8 @@ def _unescape_formula_cell(text: str) -> str:
     """Обратное к csv_export.escape_formula_cell: снимает ровно один ведущий
     апостроф, если за ним знак формулы или ещё один такой апостроф-защита:
     «'=cmd» → «=cmd», «''-5 drop» → «'-5 drop». «'Тяга» остаётся как есть."""
-    if text[:1] == "'" and text[1:2] != "":
-        import csv_export
-
-        if csv_export.needs_formula_escape(text[1:]):
-            return text[1:]
+    if text[:1] == "'" and text[1:2] != "" and csv_export.needs_formula_escape(text[1:]):
+        return text[1:]
     return text
 
 

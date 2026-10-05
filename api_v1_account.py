@@ -464,7 +464,7 @@ async def update_workout_set(request: Request) -> JSONResponse:
     # Границы — общие с живой записью и с разбором строки (см. api_v1_common).
     weight = set_row["weight"]
     if "weight" in body:
-        weight = common.set_weight(body["weight"])
+        weight = common.keep_exact(common.set_weight(body["weight"]), set_row["weight"])
 
     reps = set_row["reps"]
     if "reps" in body:

@@ -67,12 +67,38 @@ def _round_floats(value: Any) -> Any:
     «61.23496133» ему показывать незачем. Два знака ниже любой цены блина.
     """
     if isinstance(value, float):
-        return round(value, 2) if math.isfinite(value) else value
+        # `+ 0.0` — минус ноль (round(-0.001, 2)) показывался бы как «-0.0».
+        return round(value, 2) + 0.0 if math.isfinite(value) else value
     if isinstance(value, dict):
         return {k: _round_floats(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_round_floats(v) for v in value]
     return value
+
+
+def keep_exact(sent: float, stored: float | None) -> float:
+    """Клиент прислал обратно число, которое мы ему отдали (округлённое до 2
+    знаков, см. _round_floats): если оно равно округлённому хранимому — храним
+    прежнее точное значение, а не затираем его округлённым (61.23496 кг = 135
+    lb; 61.23 уже не вернётся в 135 lb). Любое другое число — настоящая правка."""
+    if stored is not None and sent == round(stored, 2):
+        return stored
+    return sent
+
+
+def restore_converted_weight(sent: float, unit: str) -> float:
+    """То же для случая, когда хранимого значения рядом нет (копия дня: iOS
+    шлёт шаг исходного упражнения в новый пункт). Число не с сетки 0.05 и в
+    пределах 0.006 от точного образа ровного веса другой единицы — это наш же
+    округлённый 5.51 от 2.5 кг (5.51155): возвращаем точный образ. Ровные
+    числа (2.5, 5, 1.25) не трогаем — они и так настоящие."""
+    grid = 0.05
+    if abs(sent - round(sent / grid) * grid) < 1e-6:
+        return sent
+    to_other = 1 / config.LB_PER_KG if unit == "lb" else config.LB_PER_KG
+    ground = round(round(sent * to_other / grid) * grid, 2)
+    exact = db.convert_weight(ground, 1 / to_other)
+    return exact if abs(exact - sent) <= 0.006 else sent
 
 
 class JSONResponse(_StarletteJSONResponse):
