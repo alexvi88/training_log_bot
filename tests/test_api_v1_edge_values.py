@@ -223,11 +223,39 @@ async def test_escape_formula_cell_covers_tab_and_cr():
     assert csv_export.escape_formula_cell("Присед") == "Присед"
 
 
-async def test_csv_export_import_roundtrip_unescapes():
+@pytest.mark.parametrize("name", [
+    "'-5 drop", "=SUM", "-5", "\tfoo", "\rbar", "@x", "+1", "'Тяга", "''=x", "'=x", "'\tx", "Присед", "'",
+])
+async def test_csv_formula_escape_roundtrips_exactly(name):
+    import csv_export
     from handlers import csv_import
 
-    assert csv_import._unescape_formula_cell("'=cmd") == "=cmd"
-    assert csv_import._unescape_formula_cell("'Тяга") == "'Тяга"
+    cell = csv_export.escape_formula_cell(name)
+    assert csv_import._unescape_formula_cell(cell) == name
+    if csv_export.needs_formula_escape(name):
+        assert cell == "'" + name
+    else:
+        assert cell == name
+
+
+async def test_csv_export_keeps_leading_apostrophe_name(fresh_db, user_id):
+    import csv as csvmod
+    import io
+
+    import csv_export
+    from handlers import csv_import
+
+    ex_id = await fresh_db.create_exercise(user_id, "'-5 drop", None)
+    wid = await fresh_db.create_finished_workout(
+        user_id, started_at="2026-03-01T10:00:00", finished_at="2026-03-01T11:00:00"
+    )
+    block_id = await fresh_db.create_block(wid, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    await fresh_db.add_set(block_id, ex_id, 1, 0, 50.0, 5, None)
+    raw = (await csv_export.build_csv(user_id)).decode("utf-8-sig")
+    cell = list(csvmod.reader(io.StringIO(raw)))[1][1]
+    assert cell == "''-5 drop"
+    assert csv_import._unescape_formula_cell(cell) == "'-5 drop"
 
 
 async def test_exercise_name_control_chars_stripped(fresh_db, client_factory):

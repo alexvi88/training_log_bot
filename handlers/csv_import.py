@@ -524,10 +524,14 @@ def _parse_row_date(
 
 
 def _unescape_formula_cell(text: str) -> str:
-    """Обратное к csv_export.escape_formula_cell: «'=cmd» → «=cmd». Апостроф
-    снимается только перед знаком формулы — «'Тяга» остаётся как есть."""
-    if len(text) > 1 and text[0] == "'" and text[1] in "=+-@":
-        return text[1:]
+    """Обратное к csv_export.escape_formula_cell: снимает ровно один ведущий
+    апостроф, если за ним знак формулы или ещё один такой апостроф-защита:
+    «'=cmd» → «=cmd», «''-5 drop» → «'-5 drop». «'Тяга» остаётся как есть."""
+    if text[:1] == "'" and text[1:2] != "":
+        import csv_export
+
+        if csv_export.needs_formula_escape(text[1:]):
+            return text[1:]
     return text
 
 

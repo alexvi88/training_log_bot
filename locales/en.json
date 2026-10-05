@@ -1727,7 +1727,7 @@
   "workout.set_deleted": "Deleted the set",
   "workout.set_index_not_found": "No set #{index} — there are only {total} logged so far.",
   "workout.set_not_found": "Can't find that set — the screen's stale. Go back for the current list",
-  "workout.closed_cant_log": "That workout is already closed, so I didn't log the set. Start a new one: /start or the Start workout button.",
+  "workout.closed_cant_log": "I can't find an open workout, so I didn't log the set. Start a new one: /start or the Start workout button.",
   "workout.since_last_time": "last time it was",
   "workout.since_today": "today it was",
   "workout.slot_placeholder": "🏋️ Workout",

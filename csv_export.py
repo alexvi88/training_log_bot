@@ -30,8 +30,15 @@ import timeutil
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
+def needs_formula_escape(value: str) -> bool:
+    """Ячейку надо защитить, если после ведущих апострофов (их может быть
+    ноль) идёт знак формулы: «'-5 drop» без лишнего апострофа при импорте
+    потеряла бы свой собственный, ведь импорт снимает ровно один."""
+    return value.lstrip("'").startswith(FORMULA_PREFIXES)
+
+
 def escape_formula_cell(value: str) -> str:
-    return "'" + value if value.startswith(FORMULA_PREFIXES) else value
+    return "'" + value if needs_formula_escape(value) else value
 
 
 CSV_HEADER = ["started_at", "exercise", "round_index", "weight", "reps", "rpe"]

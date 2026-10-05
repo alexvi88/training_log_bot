@@ -211,13 +211,12 @@ def _validated_progression(progression: dict[str, Any], unit: str) -> dict[str, 
         raise bad
     if len(json.dumps(progression, ensure_ascii=False).encode("utf-8")) > _PROGRESSION_MAX_JSON_BYTES:
         raise bad
-    step = progression.get("step")
-    if step is not None:  # step: null — «шага нет», как у iOS без поля
-        if (
-            isinstance(step, bool) or not isinstance(step, (int, float))
-            or step <= 0 or step > analytics.progression_max_step(unit)
-        ):
-            raise bad
+    step = progression.get("step")  # null — «шага нет», как у iOS без поля
+    if step is not None and (
+        isinstance(step, bool) or not isinstance(step, (int, float))
+        or step <= 0 or step > analytics.progression_max_step(unit)
+    ):
+        raise bad
     rule = progression.get("rule")
     if rule is not None and (not isinstance(rule, str) or rule not in _PROGRESSION_RULES):
         raise bad
