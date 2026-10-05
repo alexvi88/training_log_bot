@@ -628,8 +628,19 @@ def _logging_hint(
         body = f"{lead}<i>{info}</i>\n\n{base}" if base else f"{lead}<i>{info}</i>"
     elif target_line:
         # Истории нет — план всё равно показываем: он и есть всё, что известно
-        # про сегодняшнее упражнение.
+        # про сегодняшнее упражнение. Своя цель у схемы главнее общей «Цели».
         info = f"{lead}<i>{target_line}</i>"
+        body = f"{info}\n\n{base}" if base else info
+    elif show_progression and not has_sets and (
+        no_history := progression_data.no_history_hint(
+            kind=progression_kind, rule=progression_rule, target=target,
+            rep_range=rep_range,
+        )
+    ):
+        # Упражнение без единого подхода в дневнике: числа предлагать не от чего,
+        # строка подсказывает, как подобрать вес. Тот же текст и тот же отказ
+        # (схема, правило, планка), что у приложения.
+        info = f"{lead}<i>{no_history['text']}</i>"
         body = f"{info}\n\n{base}" if base else info
     elif lead:
         body = f"{lead}\n{base}" if base else lead.rstrip("\n")
@@ -771,7 +782,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         # Планка — цель в секундах, подтягивания — без «+кг» из программы.
         progression_kind=(
             await db.exercise_progression_kind(active)
-            if active is not None and last_session and not is_backfill else "weight"
+            if active is not None and not is_backfill else "weight"
         ),
         # Неделя разгрузки программы — цель на ~90 % без прибавки и строка
         # срезать подходы (db.deload_week_for_workout).

@@ -99,6 +99,45 @@ def hint(
     }
 
 
+def no_history_hint(
+    *,
+    kind: str = "weight",
+    rule: Optional[dict] = None,
+    target: Optional[str] = None,
+    rep_range: Optional[tuple[int, int]] = None,
+) -> Optional[dict[str, Any]]:
+    """«🎯 Цель» для упражнения, в котором у атлета ещё нет ни одного подхода.
+
+    Числа предлагать не от чего, поэтому строка называет не вес, а способ его
+    найти: вес, с которым выйдет столько повторов, сколько стоит в настройке
+    «Диапазон повторов» (`analytics.user_rep_range`, по умолчанию 5–12).
+
+    `None` там, где у упражнения уже есть своя цель или слово «вес» не к месту:
+    - схема подходов в карточке (`target`) и правило прогрессии программы
+      (`rule`) — это цель, и они главнее (как в `analytics.suggest_progression`);
+    - не "weight" (планка на время, подтягивания и скручивания без отягощения) —
+      «вес, с которым сделаешь N раз» там неправда.
+
+    Форма ответа — та же, что у `hint`, плюс `"no_history": True`: старые сборки
+    приложения читают `text` и числа, как раньше, и показывают строку в том же
+    месте; `target_weight` у неё 0 — клиенты его не используют, а цели в нём нет.
+    """
+    if kind != "weight" or rule or target:
+        return None
+    low, high = rep_range or (analytics.REP_RANGE_MIN, analytics.REP_RANGE_MAX)
+    return {
+        "text": i18n.t("progression.goal_no_history", min=low, max=high),
+        "achieved": False,
+        "role": None,
+        "is_deload": False,
+        "target_weight": 0.0,
+        "target_reps": high,
+        "is_bodyweight": False,
+        "is_timed": False,
+        "no_history": True,
+    }
+
+
 async def hint_for_workout(
     workout_id: int, exercise_id: int, user
 ) -> Optional[dict[str, Any]]:
@@ -119,17 +158,33 @@ async def hint_for_workout(
         return None
 
     rows = await db.list_sets_for_exercise(exercise_id)
-    if not rows:
-        return None
-    last_workout_id = rows[-1]["workout_id"]
+    last_workout_id = rows[-1]["workout_id"] if rows else None
     # Подходы ПРОШЛОЙ законченной тренировки с этим упражнением. Если последняя
     # в истории — текущая, отталкиваться надо от предыдущей: сравнивать
     # сегодняшний подход с самим собой бессмысленно.
     if last_workout_id == workout_id:
         earlier = [r for r in rows if r["workout_id"] != workout_id]
-        if not earlier:
+        last_workout_id = earlier[-1]["workout_id"] if earlier else None
+    if last_workout_id is None:
+        # Истории нет. Строка только до первого подхода: записал — цель
+        # «вес на N–M раз» уже выполнена самим подходом, и она уходит.
+        today = await db.list_sets_for_workout_exercise(workout_id, exercise_id)
+        if rows or today:
             return None
-        last_workout_id = earlier[-1]["workout_id"]
+        # Схема — из дня программы: подходов сегодня ещё нет, так что
+        # workout_exercise_targets (он читает записанные подходы) здесь пуст.
+        routine_id = workout["routine_id"]
+        planned = {
+            r["exercise_id"]: r["target"]
+            for r in (await db.list_routine_exercises(routine_id) if routine_id else [])
+        }
+        with i18n.use_lang(user["lang"]):
+            return no_history_hint(
+                kind=await db.exercise_progression_kind(exercise_id),
+                rule=await db.progression_rule_for_workout(workout_id, exercise_id),
+                target=planned.get(exercise_id),
+                rep_range=analytics.user_rep_range(user),
+            )
     last_session = [
         (r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id
     ]

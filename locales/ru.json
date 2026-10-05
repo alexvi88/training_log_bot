@@ -1221,6 +1221,7 @@
   "progress.total_reps": "всего повторов {n}",
   "progression.goal": "🎯 Цель: {goal}{reason}",
   "progression.goal_achieved": "✅ Цель выполнена: {goal}",
+  "progression.goal_no_history": "🎯 Цель: вес, с которым сделаешь {min}–{max} раз. Последние повторы — тяжело, но чисто.",
   "progression.goal_reps": "{n} повторов",
   "progression.goal_seconds": "{n} сек",
   "progression.reason_add_weight": " — взял {n} повторов, добавляем вес",

@@ -132,7 +132,9 @@ async def test_todays_sets_do_not_become_the_baseline(fresh_db, client_factory):
 # ---------- когда подсказки нет ----------
 
 
-async def test_no_hint_without_history(fresh_db, client_factory):
+async def test_no_history_gets_the_rep_range_line_not_numbers(fresh_db, client_factory):
+    """Истории нет — цели в числах нет, но строка про диапазон повторов есть
+    (подробности — tests/test_goal_hint_no_history.py)."""
     user_id = 111
     client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
     ex_id = await _exercise(user_id)
@@ -140,7 +142,8 @@ async def test_no_hint_without_history(fresh_db, client_factory):
 
     resp = await client.get(f"/workouts/{workout_id}/exercises/{ex_id}/next-target")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["hint"] is None
+    hint = resp.json()["hint"]
+    assert hint["no_history"] is True and "5–12" in hint["text"]
 
 
 async def test_toggle_off_hides_the_hint(fresh_db, client_factory):
