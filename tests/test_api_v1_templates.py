@@ -94,7 +94,8 @@ async def test_list_rows_carry_catalog_thumb(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     template = await _bench_press_template(fresh_db)
     detail = (await client.get(f"/exercise-templates/{template['id']}")).json()
-    first_frame = detail["media"]["images"][0]
+    full = detail["media"]["images"][0]
+    first_frame = full.replace("/media/exercises/", "/media/exercises/thumbs/")
 
     for params in ({"query": "жим штанги лёжа"}, {"group_id": template["primary_group_id"]}):
         rows = {t["id"]: t for t in (await client.get("/exercise-templates", params=params)).json()}

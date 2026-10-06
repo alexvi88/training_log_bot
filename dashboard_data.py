@@ -44,6 +44,12 @@ class MenuDashboard:
     # Собственный эмодзи звания (`analytics.Rank.emoji`) — приложение ставит
     # его на плашку звания вместо общей медали, как в лестнице званий.
     rank_emoji: str = ""
+    #: Недостача до следующего звания и его имя — те же строки, что отдаёт
+    #: GET /hall-of-fame в rank.gap_text / rank.next_name (приложение берёт их
+    #: для шапки профиля и больше не тянет ради них весь зал). Оба None на
+    #: верхнем звании.
+    rank_gap_text: Optional[str] = None
+    rank_next_name: Optional[str] = None
     #: (подпись, число) или (подпись, число, приписка)
     tiles: list[tuple] = field(default_factory=list)
     volume_title: str = ""
@@ -129,17 +135,19 @@ async def collect(
         growth.append((row["display_name"], before_max, window_max, row["id"]))
 
     agg = await db.hall_of_fame_aggregates(user_id, exclude_workout_ids=excluded)
-    rank = analytics.rank_for(
-        len(dates),
-        formatting.to_kg(agg["tonnage"], user["unit"]),
-        analytics.workouts_per_week(dates, today),
-    )
+    tonnage_kg = formatting.to_kg(agg["tonnage"], user["unit"])
+    per_week = analytics.workouts_per_week(dates, today)
+    rank = analytics.rank_for(len(dates), tonnage_kg, per_week)
+    gap = analytics.rank_gap(rank, len(dates), tonnage_kg, per_week)
+    next_rank = analytics.next_rank(rank) if gap else None
     lift_tiles = formatting.menu_lift_tiles(growth, user["unit"])
     return MenuDashboard(
         headline=formatting.menu_headline(dashboard),
         rank_name=rank.name,
         rank_level=rank.level,
         rank_emoji=rank.emoji,
+        rank_gap_text=formatting.format_rank_gap(gap, user["unit"]) if gap else None,
+        rank_next_name=next_rank.name if next_rank else None,
         tiles=formatting.menu_tiles(
             dashboard, tonnage, records, user["unit"], total_workouts=len(dates)
         ),
