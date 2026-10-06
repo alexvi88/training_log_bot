@@ -42,7 +42,17 @@ def _dashboard_json(
 ) -> dict[str, Any]:
     payload = {
         "headline": data.headline,
-        "rank": {"name": data.rank_name, "level": data.rank_level, "emoji": data.rank_emoji or None},
+        "rank": {
+            "name": data.rank_name,
+            "level": data.rank_level,
+            "emoji": data.rank_emoji or None,
+            # Те же значения, что rank.gap_text / rank.next_name у GET /hall-of-fame:
+            # шапке профиля нужны только они, а зал целиком стоит прохода по
+            # истории. Ключи добавлены, старые клиенты их не читают; null — на
+            # верхнем звании.
+            "gap_text": data.rank_gap_text,
+            "next_name": data.rank_next_name,
+        },
         "tiles": [_tile_json(t) for t in data.tiles],
         "volume": {
             "title": data.volume_title,

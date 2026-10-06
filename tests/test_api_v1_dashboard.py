@@ -181,3 +181,24 @@ async def test_app_total_tile_drops_the_30_day_note_when_it_repeats_the_total(fr
     await _train(111, "Squat", days_ago=40)
     first = (await client.get("/dashboard")).json()["tiles"][0]
     assert (first["value"], first["sub"]) == ("2", "1 за 30 дней")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_dashboard_rank_gap_matches_hall_of_fame(fresh_db, client_factory, lang):
+    """Шапке профиля нужны `gap_text`/`next_name` — их отдаёт и сводка, без
+    прохода по всей истории ради зала славы. Значения те же байт в байт, на
+    языке атлета."""
+    client = await _linked_client(fresh_db, client_factory, lang=lang)
+    await _train(111)
+
+    rank = (await client.get("/dashboard")).json()["rank"]
+    hof_rank = (await client.get("/hall-of-fame")).json()["rank"]
+
+    assert rank["gap_text"], "у новичка до следующего звания есть недостача"
+    assert rank["next_name"]
+    assert rank["gap_text"] == hof_rank["gap_text"]
+    assert rank["next_name"] == hof_rank["next_name"]
+    assert rank["name"] == hof_rank["name"] and rank["level"] == hof_rank["level"]
+    for text in (rank["gap_text"], rank["next_name"]):
+        assert bool(CYRILLIC.search(text)) == (lang == "ru"), text

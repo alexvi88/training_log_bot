@@ -19,7 +19,7 @@ pytestmark = pytest.mark.asyncio
 
 USER = 111
 CATALOG = "Жим штанги лёжа"  # в exercise_media.EXERCISE_IMAGE_SLUGS, оба кадра на диске
-CATALOG_THUMB = "/media/exercises/barbell_bench_press_medium_grip_1.jpg"
+CATALOG_THUMB = "/media/exercises/thumbs/barbell_bench_press_medium_grip_1.jpg"
 
 
 def _client() -> httpx.AsyncClient:
@@ -51,7 +51,9 @@ async def test_field_shapes_catalog_and_custom(fresh_db):
 
     # Та же первая картинка, что у карточки упражнения.
     media = (await client.get(f"/exercises/{catalog_id}/media")).json()
-    assert catalog["thumb"] == CATALOG_THUMB == media["images"][0]
+    # Превью — уменьшенная копия того же кадра; полный кадр карточки — в `images`.
+    assert catalog["thumb"] == CATALOG_THUMB
+    assert media["images"][0] == "/media/exercises/barbell_bench_press_medium_grip_1.jpg"
     assert catalog["has_photo"] is False
 
     # Своё упражнение: каталожных кадров нет — null.
@@ -91,12 +93,12 @@ async def test_fields_on_every_list_mode_and_single_responses(fresh_db):
         row = _by_id((await client.get(url)).json())[ex]
         assert row["thumb"] == CATALOG_THUMB and row["has_photo"] is False, url
     archived = _by_id((await client.get("/exercises?archived=1")).json())[arch]
-    assert archived["thumb"] == "/media/exercises/barbell_shrug_1.jpg"
+    assert archived["thumb"] == "/media/exercises/thumbs/barbell_shrug_1.jpg"
 
     patched = (await client.patch(f"/exercises/{ex}", json={"description": "Медленно."})).json()
     assert patched["thumb"] == CATALOG_THUMB
     unarchived = (await client.post(f"/exercises/{arch}/unarchive")).json()
-    assert unarchived["thumb"] == "/media/exercises/barbell_shrug_1.jpg"
+    assert unarchived["thumb"] == "/media/exercises/thumbs/barbell_shrug_1.jpg"
     created = (await client.post("/exercises", json={"name": "Совсем новое"})).json()
     assert created["thumb"] is None and created["has_photo"] is False
 
