@@ -70,10 +70,29 @@ def week_monday(day: dt.date) -> dt.date:
     return day - dt.timedelta(days=day.weekday())
 
 
-def default_week(today: dt.date) -> dt.date:
+def default_week(today: dt.date, first_day: Optional[dt.date] = None) -> dt.date:
     """Понедельник последней законченной недели — той, что уже кончилась к
-    `today` (в любой день, включая воскресенье, это прошлая неделя)."""
-    return week_monday(today) - dt.timedelta(days=7)
+    `today` (в любой день, включая воскресенье, это прошлая неделя).
+
+    `first_day` — день первой законченной тренировки атлета. Если прошлая
+    неделя целиком раньше него, атлета в ней ещё не было, и итога у неё нет:
+    тогда по умолчанию — текущая неделя, с которой его дневник начался
+    (вердикт «first»), а не «неделя мимо» за время, когда его тут не было."""
+    last = week_monday(today) - dt.timedelta(days=7)
+    if first_day is not None and last + dt.timedelta(days=6) < first_day:
+        return week_monday(today)
+    return last
+
+
+def before_history(week_start: dt.date, first_day: Optional[dt.date]) -> bool:
+    """Неделя целиком раньше первой тренировки — итога у неё нет."""
+    return first_day is not None and week_monday(week_start) + dt.timedelta(days=6) < first_day
+
+
+async def first_workout_day(user_id: int, user: Any) -> Optional[dt.date]:
+    """Местный день первой законченной тренировки, None — их нет."""
+    dates = await db.list_finished_workout_dates(user_id, tz_offset=timeutil.offset_hours(user))
+    return min(dt.date.fromisoformat(d) for d in dates) if dates else None
 
 
 @dataclass(frozen=True)
@@ -405,6 +424,8 @@ async def collect(user_id: int, week_start: dt.date, user: Any = None) -> Option
     """Итог недели, начинающейся `week_start` (понедельник), или None, если
     законченных тренировок у атлета нет вовсе — как у dashboard_data.collect:
     у новичка показывать нечего, и экран зовёт начать, а не рисует нули.
+    Тот же None — у недели, которая целиком раньше первой тренировки: атлета в
+    ней ещё не было, и «неделя мимо» с «серию начнём заново» были бы неправдой.
 
     `week_start`, который не понедельник, сдвигается к понедельнику своей недели.
     """
@@ -424,7 +445,7 @@ async def collect(user_id: int, week_start: dt.date, user: Any = None) -> Option
     all_dates = [
         dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id, tz_offset=tz)
     ]
-    if not all_dates:
+    if not all_dates or before_history(week_start, min(all_dates)):
         return None
     upto = [d for d in all_dates if d <= week_end]
     this_dates = [d for d in upto if d >= week_start]

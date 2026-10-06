@@ -10308,11 +10308,16 @@ async def list_newbie_user_ids() -> list[tuple[int, str]]:
     walked by one of the two daily loops. Returns `created_at` alongside the id since
     the nudge is timed off signup date, not off a last-workout date these users don't have,
     and `tz_offset` so the send lands at the user's own evening (see the engagement job).
+
+    Тот, у кого прямо сейчас открыта тренировка (status='active'), в пул не
+    попадает: «дневник пока пустой, залогируй хоть один подход» посреди его
+    первой тренировки — неправда, он как раз логирует.
     """
     cur = await conn().execute(
         "SELECT u.telegram_id, u.created_at, u.tz_offset FROM users u "
         "WHERE u.pushes_enabled = 1 AND NOT EXISTS ("
-        "SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id AND w.status = 'finished')"
+        "SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id "
+        "AND w.status IN ('finished', 'active'))"
     )
     return [(r["telegram_id"], r["created_at"], r["tz_offset"]) for r in await cur.fetchall()]
 

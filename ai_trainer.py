@@ -1389,6 +1389,12 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         return i18n.t_in(lang, "ai.comment.workout_not_found")
     with i18n.use_lang(lang):
         card_text = await workout_card_for_model(user, workout)
+        # Первая тренировка в дневнике — строкой в данных запроса, а не в
+        # системном промпте: тот общий у всех и должен оставаться неизменным
+        # префиксом (кэш xAI, см. CLAUDE.md). Без неё «отметь, что не так» из
+        # промпта превращало разбор первой тренировки в список недоборов.
+        if await _is_first_workout(user_id, workout_id):
+            card_text += "\n\n" + i18n.t("ai.comment.first_workout_note")
 
         client = _get_client()
         response = await paid_call(
@@ -1414,6 +1420,11 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         )
     text = (response.choices[0].message.content or "").strip()
     return text or "Не получилось сформулировать комментарий, попробуй ещё раз позже."
+
+
+async def _is_first_workout(user_id: int, workout_id: int) -> bool:
+    """Других законченных тренировок у атлета нет — эта первая в дневнике."""
+    return not await db.list_finished_workout_dates(user_id, exclude_workout_ids=(workout_id,))
 
 
 async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
@@ -1542,8 +1553,15 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         groups_line = "; ".join(
             f"{g['group']}: {g['sets']} подходов ({g['status']})" for g in vol["groups"]
         )
+        # Атлета на прошлой неделе ещё не было (вся история — с этого
+        # понедельника): «на прошлой: 0» модель читала как пропуск. Вместо
+        # неё — строка о первой неделе, в данных, а не в системном промпте.
+        first_week = not any(d < monday for d in dates)
+        last_week_note = (
+            i18n.t("ai.digest.first_week_note") if first_week else f"на прошлой: {last_week}"
+        )
         summary = (
-            f"Тренировок на этой неделе: {dash.this_week} (на прошлой: {last_week}).\n"
+            f"Тренировок на этой неделе: {dash.this_week} ({last_week_note}).\n"
             f"Суммарный тоннаж с понедельника: {tonnage:.0f} {user['unit']}.\n"
         )
         if records:

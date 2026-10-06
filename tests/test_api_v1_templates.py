@@ -77,6 +77,29 @@ async def test_search_localizes_name_for_english_user(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_list_rows_carry_russian_identity_as_original_name(fresh_db, client_factory):
+    """`original_name` в сводке шаблона — русская идентичность на любом языке
+    аккаунта, та же, что форк запишет в exercises.original_name; `name` —
+    локализованный показ. И в поиске, и в группе."""
+    await db.get_or_create_user(telegram_id=333, username="en_user", language_code="en")
+    code = await db.issue_oauth_link_code(333, ttl_seconds=600, digits=8)
+    client = client_factory()
+    token = (await client.post("/auth/link", json={"code": code})).json()["token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    template = await _bench_press_template(fresh_db)
+
+    for params in ({"query": "bench press"}, {"group_id": template["primary_group_id"]}):
+        rows = {t["id"]: t for t in (await client.get("/exercise-templates", params=params)).json()}
+        row = rows[template["id"]]
+        assert row["original_name"] == "Жим штанги лёжа"
+        assert "Bench" in row["name"]
+        assert all(r["original_name"] for r in rows.values())
+
+    fork = (await client.post(f"/exercise-templates/{template['id']}/add")).json()
+    assert fork["original_name"] == row["original_name"]
+
+
+@pytest.mark.asyncio
 async def test_browse_by_group_lists_templates(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     template = await _bench_press_template(fresh_db)

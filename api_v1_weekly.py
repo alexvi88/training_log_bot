@@ -64,10 +64,12 @@ def summary_json(s: weekly_summary.WeeklySummary) -> dict[str, Any]:
 
 async def get_weekly_summary(request: Request) -> JSONResponse:
     """Итог недели `?week=YYYY-MM-DD` (любой день недели — берётся её
-    понедельник), без параметра — последняя законченная неделя.
+    понедельник), без параметра — последняя законченная неделя, а если атлета
+    в ней ещё не было (первая тренировка позже её воскресенья) — текущая.
 
     `null` целиком, если законченных тренировок у атлета нет вовсе — как у
     /dashboard: у новичка итога нет, и клиент зовёт начать, а не рисует нули.
+    Тот же `null` — у недели, которая целиком раньше первой тренировки.
     Неделя, которая ещё не началась, — 400 с текстом на языке атлета.
     """
     user_id, user = await authed_user(request)
@@ -78,7 +80,8 @@ async def get_weekly_summary(request: Request) -> JSONResponse:
         if week > today:
             raise ApiError(400, "weekly_future", "week has not started yet", key="api.error.weekly_future")
     else:
-        week = weekly_summary.default_week(today)
+        first_day = await weekly_summary.first_workout_day(user_id, user)
+        week = weekly_summary.default_week(today, first_day)
     with i18n.use_lang(user["lang"]):
         summary = await weekly_summary.collect(user_id, week, user)
         return JSONResponse(summary_json(summary) if summary is not None else None)

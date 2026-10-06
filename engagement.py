@@ -179,10 +179,71 @@ def rank_near_missing(
     return missing, nxt
 
 
-def skip_milestone(days_since_last: Optional[int]) -> Optional[int]:
-    if days_since_last in push_texts.SKIP_MILESTONE_DAYS:
+# Подколка о пропуске — только про настоящий пропуск. Короткие вехи (3 и 5
+# дней) молчат, пока перерыв не длиннее обычного для атлета: у того, кто ходит
+# пн/ср/пт, с пятницы до понедельника — три дня, и это график, а не «отмазки».
+# Вехи от SKIP_ALWAYS_FROM_DAY (неделя и дальше) от графика не зависят.
+SKIP_ALWAYS_FROM_DAY = 7
+# Пока законченных тренировок меньше этого, графика ещё не видно — первая
+# подколка не раньше SKIP_NEWBIE_FIRST_DAY дней перерыва.
+SKIP_NEWBIE_MIN_WORKOUTS = 5
+SKIP_NEWBIE_FIRST_DAY = 5
+# «Обычный» перерыв — медиана по последним SKIP_GAP_WINDOW промежуткам между
+# днями тренировок, и только когда их хотя бы SKIP_GAP_MIN.
+SKIP_GAP_WINDOW = 12
+SKIP_GAP_MIN = 3
+# Перерывы, начавшиеся в тот же день недели, что и текущий, — если их хотя бы
+# столько, их медиана тоже в счёте (график недельный: перерыв с пятницы длиннее).
+SKIP_SAME_WEEKDAY_MIN = 2
+
+
+def _median(values: list[int]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return float(ordered[mid]) if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def usual_gap_days(dates: list[dt.date]) -> Optional[float]:
+    """Обычный для атлета перерыв перед следующей тренировкой, или None, если
+    истории мало (меньше SKIP_GAP_MIN промежутков между разными днями).
+
+    Берётся большее из двух: медиана последних промежутков и медиана тех из
+    них, что начинались в тот же день недели, что и последняя тренировка. Так
+    у графика пн/ср/пт перерыв после пятницы обычный — три дня, а после среды —
+    два: суббота после пропущенной пятницы — пропуск, понедельник — нет."""
+    days = sorted(set(dates))
+    if len(days) < 2:
+        return None
+    pairs = list(zip(days, days[1:], strict=False))[-SKIP_GAP_WINDOW:]
+    if len(pairs) < SKIP_GAP_MIN:
+        return None
+    usual = _median([(b - a).days for a, b in pairs])
+    weekday = days[-1].weekday()
+    same = [(b - a).days for a, b in pairs if a.weekday() == weekday]
+    if len(same) >= SKIP_SAME_WEEKDAY_MIN:
+        usual = max(usual, _median(same))
+    return usual
+
+
+def skip_milestone(
+    days_since_last: Optional[int], dates: Optional[list[dt.date]] = None
+) -> Optional[int]:
+    """Веха пропуска (день из SKIP_MILESTONE_DAYS) или None.
+
+    `dates` — дни законченных тренировок (по одному на тренировку). Без них —
+    только точное совпадение дня. С ними короткие вехи молчат, пока перерыв
+    укладывается в обычный для атлета, и пока у новичка меньше
+    SKIP_NEWBIE_MIN_WORKOUTS тренировок — до SKIP_NEWBIE_FIRST_DAY дней."""
+    if days_since_last not in push_texts.SKIP_MILESTONE_DAYS:
+        return None
+    if dates is None or days_since_last >= SKIP_ALWAYS_FROM_DAY:
         return days_since_last
-    return None
+    if len(dates) < SKIP_NEWBIE_MIN_WORKOUTS and days_since_last < SKIP_NEWBIE_FIRST_DAY:
+        return None
+    usual = usual_gap_days(dates)
+    if usual is not None and days_since_last <= usual:
+        return None
+    return days_since_last
 
 
 def is_win_back_day(days_since_last: Optional[int]) -> bool:
@@ -315,7 +376,7 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             push_texts.STREAK_AT_RISK, text, ios_params={"weeks": weeks_phrase, "days_left": days_left}
         )
 
-    milestone_day = skip_milestone(dashboard.days_since_last)
+    milestone_day = skip_milestone(dashboard.days_since_last, dates)
     if milestone_day is not None:
         category = push_texts.SKIP_CATEGORY_BY_DAY[milestone_day]
         text = await push_texts.pick_text(telegram_id, category)
@@ -432,12 +493,22 @@ async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:
         return None
 
 
-async def build_newbie_push(telegram_id: int, created_at: str, today: dt.date) -> Optional[PushDecision]:
+def local_signup_date(created_at: str, tz_offset: Optional[int]) -> dt.date:
+    """День регистрации по часам атлета. `created_at` в базе — наивный UTC, а
+    сравнивается он с местным `today`: без сдвига у UTC+5, заведённого в 02:00
+    по местному, «день после регистрации» наступал на сутки раньше."""
+    signed_up = dt.datetime.fromisoformat(created_at.replace(" ", "T")[:19])
+    return (signed_up + dt.timedelta(hours=tz_offset or 0)).date()
+
+
+async def build_newbie_push(
+    telegram_id: int, created_at: str, today: dt.date, tz_offset: Optional[int] = 0
+) -> Optional[PushDecision]:
     if await db.has_push_today(
         telegram_id, today.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES
     ):
         return None
-    signup_date = dt.date.fromisoformat(created_at[:10])
+    signup_date = local_signup_date(created_at, tz_offset)
     days_since_signup = (today - signup_date).days
     if not is_newbie_nudge_day(days_since_signup):
         return None
@@ -744,7 +815,7 @@ async def _send_daily_pushes(bot: Bot) -> None:
         if should_send_now(tz_offset, hour)
     ]
     due_newbies = [
-        (telegram_id, created_at, _local_now(tz_offset).date())
+        (telegram_id, created_at, tz_offset, _local_now(tz_offset).date())
         for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids()
         if should_send_now(tz_offset, hour)
     ]
@@ -766,11 +837,11 @@ async def _send_daily_pushes(bot: Bot) -> None:
                     # обрывать рассылку остальным: раньше исключение улетало из цикла.
                     logger.exception("Failed to deliver push for user %s", telegram_id)
 
-    for telegram_id, created_at, local_date in due_newbies:
+    for telegram_id, created_at, tz_offset, local_date in due_newbies:
         user = await db.get_user(telegram_id)
         with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
             try:
-                decision = await build_newbie_push(telegram_id, created_at, local_date)
+                decision = await build_newbie_push(telegram_id, created_at, local_date, tz_offset=tz_offset)
             except Exception:
                 logger.exception("Failed to build newbie push for user %s", telegram_id)
                 continue
