@@ -64,7 +64,8 @@ RU_ALLOWED_LATIN = {
 
 # Идентичность каталога: русское имя шаблона, по которому ключуются картинки и
 # описания (exercises.original_name, и то же поле `original_name` в сводке
-# шаблона GET /exercise-templates — ExerciseTemplateSummary на клиенте). Не
+# шаблона GET /exercise-templates — клиент читает его начиная с iOS PR #715,
+# `ExerciseTemplateSummary.originalName`, чтобы узнать свою копию шаблона). Не
 # показывается как текст — клиент показывает display_name/name. По-русски
 # навсегда, на любом языке аккаунта.
 EN_IDENTITY_KEYS = {"original_name"}

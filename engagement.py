@@ -184,7 +184,7 @@ def rank_near_missing(
 # пн/ср/пт, с пятницы до понедельника — три дня, и это график, а не «отмазки».
 # Вехи от SKIP_ALWAYS_FROM_DAY (неделя и дальше) от графика не зависят.
 SKIP_ALWAYS_FROM_DAY = 7
-# Пока законченных тренировок меньше этого, графика ещё не видно — первая
+# Пока разных дней с тренировкой меньше этого, графика ещё не видно — первая
 # подколка не раньше SKIP_NEWBIE_FIRST_DAY дней перерыва.
 SKIP_NEWBIE_MIN_WORKOUTS = 5
 SKIP_NEWBIE_FIRST_DAY = 5
@@ -233,12 +233,14 @@ def skip_milestone(
     `dates` — дни законченных тренировок (по одному на тренировку). Без них —
     только точное совпадение дня. С ними короткие вехи молчат, пока перерыв
     укладывается в обычный для атлета, и пока у новичка меньше
-    SKIP_NEWBIE_MIN_WORKOUTS тренировок — до SKIP_NEWBIE_FIRST_DAY дней."""
+    SKIP_NEWBIE_MIN_WORKOUTS разных дней с тренировкой — до
+    SKIP_NEWBIE_FIRST_DAY дней (две тренировки в один день — один день
+    графика, а не два)."""
     if days_since_last not in push_texts.SKIP_MILESTONE_DAYS:
         return None
     if dates is None or days_since_last >= SKIP_ALWAYS_FROM_DAY:
         return days_since_last
-    if len(dates) < SKIP_NEWBIE_MIN_WORKOUTS and days_since_last < SKIP_NEWBIE_FIRST_DAY:
+    if len(set(dates)) < SKIP_NEWBIE_MIN_WORKOUTS and days_since_last < SKIP_NEWBIE_FIRST_DAY:
         return None
     usual = usual_gap_days(dates)
     if usual is not None and days_since_last <= usual:

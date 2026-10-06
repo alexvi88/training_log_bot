@@ -93,7 +93,8 @@ async def test_signup_on_tuesday_first_workout_default_summary_is_this_week(
 ):
     """Пришёл во вторник, потренировался, открыл «Итог недели» без `week`:
     видит свою первую неделю, а не «Неделя мимо» за прошлую, где его не было."""
-    real_today = timeutil.user_today(None)
+    # Пояс атлета — UTC (_api_client ставит tz_offset=0), и «сегодня» берём в нём же.
+    real_today = timeutil.user_today({"tz_offset": 0})
     tuesday = weekly_summary.week_monday(real_today) - dt.timedelta(days=13)
     assert tuesday.weekday() == 1
     monkeypatch.setattr(timeutil, "user_today", lambda user: tuesday + dt.timedelta(days=1))
@@ -108,10 +109,23 @@ async def test_signup_on_tuesday_first_workout_default_summary_is_this_week(
     for key in ("weekly.verdict.empty.title", "weekly.verdict.empty.body.1"):
         assert i18n.t_in(lang, key) not in (body["verdict"]["title"] + body["verdict"]["body"])
 
-    # Прошлая неделя явно — у неё итога нет, как до первой тренировки.
+    # Прошлая неделя явно — атлета в ней не было; `null` клиент прочёл бы как
+    # «тренировок нет вовсе», поэтому ответ тот же, что без параметра.
     last = weekly_summary.week_monday(tuesday) - dt.timedelta(days=7)
     resp = await client.get(f"/weekly-summary?week={last.isoformat()}")
-    assert resp.status_code == 200 and resp.json() is None
+    assert resp.status_code == 200
+    assert resp.json() == body
+    # Явная неделя с тренировкой — та самая неделя.
+    resp = await client.get(f"/weekly-summary?week={tuesday.isoformat()}")
+    assert resp.json()["week_start"] == body["week_start"]
+
+
+async def test_weekly_summary_is_null_only_without_any_workouts(fresh_db, client_factory):
+    client = await _api_client(fresh_db, client_factory)
+    week = weekly_summary.default_week(timeutil.user_today({"tz_offset": 0}))
+    for path in ("/weekly-summary", f"/weekly-summary?week={week.isoformat()}"):
+        resp = await client.get(path)
+        assert resp.status_code == 200 and resp.json() is None
 
 
 async def test_collect_returns_none_for_a_week_before_the_first_workout(fresh_db, user_id):
@@ -147,6 +161,8 @@ def test_skip_milestone_rules():
     assert engagement.skip_milestone(3, tue_fri[:-1]) is None
     # Меньше пяти тренировок — первая подколка не раньше пятого дня.
     three = [MON, _day(0, 1), _day(0, 2)]
+    # Порог новичка — по дням: шесть тренировок в три дня — всё ещё три дня.
+    assert engagement.skip_milestone(3, three + three) is None
     assert engagement.skip_milestone(3, three) is None
     assert engagement.skip_milestone(5, three) == 5
     # Длинные вехи от графика не зависят.
@@ -187,8 +203,9 @@ def test_weekday_leader_needs_history_and_a_clear_lead():
     saturday = _day(0, 5)
     assert analytics.most_frequent_weekday([saturday]) is None
     assert analytics.most_frequent_weekday([saturday, _day(1, 5)]) is None
-    # Одни субботы — сравнивать не с чем, лидера нет.
-    assert analytics.most_frequent_weekday([_day(w, 5) for w in range(5)]) is None
+    assert analytics.most_frequent_weekday([_day(w, 5) for w in range(3)]) is None
+    # Ходит только по субботам — суббота и есть его день.
+    assert analytics.most_frequent_weekday([_day(w, 5) for w in range(5)]) == 5
     # Шесть тренировок, субботы явно впереди.
     dates = [_day(w, 5) for w in range(4)] + [_day(0, 1), _day(1, 3)]
     assert analytics.most_frequent_weekday(dates) == 5
@@ -223,8 +240,17 @@ async def test_sunday_static_digest_after_one_workout_claims_no_best_day(
 
 async def test_newbie_nudge_skips_someone_mid_first_workout(fresh_db, user_id):
     assert [uid for uid, *_ in await fresh_db.list_newbie_user_ids()] == [user_id]
-    await fresh_db.create_workout(user_id)  # status='active'
+    await fresh_db.create_workout(user_id)  # status='active', начата сейчас
     assert await fresh_db.list_newbie_user_ids() == []
+
+
+async def test_newbie_nudge_returns_after_an_abandoned_active_workout(fresh_db, user_id):
+    """Нажал «Начать» и ушёл: брошенная активная тренировка сама не закрывается,
+    и без срока он выпал бы из напоминаний навсегда."""
+    stale = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+             - dt.timedelta(hours=fresh_db.NEWBIE_ACTIVE_WORKOUT_HOURS + 1))
+    await fresh_db.create_workout(user_id, started_at=stale.isoformat(timespec="seconds"))
+    assert [uid for uid, *_ in await fresh_db.list_newbie_user_ids()] == [user_id]
 
 
 def test_signup_day_is_local():

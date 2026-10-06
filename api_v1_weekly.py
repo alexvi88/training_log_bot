@@ -67,20 +67,26 @@ async def get_weekly_summary(request: Request) -> JSONResponse:
     понедельник), без параметра — последняя законченная неделя, а если атлета
     в ней ещё не было (первая тренировка позже её воскресенья) — текущая.
 
-    `null` целиком, если законченных тренировок у атлета нет вовсе — как у
-    /dashboard: у новичка итога нет, и клиент зовёт начать, а не рисует нули.
-    Тот же `null` — у недели, которая целиком раньше первой тренировки.
+    `null` целиком — только если законченных тренировок у атлета нет вовсе,
+    как у /dashboard: у новичка итога нет, и клиент зовёт начать, а не рисует
+    нули. Явная неделя целиком раньше первой тренировки ведёт себя как запрос
+    без параметра — атлета в ней не было, и итог по ней был бы неправдой.
     Неделя, которая ещё не началась, — 400 с текстом на языке атлета.
     """
     user_id, user = await authed_user(request)
     today = timeutil.user_today(user)
     raw = request.query_params.get("week")
+    first_day = await weekly_summary.first_workout_day(user_id, user)
     if raw:
         week = weekly_summary.week_monday(parse_date(raw, "week"))
         if week > today:
             raise ApiError(400, "weekly_future", "week has not started yet", key="api.error.weekly_future")
+        # Неделя раньше первой тренировки: `null` клиент читает как «тренировок
+        # нет вовсе» — неправда. Отдаём то же, что без параметра: неделю, с
+        # которой дневник начался (текущую, вердикт first).
+        if weekly_summary.before_history(week, first_day):
+            week = weekly_summary.default_week(today, first_day)
     else:
-        first_day = await weekly_summary.first_workout_day(user_id, user)
         week = weekly_summary.default_week(today, first_day)
     with i18n.use_lang(user["lang"]):
         summary = await weekly_summary.collect(user_id, week, user)

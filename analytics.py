@@ -1000,9 +1000,10 @@ def most_frequent_weekday(
 
     `min_lead` is how many workouts clear of the runner-up the winner must be:
     "твой самый продуктивный день" is a claim about a habit, and 5-vs-4 is
-    noise, not a habit. The lead is required always; with fewer than
-    `min_workouts` workouts, or only one weekday in the whole history, there
-    is no runner-up to beat and nothing to compare — None.
+    noise, not a habit. With fewer than `min_workouts` workouts there is no
+    habit yet — None. With enough workouts all on one weekday that weekday is
+    the honest answer (someone who only trains on Saturdays is productive on
+    Saturdays), and there is no runner-up for `min_lead` to apply to.
     """
     dates = list(workout_dates)
     if len(dates) < min_workouts:
@@ -1011,8 +1012,8 @@ def most_frequent_weekday(
     for d in dates:
         counts[d.weekday()] = counts.get(d.weekday(), 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    if len(ranked) < 2:
-        return None
+    if len(ranked) == 1:
+        return ranked[0][0]
     return ranked[0][0] if ranked[0][1] - ranked[1][1] >= min_lead else None
 
 

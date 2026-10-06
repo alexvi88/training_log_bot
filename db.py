@@ -10300,6 +10300,11 @@ async def list_engagement_eligible_user_ids() -> list[tuple[int, int]]:
     return [(r["user_id"], r["tz_offset"]) for r in await cur.fetchall()]
 
 
+# Активная тренировка новичка свежее этого — он сейчас в зале, напоминание
+# «дневник пустой» не шлём (list_newbie_user_ids).
+NEWBIE_ACTIVE_WORKOUT_HOURS = 12
+
+
 async def list_newbie_user_ids() -> list[tuple[int, str]]:
     """Users who never finished a workout — the separate walk pool for the newbie nudge.
 
@@ -10309,15 +10314,22 @@ async def list_newbie_user_ids() -> list[tuple[int, str]]:
     the nudge is timed off signup date, not off a last-workout date these users don't have,
     and `tz_offset` so the send lands at the user's own evening (see the engagement job).
 
-    Тот, у кого прямо сейчас открыта тренировка (status='active'), в пул не
-    попадает: «дневник пока пустой, залогируй хоть один подход» посреди его
-    первой тренировки — неправда, он как раз логирует.
+    Тот, у кого прямо сейчас идёт тренировка (status='active', начата не
+    раньше NEWBIE_ACTIVE_WORKOUT_HOURS часов назад), в пул не попадает: «дневник
+    пока пустой, залогируй хоть один подход» посреди его первой тренировки —
+    неправда, он как раз логирует. Брошенная активная тренировка сама не
+    закрывается, поэтому старая не в счёт: нажал «Начать» и ушёл — напоминание
+    вернётся. started_at — наивный UTC ISO (now_iso), сравнение через
+    datetime(), чтобы формат с пробелом или поясом не ломал порог.
     """
+    fresh_since = (_utc_now() - dt.timedelta(hours=NEWBIE_ACTIVE_WORKOUT_HOURS)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT u.telegram_id, u.created_at, u.tz_offset FROM users u "
         "WHERE u.pushes_enabled = 1 AND NOT EXISTS ("
         "SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id "
-        "AND w.status IN ('finished', 'active'))"
+        "AND (w.status = 'finished' OR (w.status = 'active' "
+        "AND datetime(w.started_at) >= datetime(?))))",
+        (fresh_since,),
     )
     return [(r["telegram_id"], r["created_at"], r["tz_offset"]) for r in await cur.fetchall()]
 
