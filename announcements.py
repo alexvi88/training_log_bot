@@ -262,8 +262,8 @@ FEEDBACK_CONTACT_RU = Announcement(
     lang="ru",
     text=(
         "ПРИВЕТ АТЛЕТ! Есть разговор не про железо.\n\n"
-        "Тот, кто меня собирает, читает всё сам. Что бесит, чего не хватает, "
-        "что сделать лучше — пиши ему напрямую: @lexbp8.\n\n"
+        "Меня делает живой человек — @lexbp8, и все сообщения он читает сам. "
+        "Что бесит, чего не хватает, что сделать лучше — пиши ему напрямую.\n\n"
         "Любая мелочь пригодится: новые штуки во мне появляются ровно из таких сообщений."
     ),
     buttons=[("✍️ Написать @lexbp8", FEEDBACK_CONTACT_URL)],
@@ -275,8 +275,8 @@ FEEDBACK_CONTACT_EN = Announcement(
     lang="en",
     text=(
         "HEY ATHLETE! A word that's not about the iron.\n\n"
-        "The person who builds me reads every message personally. What bugs you, "
-        "what's missing, what to make better — write to them directly: @lexbp8.\n\n"
+        "I'm built by a real person — @lexbp8 — who reads every message personally. "
+        "What bugs you, what's missing, what to make better — write to @lexbp8 directly.\n\n"
         "Any small thing helps: that's exactly where my new features come from."
     ),
     buttons=[("✍️ Message @lexbp8", FEEDBACK_CONTACT_URL)],
