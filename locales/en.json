@@ -291,6 +291,7 @@
   "btn.delete_day": "🗑 Delete day",
   "btn.delete_set": "🗑 Delete set",
   "btn.disconnect": "🚫 Disconnect {name}",
+  "btn.ios_app": "📱 iPhone app",
   "btn.donate": "❤️ Support the project",
   "btn.done_check": "✅ Done",
   "btn.duplicate": "📄 Duplicate",

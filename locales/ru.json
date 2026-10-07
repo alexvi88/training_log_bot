@@ -291,6 +291,7 @@
   "btn.delete_day": "🗑 Удалить день",
   "btn.delete_set": "🗑 Удалить подход",
   "btn.disconnect": "🚫 Отключить {name}",
+  "btn.ios_app": "📱 Приложение для iPhone",
   "btn.donate": "❤️ Поддержать проект",
   "btn.done_check": "✅ Готово",
   "btn.duplicate": "📄 Дублировать",

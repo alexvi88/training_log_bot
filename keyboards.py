@@ -139,6 +139,7 @@ def main_menu(
     show_import_button: bool = False,
     community_url: str | None = None,
     show_donate: bool = False,
+    app_store_url: str | None = None,
 ) -> InlineKeyboardMarkup:
     """show_import_button: offered while the diary is still empty (same condition
     that used to gate the now-removed "✍️ Записать прошлую тренировку" quick-log
@@ -154,7 +155,12 @@ def main_menu(
     show_donate: config.DONATIONS_ENABLED — «❤️ Поддержать проект» самой
     последней строкой (см. handlers/donate.py). Ниже AI-тренера и чата
     сообщества нарочно: это не функция дневника, а отдельная, необязательная
-    просьба, и ей не место среди рабочих экранов."""
+    просьба, и ей не место среди рабочих экранов.
+
+    app_store_url: config.app_store_url() — «📱 Приложение для iPhone» сразу
+    под AI-тренером, ссылкой в App Store. Анонс релиза уходит один раз тем,
+    кто уже был в боте; новичку про приложение говорит только эта кнопка.
+    Нет ссылки — нет и кнопки: кнопка в никуда хуже отсутствующей."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text=i18n.t("btn.resume_workout_caps"), callback_data="menu:resume_workout")
@@ -170,20 +176,24 @@ def main_menu(
     b.button(text=i18n.t("btn.exercises"), callback_data="menu:exercises")
     b.button(text=i18n.t("btn.programs"), callback_data="rt:manage")
     b.button(text=i18n.t("btn.weight_diary"), callback_data="menu:bodyweight")
-    b.button(text=i18n.t("btn.food_diary"), callback_data="menu:food")
     b.button(text=i18n.t("btn.achievements"), callback_data="menu:achievements")
     b.button(text=i18n.t("btn.settings"), callback_data="menu:settings")
     b.button(text=i18n.t("btn.ai_coach"), callback_data="menu:ai")
+    if app_store_url:
+        b.button(text=i18n.t("btn.ios_app"), url=app_store_url)
     if community_url:
         b.button(text=i18n.t("btn.community_chat"), url=community_url)
     if show_donate:
         b.button(text=i18n.t("btn.donate"), callback_data="menu:donate")
     # start/resume and the import button (if shown) full width, then pairs:
-    # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
-    # Достижения·Настройки, then AI-тренер full width at the very bottom,
-    # под ним — чат сообщества (если заведён), и под всем — донат (если включён).
+    # Прогресс·История, Упражнения·Программы, Дневник веса·Достижения, then
+    # Настройки and AI-тренер full width at the very bottom (кнопки «Дневник
+    # еды» в меню больше нет — владелец убрал; сам экран жив по старым кнопкам),
+    # под ним — приложение для iPhone (если есть ссылка), чат сообщества (если
+    # заведён), и под всем — донат (если включён).
     b.adjust(
-        *([1, 1] if show_import_button else [1]), 2, 2, 2, 2, 1,
+        *([1, 1] if show_import_button else [1]), 2, 2, 2, 1, 1,
+        *([1] if app_store_url else []),
         *([1] if community_url else []), *([1] if show_donate else []),
     )
     return b.as_markup()
