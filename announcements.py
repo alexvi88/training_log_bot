@@ -135,6 +135,10 @@ class Announcement:
     # человеку с приложением — шум. Таким пишем отметку доставки без
     # отправки, чтобы следующий прогон их не трогал.
     skip_app_users: bool = False
+    # Не слать app-only аккаунтам (вход через Apple, без Telegram): у них
+    # анонс ушёл бы только общим баннером APNs «в дневнике что-то новое», а
+    # ведёт он наружу, в Telegram. Отметку доставки пишем, чтобы не повторять.
+    telegram_only: bool = False
     _file_id: list[str] = field(default_factory=list, repr=False)
 
 
@@ -249,6 +253,36 @@ RELEASE_IOS_APP_EN = Announcement(
     skip_app_users=True,
 )
 
+# Просьба о фидбеке напрямую владельцу. Голос тренера: говорит о том, кто
+# его собирает, в третьем лице — персонаж в продукте один (TONE_OF_VOICE.md).
+FEEDBACK_CONTACT_URL = "https://t.me/lexbp8"
+
+FEEDBACK_CONTACT_RU = Announcement(
+    key="feedback_contact_ru",
+    lang="ru",
+    text=(
+        "ПРИВЕТ АТЛЕТ! Есть разговор не про железо.\n\n"
+        "Тот, кто меня собирает, читает всё сам. Что бесит, чего не хватает, "
+        "что сделать лучше — пиши ему напрямую: @lexbp8.\n\n"
+        "Любая мелочь пригодится: новые штуки во мне появляются ровно из таких сообщений."
+    ),
+    buttons=[("✍️ Написать @lexbp8", FEEDBACK_CONTACT_URL)],
+    telegram_only=True,
+)
+
+FEEDBACK_CONTACT_EN = Announcement(
+    key="feedback_contact_en",
+    lang="en",
+    text=(
+        "HEY ATHLETE! A word that's not about the iron.\n\n"
+        "The person who builds me reads every message personally. What bugs you, "
+        "what's missing, what to make better — write to them directly: @lexbp8.\n\n"
+        "Any small thing helps: that's exactly where my new features come from."
+    ),
+    buttons=[("✍️ Message @lexbp8", FEEDBACK_CONTACT_URL)],
+    telegram_only=True,
+)
+
 # Что ещё не разослано. Отправленную рассылку отсюда убираем — база помнит её
 # и без этого списка.
 ANNOUNCEMENTS: list[Announcement] = [
@@ -258,6 +292,8 @@ ANNOUNCEMENTS: list[Announcement] = [
     RATE_BOTS_ARCHIVE_EN,
     RELEASE_IOS_APP_RU,
     RELEASE_IOS_APP_EN,
+    FEEDBACK_CONTACT_RU,
+    FEEDBACK_CONTACT_EN,
 ]
 
 # Ключи рассылок, которые прямо сейчас разносятся этим процессом. Раньше этот
@@ -431,7 +467,10 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     today = dt.date.today().isoformat()
     for telegram_id in recipients:
         user = await db.get_user(telegram_id)
-        if ann.skip_app_users and await _has_app(telegram_id, user):
+        app_only = user is not None and not user["telegram_linked"]
+        if (ann.skip_app_users and await _has_app(telegram_id, user)) or (
+            ann.telegram_only and app_only
+        ):
             # Не отправка, а отметка «этому не нужно» — иначе следующий прогон
             # снова увидит его неотправленным. В счёт доставленных не идёт.
             await db.record_push(telegram_id, ann.key, ann.text, today)

@@ -754,3 +754,30 @@ async def test_ios_release_texts_follow_the_brand_and_languages():
     for ann in (ru, en):
         assert ann.pin and ann.skip_app_users
         assert len(ann.buttons) == 1
+
+
+async def test_telegram_only_release_skips_app_only_accounts(fresh_db, monkeypatch):
+    await _users(fresh_db, 1)
+    app_user = await fresh_db.create_app_only_user()
+    await fresh_db.register_push_token(app_user["telegram_id"], "ios", "device-token-9")
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(apns, "send_alert", alerts)
+
+    bot = FakeBot()
+    ann = _announcement()
+    ann.telegram_only = True
+    assert await announcements.send_announcement(bot, ann) == (1, 0, 0)
+    assert [chat for chat, _ in bot.sent] == [1]
+    alerts.assert_not_awaited()
+    assert await announcements.send_announcement(FakeBot(), ann) == (0, 0, 0)
+
+
+async def test_feedback_contact_texts():
+    ru, en = announcements.FEEDBACK_CONTACT_RU, announcements.FEEDBACK_CONTACT_EN
+    assert ru.text.startswith("ПРИВЕТ АТЛЕТ! ") and ru.lang == "ru"
+    assert en.text.startswith("HEY ATHLETE! ") and en.lang == "en"
+    assert not any("а" <= ch.lower() <= "я" for ch in en.text)
+    for ann in (ru, en):
+        assert "@lexbp8" in ann.text and ann.telegram_only and not ann.pin
+        assert ann.buttons[0][1] == "https://t.me/lexbp8"
