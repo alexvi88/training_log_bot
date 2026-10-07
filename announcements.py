@@ -125,6 +125,16 @@ class Announcement:
     available: Callable[[], bool] = lambda: True
     parse_mode: str | None = "HTML"
     lang: str | None = None
+    # Закрепить сообщение в чате с ботом после отправки (тихо, без второго
+    # уведомления). Для анонсов, которые должны висеть сверху и дальше —
+    # например, ссылка на приложение. Не закрепилось — анонс всё равно
+    # доставлен: закреп — украшение, а не условие доставки.
+    pin: bool = False
+    # Не слать тем, у кого приложение уже стоит: app-only аккаунтам и
+    # телеграмным с привязанным iOS-устройством. Анонс «скачай приложение»
+    # человеку с приложением — шум. Таким пишем отметку доставки без
+    # отправки, чтобы следующий прогон их не трогал.
+    skip_app_users: bool = False
     _file_id: list[str] = field(default_factory=list, repr=False)
 
 
@@ -197,6 +207,48 @@ RATE_BOTS_ARCHIVE_EN = Announcement(
     buttons=[("⭐ Rate it in the catalog", BOTS_ARCHIVE_URL)],
 )
 
+# Релиз iOS-приложения в App Store. Ждёт, пока на развороте задан
+# APP_STORE_URL (`available`): кнопка без ссылки ведёт в никуда. Закрепляется
+# в чате — ссылка на приложение нужна и потом, а не только в день релиза.
+# Тем, у кого приложение уже стоит, не уходит (`skip_app_users`).
+RELEASE_IOS_APP_RU = Announcement(
+    key="release_ios_app_ru",
+    lang="ru",
+    text=(
+        "ПРИВЕТ АТЛЕТ! Я теперь и на iPhone.\n\n"
+        "📱 <b>Дневник в App Store.</b> Тот же тренер, та же история: войди "
+        "через Telegram — и все твои тренировки уже там.\n\n"
+        "⏱ Подход записываешь в пару касаний — прямо с экрана блокировки, "
+        "не открывая приложение. Отдых считаю там же.\n"
+        "📈 Прогресс, рекорды и программы — на одном экране.\n"
+        "🤖 Спросить меня можно и там, голосом тоже.\n\n"
+        "Бот никуда не уходит: пиши здесь или там — дневник один."
+    ),
+    buttons=[("📱 Скачать в App Store", config.APP_STORE_URL)],
+    available=lambda: config.app_store_url() is not None,
+    pin=True,
+    skip_app_users=True,
+)
+
+RELEASE_IOS_APP_EN = Announcement(
+    key="release_ios_app_en",
+    lang="en",
+    text=(
+        "HEY ATHLETE! I'm on iPhone now.\n\n"
+        "📱 <b>The log is on the App Store.</b> Same coach, same history: sign in "
+        "with Telegram and all your workouts are already there.\n\n"
+        "⏱ Log a set in a couple of taps — right from the lock screen, without "
+        "opening the app. I count your rest there too.\n"
+        "📈 Progress, records and programs on one screen.\n"
+        "🤖 You can ask me there as well, by voice too.\n\n"
+        "The bot stays: log here or there — it's one diary."
+    ),
+    buttons=[("📱 Get it on the App Store", config.APP_STORE_URL)],
+    available=lambda: config.app_store_url() is not None,
+    pin=True,
+    skip_app_users=True,
+)
+
 # Что ещё не разослано. Отправленную рассылку отсюда убираем — база помнит её
 # и без этого списка.
 ANNOUNCEMENTS: list[Announcement] = [
@@ -204,6 +256,8 @@ ANNOUNCEMENTS: list[Announcement] = [
     RELEASE_AI_TRAINER_ACTIONS,
     RATE_BOTS_ARCHIVE_RU,
     RATE_BOTS_ARCHIVE_EN,
+    RELEASE_IOS_APP_RU,
+    RELEASE_IOS_APP_EN,
 ]
 
 # Ключи рассылок, которые прямо сейчас разносятся этим процессом. Раньше этот
@@ -283,6 +337,30 @@ async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
     # не файл — картинка у всех одна.
     if photo is not None and not ann._file_id and getattr(message, "photo", None):
         ann._file_id.append(message.photo[-1].file_id)
+    if ann.pin:
+        await _pin(bot, telegram_id, message, ann)
+
+
+async def _pin(bot: Bot, telegram_id: int, message, ann: Announcement) -> None:
+    """Закрепить анонс в чате с ботом — тихо. Не вышло — анонс всё равно
+    доставлен, ошибку только пишем в лог (см. `Announcement.pin`)."""
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return
+    try:
+        await bot.pin_chat_message(
+            chat_id=telegram_id, message_id=message_id, disable_notification=True
+        )
+    except TelegramAPIError:
+        logger.warning("Announcement %s: could not pin for user %s", ann.key, telegram_id)
+
+
+async def _has_app(telegram_id: int, user) -> bool:
+    """Приложение у человека уже стоит: app-only аккаунт или привязанный
+    iOS-девайс (см. `Announcement.skip_app_users`)."""
+    if user is not None and not user["telegram_linked"]:
+        return True
+    return bool(await db.get_push_tokens(telegram_id, "ios"))
 
 
 # ---------- шаг 1: показать админу ----------
@@ -353,6 +431,11 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     today = dt.date.today().isoformat()
     for telegram_id in recipients:
         user = await db.get_user(telegram_id)
+        if ann.skip_app_users and await _has_app(telegram_id, user):
+            # Не отправка, а отметка «этому не нужно» — иначе следующий прогон
+            # снова увидит его неотправленным. В счёт доставленных не идёт.
+            await db.record_push(telegram_id, ann.key, ann.text, today)
+            continue
         if user is not None and not user["telegram_linked"]:
             # App-only атлет — чата с ботом нет, Telegram-попытка тут ничего
             # не доставит, только оставит ошибку в логе на каждого такого
