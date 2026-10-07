@@ -1005,7 +1005,10 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
         bool(active),
         show_import_button=not has_history,
         community_url=None,
-        show_donate=config.DONATIONS_ENABLED,
+        # «❤️ Поддержать проект» из главного меню убрал владелец; экран
+        # доната жив по старым кнопкам (menu:donate).
+        show_donate=False,
+        app_store_url=config.app_store_url(),
     )
 
 

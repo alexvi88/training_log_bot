@@ -263,3 +263,16 @@ async def test_donation_totals_count_distinct_donors(fresh_db, user_id):
 
     assert stars == 700
     assert people == 2
+
+
+def test_main_menu_links_the_ios_app_only_when_the_store_link_is_set():
+    url = "https://apps.apple.com/app/id6815211995"
+    rows = keyboards.main_menu(has_active_workout=False, app_store_url=url).inline_keyboard
+    app_buttons = [b for row in rows for b in row if b.url == url]
+    assert len(app_buttons) == 1
+    # Своей строкой, сразу под AI-тренером.
+    ai_row = next(i for i, row in enumerate(rows) if any(b.callback_data == "menu:ai" for b in row))
+    assert rows[ai_row + 1] == app_buttons
+
+    rows = keyboards.main_menu(has_active_workout=False, app_store_url=None).inline_keyboard
+    assert not any(b.url for row in rows for b in row)
