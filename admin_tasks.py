@@ -244,6 +244,9 @@ async def run_backup_staleness_check(bot: Bot) -> None:
 
 _ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
 _replica_alerted_at: Optional[float] = None
+# Момент старта процесса (monotonic): до config.REPLICA_CHECK_STARTUP_GRACE_MINUTES
+# после него проверка реплики молчит — см. там же, почему.
+_process_started_at = time.monotonic()
 
 
 def _litestream_binary() -> Optional[str]:
@@ -339,6 +342,8 @@ async def check_replica_health() -> Optional[str]:
     config.REPLICA_ALERT_REPEAT_HOURS — пока реплика лежит, час за часом слать одно
     и то же значит приучить админа не читать."""
     global _replica_alerted_at
+    if time.monotonic() - _process_started_at < config.REPLICA_CHECK_STARTUP_GRACE_MINUTES * 60:
+        return None
     problem: Optional[str] = None
     try:
         age = await replica_age_hours()
