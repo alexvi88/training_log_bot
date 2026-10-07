@@ -1301,6 +1301,11 @@
     "thumb": {
      "type": "String",
      "optional": true
+    },
+    "originalName": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3990,5 +3995,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "50a691d1d816763f87ec6fc12750ad4a06a14d5f"
+ "_ios_commit": "a15ccfe7877917ad194d22d1b96385edf335247f"
 }
