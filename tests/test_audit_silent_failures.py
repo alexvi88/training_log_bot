@@ -177,6 +177,8 @@ def _fresh_replica_state(monkeypatch, tmp_path=None, db_age_hours=0.0):
         os.utime(path, (stamp, stamp))
         monkeypatch.setattr(config, "DB_PATH", str(path))
     monkeypatch.setattr(admin_tasks, "_replica_alerted_at", None)
+    # Процесс давно запущен — щель на старте (см. ниже) позади.
+    monkeypatch.setattr(admin_tasks, "_process_started_at", _time.monotonic() - 24 * 3600)
     monkeypatch.setattr(config, "BUCKET_NAME", "bucket")
     monkeypatch.setattr(admin_tasks, "_litestream_binary", lambda: "/usr/bin/litestream")
 
@@ -260,6 +262,24 @@ async def test_wal_file_mtime_counts_as_a_write(monkeypatch, tmp_path):
     stamp = _time.time() - 6 * 3600
     os.utime(tmp_path / "training_log.db-wal", (stamp, stamp))
     assert admin_tasks._db_written_since_replica(5) is False
+
+
+async def test_replica_check_waits_after_process_start(monkeypatch, tmp_path):
+    # Деплой после тихого утра: бот на старте записал в базу (mtime свежий), а
+    # Litestream ещё не выгрузил эту запись — последний сегмент 3 часа назад.
+    # Сразу после старта тревоги нет; когда щель прошла — проверка снова живая.
+    import time as _time
+
+    _fresh_replica_state(monkeypatch, tmp_path, db_age_hours=0)
+    run = AsyncMock(return_value=WAL_TABLE.format(created=_iso(3.1)))
+    monkeypatch.setattr(admin_tasks, "_run_litestream", run)
+    monkeypatch.setattr(admin_tasks, "_process_started_at", _time.monotonic())
+    assert await admin_tasks.check_replica_health() is None
+    run.assert_not_awaited()
+
+    grace = config.REPLICA_CHECK_STARTUP_GRACE_MINUTES * 60
+    monkeypatch.setattr(admin_tasks, "_process_started_at", _time.monotonic() - grace - 1)
+    assert await admin_tasks.check_replica_health() is not None
 
 
 async def test_failing_litestream_command_alerts(monkeypatch):

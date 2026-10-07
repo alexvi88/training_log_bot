@@ -17,6 +17,13 @@ REPLICA_STALE_ALERT_HOURS = float(os.getenv("REPLICA_STALE_ALERT_HOURS", "2"))
 REPLICA_ALERT_REPEAT_HOURS = float(os.getenv("REPLICA_ALERT_REPEAT_HOURS", "6"))
 # Сколько ждать ответа `litestream snapshots/wal` (ходит в хранилище по сети).
 REPLICA_CHECK_TIMEOUT_SECONDS = float(os.getenv("REPLICA_CHECK_TIMEOUT_SECONDS", "60"))
+# Первые столько минут после старта процесса реплику не проверяем: на старте бот
+# сам пишет в базу (mtime свежий), а Litestream выгружает эту запись через
+# минуту-другую. Проверка в эту щель видела «писали после последней выгрузки» и
+# возраст тихого утра — ложная тревога на каждом деплое после паузы в записи.
+REPLICA_CHECK_STARTUP_GRACE_MINUTES = float(
+    os.getenv("REPLICA_CHECK_STARTUP_GRACE_MINUTES", "15")
+)
 
 # FSM state survives restarts by persisting to this file instead of memory.
 FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
