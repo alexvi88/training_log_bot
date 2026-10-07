@@ -655,3 +655,102 @@ async def test_ai_actions_release_only_advertises_tools_that_actually_exist():
         "move_exercise_to_group", "archive_exercise", "copy_program",
         "rename_program", "merge_programs", "delete_program", "share_program",
     } <= write_tools
+
+
+# ---------- релиз приложения: закреп и пропуск тех, у кого оно уже стоит ----------
+
+
+class PinningBot(FakeBot):
+    def __init__(self, fail_pin: bool = False):
+        super().__init__()
+        self.pinned: list[tuple[int, int]] = []
+        self.fail_pin = fail_pin
+        self._next_id = 100
+
+    async def _record(self, chat_id: int, text: str):
+        self.sent.append((chat_id, text))
+        self._next_id += 1
+        return SimpleNamespace(photo=None, message_id=self._next_id)
+
+    async def pin_chat_message(self, chat_id: int, message_id: int, disable_notification: bool = False):
+        assert disable_notification is True  # закреп не будит второй раз
+        if self.fail_pin:
+            raise TelegramNetworkError(method=MagicMock(), message="pin failed")
+        self.pinned.append((chat_id, message_id))
+
+
+def _app_release(**overrides) -> announcements.Announcement:
+    fields = dict(
+        key="test_app_release",
+        text="ПРИВЕТ АТЛЕТ! Я теперь и на iPhone.",
+        buttons=[("📱 Скачать", "https://apps.apple.com/app/id1")],
+        pin=True,
+        skip_app_users=True,
+    )
+    fields.update(overrides)
+    return announcements.Announcement(**fields)
+
+
+async def test_pinned_release_is_pinned_quietly_in_each_chat(fresh_db):
+    await _users(fresh_db, 1, 2)
+    bot = PinningBot()
+    assert await announcements.send_announcement(bot, _app_release()) == (2, 0, 0)
+    assert [chat for chat, _ in bot.pinned] == [1, 2]
+
+
+async def test_failed_pin_still_counts_as_delivered(fresh_db):
+    await _users(fresh_db, 1)
+    bot = PinningBot(fail_pin=True)
+    ann = _app_release()
+    assert await announcements.send_announcement(bot, ann) == (1, 0, 0)
+    # Отметка доставки есть — второй прогон не шлёт повторно.
+    assert await announcements.send_announcement(PinningBot(), ann) == (0, 0, 0)
+
+
+async def test_unpinned_release_is_not_pinned(fresh_db):
+    await _users(fresh_db, 1)
+    bot = PinningBot()
+    await announcements.send_announcement(bot, _app_release(pin=False))
+    assert bot.pinned == []
+
+
+async def test_app_release_skips_people_who_already_have_the_app(fresh_db, monkeypatch):
+    """Тем, у кого приложение уже стоит (app-only или привязан iOS-девайс),
+    анонс «скачай приложение» не уходит ни в Telegram, ни баннером — но
+    отмечается, чтобы следующий прогон их не трогал."""
+    await _users(fresh_db, 1, 2)
+    await fresh_db.register_push_token(2, "ios", "device-token-2")
+    app_user = await fresh_db.create_app_only_user()
+    await fresh_db.register_push_token(app_user["telegram_id"], "ios", "device-token-3")
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(apns, "send_alert", alerts)
+
+    bot = PinningBot()
+    ann = _app_release()
+    assert await announcements.send_announcement(bot, ann) == (1, 0, 0)
+    assert [chat for chat, _ in bot.sent] == [1]
+    alerts.assert_not_awaited()
+
+    again = PinningBot()
+    assert await announcements.send_announcement(again, ann) == (0, 0, 0)
+    assert again.sent == []
+
+
+async def test_ios_release_waits_for_the_app_store_link(monkeypatch):
+    monkeypatch.setattr(config, "APP_STORE_URL", "")
+    assert not announcements.RELEASE_IOS_APP_RU.available()
+    assert not announcements.RELEASE_IOS_APP_EN.available()
+    monkeypatch.setattr(config, "APP_STORE_URL", "https://apps.apple.com/app/id123")
+    assert announcements.RELEASE_IOS_APP_RU.available()
+    assert announcements.RELEASE_IOS_APP_EN.available()
+
+
+async def test_ios_release_texts_follow_the_brand_and_languages():
+    ru, en = announcements.RELEASE_IOS_APP_RU, announcements.RELEASE_IOS_APP_EN
+    assert ru.text.startswith("ПРИВЕТ АТЛЕТ! ") and ru.lang == "ru"
+    assert en.text.startswith("HEY ATHLETE! ") and en.lang == "en"
+    assert not any("а" <= ch.lower() <= "я" for ch in en.text)
+    for ann in (ru, en):
+        assert ann.pin and ann.skip_app_users
+        assert len(ann.buttons) == 1
