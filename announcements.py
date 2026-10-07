@@ -261,10 +261,8 @@ FEEDBACK_CONTACT_RU = Announcement(
     key="feedback_contact_ru",
     lang="ru",
     text=(
-        "ПРИВЕТ АТЛЕТ! Есть разговор не про железо.\n\n"
-        "Меня делает живой человек — @lexbp8, и все сообщения он читает сам. "
-        "Что бесит, чего не хватает, что сделать лучше — пиши ему напрямую.\n\n"
-        "Любая мелочь пригодится: новые штуки во мне появляются ровно из таких сообщений."
+        "ПРИВЕТ АТЛЕТ! Что бесит, чего не хватает, что сделать лучше — "
+        "пиши разработчику напрямую: @lexbp8. Читает всё лично."
     ),
     buttons=[("✍️ Написать @lexbp8", FEEDBACK_CONTACT_URL)],
     telegram_only=True,
@@ -274,10 +272,8 @@ FEEDBACK_CONTACT_EN = Announcement(
     key="feedback_contact_en",
     lang="en",
     text=(
-        "HEY ATHLETE! A word that's not about the iron.\n\n"
-        "I'm built by a real person — @lexbp8 — who reads every message personally. "
-        "What bugs you, what's missing, what to make better — write to @lexbp8 directly.\n\n"
-        "Any small thing helps: that's exactly where my new features come from."
+        "HEY ATHLETE! What bugs you, what's missing, what to make better — "
+        "write to the developer directly: @lexbp8. Every message gets read personally."
     ),
     buttons=[("✍️ Message @lexbp8", FEEDBACK_CONTACT_URL)],
     telegram_only=True,
