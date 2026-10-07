@@ -986,19 +986,31 @@ def _week_monday(d: dt.date) -> dt.date:
     return d - dt.timedelta(days=d.weekday())
 
 
-def most_frequent_weekday(workout_dates: Iterable[dt.date], min_lead: int = 2) -> int | None:
+# Меньше стольких законченных тренировок — «самого продуктивного дня» нет:
+# одна суббота в истории — не привычка, а одна суббота.
+WEEKDAY_LEADER_MIN_WORKOUTS = 4
+
+
+def most_frequent_weekday(
+    workout_dates: Iterable[dt.date], min_lead: int = 2,
+    min_workouts: int = WEEKDAY_LEADER_MIN_WORKOUTS,
+) -> int | None:
     """Which weekday (0=Mon) the user trains on most, or None when nothing
     stands out.
 
     `min_lead` is how many workouts clear of the runner-up the winner must be:
     "твой самый продуктивный день" is a claim about a habit, and 5-vs-4 is
-    noise, not a habit.
+    noise, not a habit. With fewer than `min_workouts` workouts there is no
+    habit yet — None. With enough workouts all on one weekday that weekday is
+    the honest answer (someone who only trains on Saturdays is productive on
+    Saturdays), and there is no runner-up for `min_lead` to apply to.
     """
-    counts: dict[int, int] = {}
-    for d in workout_dates:
-        counts[d.weekday()] = counts.get(d.weekday(), 0) + 1
-    if not counts:
+    dates = list(workout_dates)
+    if len(dates) < min_workouts:
         return None
+    counts: dict[int, int] = {}
+    for d in dates:
+        counts[d.weekday()] = counts.get(d.weekday(), 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     if len(ranked) == 1:
         return ranked[0][0]

@@ -185,4 +185,8 @@ async def rank_promotion(user_id: int, user) -> "analytics.Rank | None":
     if rank.level == seen:
         return None
     await db.update_user(user_id, rank_level_seen=rank.level)
-    return rank if rank.level > seen else None
+    # Уровень 0 («Новичок») — стартовая ступень, а не повышение: на первой
+    # тренировке «Новое звание: Новичок» звучало как издёвка. Отметка всё равно
+    # ставится, а сравнение — с max(seen, 0), так что первое настоящее
+    # повышение объявляется как раньше.
+    return rank if rank.level > max(seen, 0) else None

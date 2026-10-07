@@ -74,6 +74,13 @@ def _template_list_json(template, lang: str) -> dict[str, Any]:
         # `name`/`display_name` шаблона в базе всегда по-русски (см. докстринг
         # db.search_exercise_templates) — то, что видит атлет, локализуется тут.
         "name": seed_data.localized_exercise_name(template["name"], lang),
+        # Идентичность шаблона — русское имя, то самое, что форк запишет в
+        # exercises.original_name (db.fork_exercise_from_template сверяет по
+        # нему). Не для показа: показывается `name`. Клиент читает поле начиная
+        # с iOS PR #715 (`ExerciseTemplateSummary.originalName: String?`) — по
+        # нему узнаёт свою копию шаблона в каталоге. Сборки 51/52 его не знают
+        # и просто не читают.
+        "original_name": template["name"],
         "group_id": template["primary_group_id"],
         # Первый кадр каталога для превью в строке подбора — то же поле, что
         # у своих упражнений в GET /exercises (api_v1_common.exercise_json).

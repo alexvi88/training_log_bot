@@ -144,7 +144,7 @@ async def test_unexpected_delivery_error_does_not_abort_the_tick(fresh_db, user_
     async def build(telegram_id, today):
         return engagement.PushDecision(push_texts.SKIP_3, "текст")
 
-    async def build_newbie(telegram_id, created_at, today):
+    async def build_newbie(telegram_id, created_at, today, tz_offset=0):
         return engagement.PushDecision(push_texts.NEWBIE_NUDGE, "текст")
 
     monkeypatch.setattr(engagement, "_deliver", deliver)

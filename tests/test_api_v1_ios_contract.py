@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from typing import Any
 from test_api_v1_language_invariant import _client, _route_for, _scenario, _Walker
 
 import config
+import timeutil
 
 MANIFEST_PATH = Path(__file__).with_name("ios_contract.json")
 MANIFEST = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -506,11 +508,19 @@ async def _state_offline_replay(fresh_db, lang: str) -> list[_Walker]:
 
 async def _state_long_history(fresh_db, lang: str) -> list[_Walker]:
     """Два месяца истории с чередованием упражнений (суперсет) и ростом весов: подсказки
-    «что дальше», напарники по суперсету, плитки роста на главной и «лучший подъём» недели."""
+    «что дальше», напарники по суперсету, плитки роста на главной и «лучший подъём» недели.
+    Пятая тренировка — первое настоящее звание (rank_promotion): «Новичок» на
+    первой тренировке не объявляется (dashboard_data.rank_promotion)."""
     w = await _login(fresh_db, lang, 213)
     a = (await w.call("POST", "/exercises", json={"name": "Cable row"}, expect=201)).json()["id"]
     b = (await w.call("POST", "/exercises", json={"name": "Face pull"}, expect=201)).json()["id"]
-    for date, base in (("2026-08-03", 40), ("2026-08-24", 45), ("2026-09-14", 50), (None, 60)):
+    # Даты — от настоящего «сегодня»: звание 1 требует частоты за последние
+    # 8 недель (analytics.RANK_FREQUENCY_WEEKS), и прибитые даты со временем
+    # выпали бы из окна.
+    today = timeutil.user_today(None)
+    history = [((today - dt.timedelta(days=days)).isoformat(), base)
+               for days, base in ((63, 40), (42, 45), (21, 50), (7, 55))]
+    for date, base in (*history, (None, 60)):
         wid = (await w.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
         for k in range(3):
             for ex, weight in ((a, base), (b, base / 2)):
