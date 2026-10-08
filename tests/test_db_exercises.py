@@ -715,3 +715,23 @@ async def test_search_matches_word_starts_not_the_middle_of_a_word(fresh_db, use
     names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "станова", limit=50)]
     assert "Становая тяга" in names
     assert not any("постановк" in n.lower() for n in names), names
+
+
+async def test_hidden_program_seeded_fork_does_not_hide_the_template(fresh_db, user_id):
+    """Программа завела человеку копию «Становой тяги» (seeded_from_program),
+    программу удалили, подходов нет — свой поиск такую копию не показывает
+    (_VISIBLE_EXERCISE_FILTER). А поиск каталога прятал шаблон, раз
+    идентичность «уже есть», — и становой не было нигде."""
+    db = fresh_db
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Становая тяга"
+    )
+    own_id = await db.fork_exercise_from_template(user_id, template["id"])
+    await db.conn().execute("UPDATE exercises SET seeded_from_program = 1 WHERE id = ?", (own_id,))
+    await db.conn().commit()
+
+    assert own_id not in [r["id"] for r in await db.search_exercises(user_id, "станова")]
+    names = [t["name"] for t in await db.search_exercise_templates(user_id, "станова")]
+    assert "Становая тяга" in names
+    # Тап по шаблону отдаёт ту же копию, а не дубль.
+    assert await db.fork_exercise_from_template(user_id, template["id"]) == own_id

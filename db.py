@@ -3604,9 +3604,15 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
     if not templates:
         return []
 
+    # «Уже есть» — только то, что свой поиск (search_exercises) и правда
+    # покажет: копия, которую завела программа и которой так и не
+    # пользовались, скрыта фильтром видимости, и пряталась бы вместе с
+    # шаблоном — человек не находил становую вовсе. Тап по шаблону вернёт ту
+    # же копию (fork_exercise_from_template), дубля не будет.
     cur = await conn().execute(
-        "SELECT original_name FROM exercises "
-        "WHERE user_id = ? AND is_template = 0 AND is_archived = 0",
+        "SELECT e.original_name FROM exercises e "
+        "WHERE e.user_id = ? AND e.is_template = 0 AND e.is_archived = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER}",
         (user_id,),
     )
     owned = {
