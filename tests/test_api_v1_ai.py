@@ -236,8 +236,8 @@ async def test_ask_returns_model_answer_and_charges_quota(fresh_db, client_facto
         assert history == []
         # on_program/on_action/on_questions/on_wire подключены (см. _run_turn в
         # api_v1_ai.py) — черновик программы, действия и опросник теперь
-        # доезжают до ответа /ai/ask; on_chunk (стрим бота) остаётся
-        # телеграм-специфичным и не подключён.
+        # доезжают до ответа /ai/ask; on_chunk подключается только у
+        # `"stream": true` (см. tests/test_api_v1_ai_stream.py).
         assert set(kwargs) == {"on_program", "on_action", "on_questions", "on_wire"}
         for cb in kwargs.values():
             assert callable(cb)
