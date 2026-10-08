@@ -270,7 +270,7 @@ async def _read_everything(w: _Walker, *, exercise_id: int | None, workout_id: i
         "/me", "/settings", "/profile", "/muscle-groups", "/exercises", "/exercises?archived=true",
         "/workouts", "/workouts/active", "/workouts/backfill", "/workouts/visits",
         "/workouts/calendar?year=2026&month=1", "/workouts/calendar?year=2026&month=9",
-        "/workouts/search?exercise=a", "/dashboard", "/hall-of-fame", "/hall-of-fame/rank-ladder",
+        "/workouts/search?exercise=bench", "/dashboard", "/hall-of-fame", "/hall-of-fame/rank-ladder",
         "/weekly-summary", "/achievements", "/achievements/nearest", "/achievements/stats",
         "/bodyweight", "/bodyweight?limit=1", "/programs", "/programs/catalog", "/routines",
         "/share/mine", "/ai/limits", "/ai/history", "/ai/conversations", "/ai/pending",

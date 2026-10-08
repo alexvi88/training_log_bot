@@ -1228,6 +1228,18 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _conn.create_function(
         "py_fold", 1, lambda s: search_terms.fold(s) if s is not None else None
     )
+    # «Есть слово, начинающееся с основы» — см. search_terms.has_stem и
+    # _stem_filter: подстрокой «станова» находила «постановкой».
+    # Английское имя шаблона по русской идентичности — для поиска своих
+    # упражнений по каталожному имени на любом языке (search_exercises).
+    await _conn.create_function(
+        "py_en_name", 1,
+        lambda s: localized_exercise_name(s, "en") if s else None,
+    )
+    await _conn.create_function(
+        "py_has_stem", 2,
+        lambda s, v: int(s is not None and search_terms.has_stem(search_terms.fold(s), v)),
+    )
     _forget_api_tokens()
     await _enable_wal_with_fallback()
     await _tune_connection()
@@ -3489,16 +3501,42 @@ def _stem_filter(col: str, query: str) -> tuple[str, list[str]]:
     params: list[str] = []
     clauses = []
     for variants in groups:
-        ors = " OR ".join(f"py_fold({col}) LIKE '%' || ? || '%' ESCAPE '\\'" for _ in variants)
+        ors = " OR ".join(f"py_has_stem({col}, ?)" for _ in variants)
         clauses.append(f"({ors})")
-        params.extend(_escape_like(v) for v in variants)
+        params.extend(variants)
+    return " AND ".join(clauses), params
+
+
+# Имена, по которым ищется своё упражнение: показываемое плюс идентичность
+# каталога на обоих языках (см. search_exercises).
+_EXERCISE_NAME_COLS = ("e.display_name", "e.original_name", "py_en_name(e.original_name)")
+
+
+def _stem_filter_any(cols: tuple[str, ...], query: str) -> tuple[str, list[str]]:
+    """`_stem_filter`, где каждой группе достаточно совпасть хоть в одной из
+    колонок `cols`."""
+    groups = search_terms.query_groups(query)
+    if not groups:
+        return "0", []
+    params: list[str] = []
+    clauses = []
+    for variants in groups:
+        ors = " OR ".join(f"py_has_stem({col}, ?)" for col in cols for _ in variants)
+        clauses.append(f"({ors})")
+        params.extend(v for _ in cols for v in variants)
     return " AND ".join(clauses), params
 
 
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
+    """Свои упражнения по запросу — по показываемому имени И по идентичности
+    каталога (`original_name` и его английской локализации). Иначе копия,
+    которую человек переименовал («Становая тяга» → «conventional deadlift»)
+    или завёл на другом языке, не находилась по каталожному имени, а шаблон
+    той же идентичности `search_exercise_templates` прячет — и упражнения не
+    было в выдаче вовсе."""
     escaped = _escape_like(query)
     rank = _RELEVANCE_RANK.format(col="e.display_name")
-    match, match_params = _stem_filter("e.display_name", query)
+    match, match_params = _stem_filter_any(_EXERCISE_NAME_COLS, query)
     cur = await conn().execute(
         "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
         f"AND {match} "
@@ -3512,9 +3550,10 @@ async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[ai
 
 def _matches_query_groups(text: str, groups: list[tuple[str, ...]]) -> bool:
     """Python-эквивалент SQL-фильтра `_stem_filter`: все группы обязаны найти
-    хоть один свой вариант подстрокой в `text` (сложенном через py_fold)."""
+    хоть один свой вариант в начале какого-нибудь слова `text` (сложенного
+    через py_fold, см. search_terms.has_stem)."""
     folded = search_terms.fold(text)
-    return all(any(variant in folded for variant in variants) for variants in groups)
+    return all(any(search_terms.has_stem(folded, variant) for variant in variants) for variants in groups)
 
 
 def _template_relevance_rank(text: str, folded_query: str) -> int:
@@ -5012,7 +5051,7 @@ async def search_workouts_by_exercise(
     offset — вторая и следующие страницы: без неё старые тренировки частого
     упражнения физически недостижимы после первых 20 совпадений.
     """
-    match, match_params = _stem_filter("e.display_name", query)
+    match, match_params = _stem_filter_any(_EXERCISE_NAME_COLS, query)
     cur = await conn().execute(
         "SELECT DISTINCT w.* FROM workouts w "
         "JOIN workout_blocks b ON b.workout_id = w.id "
@@ -5031,7 +5070,7 @@ async def count_workouts_by_exercise(user_id: int, query: str) -> int:
     `search_workouts_by_exercise` — the history search header needs the real
     total ("N нашлось"), not "сколько влезло под LIMIT 20".
     """
-    match, match_params = _stem_filter("e.display_name", query)
+    match, match_params = _stem_filter_any(_EXERCISE_NAME_COLS, query)
     cur = await conn().execute(
         "SELECT COUNT(DISTINCT w.id) FROM workouts w "
         "JOIN workout_blocks b ON b.workout_id = w.id "

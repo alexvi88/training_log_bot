@@ -691,3 +691,27 @@ async def test_ai_program_composition_shows_the_same_name_as_the_regular_picker(
 
     # Оба экрана согласны и оба — на новом языке.
     assert ai_program_name == renamed["display_name"] == saved[0]["display_name"]
+
+
+async def test_renamed_fork_is_found_by_catalog_name(fresh_db, user_id):
+    """Человек переименовал свою становую в «conventional deadlift». Шаблон
+    той же идентичности поиск каталога прячет, а своя копия по «станова» не
+    находилась — становой не было в выдаче вовсе. Теперь своя находится и по
+    каталожному имени, на обоих языках."""
+    db = fresh_db
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Становая тяга"
+    )
+    own_id = await db.fork_exercise_from_template(user_id, template["id"])
+    await db.update_exercise_name(own_id, "conventional deadlift")
+
+    for query in ("станова", "становая тяга", "deadlift"):
+        own = await db.search_exercises(user_id, query)
+        assert own_id in [r["id"] for r in own], query
+
+
+async def test_search_matches_word_starts_not_the_middle_of_a_word(fresh_db, user_id):
+    """«станова» не должна находить «...узкой постановкой»."""
+    names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "станова", limit=50)]
+    assert "Становая тяга" in names
+    assert not any("постановк" in n.lower() for n in names), names

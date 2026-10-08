@@ -233,6 +233,21 @@ _PHRASES_EN: dict[str, tuple[str, ...]] = {
 _ALL_PHRASES: dict[str, tuple[str, ...]] = {**_PHRASES, **_PHRASES_EN}
 
 
+def has_stem(text: str, variant: str) -> bool:
+    """Есть ли в `text` слово, НАЧИНАЮЩЕЕСЯ с `variant` (оба уже сложены через
+    fold). Именно с начала слова, а не подстрокой где угодно: «станова» иначе
+    находила «Гак-присед узкой по-СТАНОВ-кой», а «жим» — любое слово с «жим»
+    внутри. Граница слова — начало строки или не-буква/не-цифра перед
+    вариантом (пробел, дефис, кавычка), так что «Гак-присед» находится по
+    «присед»."""
+    start = text.find(variant)
+    while start != -1:
+        if start == 0 or not text[start - 1].isalnum():
+            return True
+        start = text.find(variant, start + 1)
+    return False
+
+
 def query_groups(query: str) -> list[tuple[str, ...]]:
     """Запрос → группы вариантов. Внутри группы достаточно любого совпадения,
     но выполниться должны ВСЕ группы: «жим лёжа» это и «жим», и «лёжа»."""
