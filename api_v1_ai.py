@@ -123,9 +123,9 @@ aiogram FSM (`ai_history` в state) — это отдельное окно ко�
 
 Чего в HTTP-варианте всё ещё НЕТ по сравнению с ботом, и почему:
 
-- **Стриминга.** `on_chunk`/`_DraftStreamer` в боте правят уже отправленное
-  сообщение по мере генерации — специфика Telegram. Здесь ответ обычный
-  JSON, целиком, одним куском.
+- ~~Стриминга~~ — есть с `"stream": true` у /ai/ask (Server-Sent Events,
+  см. `_stream_turn`): текст уезжает по мере генерации тем же `on_chunk`,
+  которым бот правит своё сообщение. Без флага — прежний JSON целиком.
 - **Предложенных действий** (`on_action` — удалить программу, объединить
   две, поделиться и т.п., см. ai_trainer.ActionCallback). Каждое такое
   действие в боте необратимо и подтверждается отдельным тапом с кнопкой,
@@ -157,13 +157,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import os
 import secrets
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, StreamingResponse
 from starlette.routing import Route
 
 import ai_limits
@@ -359,6 +360,7 @@ async def _run_turn(
     video_context: Optional[str] = None,
     saved_image_path: Optional[str] = None,
     shown_question: Optional[str] = None,
+    on_chunk: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Один вызов ai_trainer.ask() с полным набором колбэков — общее ядро для
     /ai/ask, /ai/video и для «опросник закончился, идём собирать программу»
@@ -418,6 +420,10 @@ async def _run_turn(
         ask_kwargs["image_data_url"] = image_data_url
     if video_context is not None:
         ask_kwargs["video_context"] = video_context
+    # Стрим (`"stream": true` у /ai/ask) — тот же ход, только текст отдаётся
+    # наружу по мере генерации, как боту (`_completion_round` с on_chunk).
+    if on_chunk is not None:
+        ask_kwargs["on_chunk"] = on_chunk
 
     # Язык хода — из users.lang, а не из ContextVar по умолчанию: у HTTP-запроса
     # нет middleware бота, и без use_lang ai_trainer._with_language_tail дописал
@@ -811,8 +817,7 @@ async def ask_question(request: Request) -> JSONResponse:
     # Но только после ВСЕХ проверок тела: раньше фото ложилось на диск до
     # проверки длины вопроса, и 400 «слишком длинно» оставлял файл, о котором
     # никто не знает по имени (сносит его только except ниже, до которого 400
-    # не доходил).
-    saved_image_path: Optional[str] = None
+    # не доходил). Само сохранение — в `_ask_turn`.
     with i18n.use_lang(lang):
         raw_image: Optional[tuple[bytes, str]] = None
         if image_data_url is not None:
@@ -845,9 +850,133 @@ async def ask_question(request: Request) -> JSONResponse:
             key="api.error.text_too_long", max=MAX_QUESTION_LENGTH,
         )
 
+    # «stream»: true — тот же ход, но текст ответа уезжает по мере генерации
+    # (Server-Sent Events, см. `_stream_turn`). Ошибки до вызова модели (тело,
+    # согласие, лимит, бронь) — обычным JSON со своим статусом, как и без него.
+    stream = body.get("stream") is True
+
     # Бронь — тоже до сохранения: 429 busy из _claim_turn_or_429 стоит вне
     # try ниже и файл за собой не убрал бы.
     _claim_turn_or_429(user_id, lang)
+    if stream:
+        # Лимит проверяем здесь, а не только внутри `_run_turn`: после первого
+        # байта стрима статус ответа уже не поменять, и 429 должен прийти
+        # обычным ответом, как у нестримящего вызова.
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            _busy.discard(user_id)
+            raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
+        return _stream_turn(
+            user_id, lang,
+            lambda on_chunk: _ask_turn(
+                user_id, lang, question, image_data_url, raw_image, shown_question, on_chunk=on_chunk,
+            ),
+        )
+    try:
+        return JSONResponse(await _ask_turn(
+            user_id, lang, question, image_data_url, raw_image, shown_question,
+        ))
+    finally:
+        _busy.discard(user_id)
+
+
+# Пауза в стриме, после которой уходит пустой комментарий: между раундами
+# инструментов модель молчит по 10–20 секунд, а прокси по дороге (Fly, мобильный
+# оператор) закрывает соединение, по которому давно ничего не шло.
+STREAM_HEARTBEAT_SECONDS = 10.0
+
+_stream_tasks: set[asyncio.Task] = set()
+
+
+def _sse(event: str, payload: dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _stream_turn(user_id: int, lang: str, run: Any) -> StreamingResponse:
+    """Ход тренера стримом (Server-Sent Events) — чтобы атлет читал ответ, пока
+    тот пишется, а не смотрел полминуты на «думаю».
+
+    События:
+      * `chunk` — `{"text": весь текст ответа на сейчас}`: клиент ЗАМЕНЯЕТ им
+        пузырь, а не дописывает (раунд с инструментами может начаться заново);
+      * `done` — ровно то же тело, что у нестримящего /ai/ask;
+      * `error` — `{"status", "error", "message", "detail"}`, те же поля, что у
+        ошибки `/v1`: статус ответа после первого байта уже не поменять;
+      * `: ping` — комментарий-пульс раз в STREAM_HEARTBEAT_SECONDS.
+
+    `run(on_chunk)` — сам ход (см. `_ask_turn`). Бронь `_busy` снимается здесь,
+    когда ход закончился, а не когда вернулся обработчик. Ушёл клиент — ход
+    всё равно доводим до конца, как и нестримящий: ответ ложится в историю,
+    и вернувшийся на экран тренера увидит его там."""
+    queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
+
+    async def on_chunk(text: str) -> None:
+        await queue.put(_sse("chunk", {"text": text}))
+
+    async def produce() -> None:
+        try:
+            payload = await run(on_chunk)
+            await queue.put(_sse("done", payload))
+        except ApiError as exc:
+            await queue.put(_sse("error", {
+                "status": exc.status_code,
+                "error": exc.code,
+                "message": common.human_error_message(exc, lang),
+                "detail": exc.message,
+            }))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("api_v1: streamed /ai/ask failed for user %s", user_id)
+            await queue.put(_sse("error", {
+                "status": 500,
+                "error": "internal_error",
+                "message": i18n.t_in(lang, "api.error.internal_error"),
+                "detail": "internal error",
+            }))
+        finally:
+            _busy.discard(user_id)
+            await queue.put(None)
+
+    # Ход заводится сразу, а не из генератора: генератор Starlette может так и
+    # не начать (клиент ушёл до первого байта), и тогда бронь было бы снимать
+    # некому. Сильная ссылка — в `_stream_tasks`, иначе задачу может собрать GC.
+    task = asyncio.create_task(produce())
+    _stream_tasks.add(task)
+    task.add_done_callback(_stream_tasks.discard)
+
+    async def body():
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=STREAM_HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                yield b": ping\n\n"
+                continue
+            if item is None:
+                break
+            yield item
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _ask_turn(
+    user_id: int,
+    lang: str,
+    question: str,
+    image_data_url: Optional[str],
+    raw_image: Optional[tuple[bytes, str]],
+    shown_question: Optional[str],
+    *,
+    on_chunk: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Ход /ai/ask после всех проверок тела и брони — общий у обычного ответа и
+    у стрима. Бронь `_busy` снимает вызывающий: у стрима ход живёт дольше
+    обработчика, и снимать её надо там, где ход действительно кончился."""
+    saved_image_path: Optional[str] = None
     try:
         if raw_image is not None:
             try:
@@ -864,25 +993,23 @@ async def ask_question(request: Request) -> JSONResponse:
             and ai_setup_flow.is_build_program_seed(question)
             and await ai_setup_flow.is_fresh_start(user_id)
         ):
-            return JSONResponse(await _fresh_start_response(
+            return await _fresh_start_response(
                 user_id, lang, question, history, shown_question=shown_question,
-            ))
+            )
         turn = await _run_turn(
             user_id, question, history,
             image_data_url=image_data_url, saved_image_path=saved_image_path,
-            shown_question=shown_question,
+            shown_question=shown_question, on_chunk=on_chunk,
         )
-        return JSONResponse(await _turn_response(user_id, turn, goal=question))
-    except Exception:
-        # Ход не состоялся (лимит, таймаут, сбой модели) — до
+        return await _turn_response(user_id, turn, goal=question)
+    except BaseException:
+        # Ход не состоялся (лимит, таймаут, сбой модели, обрыв стрима) — до
         # db.add_ai_conversation_turn дело не дошло, и файл на диске никто
         # не будет знать по имени: сносим сами, иначе это утечка на каждый
         # неудачный фото-вопрос.
         if saved_image_path is not None:
             chat_attachments.delete(saved_image_path)
         raise
-    finally:
-        _busy.discard(user_id)
 
 
 async def answer_setup_question(request: Request) -> JSONResponse:
