@@ -346,6 +346,10 @@ def alternatives_for(canonical_name: str) -> list[str]:
         if needle not in {_fold(n) for n in family}:
             continue
         for name in family:
+            # Скрытое из каталога (seed_data.CATALOG_HIDDEN) заменой не
+            # предлагаем — в каталоге его уже не найти.
+            if seed_data.is_catalog_hidden(name):
+                continue
             if _fold(name) not in seen:
                 seen.add(_fold(name))
                 result.append(name)

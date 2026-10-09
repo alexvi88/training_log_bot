@@ -68,5 +68,16 @@ async def test_archived_copy_is_offered_as_template(fresh_db, user_id):
 def test_every_catalog_template_has_alternatives():
     """Новое упражнение каталога без семейства остаётся без замен молча —
     экран «Альтернативные упражнения» пустой. Дописывай в FAMILIES."""
-    missing = [n for _g, n in seed_data.EXERCISE_TEMPLATES if not exercise_alternatives.alternatives_for(n)]
+    # Скрытые из каталога (seed_data.CATALOG_HIDDEN) не выбрать заново, а
+    # заменой их не предлагают — у пары скрытых друг для друга замен нет.
+    missing = [
+        n for _g, n in seed_data.EXERCISE_TEMPLATES
+        if not seed_data.is_catalog_hidden(n) and not exercise_alternatives.alternatives_for(n)
+    ]
     assert not missing, f"нет ни в одном семействе FAMILIES: {missing}"
+
+
+def test_hidden_templates_are_never_offered_as_alternatives():
+    for _g, name in seed_data.EXERCISE_TEMPLATES:
+        offered = set(exercise_alternatives.alternatives_for(name))
+        assert not (offered & seed_data.CATALOG_HIDDEN), name

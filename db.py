@@ -46,6 +46,7 @@ from seed_data import (
     canonical_exercise_name,
     canonical_muscle_group_name,
     catalog_popularity,
+    is_catalog_hidden,
     legacy_program_texts,
     localized_exercise_name,
     localized_program_day_name,
@@ -3471,7 +3472,7 @@ async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
         "SELECT * FROM exercises WHERE is_template = 1 AND primary_group_id = ?",
         (group_id,),
     )
-    rows = await cur.fetchall()
+    rows = [t for t in await cur.fetchall() if not is_catalog_hidden(t["name"])]
     return sorted(rows, key=lambda t: (catalog_popularity(t["name"]), search_terms.fold(t["name"])))
 
 
@@ -3631,7 +3632,7 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
     scored: list[tuple[int, str, aiosqlite.Row]] = []
     for t in templates:
         identity = t["original_name"] or t["name"]
-        if search_terms.fold(identity) in owned:
+        if search_terms.fold(identity) in owned or is_catalog_hidden(t["name"]):
             continue
         candidates = [t["display_name"], localized_exercise_name(t["display_name"], "en")]
         if not any(_matches_query_groups(name, groups) for name in candidates):
