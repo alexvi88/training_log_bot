@@ -25,6 +25,7 @@ import secrets
 import sqlite3
 import time
 import uuid
+from contextlib import suppress
 from typing import Any, Iterable, Optional
 
 import aiosqlite
@@ -1219,7 +1220,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     parent = os.path.dirname(db_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    _conn = await aiosqlite.connect(db_path)
+    _conn = await aiosqlite.connect(db_path, timeout=config.SQLITE_BUSY_TIMEOUT_SECONDS)
     _conn.row_factory = aiosqlite.Row
     # SQLite's built-in LOWER() only case-folds ASCII; register a Python-backed
     # one so Cyrillic search can be filtered in SQL instead of fetching every
@@ -7175,11 +7176,19 @@ async def resolve_api_token(token: str) -> Optional[int]:
         return None
     user_id = row["user_id"]
     if _api_token_touch_due(row["last_used_at"]):
-        async with _write_lock:
-            await conn().execute(
-                "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
-            )
-            await conn().commit()
+        # Отметка «когда пользовались» — справочная. Не записалась (базу держит
+        # Litestream дольше busy-таймаута) — запрос атлета всё равно проходит:
+        # раньше он падал 500 ровно здесь, хотя токен уже проверен.
+        try:
+            async with _write_lock:
+                await conn().execute(
+                    "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
+                )
+                await conn().commit()
+        except sqlite3.OperationalError:
+            logger.warning("api token touch skipped: database is busy", exc_info=True)
+            with suppress(sqlite3.Error):
+                await conn().rollback()
     if generation == _api_token_generation:
         _api_token_cache[token] = (user_id, now + API_TOKEN_CACHE_TTL_SECONDS)
     return user_id
