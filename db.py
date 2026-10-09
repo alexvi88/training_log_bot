@@ -45,6 +45,7 @@ from seed_data import (
     PROGRAM_BY_KEY,
     canonical_exercise_name,
     canonical_muscle_group_name,
+    catalog_popularity,
     legacy_program_texts,
     localized_exercise_name,
     localized_program_day_name,
@@ -3462,11 +3463,16 @@ async def list_all_exercise_templates() -> list[aiosqlite.Row]:
 
 
 async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
+    """Шаблоны группы — самые ходовые первыми (seed_data.catalog_popularity),
+    а не по алфавиту: в «Спине» по алфавиту первыми шли «Австралийские
+    подтягивания» и «Гиперэкстензия на полу», а у англоязычного алфавит был
+    русский и выглядел случайным."""
     cur = await conn().execute(
-        "SELECT * FROM exercises WHERE is_template = 1 AND primary_group_id = ? ORDER BY display_name",
+        "SELECT * FROM exercises WHERE is_template = 1 AND primary_group_id = ?",
         (group_id,),
     )
-    return await cur.fetchall()
+    rows = await cur.fetchall()
+    return sorted(rows, key=lambda t: (catalog_popularity(t["name"]), search_terms.fold(t["name"])))
 
 
 # Точное совпадение → начинается с запроса → содержит его где-то внутри. Без
@@ -3634,9 +3640,11 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
         miss = search_terms.word_start_miss(query, *candidates)
         # py_fold и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
         # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
-        scored.append((rank, miss, search_terms.fold(t["display_name"]), t))
+        # Внутри одной ступени совпадения — ходовые первыми, а не по
+        # алфавиту: по «жим» классический жим лёжа выше «Жима блина Свенда».
+        scored.append((rank, miss, catalog_popularity(t["name"]), search_terms.fold(t["display_name"]), t))
 
-    scored.sort(key=lambda item: item[:3])
+    scored.sort(key=lambda item: item[:4])
     return [t for *_, t in scored[:limit]]
 
 

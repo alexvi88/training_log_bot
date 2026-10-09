@@ -758,3 +758,28 @@ async def test_hidden_program_seeded_fork_does_not_hide_the_template(fresh_db, u
     assert "Становая тяга" in names
     # Тап по шаблону отдаёт ту же копию, а не дубль.
     assert await db.fork_exercise_from_template(user_id, template["id"]) == own_id
+
+
+async def test_popular_first_names_are_real_catalog_templates():
+    """Опечатка в топе популярных молча уронила бы упражнение в хвост."""
+    import seed_data
+
+    catalog = {(group, name) for group, name in seed_data.EXERCISE_TEMPLATES}
+    for group, names in seed_data.CATALOG_POPULAR_FIRST.items():
+        assert len(set(names)) == len(names), group
+        for name in names:
+            assert (group, name) in catalog, (group, name)
+
+
+async def test_group_catalog_lists_the_popular_ones_first(fresh_db):
+    db = fresh_db
+    templates = await db.list_all_exercise_templates()
+    back_id = next(t["primary_group_id"] for t in templates if t["name"] == "Становая тяга")
+    names = [t["name"] for t in await db.list_templates_in_group(back_id)]
+    assert names[:3] == ["Подтягивания", "Тяга верхнего блока", "Становая тяга"], names[:5]
+    assert names.index("Становая тяга") < names.index("Австралийские подтягивания")
+
+
+async def test_template_search_prefers_popular_within_the_same_match(fresh_db, user_id):
+    names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "жим", limit=50)]
+    assert names.index("Жим штанги лёжа") < names.index("Жим блина Свенда"), names[:10]
