@@ -87,6 +87,11 @@ def _template_list_json(template, lang: str) -> dict[str, Any]:
         # Без него приложение рисовало у всех 📋-строк плитку группы, хотя
         # кадры у шаблона есть — их видно в превью (`media`) и у форка.
         "thumb": exercise_media.thumb_url_for(template),
+        # Место в своей группе по популярности (0 — самый ходовой, см.
+        # seed_data.catalog_popularity). «Все» приложение склеивает из групп
+        # и сортирует по этому полю: сначала главное из каждой группы, а не
+        # вся «Спина» подряд, потом вся «Грудь».
+        "popularity": seed_data.catalog_popularity(template["name"]),
     }
 
 
