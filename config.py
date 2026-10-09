@@ -454,7 +454,23 @@ NOVITA_BASE_URL = os.getenv("NOVITA_BASE_URL", "https://api.novita.ai/openai/v1"
 # на внимание, и цепочка рассуждений тут окупается: втрое дороже по входу и
 # вчетверо по выходу (см. LLM_PRICES_USD_PER_1K), но альтернатива — тренер,
 # хвалящий круглую спину, и это дороже любых токенов.
-NOVITA_VIDEO_MODEL = os.getenv("NOVITA_VIDEO_MODEL", "qwen/qwen3-vl-235b-a22b-thinking")
+#
+# 9 октября 2026 Novita сняла `qwen/qwen3-vl-235b-a22b-thinking` — каждый вызов
+# получал 404 MODEL_NOT_FOUND, разбор видео лёг целиком. Замена — Qwen3.5
+# 122B-A10B: нативная VL (текст, картинки, видео), по зрению Novita ставит её
+# выше VL-235B, и она тоже думает перед ответом (рассуждение снимает
+# video_analysis._strip_reasoning).
+NOVITA_VIDEO_MODEL = os.getenv("NOVITA_VIDEO_MODEL", "qwen/qwen3.5-122b-a10b")
+# Если и основную модель снимут — разбор не ложится, а идёт к следующей из
+# списка (только на 404 «модели нет», не на любой ошибке; см.
+# video_analysis.analyze). Через запятую в переменной окружения.
+NOVITA_VIDEO_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "NOVITA_VIDEO_FALLBACK_MODELS", "qwen/qwen3.6-27b,qwen/qwen3-vl-235b-a22b-instruct"
+    ).split(",")
+    if m.strip()
+]
 
 # Назад к 0.2, и на этот раз с замером, а не по общей рекомендации.
 #
@@ -665,6 +681,11 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     # что reasoning-токены тарифицируются как выход: на рассуждении их уходит
     # больше, чем на сам JSON.
     "qwen/qwen3-vl-235b-a22b-thinking": (0.00098, 0.00395),
+    # Novita, Qwen3.5 122B-A10B — модель разбора видео с 9.10.2026.
+    # $0.40/$3.20 за 1M по карточке модели на novita.ai.
+    "qwen/qwen3.5-122b-a10b": (0.0004, 0.0032),
+    # Novita, Qwen3.6 27B — первый запасной вариант. $0.60/$3.60 за 1M.
+    "qwen/qwen3.6-27b": (0.0006, 0.0036),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():

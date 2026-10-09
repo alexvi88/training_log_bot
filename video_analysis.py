@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Optional
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, NotFoundError
 
 import ai_limits
 import config
@@ -510,6 +510,19 @@ async def _count_attempt(user_id: Optional[int], *, ok: bool) -> None:
         logger.exception("failed to count video analysis attempt")
 
 
+# Модели, на которые провайдер ответил 404, — до перезапуска процесса.
+_gone_models: set[str] = set()
+
+
+def _video_models() -> list[str]:
+    """Основная модель разбора видео и запасные, без снятых провайдером. Все
+    сняты — пробуем основную снова: вдруг вернули, а молчать до перезапуска
+    хуже лишнего 404."""
+    ordered = list(dict.fromkeys([config.NOVITA_VIDEO_MODEL, *config.NOVITA_VIDEO_FALLBACK_MODELS]))
+    alive = [m for m in ordered if m not in _gone_models]
+    return alive or ordered[:1]
+
+
 async def analyze(
     video_bytes: bytes,
     user_id: Optional[int],
@@ -553,25 +566,39 @@ async def analyze(
     extra: dict[str, Any] = {}
     if config.VIDEO_ANALYSIS_JSON_MODE:
         extra["response_format"] = {"type": "json_object"}
-    try:
-        response = await _get_client().chat.completions.create(
-            model=config.NOVITA_VIDEO_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_prompt},
-                        {"type": "video_url", "video_url": {"url": data_url}},
-                    ],
-                },
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_prompt},
+                {"type": "video_url", "video_url": {"url": data_url}},
             ],
-            max_tokens=config.VIDEO_ANALYSIS_MAX_TOKENS,
-            temperature=config.VIDEO_ANALYSIS_TEMPERATURE,
-            **extra,
-        )
-    except Exception:
-        logger.exception("video analysis call failed for user %s", user_id)
+        },
+    ]
+    response = None
+    model = config.NOVITA_VIDEO_MODEL
+    for model in _video_models():
+        try:
+            response = await _get_client().chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=config.VIDEO_ANALYSIS_MAX_TOKENS,
+                temperature=config.VIDEO_ANALYSIS_TEMPERATURE,
+                **extra,
+            )
+            break
+        except NotFoundError:
+            # Провайдер снял модель (404 MODEL_NOT_FOUND) — так 9.10.2026 лёг
+            # весь разбор видео. Запоминаем до перезапуска и идём к следующей:
+            # повторять заведомый 404 на каждом ролике незачем.
+            logger.error("video model %s is gone (404), trying the next one", model)
+            _gone_models.add(model)
+        except Exception:
+            logger.exception("video analysis call failed for user %s", user_id)
+            return None
+    if response is None:
+        logger.error("video analysis: no video model left (all returned 404)")
         return None
 
     # Цену считает дневной отчёт по имени модели (config.LLM_PRICES_USD_PER_1K),
@@ -590,13 +617,13 @@ async def analyze(
     # на что смотреть, если счёт окажется больше ожидаемого.
     logger.info(
         "video analysis usage: prompt=%s completion=%s (reasoning=%s) model=%s",
-        prompt_tokens, completion_tokens, reasoning_tokens, config.NOVITA_VIDEO_MODEL,
+        prompt_tokens, completion_tokens, reasoning_tokens, model,
     )
     try:
         await db.log_cost_event(
             user_id,
             "llm_call",
-            model=config.NOVITA_VIDEO_MODEL,
+            model=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cached_tokens=getattr(details, "cached_tokens", 0) or 0,

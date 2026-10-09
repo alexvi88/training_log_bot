@@ -506,3 +506,55 @@ def test_pose_summary_block_is_capped_and_labelled():
     block = video_analysis.pose_summary_block("x" * 5000)
     assert "Apple Vision" in block
     assert block.count("x") == video_analysis.POSE_SUMMARY_MAX_CHARS
+
+
+async def test_model_gone_falls_back_to_the_next_and_remembers(monkeypatch):
+    """9.10.2026 Novita сняла модель разбора видео: 404 MODEL_NOT_FOUND на
+    каждом ролике. Теперь 404 уводит к следующей модели из списка, цена
+    пишется по той, что ответила, а снятая больше не дёргается."""
+    import httpx
+    from openai import NotFoundError
+
+    logged = []
+
+    async def fake_log(user_id, event_type, *, model, **kwargs):
+        logged.append(model)
+
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", fake_log)
+    monkeypatch.setattr(config, "NOVITA_API_KEY", "test-key")
+    monkeypatch.setattr(config, "NOVITA_VIDEO_MODEL", "gone/model")
+    monkeypatch.setattr(config, "NOVITA_VIDEO_FALLBACK_MODELS", ["alive/model"])
+    monkeypatch.setattr(video_analysis, "_gone_models", set())
+
+    ok = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_analysis())))],
+        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=50),
+    )
+
+    async def create(*, model, **kwargs):
+        if model == "gone/model":
+            raise NotFoundError(
+                "model not found",
+                response=httpx.Response(404, request=httpx.Request("POST", "https://x")),
+                body=None,
+            )
+        return ok
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=create)
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    assert await video_analysis.analyze(b"fake-mp4-bytes", 42) is not None
+    assert logged == ["alive/model"]
+    assert [c.kwargs["model"] for c in client.chat.completions.create.call_args_list] == [
+        "gone/model", "alive/model",
+    ]
+
+    assert await video_analysis.analyze(b"fake-mp4-bytes", 42) is not None
+    assert client.chat.completions.create.call_args.kwargs["model"] == "alive/model"
+    assert client.chat.completions.create.call_count == 3
+
+
+async def test_every_video_model_has_a_price():
+    for model in (config.NOVITA_VIDEO_MODEL, *config.NOVITA_VIDEO_FALLBACK_MODELS):
+        assert model in config.LLM_PRICES_USD_PER_1K, model
