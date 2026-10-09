@@ -782,4 +782,28 @@ async def test_group_catalog_lists_the_popular_ones_first(fresh_db):
 
 async def test_template_search_prefers_popular_within_the_same_match(fresh_db, user_id):
     names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "жим", limit=200)]
-    assert names.index("Жим штанги лёжа") < names.index("Жим блина Свенда"), names[:10]
+    assert names.index("Жим штанги лёжа") < names.index("Жим штанги лёжа с упоров"), names[:10]
+
+
+async def test_rare_templates_are_hidden_from_catalog_and_search_but_kept(fresh_db, user_id):
+    """Редкое (seed_data.CATALOG_HIDDEN) не показывается ни в группе, ни в
+    поиске, но шаблон в базе остаётся — история и импорт сверяются с ним."""
+    import seed_data
+
+    db = fresh_db
+    templates = await db.list_all_exercise_templates()
+    svend = next(t for t in templates if t["name"] == "Жим блина Свенда")
+    assert seed_data.is_catalog_hidden(svend["name"])
+    group = [t["name"] for t in await db.list_templates_in_group(svend["primary_group_id"])]
+    assert "Жим блина Свенда" not in group and "Жим штанги лёжа" in group
+    found = [t["name"] for t in await db.search_exercise_templates(user_id, "свенда", limit=50)]
+    assert found == []
+
+
+async def test_hidden_names_are_real_catalog_templates():
+    import seed_data
+
+    names = {name for _, name in seed_data.EXERCISE_TEMPLATES}
+    assert names >= seed_data.CATALOG_HIDDEN
+    popular = {n for group in seed_data.CATALOG_POPULAR_FIRST.values() for n in group}
+    assert not (seed_data.CATALOG_HIDDEN & popular)
