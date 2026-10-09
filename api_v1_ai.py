@@ -862,7 +862,20 @@ async def ask_question(request: Request) -> JSONResponse:
         # Лимит проверяем здесь, а не только внутри `_run_turn`: после первого
         # байта стрима статус ответа уже не поменять, и 429 должен прийти
         # обычным ответом, как у нестримящего вызова.
-        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        # «Составь программу» с чистого листа — бесплатный путь без модели
+        # (`_fresh_start_response`): лимит его не запирает, как и без стрима.
+        # Бронь снимаем при ЛЮБОМ исходе до старта стрима: упавшая проверка
+        # иначе держала бы `_busy` до перезапуска процесса.
+        try:
+            fresh_start = (
+                image_data_url is None
+                and ai_setup_flow.is_build_program_seed(question)
+                and await ai_setup_flow.is_fresh_start(user_id)
+            )
+            block = None if fresh_start else await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        except BaseException:
+            _busy.discard(user_id)
+            raise
         if block is not None:
             _busy.discard(user_id)
             raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
@@ -889,7 +902,10 @@ _stream_tasks: set[asyncio.Task] = set()
 
 
 def _sse(event: str, payload: dict[str, Any]) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+    # Тот же вид чисел, что у JSONResponse обычного ответа (`_round_floats`),
+    # и без NaN — иначе `done` не было бы «ровно тем же телом».
+    data = json.dumps(common._round_floats(payload), ensure_ascii=False, allow_nan=False)
+    return f"event: {event}\ndata: {data}\n\n".encode("utf-8")
 
 
 def _stream_turn(user_id: int, lang: str, run: Any) -> StreamingResponse:

@@ -5058,15 +5058,17 @@ async def search_workouts_by_exercise(
     упражнения физически недостижимы после первых 20 совпадений.
     """
     match, match_params = _stem_filter_any(_EXERCISE_NAME_COLS, query)
+    # Имя сверяем по упражнениям человека (их десятки), а не по каждой строке
+    # тренировки (их тысячи): py_has_stem — Python-функция, и на строках
+    # JOIN-а поиск по истории шёл втрое дольше.
     cur = await conn().execute(
         "SELECT DISTINCT w.* FROM workouts w "
         "JOIN workout_blocks b ON b.workout_id = w.id "
         "JOIN block_exercises be ON be.block_id = b.id "
-        "JOIN exercises e ON e.id = be.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        f"  AND {match} "
+        f"  AND be.exercise_id IN (SELECT e.id FROM exercises e WHERE e.user_id = ? AND {match}) "
         "ORDER BY w.started_at DESC, w.id DESC LIMIT ? OFFSET ?",
-        (user_id, *match_params, limit, offset),
+        (user_id, user_id, *match_params, limit, offset),
     )
     return await cur.fetchall()
 
@@ -5081,10 +5083,9 @@ async def count_workouts_by_exercise(user_id: int, query: str) -> int:
         "SELECT COUNT(DISTINCT w.id) FROM workouts w "
         "JOIN workout_blocks b ON b.workout_id = w.id "
         "JOIN block_exercises be ON be.block_id = b.id "
-        "JOIN exercises e ON e.id = be.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        f"  AND {match}",
-        (user_id, *match_params),
+        f"  AND be.exercise_id IN (SELECT e.id FROM exercises e WHERE e.user_id = ? AND {match})",
+        (user_id, user_id, *match_params),
     )
     (count,) = await cur.fetchone()
     return count
