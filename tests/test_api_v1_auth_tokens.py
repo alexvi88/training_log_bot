@@ -137,3 +137,29 @@ async def test_merge_keeps_the_telegram_accounts_own_devices(fresh_db):
 
     assert await db.resolve_api_token(tg_token) == 555
     assert await db.resolve_api_token(app_token) == 555
+
+
+async def test_busy_database_does_not_fail_token_lookup(fresh_db, monkeypatch):
+    """Litestream держит блокировку записи дольше busy-таймаута — отметка
+    «когда пользовались» не пишется, но вход по токену проходит (раньше 500)."""
+    import sqlite3
+
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    token = await db.issue_api_token(111)
+    db._forget_api_tokens()
+    monkeypatch.setattr(db, "_api_token_touch_due", lambda _last: True)
+    real_execute = db.conn().execute
+
+    async def locked_on_update(sql, *args, **kwargs):
+        if sql.lstrip().upper().startswith("UPDATE API_TOKENS"):
+            raise sqlite3.OperationalError("database is locked")
+        return await real_execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(db.conn(), "execute", locked_on_update)
+    assert await db.resolve_api_token(token) == 111
+
+
+def test_sqlite_waits_longer_than_the_default_for_litestream():
+    import config
+
+    assert config.SQLITE_BUSY_TIMEOUT_SECONDS >= 30
