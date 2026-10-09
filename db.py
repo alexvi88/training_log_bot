@@ -1228,8 +1228,6 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _conn.create_function(
         "py_fold", 1, lambda s: search_terms.fold(s) if s is not None else None
     )
-    # «Есть слово, начинающееся с основы» — см. search_terms.has_stem и
-    # _stem_filter: подстрокой «станова» находила «постановкой».
     # Английское имя шаблона по русской идентичности — для поиска своих
     # упражнений по каталожному имени на любом языке (search_exercises).
     await _conn.create_function(
@@ -1240,6 +1238,10 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
         "py_has_stem", 2,
         lambda s, v: int(s is not None and search_terms.has_stem(search_terms.fold(s), v)),
     )
+    # Ключ сортировки: совпадение с начала слова выше совпадения внутри
+    # слова (см. search_terms.word_start_miss). Первый аргумент — запрос,
+    # дальше любые колонки с именами.
+    await _conn.create_function("py_word_start_miss", -1, search_terms.word_start_miss)
     _forget_api_tokens()
     await _enable_wal_with_fallback()
     await _tune_connection()
@@ -3541,17 +3543,17 @@ async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[ai
         "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
         f"AND {match} "
         f"AND {_VISIBLE_EXERCISE_FILTER} "
-        f"ORDER BY {rank}, e.last_used_at IS NULL, e.last_used_at DESC, py_fold(e.display_name) "
+        f"ORDER BY {rank}, py_word_start_miss(?, {', '.join(_EXERCISE_NAME_COLS)}), e.last_used_at IS NULL, e.last_used_at DESC, py_fold(e.display_name) "
         "LIMIT ?",
-        (user_id, *match_params, escaped, escaped, limit),
+        (user_id, *match_params, escaped, escaped, query, limit),
     )
     return await cur.fetchall()
 
 
 def _matches_query_groups(text: str, groups: list[tuple[str, ...]]) -> bool:
     """Python-эквивалент SQL-фильтра `_stem_filter`: все группы обязаны найти
-    хоть один свой вариант в начале какого-нибудь слова `text` (сложенного
-    через py_fold, см. search_terms.has_stem)."""
+    хоть один свой вариант в `text` (сложенном через py_fold, см.
+    search_terms.has_stem)."""
     folded = search_terms.fold(text)
     return all(any(search_terms.has_stem(folded, variant) for variant in variants) for variants in groups)
 
@@ -3629,12 +3631,13 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
         if not any(_matches_query_groups(name, groups) for name in candidates):
             continue
         rank = min(_template_relevance_rank(name, folded_query) for name in candidates)
+        miss = search_terms.word_start_miss(query, *candidates)
         # py_fold и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
         # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
-        scored.append((rank, search_terms.fold(t["display_name"]), t))
+        scored.append((rank, miss, search_terms.fold(t["display_name"]), t))
 
-    scored.sort(key=lambda item: (item[0], item[1]))
-    return [t for _, _, t in scored[:limit]]
+    scored.sort(key=lambda item: item[:3])
+    return [t for *_, t in scored[:limit]]
 
 
 async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:

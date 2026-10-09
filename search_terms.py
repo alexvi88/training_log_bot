@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 
 # Ниже этой длины основу не режем: «тяг» ещё осмысленно, «т» уже совпадёт с
@@ -234,18 +235,45 @@ _ALL_PHRASES: dict[str, tuple[str, ...]] = {**_PHRASES, **_PHRASES_EN}
 
 
 def has_stem(text: str, variant: str) -> bool:
-    """Есть ли в `text` слово, НАЧИНАЮЩЕЕСЯ с `variant` (оба уже сложены через
-    fold). Именно с начала слова, а не подстрокой где угодно: «станова» иначе
-    находила «Гак-присед узкой по-СТАНОВ-кой», а «жим» — любое слово с «жим»
-    внутри. Граница слова — начало строки или не-буква/не-цифра перед
-    вариантом (пробел, дефис, кавычка), так что «Гак-присед» находится по
-    «присед»."""
+    """Есть ли `variant` в `text` (оба уже сложены через fold) — где угодно,
+    в том числе внутри слова. Только с начала слова было мало: «тяга» не
+    находила «Подтягивания», «жим» — «Отжимания», «lift» — «Deadlift»,
+    «extension» — «Hyperextension». Совпадение с начала слова при этом ценнее
+    — его поднимает наверх `starts_word` (см. `word_start_miss`)."""
+    return variant in text
+
+
+def starts_word(text: str, variant: str) -> bool:
+    """Есть ли в `text` слово, НАЧИНАЮЩЕЕСЯ с `variant`. Граница слова — начало
+    строки или не-буква/не-цифра перед вариантом (пробел, дефис, кавычка), так
+    что «Гак-присед» начинается со слова «присед», а «...узкой постановкой» со
+    слова «станова» — нет."""
     start = text.find(variant)
     while start != -1:
         if start == 0 or not text[start - 1].isalnum():
             return True
         start = text.find(variant, start + 1)
     return False
+
+
+@functools.lru_cache(maxsize=256)
+def _cached_query_groups(query: str) -> tuple[tuple[str, ...], ...]:
+    # word_start_miss зовётся на каждой строке выдачи — разбор запроса один.
+    return tuple(query_groups(query))
+
+
+def word_start_miss(query: str, *texts: str | None) -> int:
+    """0 — каждое слово запроса начинает какое-нибудь слово хоть в одном из
+    `texts`, 1 — нет (нашлось только внутри слова). Ключ сортировки: по
+    «станова» «Становая тяга» выше «...узкой постановкой», по «тяга» тяги
+    выше подтягиваний."""
+    folded = [fold(t) for t in texts if t]
+    groups = _cached_query_groups(query)
+    hit = all(
+        any(starts_word(text, variant) for text in folded for variant in variants)
+        for variants in groups
+    )
+    return 0 if hit else 1
 
 
 def query_groups(query: str) -> list[tuple[str, ...]]:

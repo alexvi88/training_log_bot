@@ -983,7 +983,7 @@ async def cmd_announce(message: Message):
             await message.answer(f"Релиз «{ann.key}» рассылаю прямо сейчас.")
             continue
         status = await db.get_announcement_status(ann.key)
-        pending = await db.count_announcement_recipients(ann.key, ann.lang)
+        pending = await announcements.count_pending(ann)
         if status == announcements.STATUS_APPROVED and not pending:
             await message.answer(f"Релиз «{ann.key}» разослан целиком.")
             continue

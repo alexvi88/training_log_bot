@@ -773,6 +773,21 @@ async def test_telegram_only_release_skips_app_only_accounts(fresh_db, monkeypat
     assert await announcements.send_announcement(FakeBot(), ann) == (0, 0, 0)
 
 
+async def test_preview_count_matches_who_will_actually_get_it(fresh_db):
+    """Счётчик в превью не считает тех, кого рассылка пропустит."""
+    await _users(fresh_db, 1, 2)
+    await fresh_db.register_push_token(2, "ios", "device-token-2")
+    await fresh_db.create_app_only_user()
+
+    ann = _announcement()
+    ann.telegram_only = True
+    assert await announcements.count_pending(ann) == 2
+    ann.skip_app_users = True
+    assert await announcements.count_pending(ann) == 1
+    assert await announcements.send_announcement(FakeBot(), ann) == (1, 0, 0)
+    assert await announcements.count_pending(ann) == 0
+
+
 async def test_feedback_contact_texts():
     ru, en = announcements.FEEDBACK_CONTACT_RU, announcements.FEEDBACK_CONTACT_EN
     assert ru.text.startswith("ПРИВЕТ АТЛЕТ! ") and ru.lang == "ru"
