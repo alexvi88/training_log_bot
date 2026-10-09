@@ -781,5 +781,5 @@ async def test_group_catalog_lists_the_popular_ones_first(fresh_db):
 
 
 async def test_template_search_prefers_popular_within_the_same_match(fresh_db, user_id):
-    names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "жим", limit=50)]
+    names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "жим", limit=200)]
     assert names.index("Жим штанги лёжа") < names.index("Жим блина Свенда"), names[:10]

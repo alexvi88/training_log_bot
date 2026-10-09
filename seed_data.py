@@ -675,26 +675,45 @@ CATALOG_POPULAR_FIRST: dict[str, tuple[str, ...]] = {
 }
 
 
+# При равном месте в своей группе — какая группа ходовее: по «жим» жим лёжа
+# (первый в «Груди») выше жима гантелей сидя (первого в «Плечах»).
+_POPULAR_GROUP_ORDER = ("Грудь", "Спина", "Ноги", "Плечи", "Бицепс", "Трицепс", "Пресс", "Другое")
+
+
 def _build_catalog_popularity() -> dict[str, int]:
-    rank: dict[str, int] = {}
+    """Место в группе → общий ранг: сначала первые каждой группы (в порядке
+    `_POPULAR_GROUP_ORDER`), потом вторые и так далее. Так и «Все» в
+    приложении, и поиск по нескольким группам чередуют главное, а не идут
+    группа за группой."""
+    place: dict[str, int] = {}
     for names in CATALOG_POPULAR_FIRST.values():
         for index, name in enumerate(names):
-            rank[name] = index
+            place[name] = index
     tail = {group: len(names) for group, names in CATALOG_POPULAR_FIRST.items()}
+    group_of: dict[str, str] = {}
     for group, name in EXERCISE_TEMPLATES:
-        if name not in rank:
-            rank[name] = tail.get(group, 0)
-            tail[group] = rank[name] + 1
-    return rank
+        group_of.setdefault(name, group)
+        if name not in place:
+            place[name] = tail.get(group, 0)
+            tail[group] = place[name] + 1
+    width = len(_POPULAR_GROUP_ORDER) + 1
+    return {
+        name: index * width + (
+            _POPULAR_GROUP_ORDER.index(group_of[name])
+            if group_of.get(name) in _POPULAR_GROUP_ORDER else width - 1
+        )
+        for name, index in place.items()
+    }
 
 
 _CATALOG_POPULARITY = _build_catalog_popularity()
 
 
 def catalog_popularity(name: str) -> int:
-    """Место шаблона в своей группе по популярности (0 — самый ходовой) по
-    русскому имени-идентичности. Не из каталога — в самый конец."""
-    return _CATALOG_POPULARITY.get(name, len(EXERCISE_TEMPLATES))
+    """Ранг шаблона по популярности (0 — самый ходовой во всём каталоге) по
+    русскому имени-идентичности: внутри группы — порядок её топа, между
+    группами — см. `_build_catalog_popularity`. Не из каталога — в конец."""
+    return _CATALOG_POPULARITY.get(name, 10**6)
 
 
 def canonical_muscle_group_name(shown_name: str) -> Optional[str]:

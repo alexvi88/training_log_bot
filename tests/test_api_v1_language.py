@@ -299,6 +299,18 @@ async def test_template_search_limit_goes_up_to_200(fresh_db, monkeypatch):
     assert seen["limit"] == 200
 
 
+async def test_group_templates_come_popular_first_with_popularity(fresh_db):
+    """Каталог группы — ходовые первыми, и каждая строка несёт `popularity`:
+    по нему приложение сортирует склеенное из групп «Все»."""
+    client = await _linked(fresh_db, "en")
+    found = (await client.get("/exercise-templates?query=bench press&limit=50")).json()
+    bench = next(r for r in found if r["original_name"] == "Жим штанги лёжа")
+    rows = (await client.get(f"/exercise-templates?group_id={bench['group_id']}")).json()
+    assert rows[0]["original_name"] == "Жим штанги лёжа"
+    ranks = [r["popularity"] for r in rows]
+    assert ranks == sorted(ranks)
+
+
 # ---------- шаринг ----------
 
 

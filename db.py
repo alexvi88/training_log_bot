@@ -3636,7 +3636,9 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
         candidates = [t["display_name"], localized_exercise_name(t["display_name"], "en")]
         if not any(_matches_query_groups(name, groups) for name in candidates):
             continue
-        rank = min(_template_relevance_rank(name, folded_query) for name in candidates)
+        # Точное совпадение — первым; «начинается с запроса» популярность не
+        # перебивает: по «bench» жим лёжа выше «Bench Dips».
+        rank = min(min(_template_relevance_rank(name, folded_query), 1) for name in candidates)
         miss = search_terms.word_start_miss(query, *candidates)
         # py_fold и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
         # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
