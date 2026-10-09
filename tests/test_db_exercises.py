@@ -710,11 +710,34 @@ async def test_renamed_fork_is_found_by_catalog_name(fresh_db, user_id):
         assert own_id in [r["id"] for r in own], query
 
 
-async def test_search_matches_word_starts_not_the_middle_of_a_word(fresh_db, user_id):
-    """«станова» не должна находить «...узкой постановкой»."""
-    names = [t["name"] for t in await fresh_db.search_exercise_templates(user_id, "станова", limit=50)]
-    assert "Становая тяга" in names
-    assert not any("постановк" in n.lower() for n in names), names
+async def test_search_finds_inside_words_but_ranks_word_starts_first(fresh_db, user_id):
+    """«тяга» находит и «Подтягивания», «жим» — «Отжимания», «lift» —
+    «Deadlift»: совпадение внутри слова тоже совпадение. Но совпадение с
+    начала слова выше: по «станова» «Становая тяга» стоит раньше «...узкой
+    постановкой»."""
+    db = fresh_db
+
+    async def names(query):
+        return [t["name"] for t in await db.search_exercise_templates(user_id, query, limit=100)]
+
+    assert any(n.startswith("Подтягивания") for n in await names("тяга"))
+    assert any(n.startswith("Отжимания") for n in await names("жим"))
+    assert "Становая тяга" in await names("lift")
+
+    stanova = await names("станова")
+    assert stanova[0] == "Становая тяга", stanova
+    inner = [i for i, n in enumerate(stanova) if "постановк" in n.lower()]
+    assert all(i > stanova.index("Становая тяга") for i in inner), stanova
+
+
+
+async def test_own_search_ranks_word_starts_first(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    pull_id = await db.create_exercise(user_id, "Подтягивания широким хватом", group_id)
+    row_id = await db.create_exercise(user_id, "Тяга гантели в наклоне", group_id)
+    found = [r["id"] for r in await db.search_exercises(user_id, "тяга")]
+    assert found.index(row_id) < found.index(pull_id), found
 
 
 async def test_hidden_program_seeded_fork_does_not_hide_the_template(fresh_db, user_id):

@@ -395,6 +395,25 @@ async def _has_app(telegram_id: int, user) -> bool:
     return bool(await db.get_push_tokens(telegram_id, "ios"))
 
 
+async def _not_for(ann: Announcement, telegram_id: int, user) -> bool:
+    """Этому атлету релиз не нужен: приложение уже стоит (`skip_app_users`)
+    или чата с ботом нет (`telegram_only`). Одно правило на рассылку и на
+    счётчик в превью — иначе админ видел число больше, чем уйдёт."""
+    app_only = user is not None and not user["telegram_linked"]
+    return (ann.skip_app_users and await _has_app(telegram_id, user)) or (
+        ann.telegram_only and app_only
+    )
+
+
+async def count_pending(ann: Announcement) -> int:
+    """Сколько человек реально получат релиз: ещё не получали и он им нужен."""
+    count = 0
+    for telegram_id in await db.list_announcement_recipients(ann.key, ann.lang):
+        if not await _not_for(ann, telegram_id, await db.get_user(telegram_id)):
+            count += 1
+    return count
+
+
 # ---------- шаг 1: показать админу ----------
 
 
@@ -418,7 +437,7 @@ async def send_preview(bot: Bot, ann: Announcement) -> bool:
     # (/announce) новой отметки не пишет — она уже стоит.
     if not await db.has_announcement_push(config.ADMIN_ID, ann.key):
         await db.record_push(config.ADMIN_ID, ann.key, ann.text, dt.date.today().isoformat())
-    pending = await db.count_announcement_recipients(ann.key, ann.lang)
+    pending = await count_pending(ann)
     try:
         await bot.send_message(
             config.ADMIN_ID,
@@ -463,10 +482,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     today = dt.date.today().isoformat()
     for telegram_id in recipients:
         user = await db.get_user(telegram_id)
-        app_only = user is not None and not user["telegram_linked"]
-        if (ann.skip_app_users and await _has_app(telegram_id, user)) or (
-            ann.telegram_only and app_only
-        ):
+        if await _not_for(ann, telegram_id, user):
             # Не отправка, а отметка «этому не нужно» — иначе следующий прогон
             # снова увидит его неотправленным. В счёт доставленных не идёт.
             await db.record_push(telegram_id, ann.key, ann.text, today)

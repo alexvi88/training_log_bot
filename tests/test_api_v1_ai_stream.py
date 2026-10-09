@@ -196,3 +196,56 @@ async def test_stream_sends_heartbeat_while_model_is_silent(fresh_db, client_fac
     events = _events(resp.text)
     assert ("ping", None) in events
     assert events[-1][0] == "done"
+
+
+@pytest.mark.asyncio
+async def test_stream_fresh_start_seed_ignores_exhausted_limit(fresh_db, client_factory, monkeypatch):
+    """Бесплатный старт «собери программу» лимит не запирает — и в стриме тоже."""
+    import ai_setup_flow
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(config, "AI_QUESTION_DAILY_LIMIT", 1)
+    ai_limits.reset_cache()
+    monkeypatch.setattr(ai_setup_flow, "is_build_program_seed", lambda text: True)
+
+    async def fresh(user_id):
+        return True
+
+    monkeypatch.setattr(ai_setup_flow, "is_fresh_start", fresh)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        raise AssertionError("бесплатный старт идёт без модели")
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.try_increment_ai_question_count(111, 1)
+
+    resp = await client.post("/ai/ask", json={"question": "Собери мне программу", "stream": True})
+    assert resp.status_code == 200, resp.text
+    assert [name for name, _ in _events(resp.text) if name != "ping"][-1] == "done"
+
+
+@pytest.mark.asyncio
+async def test_stream_limit_check_failure_releases_busy(fresh_db, client_factory, monkeypatch):
+    """Упала проверка лимита — бронь снята, следующий вопрос не получает 429 busy."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    real_check = ai_limits.check
+
+    async def broken_check(user_id, kind):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(ai_limits, "check", broken_check)
+    with pytest.raises(RuntimeError):
+        await client.post("/ai/ask", json={"question": "вопрос", "stream": True})
+    assert not api_v1_ai._busy
+
+    monkeypatch.setattr(ai_limits, "check", real_check)
+
+    async def fine(user_id, question, history, **kwargs):
+        return "ответ"
+
+    monkeypatch.setattr(ai_trainer, "ask", fine)
+    again = await client.post("/ai/ask", json={"question": "ещё", "stream": True})
+    assert again.status_code == 200, again.text
