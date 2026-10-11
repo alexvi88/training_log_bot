@@ -6272,6 +6272,21 @@ async def append_set(
         return set_id
 
 
+async def _last_session_first_weight(exercise_id: int, exclude_workout_id: int) -> float:
+    """Вес первого подхода упражнения в прошлой законченной тренировке (не
+    последнего: тот уже скидка от усталости), 0.0 — если истории нет."""
+    cur = await conn().execute(
+        "SELECT s.weight FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE s.exercise_id = ? AND w.status = 'finished' AND w.id != ? "
+        "ORDER BY w.started_at DESC, w.id DESC, s.id ASC LIMIT 1",
+        (exercise_id, exclude_workout_id),
+    )
+    row = await cur.fetchone()
+    return float(row["weight"]) if row and row["weight"] else 0.0
+
+
 async def store_parsed_sets(
     workout_id: int,
     block_id: int,
@@ -6314,6 +6329,11 @@ async def store_parsed_sets(
 
         previous = await list_sets_for_workout_exercise(workout_id, exercise_id)
         prev_weight = previous[-1]["weight"] if previous else 0.0
+        if not previous and any(omitted for omitted, *_ in items):
+            # Первый подход сегодня голыми повторами («8») — вес с прошлой
+            # тренировки, как у бота (handlers.workout._seed_last_value) и как
+            # приложение показывает над рядом повторов. Иначе ложился 0 кг × 8.
+            prev_weight = await _last_session_first_weight(exercise_id, workout_id)
         created_ids: list[int] = []
         workout_date = await _workout_date_of_block(block_id)
         for position, (weight_omitted, weight, reps, rpe) in enumerate(items):
