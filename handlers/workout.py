@@ -2375,6 +2375,9 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
 # ---------- logging sets: type "weight reps", switch between open exercises freely ----------
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:switch:"))
+# «Дальше →» (keyboards.superset_next_id) — то же переключение, следующий id уже
+# посчитан в клавиатуре; свой префикс только чтобы не считаться вкладкой.
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:next:"))
 async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     data = await state.get_data()

@@ -756,6 +756,17 @@ def reps_window(last_reps: int, is_first_set: bool = False) -> list[int]:
     return list(range(start, start + below + above + 1))
 
 
+def superset_next_id(active_id: int | None, ids: list[int]) -> int | None:
+    """Следующее упражнение суперсета после active_id, по кругу.
+
+    None — переключать некуда: открыто меньше двух или активного среди них нет.
+    Тот же круг, что у «Дальше →» в приложении (SupersetCycle.nextId).
+    """
+    if len(ids) < 2 or active_id not in ids:
+        return None
+    return ids[(ids.index(active_id) + 1) % len(ids)]
+
+
 def logging_keyboard(
     open_items: list[tuple[int, str]],
     active_id: int | None,
@@ -819,6 +830,17 @@ def logging_keyboard(
                 else _tab_label(name, _TAB_NAME_MAX_WIDE)
             )
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
+        # «Дальше →» — следующее открытое по кругу, в порядке открытия (порядок
+        # open_items), с последнего снова первое. Только переключает, как
+        # вкладка: тот же обработчик (live_switch_exercise), свой префикс —
+        # чтобы вкладки оставались вкладками. В суперсете следующий подход
+        # почти всегда по другому движению, и одна кнопка на одном месте
+        # находится быстрее, чем вкладка с нужным именем. Отдельным рядом
+        # под вкладками: втиснутая в ряд «Суперсет»/«Заметка» она резала бы
+        # их подписи.
+        next_id = superset_next_id(active_id, [ex_id for ex_id, _ in open_items])
+        if next_id is not None:
+            b.row(InlineKeyboardButton(text=i18n.t("btn.superset_next"), callback_data=f"live:next:{next_id}"))
     top_row = [InlineKeyboardButton(text=i18n.t("btn.superset"), callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text=i18n.t("btn.note"), callback_data=f"live:note:{active_id}"))
