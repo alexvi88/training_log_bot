@@ -2044,8 +2044,8 @@ async def _picker_screen_search(callback_or_message, state: FSMContext, user):
     chunk = combined[page * size : (page + 1) * size]
     # Кнопку «создать» показываем на любой выдаче, даже когда группа не выбрана:
     # раньше поиск с экрана групп при пустом результате оставлял одно «Назад» —
-    # не нашли и создать нельзя. Группа у нового упражнения необязательна
-    # (db.create_exercise принимает None), так что запрещать было нечего.
+    # не нашли и создать нельзя. Группу без открытой группы спрашиваем уже
+    # после тапа (_create_or_ask_group), так что запрещать было нечего.
     kb = keyboards.exercises_keyboard(
         [row for kind, row in chunk if kind == "ex"],
         prefix="pick", back_cb="back",
@@ -2282,9 +2282,66 @@ async def _create_exercise_named(event, state: FSMContext, name: str) -> None:
         hint = i18n.t("workout.confirm_name_hint", name=escape(name), reason=reason)
         await _refresh_live(event.bot, state, user, data["workout_id"], hint, kb)
         return
+    await _create_or_ask_group(event, state, name)
+
+
+async def _create_or_ask_group(event, state: FSMContext, name: str) -> None:
+    """Завести упражнение и сразу его начать — если группа известна (человек
+    создаёт его изнутри открытой группы). Без группы (поиск с экрана групп,
+    «➕ Создать «…»» из пустой выдачи) раньше молча клали в «Другое», и
+    упражнение потом не находилось там, где его ищут, — теперь спрашиваем
+    группу тем же экраном, что и в ⚙️ Упражнения (exmnewgrp), и создаём только
+    после выбора (picknewgrp:grp:*)."""
     data = await state.get_data()
-    ex_id = await db.create_exercise(event.from_user.id, name, data.get("pending_group_id"))
-    await _on_exercise_chosen(event, state, ex_id)
+    group_id = data.get("pending_group_id")
+    if group_id is not None:
+        ex_id = await db.create_exercise(event.from_user.id, name, group_id)
+        await _on_exercise_chosen(event, state, ex_id)
+        return
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    await state.update_data(pending_new_exercise_name=name)
+    groups = await db.list_muscle_groups(event.from_user.id, order_by_usage=True)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="picknewgrp", extra_buttons=[(i18n.t("btn.cancel"), "picknewgrp:cancel")]
+    )
+    user = await db.get_user(event.from_user.id)
+    hint = i18n.t("workout.new_exercise_pick_group", name=escape(name))
+    await _refresh_live(event.bot, state, user, data["workout_id"], hint, kb)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("picknewgrp:grp:"))
+async def pick_new_exercise_group(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("pending_new_exercise_name")
+    if not name:
+        await callback.answer(i18n.t("workout.name_lost"), show_alert=True)
+        return
+    group_id = int(callback.data.split(":")[2])
+    group = await db.get_muscle_group(group_id)
+    if group is None or group["user_id"] not in (None, callback.from_user.id):
+        await callback.answer(i18n.t("workout.group_gone"), show_alert=True)
+        return
+    await state.update_data(pending_new_exercise_name=None)
+    ex_id = await db.create_exercise(callback.from_user.id, name, group_id)
+    await _on_exercise_chosen(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "picknewgrp:cancel")
+async def pick_new_exercise_group_cancel(callback: CallbackQuery, state: FSMContext):
+    """Назад туда, откуда пришли создавать: к выдаче поиска, если она была,
+    иначе к выбору группы. В базе ничего не появилось."""
+    await state.update_data(pending_new_exercise_name=None)
+    data = await state.get_data()
+    if data.get("pick_query"):
+        await state.set_state(WorkoutFlow.picking_exercise)
+        user = await db.get_user(callback.from_user.id)
+        await _picker_screen_search(callback, state, user)
+    else:
+        await state.set_state(WorkoutFlow.picking_group)
+        await _picker_screen_groups(callback, state)
+    await callback.answer()
 
 
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:newquery")
@@ -2319,8 +2376,7 @@ async def pick_longname_confirmed(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n.t("workout.name_lost"), show_alert=True)
         return
     await state.update_data(pending_long_exercise_name=None)
-    ex_id = await db.create_exercise(callback.from_user.id, name, data.get("pending_group_id"))
-    await _on_exercise_chosen(callback, state, ex_id)
+    await _create_or_ask_group(callback, state, name)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:longname:no")

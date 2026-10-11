@@ -3,8 +3,9 @@
 Без группы упражнение не видно в «Моих упражнениях» (список идёт по
 группам), а в недельном объёме оно стояло строкой «Без группы». Каждый путь
 создания, который раньше оставлял `primary_group_id IS NULL`, теперь кладёт
-его во встроенную «Другое» (или в группу, открытую в живой тренировке), а
-разовая миграция v9 подбирает то, что успело накопиться.
+его во встроенную «Другое», а разовая миграция v9 подбирает то, что успело
+накопиться. В живой тренировке упражнение ложится в открытую группу, а без
+неё бот спрашивает группу и создаёт упражнение только после выбора.
 """
 import httpx
 import pytest
@@ -175,7 +176,7 @@ async def test_api_import_unmatched_exercise_lands_in_other(fresh_db, client_fac
 # ---------- живая тренировка в боте ----------
 
 
-async def _create_from_query(db, user_id, state) -> dict:
+async def _create_from_query(db, user_id, state, pick_group_id=None) -> dict:
     workout_id = await db.create_workout(user_id)
     await state.update_data(
         workout_id=workout_id, open_exercises=[], open_blocks={}, active_exercise_id=None,
@@ -183,17 +184,76 @@ async def _create_from_query(db, user_id, state) -> dict:
     )
     await state.set_state(WorkoutFlow.picking_exercise)
     await workout.pick_new_from_query(_make_callback(user_id, "pick:newquery"), state)
+    if pick_group_id is not None:
+        await workout.pick_new_exercise_group(
+            _make_callback(user_id, f"picknewgrp:grp:{pick_group_id}"), state
+        )
     return next(
-        ex for ex in await db.list_user_exercises(user_id)
-        if ex["display_name"] == "Гиперэкстензия боком"
+        (
+            ex for ex in await db.list_user_exercises(user_id)
+            if ex["display_name"] == "Гиперэкстензия боком"
+        ),
+        None,
     )
 
 
-async def test_workout_create_without_group_context_lands_in_other(fresh_db, user_id):
-    """Поиск с экрана групп или «📋 Все»: группы нет — «Другое», без вопроса."""
+async def test_workout_create_without_group_context_asks_for_the_group(fresh_db, user_id):
+    """Поиск с экрана групп или «📋 Все»: группы нет — не кладу молча в
+    «Другое», а спрашиваю группу; упражнение появляется только после выбора."""
+    db = fresh_db
     state = await _make_state(user_id)
-    ex = await _create_from_query(fresh_db, user_id, state)
-    assert ex["primary_group_id"] == await _other_id(fresh_db)
+    callback = _make_callback(user_id, "pick:newquery")
+    workout_id = await db.create_workout(user_id)
+    await state.update_data(
+        workout_id=workout_id, open_exercises=[], open_blocks={}, active_exercise_id=None,
+        pick_query="Гиперэкстензия боком",
+    )
+    await state.set_state(WorkoutFlow.picking_exercise)
+
+    await workout.pick_new_from_query(callback, state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    kb = callback.bot.send_message.await_args.kwargs.get("reply_markup") or (
+        callback.bot.edit_message_text.await_args.kwargs["reply_markup"]
+    )
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    other_id = await _other_id(db)
+    assert f"picknewgrp:grp:{other_id}" in callbacks
+    assert "picknewgrp:cancel" in callbacks
+
+    gid = await db.create_muscle_group(user_id, "Своя")
+    await workout.pick_new_exercise_group(_make_callback(user_id, f"picknewgrp:grp:{gid}"), state)
+
+    ex = next(e for e in await db.list_user_exercises(user_id) if e["display_name"] == "Гиперэкстензия боком")
+    assert ex["primary_group_id"] == gid
+    data = await state.get_data()
+    assert data["active_exercise_id"] == ex["id"]
+    assert await state.get_state() == WorkoutFlow.logging_set.state
+
+
+async def test_workout_create_group_question_cancel_creates_nothing(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+    assert await _create_from_query(db, user_id, state) is None
+    await workout.pick_new_exercise_group_cancel(_make_callback(user_id, "picknewgrp:cancel"), state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    data = await state.get_data()
+    assert data.get("pending_new_exercise_name") is None
+    # Назад — к выдаче поиска, с которой пришли.
+    assert await state.get_state() == WorkoutFlow.picking_exercise.state
+
+
+async def test_workout_group_question_rejects_someone_elses_group(fresh_db, user_id):
+    db = fresh_db
+    await db.get_or_create_user(telegram_id=222, username="other")
+    foreign = await db.create_muscle_group(222, "Чужая")
+    state = await _make_state(user_id)
+    await _create_from_query(db, user_id, state)
+    callback = _make_callback(user_id, f"picknewgrp:grp:{foreign}")
+    await workout.pick_new_exercise_group(callback, state)
+    assert await db.count_user_exercises(user_id) == 0
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
 
 
 async def test_workout_create_inside_an_open_group_uses_that_group(fresh_db, user_id):

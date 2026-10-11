@@ -1697,6 +1697,8 @@
   "workout.name_too_long": "a bit long for an exercise ({n} {n, plural, one{character} other{characters}})",
   "workout.new_exercise_name": "Send the name of the new exercise:",
   "workout.new_exercise_name_with_templates": "Send the name of the new exercise, or pick one from the templates:",
+  "workout.new_exercise_pick_group": "<b>{name}</b> — which muscle group does it go in? Pick one and I'll open the exercise right away.",
+  "workout.group_gone": "That group's gone — pick another one from the list.",
   "workout.no_active_workout": "No workout open — hit 🏋️ Start workout",
   "workout.no_exercises_in_workout": "No exercises in this workout",
   "workout.no_own_exercises_hint": "You don't have any exercises here yet — add one or type a name to search:",

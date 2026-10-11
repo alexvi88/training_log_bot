@@ -1698,6 +1698,8 @@
   "workout.name_too_long": "длинновато для упражнения ({n} {n, plural, one{символ} few{символа} many{символов} other{символа}})",
   "workout.new_exercise_name": "Напиши название нового упражнения:",
   "workout.new_exercise_name_with_templates": "Напиши название нового упражнения или выбери из шаблонов:",
+  "workout.new_exercise_pick_group": "<b>{name}</b> — в какую группу мышц его положить? Выбери, и я сразу открою упражнение.",
+  "workout.group_gone": "Этой группы уже нет — выбери другую из списка.",
   "workout.no_active_workout": "Открытой тренировки нет — жми 🏋️ Начать тренировку",
   "workout.no_exercises_in_workout": "В этой тренировке нет упражнений",
   "workout.no_own_exercises_hint": "У тебя пока нет своих упражнений здесь — добавь новое или напиши название для поиска:",

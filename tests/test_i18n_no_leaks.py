@@ -711,6 +711,18 @@ async def _screen_exercise_alternatives(db, user_id: int) -> str:
     return "\n".join(lines)
 
 
+async def _screen_workout_new_exercise_group(db, user_id: int) -> str:
+    """«➕ Создать «…»» без открытой группы: вопрос, в какую группу положить
+    новое упражнение (handlers.workout._create_or_ask_group)."""
+    groups = await db.list_muscle_groups(user_id, order_by_usage=True)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="picknewgrp", extra_buttons=[(i18n.t("btn.cancel"), "picknewgrp:cancel")]
+    )
+    lines = [i18n.t("workout.new_exercise_pick_group", name="Side plank"), i18n.t("workout.group_gone")]
+    lines += [b.text for row in kb.inline_keyboard for b in row]
+    return "\n".join(lines)
+
+
 async def _screen_ai_trainer_setup_question(db, user_id: int) -> str:
     """Вопрос опросника перед сборкой программы: заголовок «ВОПРОС N ИЗ M»,
     сам вопрос про цель (первый и обязательный, см. handlers.ai_trainer.
@@ -877,6 +889,7 @@ SCREENS: list[tuple[str, object]] = [
     ("ai_trainer_intro", _screen_ai_trainer_intro),
     ("ai_trainer_new_chat", _screen_ai_trainer_new_chat),
     ("exercise_alternatives", _screen_exercise_alternatives),
+    ("workout_new_exercise_group", _screen_workout_new_exercise_group),
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),
