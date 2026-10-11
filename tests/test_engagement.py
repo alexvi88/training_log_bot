@@ -101,6 +101,13 @@ def test_win_back_starts_at_21_then_every_10_days():
     assert engagement.is_win_back_day(None) is False
 
 
+def test_win_back_series_stops_after_four_tries():
+    """Как у новичков (NEWBIE_STOP_DAY): 21, 31, 41, 51 — и тишина."""
+    sent = [day for day in range(0, 200) if engagement.is_win_back_day(day)]
+    assert sent == [21, 31, 41, 51]
+    assert engagement.WIN_BACK_STOP_DAY == 51
+
+
 
 # ---------- plateau ----------
 

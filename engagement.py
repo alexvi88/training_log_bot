@@ -71,6 +71,11 @@ _push_image_file_id: str | None = None
 
 WIN_BACK_START_DAY = 21
 WIN_BACK_REPEAT_DAYS = 10
+# Потолок серии «Возвращение» — как NEWBIE_STOP_DAY у новичков: четыре
+# попытки (21, 31, 41, 51 день) и тишина. Без него серия шла каждые 10 дней
+# вечно, и человек, ушедший насовсем, получал «пора возвращаться» и через
+# полгода — это уже не возвращение, а спам, после которого бота блокируют.
+WIN_BACK_STOP_DAY = 51
 # Week-streak marks worth a celebration push. Fired on Mondays only and only on
 # an exact match, so each milestone congratulates once: by the next Monday the
 # streak has either grown past the mark or (grace week spent) reset to zero.
@@ -249,7 +254,12 @@ def skip_milestone(
 
 
 def is_win_back_day(days_since_last: Optional[int]) -> bool:
+    """21-й день без тренировки, затем каждые WIN_BACK_REPEAT_DAYS, до
+    WIN_BACK_STOP_DAY включительно. Тексты (push.win_back.*) не называют срок
+    паузы — они правдивы на любой день серии."""
     if days_since_last is None or days_since_last < WIN_BACK_START_DAY:
+        return False
+    if days_since_last > WIN_BACK_STOP_DAY:
         return False
     return (days_since_last - WIN_BACK_START_DAY) % WIN_BACK_REPEAT_DAYS == 0
 
