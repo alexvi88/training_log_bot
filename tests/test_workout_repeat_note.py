@@ -374,7 +374,8 @@ def test_superset_tabs_show_full_name_falling_back_to_wide_rows():
     ]
     kb = keyboards.logging_keyboard(open_items, active_id=2, has_sets=True)
     texts = [b.text for row in _tab_rows(kb) for b in row]
-    assert texts == ["biceps curls - alternating…", "▶ triceps block - single…"]
+    # Активная вкладка — первой (superset_rotated).
+    assert texts == ["▶ triceps block - single…", "biceps curls - alternating…"]
 
 
 def test_superset_of_two_gets_a_row_each():
