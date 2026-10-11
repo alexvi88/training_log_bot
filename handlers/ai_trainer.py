@@ -36,6 +36,7 @@ import ui
 import video_analysis
 from ai_undo import apply as _apply_undo
 from fsm import AITrainerFlow
+from state_scaffold import AI_STATE_KEYS
 
 router = Router(name="ai_trainer")
 
@@ -89,6 +90,7 @@ _MODULE_ATTR_NAMES: dict[str, str] = {
     "SETUP_HINT_TEXT_ONLY": "_setup_hint_text_only",
     "SETUP_ANSWERS_FRAME": "_setup_answers_frame",
     "SETUP_ENOUGH_FRAME": "_setup_enough_frame",
+    "NEW_CHAT_TEXT": "_new_chat_text",
 }
 
 
@@ -501,6 +503,7 @@ async def ai_keyboard(
     draft_id: Optional[str] = None,
     actions: Sequence[dict] = (),
     presets: Sequence[tuple[str, str]] = (),
+    new_chat: bool = False,
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
 
@@ -554,6 +557,7 @@ async def ai_keyboard(
         draft_id=draft_id,
         actions=actions,
         presets=presets,
+        new_chat=new_chat,
     )
 
 
@@ -585,8 +589,47 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     keyboard = await ai_keyboard(
         callback.from_user.id,
         presets=await intro_presets(callback.from_user.id),
+        new_chat=not fresh,
     )
     await ui.safe_edit(callback, text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+# Всё, что FSM держит про текущий разговор с тренером: переписка для модели,
+# черновик программы, опросник, кнопки откатов/писем/архивации под прошлыми
+# ответами. «Новый разговор» стирает ровно это — то же, что в приложении
+# делает DELETE /v1/ai/history (api_v1_ai.delete_history): черновик, опросник
+# и откаты разговору не переживают. Постоянный дневник переписки
+# (db.ai_chat_messages) не трогаем: он отдельный, и тренер может поднять
+# прошлое оттуда инструментом get_full_chat_history, если его спросят.
+_CONVERSATION_STATE_KEYS = AI_STATE_KEYS + (
+    "ai_actions",
+    "ai_undo", "ai_undo_seq",
+    "ai_feedback", "ai_feedback_seq",
+    "ai_archive", "ai_archive_seq",
+)
+
+
+def _new_chat_text() -> str:
+    return i18n.t("ai.screen.new_chat")
+
+
+@router.callback_query(F.data == "ai:newchat")
+async def ai_new_chat(callback: CallbackQuery, state: FSMContext):
+    """«🆕 Новый разговор»: контекст для модели обнуляется, модель не зовётся.
+
+    Пока тренер отвечает на прошлый вопрос, сброс не делаем: _handle_question
+    в конце записал бы ai_history поверх уже пустой, и «новый» разговор
+    молча продолжил бы старый.
+    """
+    user_id = callback.from_user.id
+    if user_id in _busy:
+        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
+        return
+    await state.set_state(AITrainerFlow.chatting)
+    await state.update_data(**{key: None for key in _CONVERSATION_STATE_KEYS})
+    keyboard = await ai_keyboard(user_id, presets=await intro_presets(user_id))
+    await ui.safe_edit(callback, _new_chat_text(), reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 

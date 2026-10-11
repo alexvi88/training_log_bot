@@ -677,6 +677,16 @@ async def _screen_ai_trainer_intro(db, user_id: int) -> str:
     return f"{at.INTRO_TEXT}\n{at.RESUME_TEXT}\n{at.ACTIONS_HINT_TEXT}\n{preset_labels}"
 
 
+async def _screen_ai_trainer_new_chat(db, user_id: int) -> str:
+    """«🆕 Новый разговор»: кнопка на экране возврата в разговор и экран,
+    который встаёт после тапа (handlers.ai_trainer.ai_new_chat)."""
+    from handlers import ai_trainer as at
+
+    kb = await at.ai_keyboard(user_id, presets=await at.intro_presets(user_id), new_chat=True)
+    buttons = "\n".join(b.text for row in kb.inline_keyboard for b in row)
+    return f"{at.NEW_CHAT_TEXT}\n{buttons}"
+
+
 async def _screen_ai_trainer_setup_question(db, user_id: int) -> str:
     """Вопрос опросника перед сборкой программы: заголовок «ВОПРОС N ИЗ M»,
     сам вопрос про цель (первый и обязательный, см. handlers.ai_trainer.
@@ -841,6 +851,7 @@ SCREENS: list[tuple[str, object]] = [
     ("fallback_ask_trainer", _screen_fallback_ask_trainer),
     ("main_error_fallback", _screen_main_error_fallback),
     ("ai_trainer_intro", _screen_ai_trainer_intro),
+    ("ai_trainer_new_chat", _screen_ai_trainer_new_chat),
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),

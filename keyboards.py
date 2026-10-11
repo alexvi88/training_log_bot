@@ -223,6 +223,7 @@ def ai_trainer_keyboard(
     programs: Sequence[Any] = (),
     actions: Sequence[Any] = (),
     presets: Sequence[tuple[str, str]] = (),
+    new_chat: bool = False,
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -259,6 +260,11 @@ def ai_trainer_keyboard(
     стоят первыми строками, выше всего остального — на интро это единственный
     контент, и тап по ним должен быть первым движением, а не поиском под
     навигацией.
+
+    `new_chat` — кнопка «🆕 Новый разговор» (ai:newchat). Только на экране
+    входа в уже идущий разговор (menu:ai и нижняя кнопка): под каждым ответом
+    она засоряла бы чат, а на входе её и ищут — человек вернулся и хочет
+    спросить о другом, не таща за собой старый контекст.
 
     Программа, если есть, идёт первым пунктом общего списка и делит с
     упоминаниями упражнений один и тот же лимит и постраничную навигацию
@@ -349,8 +355,13 @@ def ai_trainer_keyboard(
         [InlineKeyboardButton(text=label, callback_data=cb)] for label, cb in presets
     ]
 
+    new_chat_rows = (
+        [[InlineKeyboardButton(text=i18n.t("btn.ai_new_chat"), callback_data="ai:newchat")]]
+        if new_chat else []
+    )
+
     return InlineKeyboardMarkup(
-        inline_keyboard=preset_rows + action_rows + item_rows + page_nav_rows + nav
+        inline_keyboard=preset_rows + action_rows + item_rows + page_nav_rows + new_chat_rows + nav
     )
 
 
