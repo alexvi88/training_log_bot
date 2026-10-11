@@ -544,7 +544,7 @@ def _exercise_detail_view(
     b.button(text=i18n.t("exercises.btn.edit"), callback_data=f"exm:editmenu:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.share"), callback_data=f"share:ex:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.archive_ex"), callback_data=f"exm:archiveask:{ex['id']}")
-    # «🔁 Замена» — только если у упражнения есть соседи по семейству каталога
+    # «🔁 Альтернативы» — только если у упражнения есть соседи по семейству каталога
     # (exercise_alternatives): своему упражнению не из каталога замен мы не
     # знаем, и кнопка вела бы в пустой экран.
     can_swap = bool(exercise_alternatives.alternatives_for(exercise_media.catalog_key(ex)))
@@ -712,7 +712,7 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("exm:alt:"))
 async def exm_alternatives(callback: CallbackQuery, state: FSMContext):
-    """«🔁 Замена» в карточке: чем заменить упражнение (exercise_alternatives —
+    """«🔁 Альтернативы» в карточке: чем заменить упражнение (exercise_alternatives —
     те же семейства, что у приложения). Своё — открывает его карточку
     (exm:ex), ещё не добавленное — заводит копию и открывает её (exm:tpladd,
     тот же путь, что «➕ Добавить» в каталоге)."""
