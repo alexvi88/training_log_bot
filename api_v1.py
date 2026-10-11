@@ -528,7 +528,11 @@ async def list_exercises(request: Request) -> JSONResponse:
     меню — обычный каталог его никогда не подмешивает), по группе мышц (обзор
     для тех, кто не помнит точное название), текстовым поиском, или весь
     каталог. Параметры не комбинируются — archived, затем group_id, затем
-    query побеждают в этом порядке, раз пришли."""
+    query побеждают в этом порядке, раз пришли.
+
+    Текстовый поиск, не нашедший ничего ни у своих, ни в каталоге, отдаёт
+    похожие с опечаткой (db.similar_exercise_matches), каждое с полем
+    `similar: true`; у обычной выдачи этого поля нет."""
     user_id = await _authed_user_id(request)
     archived_param = request.query_params.get("archived")
     group_id_param = request.query_params.get("group_id")
@@ -543,6 +547,13 @@ async def list_exercises(request: Request) -> JSONResponse:
         rows = await db.list_user_exercises_in_group(user_id, group_id)
     elif query:
         rows = await db.search_exercises(user_id, query, limit=50)
+        if not rows and not await db.search_exercise_templates(user_id, query, limit=1):
+            # Ни своего, ни каталога — похоже на опечатку («присидания»):
+            # похожие свои с `similar: true`. Приложение показывает их под
+            # «Похоже, ты про:», а «Создать» — ниже (GET /exercise-templates
+            # отдаёт каталожную половину тем же ходом).
+            own, _ = await db.similar_exercise_matches(user_id, query)
+            return JSONResponse([{**_exercise_json(r), "similar": True} for r in own])
     else:
         rows = await db.list_user_exercises(user_id)
     return JSONResponse([_exercise_json(r) for r in rows])

@@ -982,8 +982,7 @@ async def exm_search_text(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:
         return
-    results = await db.search_exercises(message.from_user.id, query)
-    templates = await db.search_exercise_templates(message.from_user.id, query)
+    results, templates, similar = await db.search_with_similar(message.from_user.id, query)
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in results]
     items += [(f"exm:tpladd:{t['id']}", f"📋 {_template_display_name(t)}") for t in templates]
@@ -991,10 +990,12 @@ async def exm_search_text(message: Message, state: FSMContext):
         b.row(*row)
     b.row(InlineKeyboardButton(text=i18n.t("exercises.btn.new_exercise"), callback_data="exm:newex"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:backlist"))
-    text = (
-        i18n.t("exercises.search.results", query=escape(query)) if (results or templates)
-        else i18n.t("exercises.search.empty", query=escape(query))
-    )
+    if similar:
+        text = i18n.t("search.similar", query=escape(query))
+    elif results or templates:
+        text = i18n.t("exercises.search.results", query=escape(query))
+    else:
+        text = i18n.t("exercises.search.empty", query=escape(query))
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
 

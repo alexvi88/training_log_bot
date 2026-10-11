@@ -1738,6 +1738,7 @@
   "workout.reps_row_hint_text": "Цифры внизу — тот же вес, выбери повторы",
   "workout.reps_row_line": "🔢 Жми повторы на {weight}",
   "workout.search_empty": "Ничего не нашлось по «{query}». Заведи своё или напиши иначе:",
+  "search.similar": "Точно «{query}» не нашёл. Похоже, ты про:",
   "workout.search_results": "Результаты поиска «{query}» — {n} {n, plural, one{совпадение} few{совпадения} many{совпадений} other{совпадения}}:",
   "workout.session_tonnage_total": "🏋️ Суммарно за тренировку — {tonnage}. {equivalent}",
   "workout.set_added": "➕ {set}",

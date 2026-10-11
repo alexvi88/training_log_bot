@@ -1022,6 +1022,11 @@
      "type": "Int",
      "optional": true,
      "default": true
+    },
+    "similar": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1309,6 +1314,11 @@
     },
     "popularity": {
      "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "similar": {
+     "type": "Bool",
      "optional": true,
      "default": true
     }
@@ -4029,5 +4039,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "947471c9531f5d70a15596f2515e7b73a5eb19bf"
+ "_ios_commit": "5fc60783bb8e0b07c3c0f881d9be7fda78074e91"
 }

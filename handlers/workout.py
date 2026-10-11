@@ -1949,10 +1949,9 @@ async def pick_page(callback: CallbackQuery, state: FSMContext):
 _SEARCH_FETCH_LIMIT = 200
 
 
-async def _search_matches(user_id: int, query: str) -> tuple[list, list]:
-    return (
-        await db.search_exercises(user_id, query, limit=_SEARCH_FETCH_LIMIT),
-        await db.search_exercise_templates(user_id, query, limit=_SEARCH_FETCH_LIMIT),
+async def _search_matches(user_id: int, query: str) -> tuple[list, list, bool]:
+    return await db.search_with_similar(
+        user_id, query, limit=_SEARCH_FETCH_LIMIT, template_limit=_SEARCH_FETCH_LIMIT,
     )
 
 
@@ -1963,23 +1962,29 @@ async def _picker_screen_search(callback_or_message, state: FSMContext, user):
     query = data["pick_query"]
     page = data.get("pick_page", 0)
     size = config.RECENT_EXERCISES_LIMIT
-    own, templates = await _search_matches(callback_or_message.from_user.id, query)
+    own, templates, similar = await _search_matches(callback_or_message.from_user.id, query)
     combined = [("ex", row) for row in own] + [("tpl", row) for row in templates]
     chunk = combined[page * size : (page + 1) * size]
     # Кнопку «создать» показываем на любой выдаче, даже когда группа не выбрана:
     # раньше поиск с экрана групп при пустом результате оставлял одно «Назад» —
     # не нашли и создать нельзя. Группу без открытой группы спрашиваем уже
     # после тапа (_create_or_ask_group), так что запрещать было нечего.
+    # Похожие на опечатку («присидания» → «Присед») идут списком, а «Создать
+    # «присидания»» — под ними, последним выходом: первым он плодил дубли
+    # каталожных упражнений.
+    named_create = not combined or similar
     kb = keyboards.exercises_keyboard(
         [row for kind, row in chunk if kind == "ex"],
         prefix="pick", back_cb="back",
         show_new_button=True,
-        new_text=None if combined else i18n.t("workout.btn_create_named", name=formatting.shorten(query, 28)),
-        new_cb="new" if combined else "newquery",
+        new_text=i18n.t("workout.btn_create_named", name=formatting.shorten(query, 28)) if named_create else None,
+        new_cb="newquery" if named_create else "new",
         page=page, has_next=(page + 1) * size < len(combined),
         templates=[row for kind, row in chunk if kind == "tpl"],
     )
-    if combined:
+    if similar:
+        hint = i18n.t("search.similar", query=escape(query))
+    elif combined:
         total = len(combined)
         hint = i18n.t("workout.search_results", query=escape(query), n=total)
     else:

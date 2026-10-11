@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import difflib
 import functools
 import re
 
@@ -285,3 +286,74 @@ def query_groups(query: str) -> list[tuple[str, ...]]:
             rest = folded.replace(phrase, " ")
             return [alts, *(expand(s) for s in query_stems(rest))]
     return [expand(s) for s in query_stems(query)]
+
+
+# ---------- опечатки: «Похоже, ты про:» ----------
+#
+# Поиск выше находит словоформы и синонимы, но не опечатки: «присидания»
+# вместо «приседания» давали «ничего не нашёл», и человек тут же заводил
+# «новое» упражнение — мусорный дубль рядом с каталожным приседом, у которого
+# и картинка, и техника, и история. Похожее показывается только запасным
+# ходом, когда обычный поиск пуст (db.similar_exercise_matches), и только как
+# предложение: что выбрать, решает человек.
+#
+# Сравнение — difflib по словам, без привязки к алфавиту (как и всё в этом
+# модуле): «sqaut» находит «Squat» тем же путём, что «присидания» — «Присед».
+
+# Слово запроса короче этого (предлоги «со», «на», «в») в сравнении не
+# участвует: опечатка в нём ничего не решает, а совпадает оно со всем подряд.
+_TYPO_SKIP_BELOW = 3
+# Короче этого — только точное начало слова: в трёх буквах одна опечатка уже
+# делает другое слово («жим»/«жир»).
+_TYPO_MIN_FUZZY = 4
+# Порог похожести слова (difflib ratio): одна опечатка в слове из пяти и
+# больше букв проходит («sqaut»/«squat» 0.8, «лажа»/«лежа» 0.75), две в
+# коротком — нет.
+_TYPO_MIN_RATIO = 0.75
+
+
+def _typo_word_score(query_word: str, name_words: list[str]) -> float:
+    """Насколько слово запроса похоже на лучшее слово названия (0…1).
+
+    Сравниваются и слово целиком, и его основа (`stem`): «присидания» против
+    «Присед» сходится только основой «присид». И с началом слова названия
+    той же длины — человек допечатал не до конца («присидан» → «Приседания»)."""
+    variants = {query_word}
+    word_stem = stem(query_word)
+    if len(word_stem) >= _TYPO_MIN_FUZZY:
+        variants.add(word_stem)
+    best = 0.0
+    for word in name_words:
+        for variant in variants:
+            if word.startswith(variant):
+                return 1.0
+            # Первую букву путают редко, а без этого условия четыре буквы с
+            # одной заменой уже сходятся с чужим словом («йога» и «ноги»).
+            if len(variant) < _TYPO_MIN_FUZZY or word[:1] != variant[:1]:
+                continue
+            matcher = difflib.SequenceMatcher(None, variant, word)
+            best = max(best, matcher.ratio())
+            if len(word) > len(variant):
+                matcher.set_seq2(word[: len(variant)])
+                best = max(best, matcher.ratio())
+    return best
+
+
+def typo_score(query: str, *names: str | None) -> float:
+    """Похожесть запроса с опечаткой на название (лучшее из `names` — например,
+    русское и английское имя одного шаблона). 0 — не похоже: каждое значимое
+    слово запроса обязано найти похожее слово в названии, как и в обычном
+    поиске все слова обязательны. Иначе средняя похожесть слов."""
+    query_words = [w for w in _WORD_RE.findall(fold(query)) if len(w) >= _TYPO_SKIP_BELOW]
+    if not query_words:
+        return 0.0
+    best = 0.0
+    for name in names:
+        if not name:
+            continue
+        name_words = _WORD_RE.findall(fold(name))
+        scores = [_typo_word_score(w, name_words) for w in query_words]
+        if min(scores) < _TYPO_MIN_RATIO:
+            continue
+        best = max(best, sum(scores) / len(scores))
+    return best

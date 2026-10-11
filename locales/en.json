@@ -1737,6 +1737,7 @@
   "workout.reps_row_hint_text": "The numbers below — same weight, pick the reps",
   "workout.reps_row_line": "🔢 Tap reps at {weight}",
   "workout.search_empty": "Nothing found for \"{query}\". Create your own or try another word:",
+  "search.similar": "No exact match for \"{query}\". Did you mean:",
   "workout.search_results": "Search results for \"{query}\" — {n} {n, plural, one{match} other{matches}}:",
   "workout.session_tonnage_total": "🏋️ Total for the workout — {tonnage}. {equivalent}",
   "workout.set_added": "➕ {set}",

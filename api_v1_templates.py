@@ -109,7 +109,10 @@ async def list_exercise_templates(request: Request) -> JSONResponse:
     подборе упражнения) или по группе мышц (`db.list_templates_in_group`,
     просмотр каталога группы при создании нового упражнения). Один из двух
     параметров обязателен — без них отдавать «весь каталог» так же не
-    задумано здесь, как и в db.search_exercise_templates при пустом query."""
+    задумано здесь, как и в db.search_exercise_templates при пустом query.
+
+    Текст, не нашедший ничего ни в каталоге, ни у своих, отдаёт похожие с
+    опечаткой (db.similar_exercise_matches) с полем `similar: true`."""
     user_id = await _authed_user_id(request)
     lang = await _user_lang(user_id)
     query = request.query_params.get("query")
@@ -121,6 +124,12 @@ async def list_exercise_templates(request: Request) -> JSONResponse:
             # список совпадений, а не первые полсотни.
             limit = _query_int(request, "limit", 8, minimum=1, maximum=200)
             templates = await db.search_exercise_templates(user_id, query, limit=limit)
+            if not templates and not await db.search_exercises(user_id, query, limit=1):
+                # Пусто и у своих — похоже на опечатку: каталожная половина
+                # похожих с `similar: true` (своя — в GET /exercises).
+                _, similar = await db.similar_exercise_matches(user_id, query)
+                payload = [{**_template_list_json(t, lang), "similar": True} for t in similar]
+                return JSONResponse(payload)
         elif group_id_param:
             try:
                 group_id = int(group_id_param)
