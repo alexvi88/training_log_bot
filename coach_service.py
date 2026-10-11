@@ -43,11 +43,6 @@ import i18n
 import timeutil
 from handlers import sharing
 
-# Гипотеза цены: бесплатно — до трёх клиентов. НЕ ограничение: ни пэйвола, ни
-# проверки нет. Число отдаётся приложению только для подписи, если владелец
-# решит её показать; решение — за ним.
-COACH_FREE_CLIENTS_HYPOTHESIS = 3
-
 MAX_DISPLAY_NAME_LENGTH = 40
 MAX_COMMENT_LENGTH = 1000
 
