@@ -25,6 +25,7 @@ import secrets
 import sqlite3
 import time
 import uuid
+from contextlib import suppress
 from typing import Any, Iterable, Optional
 
 import aiosqlite
@@ -1219,7 +1220,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     parent = os.path.dirname(db_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    _conn = await aiosqlite.connect(db_path)
+    _conn = await aiosqlite.connect(db_path, timeout=config.SQLITE_BUSY_TIMEOUT_SECONDS)
     _conn.row_factory = aiosqlite.Row
     # SQLite's built-in LOWER() only case-folds ASCII; register a Python-backed
     # one so Cyrillic search can be filtered in SQL instead of fetching every
@@ -3618,15 +3619,7 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
     # пользовались, скрыта фильтром видимости, и пряталась бы вместе с
     # шаблоном — человек не находил становую вовсе. Тап по шаблону вернёт ту
     # же копию (fork_exercise_from_template), дубля не будет.
-    cur = await conn().execute(
-        "SELECT e.original_name FROM exercises e "
-        "WHERE e.user_id = ? AND e.is_template = 0 AND e.is_archived = 0 "
-        f"AND {_VISIBLE_EXERCISE_FILTER}",
-        (user_id,),
-    )
-    owned = {
-        search_terms.fold(r["original_name"]) for r in await cur.fetchall() if r["original_name"]
-    }
+    owned = await _visible_owned_identities(user_id)
 
     folded_query = search_terms.fold(query)
     scored: list[tuple[int, str, aiosqlite.Row]] = []
@@ -3649,6 +3642,95 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
 
     scored.sort(key=lambda item: item[:4])
     return [t for *_, t in scored[:limit]]
+
+
+async def _visible_owned_identities(user_id: int) -> set[str]:
+    """Свёрнутые идентичности (`original_name`) своих упражнений, которые свой
+    поиск правда покажет, — шаблон с такой же идентичностью в выдаче каталога
+    был бы вторым входом в то же упражнение."""
+    cur = await conn().execute(
+        "SELECT e.original_name FROM exercises e "
+        "WHERE e.user_id = ? AND e.is_template = 0 AND e.is_archived = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER}",
+        (user_id,),
+    )
+    return {
+        search_terms.fold(r["original_name"]) for r in await cur.fetchall() if r["original_name"]
+    }
+
+
+# Сколько похожих предлагать на запрос с опечаткой — своих и каталожных
+# вместе. Это подсказка «ты про это?», а не выдача: длинный список похожих
+# прячет то самое одно, которое человек имел в виду.
+SIMILAR_LIMIT = 5
+
+
+async def similar_exercise_matches(
+    user_id: int, query: str, limit: int = SIMILAR_LIMIT,
+) -> tuple[list[aiosqlite.Row], list[aiosqlite.Row]]:
+    """(свои, шаблоны каталога), похожие на `query` с опечаткой
+    («присидания» → «Присед»), — запасной ход, когда обычный поиск
+    (search_exercises + search_exercise_templates) пуст: без него человек
+    видел «ничего не нашёл» и заводил дубль каталожного упражнения.
+
+    Сверяется по тем же именам, что и обычный поиск: своё — по показываемому
+    имени и идентичности каталога на обоих языках, шаблон — по русскому и
+    английскому имени (search_terms.typo_score). Отбор шаблонов тот же: без
+    скрытых и без тех, чья идентичность у атлета уже есть. Своё — первым,
+    всего не больше `limit`, внутри — самые похожие первыми."""
+    cur = await conn().execute(
+        "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER}",
+        (user_id,),
+    )
+    own_scored = []
+    for r in await cur.fetchall():
+        identity = r["original_name"]
+        score = search_terms.typo_score(
+            query, r["display_name"], identity,
+            localized_exercise_name(identity, "en") if identity else None,
+        )
+        if score > 0:
+            own_scored.append((-score, search_terms.fold(r["display_name"]), r["id"], r))
+    own_scored.sort(key=lambda item: item[:3])
+    own = [r for *_, r in own_scored[:limit]]
+
+    room = limit - len(own)
+    if room <= 0:
+        return own, []
+    owned = await _visible_owned_identities(user_id)
+    cur = await conn().execute("SELECT * FROM exercises WHERE is_template = 1")
+    tpl_scored = []
+    for t in await cur.fetchall():
+        identity = t["original_name"] or t["name"]
+        if search_terms.fold(identity) in owned or is_catalog_hidden(t["name"]):
+            continue
+        score = search_terms.typo_score(
+            query, t["display_name"], localized_exercise_name(t["display_name"], "en"),
+        )
+        if score > 0:
+            tpl_scored.append(
+                (-score, catalog_popularity(t["name"]), search_terms.fold(t["display_name"]), t["id"], t)
+            )
+    tpl_scored.sort(key=lambda item: item[:4])
+    return own, [t for *_, t in tpl_scored[:room]]
+
+
+async def search_with_similar(
+    user_id: int, query: str, limit: int = 20, template_limit: int = 8,
+) -> tuple[list[aiosqlite.Row], list[aiosqlite.Row], bool]:
+    """Поиск подбора упражнения целиком: (свои, шаблоны, похожие ли это).
+
+    Обычный поиск что-то нашёл — он и отдаётся, `False`. Пусто — похожие с
+    опечаткой (similar_exercise_matches) и `True`: экран показывает их под
+    «Похоже, ты про:» (`search.similar`), а «Создать» оставляет ниже, а не
+    первым действием."""
+    own = await search_exercises(user_id, query, limit=limit)
+    templates = await search_exercise_templates(user_id, query, limit=template_limit)
+    if own or templates:
+        return own, templates, False
+    own, templates = await similar_exercise_matches(user_id, query)
+    return own, templates, bool(own or templates)
 
 
 async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:
@@ -6271,6 +6353,21 @@ async def append_set(
         return set_id
 
 
+async def _last_session_first_weight(exercise_id: int, exclude_workout_id: int) -> float:
+    """Вес первого подхода упражнения в прошлой законченной тренировке (не
+    последнего: тот уже скидка от усталости), 0.0 — если истории нет."""
+    cur = await conn().execute(
+        "SELECT s.weight FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE s.exercise_id = ? AND w.status = 'finished' AND w.id != ? "
+        "ORDER BY w.started_at DESC, w.id DESC, s.id ASC LIMIT 1",
+        (exercise_id, exclude_workout_id),
+    )
+    row = await cur.fetchone()
+    return float(row["weight"]) if row and row["weight"] else 0.0
+
+
 async def store_parsed_sets(
     workout_id: int,
     block_id: int,
@@ -6313,6 +6410,11 @@ async def store_parsed_sets(
 
         previous = await list_sets_for_workout_exercise(workout_id, exercise_id)
         prev_weight = previous[-1]["weight"] if previous else 0.0
+        if not previous and any(omitted for omitted, *_ in items):
+            # Первый подход сегодня голыми повторами («8») — вес с прошлой
+            # тренировки, как у бота (handlers.workout._seed_last_value) и как
+            # приложение показывает над рядом повторов. Иначе ложился 0 кг × 8.
+            prev_weight = await _last_session_first_weight(exercise_id, workout_id)
         created_ids: list[int] = []
         workout_date = await _workout_date_of_block(block_id)
         for position, (weight_omitted, weight, reps, rpe) in enumerate(items):
@@ -7175,11 +7277,19 @@ async def resolve_api_token(token: str) -> Optional[int]:
         return None
     user_id = row["user_id"]
     if _api_token_touch_due(row["last_used_at"]):
-        async with _write_lock:
-            await conn().execute(
-                "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
-            )
-            await conn().commit()
+        # Отметка «когда пользовались» — справочная. Не записалась (базу держит
+        # Litestream дольше busy-таймаута) — запрос атлета всё равно проходит:
+        # раньше он падал 500 ровно здесь, хотя токен уже проверен.
+        try:
+            async with _write_lock:
+                await conn().execute(
+                    "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
+                )
+                await conn().commit()
+        except sqlite3.OperationalError:
+            logger.warning("api token touch skipped: database is busy", exc_info=True)
+            with suppress(sqlite3.Error):
+                await conn().rollback()
     if generation == _api_token_generation:
         _api_token_cache[token] = (user_id, now + API_TOKEN_CACHE_TTL_SECONDS)
     return user_id

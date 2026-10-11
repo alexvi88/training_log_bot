@@ -223,6 +223,7 @@ def ai_trainer_keyboard(
     programs: Sequence[Any] = (),
     actions: Sequence[Any] = (),
     presets: Sequence[tuple[str, str]] = (),
+    new_chat: bool = False,
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -259,6 +260,11 @@ def ai_trainer_keyboard(
     стоят первыми строками, выше всего остального — на интро это единственный
     контент, и тап по ним должен быть первым движением, а не поиском под
     навигацией.
+
+    `new_chat` — кнопка «🆕 Новый разговор» (ai:newchat). Только на экране
+    входа в уже идущий разговор (menu:ai и нижняя кнопка): под каждым ответом
+    она засоряла бы чат, а на входе её и ищут — человек вернулся и хочет
+    спросить о другом, не таща за собой старый контекст.
 
     Программа, если есть, идёт первым пунктом общего списка и делит с
     упоминаниями упражнений один и тот же лимит и постраничную навигацию
@@ -349,8 +355,13 @@ def ai_trainer_keyboard(
         [InlineKeyboardButton(text=label, callback_data=cb)] for label, cb in presets
     ]
 
+    new_chat_rows = (
+        [[InlineKeyboardButton(text=i18n.t("btn.ai_new_chat"), callback_data="ai:newchat")]]
+        if new_chat else []
+    )
+
     return InlineKeyboardMarkup(
-        inline_keyboard=preset_rows + action_rows + item_rows + page_nav_rows + nav
+        inline_keyboard=preset_rows + action_rows + item_rows + page_nav_rows + new_chat_rows + nav
     )
 
 
@@ -745,12 +756,24 @@ def reps_window(last_reps: int, is_first_set: bool = False) -> list[int]:
     return list(range(start, start + below + above + 1))
 
 
+def superset_next_id(active_id: int | None, ids: list[int]) -> int | None:
+    """Следующее упражнение суперсета после active_id, по кругу.
+
+    None — переключать некуда: открыто меньше двух или активного среди них нет.
+    Тот же круг, что у «Дальше →» в приложении (SupersetCycle.nextId).
+    """
+    if len(ids) < 2 or active_id not in ids:
+        return None
+    return ids[(ids.index(active_id) + 1) % len(ids)]
+
+
 def logging_keyboard(
     open_items: list[tuple[int, str]],
     active_id: int | None,
     has_sets: bool = True,
     last_reps: int | None = None,
     is_first_set: bool = False,
+    can_swap: bool = False,
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
@@ -759,6 +782,11 @@ def logging_keyboard(
 
     The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
     "↩️ Удалить последний" appears directly above "✅ Закончить упражнение".
+
+    can_swap — у активного упражнения есть замены из каталога
+    (exercise_alternatives): в тот же ряд встаёт «🔁 Замена» на случай, когда
+    тренажёр занят. Своё упражнение не из каталога кнопку не получает — замен
+    ему мы не знаем, и тап вёл бы в пустой экран.
 
     last_reps — повторы последнего записанного подхода. Есть они, значит есть и
     вес, и над остальными кнопками встаёт ряд цифр «тот же вес, другие
@@ -802,13 +830,51 @@ def logging_keyboard(
                 else _tab_label(name, _TAB_NAME_MAX_WIDE)
             )
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
+        # «Дальше →» — следующее открытое по кругу, в порядке открытия (порядок
+        # open_items), с последнего снова первое. Только переключает, как
+        # вкладка: тот же обработчик (live_switch_exercise), свой префикс —
+        # чтобы вкладки оставались вкладками. В суперсете следующий подход
+        # почти всегда по другому движению, и одна кнопка на одном месте
+        # находится быстрее, чем вкладка с нужным именем. Отдельным рядом
+        # под вкладками: втиснутая в ряд «Суперсет»/«Заметка» она резала бы
+        # их подписи.
+        next_id = superset_next_id(active_id, [ex_id for ex_id, _ in open_items])
+        if next_id is not None:
+            b.row(InlineKeyboardButton(text=i18n.t("btn.superset_next"), callback_data=f"live:next:{next_id}"))
     top_row = [InlineKeyboardButton(text=i18n.t("btn.superset"), callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text=i18n.t("btn.note"), callback_data=f"live:note:{active_id}"))
+        if can_swap:
+            top_row.append(InlineKeyboardButton(text=i18n.t("btn.swap"), callback_data="live:swap"))
     b.row(*top_row)
     if has_sets:
         b.row(InlineKeyboardButton(text=i18n.t("btn.undo_last"), callback_data="live:undo"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.finish_exercise"), callback_data="live:finish_exercise"))
+    return b.as_markup()
+
+
+def exercise_alternatives_keyboard(
+    alternatives: Sequence[dict],
+    own_cb: str,
+    template_cb: str,
+    back_cb: str,
+) -> InlineKeyboardMarkup:
+    """Список замен упражнению (exercise_alternatives.for_exercise) — в живом
+    трекере и в карточке упражнения.
+
+    Своё (уже заведённое) упражнение — голым именем и `own_cb.format(id)`;
+    ещё не добавленное из каталога — с 📋, как шаблоны в выдаче поиска
+    (exercises_keyboard), и `template_cb.format(template_id)`: тап сначала
+    заводит копию, потом открывает её. Каждое своей строкой — имена длинные.
+    """
+    b = InlineKeyboardBuilder()
+    for alt in alternatives:
+        if alt.get("exercise_id"):
+            text, cb = alt["name"], own_cb.format(alt["exercise_id"])
+        else:
+            text, cb = f"📋 {alt['name']}", template_cb.format(alt["template_id"])
+        b.row(InlineKeyboardButton(text=_tab_label(text, _SUGGEST_NAME_MAX), callback_data=cb))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=back_cb))
     return b.as_markup()
 
 

@@ -456,6 +456,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
                  expect=201)
     await w.call("POST", f"/workouts/{wid}/sets/parse", json={"exercise_id": forked_id, "text": "???"},
                  expect=400)
+    # Подозрительная строка у клиента, который просит спросить: вопрос тренера
+    # (и предложение «60 8») — на языке атлета, ничего не записано.
+    await w.call("POST", f"/workouts/{wid}/sets/parse",
+                 json={"exercise_id": forked_id, "text": "8 60", "confirm_suspicious": True}, expect=200)
     await w.call("POST", f"/workouts/{wid}/sets/voice",
                  json={"exercise_id": squat_id, "audio_data_url": "data:audio/m4a;base64,AAAA"}, expect=201)
     await w.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": own_id, "weight": 20, "reps": 12},

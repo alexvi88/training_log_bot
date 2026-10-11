@@ -130,6 +130,7 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
         reply_markup=await ai_keyboard(
             message.from_user.id,
             presets=await intro_presets(message.from_user.id),
+            new_chat=not fresh,
         ),
         parse_mode="HTML",
     )

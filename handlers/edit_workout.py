@@ -530,10 +530,11 @@ async def editwex_search_text(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:
         return
-    results = await db.search_exercises(message.from_user.id, query)
-    templates = await db.search_exercise_templates(message.from_user.id, query)
+    results, templates, similar = await db.search_with_similar(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="editwex", show_new_button=False, templates=templates)
-    if results or templates:
+    if similar:
+        text = i18n.t("search.similar", query=escape(query))
+    elif results or templates:
         text = i18n.t("workout.edit_search_results", query=escape(query))
     else:
         text = i18n.t("workout.edit_search_empty", query=escape(query))

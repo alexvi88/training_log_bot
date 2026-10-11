@@ -119,6 +119,10 @@ async def test_confirming_a_long_exercise_name_creates_it(fresh_db, user_id):
     callback = _make_callback(user_id, "pick:longname:yes")
 
     await workout.pick_longname_confirmed(callback, state)
+    # Группы нет — сначала спрашиваю её, и только потом завожу упражнение.
+    assert await db.count_user_exercises(user_id) == 0
+    other_id = await db.other_muscle_group_id()
+    await workout.pick_new_exercise_group(_make_callback(user_id, f"picknewgrp:grp:{other_id}"), state)
 
     assert await db.count_user_exercises(user_id) == 1
     ex = (await db.list_user_exercises(user_id))[0]
@@ -296,6 +300,8 @@ async def test_create_from_query_uses_typed_name(fresh_db, user_id):
     callback = _make_callback(user_id, "pick:newquery")
 
     await workout.pick_new_from_query(callback, state)
+    other_id = await db.other_muscle_group_id()
+    await workout.pick_new_exercise_group(_make_callback(user_id, f"picknewgrp:grp:{other_id}"), state)
 
     names = [ex["display_name"] for ex in await db.list_user_exercises(user_id)]
     assert "Гиперэкстензия боком" in names

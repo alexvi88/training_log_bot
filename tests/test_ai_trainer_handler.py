@@ -14,6 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import activity_log
 import config
+import i18n
 from handlers import ai_trainer
 
 pytestmark = pytest.mark.asyncio
@@ -208,7 +209,7 @@ async def test_ai_voice_question_checks_quota_before_transcribing(fresh_db, user
 
     transcribe.assert_not_awaited()
     message.bot.download.assert_not_awaited()
-    assert "лимит" in message.reply.await_args.args[0]
+    assert message.reply.await_args.args[0] == i18n.t("limit.question")
 
 
 def _make_message(user_id: int, text: str):
@@ -247,7 +248,7 @@ async def test_ai_question_daily_limit_blocks_before_calling_model(fresh_db, use
 
     assert called is False
     message.reply.assert_awaited_once()
-    assert "лимит" in message.reply.await_args.args[0].lower()
+    assert message.reply.await_args.args[0] == i18n.t("limit.question")
     # Сообщение о лимите — нижний экран переписки, и без клавиатуры из него
     # оставался только выход через нижнее меню.
     kb = message.reply.await_args.kwargs.get("reply_markup")
@@ -1885,7 +1886,7 @@ async def test_ai_build_program_refuses_before_burning_the_screen(fresh_db, user
 
     callback.message.answer.assert_not_awaited()
     assert callback.answer.await_args.kwargs.get("show_alert") is True
-    assert "лимит" in callback.answer.await_args.args[0].lower()
+    assert callback.answer.await_args.args[0].startswith(i18n.t("limit.question"))
     # И экран не должен утащить человека в чат с тренером, куда он не попал.
     assert await state.get_state() is None
     assert user_id not in ai_trainer._busy

@@ -677,6 +677,52 @@ async def _screen_ai_trainer_intro(db, user_id: int) -> str:
     return f"{at.INTRO_TEXT}\n{at.RESUME_TEXT}\n{at.ACTIONS_HINT_TEXT}\n{preset_labels}"
 
 
+async def _screen_ai_trainer_new_chat(db, user_id: int) -> str:
+    """«🆕 Новый разговор»: кнопка на экране возврата в разговор и экран,
+    который встаёт после тапа (handlers.ai_trainer.ai_new_chat)."""
+    from handlers import ai_trainer as at
+
+    kb = await at.ai_keyboard(user_id, presets=await at.intro_presets(user_id), new_chat=True)
+    buttons = "\n".join(b.text for row in kb.inline_keyboard for b in row)
+    return f"{at.NEW_CHAT_TEXT}\n{buttons}"
+
+
+async def _screen_exercise_alternatives(db, user_id: int) -> str:
+    """«🔁 Замена» (трекер и карточка упражнения): заголовки, подписи и список
+    замен — имена из каталога шаблонов, а не русская идентичность."""
+    import exercise_alternatives
+
+    template = (await db.find_global_templates_by_names(["Жим штанги лёжа"]))["Жим штанги лёжа"]
+    ex = await db.get_exercise(await db.fork_exercise_from_template(user_id, template["id"]))
+    alternatives = await exercise_alternatives.for_exercise(user_id, ex)
+    kb = keyboards.exercise_alternatives_keyboard(
+        alternatives, own_cb="o:{}", template_cb="t:{}", back_cb="b"
+    )
+    live = keyboards.logging_keyboard([(ex["id"], ex["display_name"])], ex["id"], can_swap=True)
+    name = ex["display_name"]
+    lines = [
+        i18n.t("workout.swap.title", name=name), i18n.t("workout.swap.sets_stay"),
+        i18n.t("workout.swap.empty", name=name),
+        i18n.t("exercises.alternatives.title", name=name),
+        i18n.t("exercises.alternatives.empty", name=name),
+    ]
+    lines += [b.text for row in kb.inline_keyboard for b in row]
+    lines += [b.text for row in live.inline_keyboard for b in row]
+    return "\n".join(lines)
+
+
+async def _screen_workout_new_exercise_group(db, user_id: int) -> str:
+    """«➕ Создать «…»» без открытой группы: вопрос, в какую группу положить
+    новое упражнение (handlers.workout._create_or_ask_group)."""
+    groups = await db.list_muscle_groups(user_id, order_by_usage=True)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="picknewgrp", extra_buttons=[(i18n.t("btn.cancel"), "picknewgrp:cancel")]
+    )
+    lines = [i18n.t("workout.new_exercise_pick_group", name="Side plank"), i18n.t("workout.group_gone")]
+    lines += [b.text for row in kb.inline_keyboard for b in row]
+    return "\n".join(lines)
+
+
 async def _screen_ai_trainer_setup_question(db, user_id: int) -> str:
     """Вопрос опросника перед сборкой программы: заголовок «ВОПРОС N ИЗ M»,
     сам вопрос про цель (первый и обязательный, см. handlers.ai_trainer.
@@ -841,6 +887,9 @@ SCREENS: list[tuple[str, object]] = [
     ("fallback_ask_trainer", _screen_fallback_ask_trainer),
     ("main_error_fallback", _screen_main_error_fallback),
     ("ai_trainer_intro", _screen_ai_trainer_intro),
+    ("ai_trainer_new_chat", _screen_ai_trainer_new_chat),
+    ("exercise_alternatives", _screen_exercise_alternatives),
+    ("workout_new_exercise_group", _screen_workout_new_exercise_group),
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),

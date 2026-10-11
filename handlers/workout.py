@@ -4,7 +4,6 @@ import asyncio
 import datetime as dt
 import logging
 import sqlite3
-from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from html import escape
@@ -34,6 +33,7 @@ import chat_bottom
 import config
 import dashboard_data
 import db
+import exercise_alternatives
 import exercise_descriptions
 import exercise_media
 import exercise_photos
@@ -41,6 +41,7 @@ import formatting
 import i18n
 import keyboards
 import progression_data
+import set_sanity
 import timeutil
 import ui
 import view_builder
@@ -412,86 +413,10 @@ async def _explain_workout_closed(event: Message | CallbackQuery, state: FSMCont
         await event.answer(text)
 
 
-# Below this fraction (or above this multiple) of the heaviest set this exercise
-# has seen — last session или уже сегодня, — a just-logged weight is flagged as a
-# likely typo rather than a deliberate change.
-#
-# Верхний порог был 3.0 и пропускал ровно тот случай, ради которого всё и
-# делалось: восемь подходов по 200, потом «500 5» — вопроса не последовало, и
-# 500 кг молча стали вечным рекордом упражнения. Прибавка в полтора раза за один
-# подход настоящей тренировкой почти не бывает; цена ложного срабатывания — один
-# тап «Да», цена пропуска — рекорд, тоннаж и ачивки, которых уже не отобрать
-# (см. _weight_confirm_prompt).
-#
-# Нижний порог, наоборот, ослаблен с 0.4 до 0.15 — из-за разминки. Кто пишет
-# разминочные подходы в тот же список (а таких много), на 60кг перед рабочими
-# 200 получал «60кг? в прошлый раз 210кг» — вопрос на ровном месте, каждую
-# тренировку. Настоящая опечатка в эту сторону — потерянный разряд («14» вместо
-# «140», «1 1» вместо «140 6»), то есть десятая часть веса и меньше; 0.15 ловит
-# весь этот класс и молчит на разминке, откате и лёгком добивочном подходе.
-_SUSPICIOUS_WEIGHT_LOW_FRACTION = 0.15
-_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 1.5
-
-
-def _working_weight_today(today_sets: list[tuple[float, int]]) -> float:
-    """Самый тяжёлый вес, который сегодня в этом упражнении встретился минимум
-    дважды, — то есть рабочий, а не ступенька разминки.
-
-    Одного подхода мало: разминка на новом упражнении выглядит как 60, потом
-    200, и если считать планкой первую же цифру, рабочий подход сам окажется
-    «подозрительно тяжёлым» — бот спросит про нормальный вес ровно там, где
-    сравнивать ещё не с чем. Повторённый вес — это уже заявление о том, с чем
-    человек сегодня работает.
-    """
-    counts = Counter(w for w, _r in today_sets if w > 0)
-    return max((w for w, times in counts.items() if times >= 2), default=0.0)
-
-
-def _suspicious_weight_warning(
-    last_session: list[tuple[float, int, float | None]] | None,
-    today_sets: list[tuple[float, int]] | None,
-    unit: str = "kg",
-) -> str | None:
-    """A soft nudge — never blocks logging, unlike parser.MAX_WEIGHT's hard
-    ceiling — when the just-logged set's weight looks like a typo next to what
-    this exercise was loaded with, in *either* direction: a dropped digit
-    ("1 1" meant "140 6") reads the same as an extra one ("1400" meant "140"),
-    even though only the low end used to be checked here. Bodyweight exercises
-    (0 kg either time) are exempt: a light set there is normal, not a typo.
-
-    Сравнение идёт с самым тяжёлым подходом этого упражнения И в прошлый раз, И
-    уже сегодня (сегодняшний — только рабочий, см. _working_weight_today).
-    Сегодняшние раньше не учитывались вовсе, и на упражнении без истории
-    проверки не было никакой — при том что восемь подходов по 200, набранные
-    полчаса назад, говорят о правдоподобном весе больше, чем любая прошлая
-    тренировка.
-    """
-    if not today_sets:
-        return None
-    last_weight, _last_reps = today_sets[-1]
-    if last_weight <= 0:
-        return None
-    prev_max_weight = max((w for w, _r, _rpe in last_session or []), default=0.0)
-    today_max_weight = _working_weight_today(today_sets[:-1])
-    baseline = max(prev_max_weight, today_max_weight)
-    if baseline <= 0:
-        return None
-    too_low = last_weight < _SUSPICIOUS_WEIGHT_LOW_FRACTION * baseline
-    too_high = last_weight > _SUSPICIOUS_WEIGHT_HIGH_MULTIPLE * baseline
-    if not (too_low or too_high):
-        return None
-    u = formatting.unit_label(unit)
-    # «сегодня», когда планка взялась из этой же тренировки: «в прошлый раз
-    # 200кг» под списком, где 200 стоит восемь раз подряд сегодня, читалось бы
-    # как ошибка самого бота.
-    since_key = "workout.since_last_time" if baseline == prev_max_weight else "workout.since_today"
-    return i18n.t(
-        "workout.suspicious_weight_warning",
-        weight=formatting.format_weight(last_weight),
-        u=u,
-        since=i18n.t(since_key),
-        baseline=formatting.format_weight(baseline),
-    )
+# Пороги и сами проверки подозрительного подхода живут в set_sanity — одна
+# копия на бота и на `/v1` (приложение спрашивает то же самое и теми же
+# словами). Прежние имена оставлены: на них завязаны экран записи и тесты.
+_suspicious_weight_warning = set_sanity.suspicious_weight_warning
 
 
 # Первые три раза за жизнь аккаунта, когда под сообщением встаёт ряд голых
@@ -757,9 +682,12 @@ async def _render_logging_screen(bot, state: FSMContext, user):
 
     names: dict[int, str] = {}
     active_note: str | None = None
+    can_swap = False
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
+        if ex_id == active:
+            can_swap = bool(exercise_alternatives.alternatives_for(exercise_media.catalog_key(ex)))
     if active is not None:
         active_note = await db.get_workout_exercise_note(data["workout_id"], active)
 
@@ -827,6 +755,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         open_items, active, has_sets,
         last_reps=reps_basis[1] if reps_basis else None,
         is_first_set=not today_sets,
+        can_swap=can_swap,
     )
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
@@ -2020,10 +1949,9 @@ async def pick_page(callback: CallbackQuery, state: FSMContext):
 _SEARCH_FETCH_LIMIT = 200
 
 
-async def _search_matches(user_id: int, query: str) -> tuple[list, list]:
-    return (
-        await db.search_exercises(user_id, query, limit=_SEARCH_FETCH_LIMIT),
-        await db.search_exercise_templates(user_id, query, limit=_SEARCH_FETCH_LIMIT),
+async def _search_matches(user_id: int, query: str) -> tuple[list, list, bool]:
+    return await db.search_with_similar(
+        user_id, query, limit=_SEARCH_FETCH_LIMIT, template_limit=_SEARCH_FETCH_LIMIT,
     )
 
 
@@ -2034,23 +1962,29 @@ async def _picker_screen_search(callback_or_message, state: FSMContext, user):
     query = data["pick_query"]
     page = data.get("pick_page", 0)
     size = config.RECENT_EXERCISES_LIMIT
-    own, templates = await _search_matches(callback_or_message.from_user.id, query)
+    own, templates, similar = await _search_matches(callback_or_message.from_user.id, query)
     combined = [("ex", row) for row in own] + [("tpl", row) for row in templates]
     chunk = combined[page * size : (page + 1) * size]
     # Кнопку «создать» показываем на любой выдаче, даже когда группа не выбрана:
     # раньше поиск с экрана групп при пустом результате оставлял одно «Назад» —
-    # не нашли и создать нельзя. Группа у нового упражнения необязательна
-    # (db.create_exercise принимает None), так что запрещать было нечего.
+    # не нашли и создать нельзя. Группу без открытой группы спрашиваем уже
+    # после тапа (_create_or_ask_group), так что запрещать было нечего.
+    # Похожие на опечатку («присидания» → «Присед») идут списком, а «Создать
+    # «присидания»» — под ними, последним выходом: первым он плодил дубли
+    # каталожных упражнений.
+    named_create = not combined or similar
     kb = keyboards.exercises_keyboard(
         [row for kind, row in chunk if kind == "ex"],
         prefix="pick", back_cb="back",
         show_new_button=True,
-        new_text=None if combined else i18n.t("workout.btn_create_named", name=formatting.shorten(query, 28)),
-        new_cb="new" if combined else "newquery",
+        new_text=i18n.t("workout.btn_create_named", name=formatting.shorten(query, 28)) if named_create else None,
+        new_cb="newquery" if named_create else "new",
         page=page, has_next=(page + 1) * size < len(combined),
         templates=[row for kind, row in chunk if kind == "tpl"],
     )
-    if combined:
+    if similar:
+        hint = i18n.t("search.similar", query=escape(query))
+    elif combined:
         total = len(combined)
         hint = i18n.t("workout.search_results", query=escape(query), n=total)
     else:
@@ -2277,9 +2211,66 @@ async def _create_exercise_named(event, state: FSMContext, name: str) -> None:
         hint = i18n.t("workout.confirm_name_hint", name=escape(name), reason=reason)
         await _refresh_live(event.bot, state, user, data["workout_id"], hint, kb)
         return
+    await _create_or_ask_group(event, state, name)
+
+
+async def _create_or_ask_group(event, state: FSMContext, name: str) -> None:
+    """Завести упражнение и сразу его начать — если группа известна (человек
+    создаёт его изнутри открытой группы). Без группы (поиск с экрана групп,
+    «➕ Создать «…»» из пустой выдачи) раньше молча клали в «Другое», и
+    упражнение потом не находилось там, где его ищут, — теперь спрашиваем
+    группу тем же экраном, что и в ⚙️ Упражнения (exmnewgrp), и создаём только
+    после выбора (picknewgrp:grp:*)."""
     data = await state.get_data()
-    ex_id = await db.create_exercise(event.from_user.id, name, data.get("pending_group_id"))
-    await _on_exercise_chosen(event, state, ex_id)
+    group_id = data.get("pending_group_id")
+    if group_id is not None:
+        ex_id = await db.create_exercise(event.from_user.id, name, group_id)
+        await _on_exercise_chosen(event, state, ex_id)
+        return
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    await state.update_data(pending_new_exercise_name=name)
+    groups = await db.list_muscle_groups(event.from_user.id, order_by_usage=True)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="picknewgrp", extra_buttons=[(i18n.t("btn.cancel"), "picknewgrp:cancel")]
+    )
+    user = await db.get_user(event.from_user.id)
+    hint = i18n.t("workout.new_exercise_pick_group", name=escape(name))
+    await _refresh_live(event.bot, state, user, data["workout_id"], hint, kb)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("picknewgrp:grp:"))
+async def pick_new_exercise_group(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("pending_new_exercise_name")
+    if not name:
+        await callback.answer(i18n.t("workout.name_lost"), show_alert=True)
+        return
+    group_id = int(callback.data.split(":")[2])
+    group = await db.get_muscle_group(group_id)
+    if group is None or group["user_id"] not in (None, callback.from_user.id):
+        await callback.answer(i18n.t("workout.group_gone"), show_alert=True)
+        return
+    await state.update_data(pending_new_exercise_name=None)
+    ex_id = await db.create_exercise(callback.from_user.id, name, group_id)
+    await _on_exercise_chosen(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "picknewgrp:cancel")
+async def pick_new_exercise_group_cancel(callback: CallbackQuery, state: FSMContext):
+    """Назад туда, откуда пришли создавать: к выдаче поиска, если она была,
+    иначе к выбору группы. В базе ничего не появилось."""
+    await state.update_data(pending_new_exercise_name=None)
+    data = await state.get_data()
+    if data.get("pick_query"):
+        await state.set_state(WorkoutFlow.picking_exercise)
+        user = await db.get_user(callback.from_user.id)
+        await _picker_screen_search(callback, state, user)
+    else:
+        await state.set_state(WorkoutFlow.picking_group)
+        await _picker_screen_groups(callback, state)
+    await callback.answer()
 
 
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:newquery")
@@ -2314,8 +2305,7 @@ async def pick_longname_confirmed(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n.t("workout.name_lost"), show_alert=True)
         return
     await state.update_data(pending_long_exercise_name=None)
-    ex_id = await db.create_exercise(callback.from_user.id, name, data.get("pending_group_id"))
-    await _on_exercise_chosen(callback, state, ex_id)
+    await _create_or_ask_group(callback, state, name)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:longname:no")
@@ -2385,6 +2375,9 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
 # ---------- logging sets: type "weight reps", switch between open exercises freely ----------
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:switch:"))
+# «Дальше →» (keyboards.superset_next_id) — то же переключение, следующий id уже
+# посчитан в клавиатуре; свой префикс только чтобы не считаться вкладкой.
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:next:"))
 async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     data = await state.get_data()
@@ -2395,6 +2388,91 @@ async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
+
+
+# ---------- «🔁 Замена»: тренажёр занят — чем заменить активное упражнение ----------
+#
+# Замены — семейства каталога (exercise_alternatives), те же, что отдаёт
+# приложению GET /v1/exercises/{id}/alternatives. Выбор закрывает текущее
+# упражнение ровно как «✅ Закончить упражнение» (пустой блок удаляется,
+# записанные подходы остаются в тренировке) и открывает замену тем же путём,
+# что и обычный выбор следующего (_on_exercise_chosen): прошлый раз, цель,
+# шаг веса — всё уже её.
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:swap")
+async def live_swap(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    ex = await db.get_exercise(active) if active is not None else None
+    if ex is None:
+        await callback.answer()
+        return
+    alternatives = await exercise_alternatives.for_exercise(callback.from_user.id, ex)
+    name = escape(ex["display_name"])
+    if not alternatives:
+        await callback.answer(i18n.t("workout.swap.empty", name=ex["display_name"]), show_alert=True)
+        return
+    has_sets = False
+    block_id = (data.get("open_blocks") or {}).get(active)
+    if block_id is not None:
+        has_sets = bool(await db.list_sets_for_block(block_id))
+    hint = i18n.t("workout.swap.title", name=name)
+    if has_sets:
+        hint += "\n" + i18n.t("workout.swap.sets_stay")
+    kb = keyboards.exercise_alternatives_keyboard(
+        alternatives, own_cb="live:swapex:{}", template_cb="live:swaptpl:{}", back_cb="live:swapback",
+    )
+    user = await db.get_user(callback.from_user.id)
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:swapback")
+async def live_swap_back(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await _render_logging_screen(callback.bot, state, user)
+    await callback.answer()
+
+
+async def _swap_active_exercise(callback: CallbackQuery, state: FSMContext, new_ex_id: int) -> None:
+    data = await state.get_data()
+    data = await _discard_superseded_confirmation(callback.bot, state, data)
+    active = data.get("active_exercise_id")
+    if active is not None and active != new_ex_id:
+        block_id = (data.get("open_blocks") or {}).get(active)
+        if block_id is not None and not await db.list_sets_for_block(block_id):
+            await db.delete_block(block_id)
+        open_blocks = dict(data.get("open_blocks") or {})
+        open_blocks.pop(active, None)
+        await state.update_data(
+            open_exercises=[eid for eid in (data.get("open_exercises") or []) if eid != active],
+            open_blocks=open_blocks,
+        )
+    await _on_exercise_chosen(callback, state, new_ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:swapex:"))
+async def live_swap_to_own(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id or ex["is_archived"]:
+        await ui.alert_exercise_not_found(callback)
+        return
+    await _swap_active_exercise(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:swaptpl:"))
+async def live_swap_to_template(callback: CallbackQuery, state: FSMContext):
+    template_id = int(callback.data.split(":")[2])
+    template = await db.get_exercise(template_id)
+    if template is None or not template["is_template"]:
+        await callback.answer(i18n.t("workout.template_not_found"), show_alert=True)
+        return
+    # Тот же форк, что у pick:tpladd: своя копия под локализованным именем, с
+    # идентичностью (original_name) шаблона; уже заведённая — та же самая.
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await _swap_active_exercise(callback, state, ex_id)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:note:"))
@@ -2481,26 +2559,7 @@ def _resolve_parsed_weights(data: dict, active: int, parsed: list[ParsedSet]) ->
     return resolved
 
 
-# Выше этого числа повторов под весом бот переспрашивает. Тридцать — это уже
-# сильно за пределами силовой работы, а вот типовые промахи ввода попадают сюда
-# все: «сто пятьдесят» без повторов (голос слышит одно число и берёт вес с
-# прошлого подхода — 100×150), «три подхода по сто на восемь» (3×100), «восемь по
-# сто» (8×100). Своим весом не ограничиваем: 50 отжиманий — обычное дело, а веса
-# там нет.
-_REPS_CONFIRM_ABOVE = 30
-
-
-def _suspicious_reps_warning(weight: float, reps: int) -> str | None:
-    """«100 кг × 150 повторов? Похоже на промах» — или None, если всё в порядке.
-
-    Вес до этого проверялся, повторы — нет вовсе (`parser.MAX_REPS` = 500, то
-    есть практически ничего). А цена промаха такая же: e1RM от 100×150 — это
-    600 кг, и оно становится вечным рекордом упражнения, попадает в тоннаж и в
-    Зал славы, откуда его уже не убрать.
-    """
-    if weight <= 0 or reps <= _REPS_CONFIRM_ABOVE:
-        return None
-    return i18n.t("workout.suspicious_reps_warning", set=formatting.format_set(weight, reps))
+_suspicious_reps_warning = set_sanity.suspicious_reps_warning
 
 
 async def _today_sets_of(data: dict, active: int | None) -> list[tuple[float, int]]:
@@ -2543,23 +2602,8 @@ def _weight_confirm_prompt(
     свидетельство о правдоподобном весе, какое вообще есть.
     """
     last_session = None if data.get("is_backfill") else (data.get("last_session_sets") or {}).get(active)
-    done_today = list(today_sets or [])
-    for ps in resolved:
-        warning = _suspicious_weight_warning(last_session, [*done_today, (ps.weight, ps.reps)], unit)
-        if warning:
-            return warning
-        # Вопрос про повторы — про перепутанные местами числа, и он уместен, пока
-        # роли чисел заданы порядком. «15 kg / 90 reps» задаёт их словами:
-        # спрашивать «не перепутал ли вес и повторы» у человека, который только
-        # что написал, где вес и где повторы, — отвечать на незаданный вопрос
-        # (живой QA поймал это на первом же вводе). Проверка веса остаётся: она
-        # про величину на фоне истории, а не про порядок чисел.
-        if ps.unit_explicit:
-            continue
-        warning = _suspicious_reps_warning(ps.weight, ps.reps)
-        if warning:
-            return warning
-    return None
+    found = set_sanity.find_suspicion(last_session, resolved, unit, today_sets)
+    return found.text if found else None
 
 
 # Голос спрятан в _HELP_SHORT, куда новичок не заходит сам — так что учим по

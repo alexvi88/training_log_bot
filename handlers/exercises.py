@@ -21,6 +21,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 import db
+import exercise_alternatives
 import exercise_descriptions
 import exercise_media
 import exercise_photos
@@ -543,6 +544,12 @@ def _exercise_detail_view(
     b.button(text=i18n.t("exercises.btn.edit"), callback_data=f"exm:editmenu:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.share"), callback_data=f"share:ex:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.archive_ex"), callback_data=f"exm:archiveask:{ex['id']}")
+    # «🔁 Замена» — только если у упражнения есть соседи по семейству каталога
+    # (exercise_alternatives): своему упражнению не из каталога замен мы не
+    # знаем, и кнопка вела бы в пустой экран.
+    can_swap = bool(exercise_alternatives.alternatives_for(exercise_media.catalog_key(ex)))
+    if can_swap:
+        b.button(text=i18n.t("btn.swap"), callback_data=f"exm:alt:{ex['id']}")
     b.button(text=i18n.t("btn.back"), callback_data=back_cb)
     b.adjust(2, 2, 1)
     # Even when the details went out as a photo caption, the button screen keeps
@@ -701,6 +708,32 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     await state.set_state(ExerciseManage.picking_exercise)
     await _render_exercise_card(callback, state, ex_id)
+
+
+@router.callback_query(F.data.startswith("exm:alt:"))
+async def exm_alternatives(callback: CallbackQuery, state: FSMContext):
+    """«🔁 Замена» в карточке: чем заменить упражнение (exercise_alternatives —
+    те же семейства, что у приложения). Своё — открывает его карточку
+    (exm:ex), ещё не добавленное — заводит копию и открывает её (exm:tpladd,
+    тот же путь, что «➕ Добавить» в каталоге)."""
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await ui.alert_exercise_not_found(callback)
+        return
+    alternatives = await exercise_alternatives.for_exercise(callback.from_user.id, ex)
+    if not alternatives:
+        await callback.answer(i18n.t("exercises.alternatives.empty", name=ex["display_name"]), show_alert=True)
+        return
+    await state.set_state(ExerciseManage.picking_exercise)
+    await state.update_data(exm_exercise_id=ex_id)
+    await _clear_exercise_media(callback.bot, callback.message.chat.id, state)
+    kb = keyboards.exercise_alternatives_keyboard(
+        alternatives, own_cb="exm:ex:{}", template_cb="exm:tpladd:{}", back_cb=f"exm:ex:{ex_id}",
+    )
+    text = i18n.t("exercises.alternatives.title", name=escape(ex["display_name"]))
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:addphoto:"))
@@ -949,8 +982,7 @@ async def exm_search_text(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:
         return
-    results = await db.search_exercises(message.from_user.id, query)
-    templates = await db.search_exercise_templates(message.from_user.id, query)
+    results, templates, similar = await db.search_with_similar(message.from_user.id, query)
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in results]
     items += [(f"exm:tpladd:{t['id']}", f"📋 {_template_display_name(t)}") for t in templates]
@@ -958,10 +990,12 @@ async def exm_search_text(message: Message, state: FSMContext):
         b.row(*row)
     b.row(InlineKeyboardButton(text=i18n.t("exercises.btn.new_exercise"), callback_data="exm:newex"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:backlist"))
-    text = (
-        i18n.t("exercises.search.results", query=escape(query)) if (results or templates)
-        else i18n.t("exercises.search.empty", query=escape(query))
-    )
+    if similar:
+        text = i18n.t("search.similar", query=escape(query))
+    elif results or templates:
+        text = i18n.t("exercises.search.results", query=escape(query))
+    else:
+        text = i18n.t("exercises.search.empty", query=escape(query))
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
 

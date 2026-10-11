@@ -10,6 +10,13 @@ DB_PATH = os.getenv("DB_PATH", "/data/training_log.db")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "")
 # Где лежит конфиг Litestream в контейнере (Dockerfile копирует его сюда).
 LITESTREAM_CONFIG_PATH = os.getenv("LITESTREAM_CONFIG_PATH", "/etc/litestream.yml")
+# Сколько соединение ждёт чужую блокировку записи, прежде чем отдать
+# «database is locked». Чужой здесь — Litestream (start.sh): он сам берёт
+# блокировку записи, чтобы переложить WAL в реплику, и при медленной сети до
+# Tigris держит её дольше дефолтных 5 секунд sqlite — запросы API падали 500
+# на отметке токена. 30 секунд — с запасом против такой паузы и всё ещё
+# меньше таймаутов клиента.
+SQLITE_BUSY_TIMEOUT_SECONDS = float(os.getenv("SQLITE_BUSY_TIMEOUT_SECONDS", "30"))
 # Реплика «протухла»: самый свежий снапшот/сегмент WAL старше стольких часов.
 # WAL уходит в хранилище в течение секунд, так что два часа — уже не лаг, а поломка.
 REPLICA_STALE_ALERT_HOURS = float(os.getenv("REPLICA_STALE_ALERT_HOURS", "2"))
