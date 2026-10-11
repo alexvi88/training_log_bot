@@ -88,6 +88,15 @@ ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("PATCH", "/settings"): "поменял настройки",
     ("POST", "/programs/catalog/{key}"): "добавил готовую программу",
     ("POST", "/routines/{routine_id}/exercises"): "добавил упражнение в день программы",
+    ("POST", "/coach"): "назвался тренером",
+    ("POST", "/coach/invite"): "выпустил новый код тренера",
+    ("POST", "/coach/invites/{code}/accept"): "открыл дневник тренеру",
+    ("DELETE", "/coach-links/{coach_id}"): "закрыл дневник от тренера",
+    ("PATCH", "/coach-links/{coach_id}"): "поменял, что видит тренер",
+    ("DELETE", "/coach/clients/{client_id}"): "убрал клиента",
+    ("POST", "/coach/clients/{client_id}/programs"): "назначил программу клиенту",
+    ("POST", "/coach/clients/{client_id}/workouts/{workout_id}/comments"): "прокомментировал тренировку клиента",
+    ("POST", "/coach/ai-summary"): "попросил AI-сводку по клиентам",
 }
 
 # Что из тела запроса показать в ленте рядом с фразой — то, что в боте видно

@@ -44,6 +44,7 @@ import api_v1_account
 import api_v1_achievements
 import api_v1_activity
 import api_v1_ai
+import api_v1_coach
 import api_v1_common as common
 import api_v1_dashboard
 import api_v1_diagnostics
@@ -2271,6 +2272,7 @@ routes += (
     + api_v1_templates.routes
     + api_v1_diagnostics.routes
     + api_v1_events.routes
+    + api_v1_coach.routes
 )
 
 

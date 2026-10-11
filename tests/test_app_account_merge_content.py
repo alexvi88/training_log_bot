@@ -32,6 +32,10 @@ SERVICE_TABLES = {
     # Воскресный разбор тренера (экран «Итог недели»): его пишет бот, а не
     # атлет, — переезжает с OR IGNORE (у приёмника своя неделя побеждает).
     "weekly_digests",
+    # Сервис для тренеров: «я тренер» и код приглашения — настройка, а не
+    # история атлета; переезжают с OR IGNORE. Связки, комментарии и назначения
+    # (две колонки-хозяина) переезжают отдельно — db._WIPE_PAIR_TABLES.
+    "coach_profiles", "coach_invites",
 }
 
 
@@ -142,3 +146,20 @@ async def test_each_kind_of_history_counts_as_content(fresh_db, seed):
         )
         await db.conn().commit()
     assert await db._has_content_data(app_id)
+
+
+async def test_coach_links_follow_the_app_account_into_telegram(fresh_db):
+    """Атлет открыл дневник тренеру из app-only аккаунта, потом привязал
+    Telegram — тренер продолжает его видеть под новым id."""
+    telegram_id = 777
+    coach_id = 888
+    await db.get_or_create_user(coach_id, username="coach")
+    await db.upsert_coach_profile(coach_id, "Тренер")
+    app = await db.create_app_only_user(language_code="ru")
+    app_id = app["telegram_id"]
+    assert await db.create_coach_link(coach_id, app_id, "Маша", show_bodyweight=False, show_food=False)
+
+    assert await db.link_telegram_to_app_account(app_id, telegram_id) == "ok"
+
+    assert await db.get_coach_link(coach_id, telegram_id) is not None
+    assert await db.get_coach_link(coach_id, app_id) is None

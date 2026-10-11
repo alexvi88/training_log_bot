@@ -805,6 +805,322 @@
     }
    }
   },
+  "CoachAISummary": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "text": {
+     "type": "String",
+     "optional": true
+    },
+    "clients": {
+     "type": "Int",
+     "optional": false
+    },
+    "skippedNoConsent": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "CoachAssignResult": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "programId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CoachAssignedProgram": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "programId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "assignedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "days": {
+     "type": "[CoachProgramDay]",
+     "optional": false
+    },
+    "doneDays": {
+     "type": "Int",
+     "optional": false
+    },
+    "onTrack": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "CoachClient": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "clientId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "linkedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "visibility": {
+     "type": "CoachVisibility",
+     "optional": false
+    },
+    "signals": {
+     "type": "CoachClientSignals",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientBodyweight": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "entries": {
+     "type": "[BodyweightEntry]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientFood": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "days": {
+     "type": "[CoachFoodDay]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientOverview": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "client": {
+     "type": "CoachClient",
+     "optional": false
+    },
+    "records": {
+     "type": "[CoachClientRecord]",
+     "optional": false
+    },
+    "programs": {
+     "type": "[CoachAssignedProgram]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientRecord": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "reps": {
+     "type": "Int",
+     "optional": false
+    },
+    "e1rm": {
+     "type": "Double",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientSignals": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "workoutsThisWeek": {
+     "type": "Int",
+     "optional": false
+    },
+    "lastWorkoutAt": {
+     "type": "String",
+     "optional": true
+    },
+    "daysSinceLastWorkout": {
+     "type": "Int",
+     "optional": true
+    },
+    "missing": {
+     "type": "Bool",
+     "optional": false
+    },
+    "newRecords": {
+     "type": "Int",
+     "optional": false
+    },
+    "behindProgram": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientWorkoutDetail": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "workout": {
+     "type": "Workout",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "comments": {
+     "type": "[CoachComment]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientWorkoutItem": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "startedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "finishedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "exerciseNames": {
+     "type": "[String]",
+     "optional": false
+    },
+    "setCount": {
+     "type": "Int",
+     "optional": false
+    },
+    "coachCommentCount": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientWorkoutsResponse": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "workouts": {
+     "type": "[CoachClientWorkoutItem]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientsResponse": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "clients": {
+     "type": "[CoachClient]",
+     "optional": false
+    }
+   }
+  },
+  "CoachComment": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "workoutId": {
+     "type": "Int",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "coachName": {
+     "type": "String",
+     "optional": true
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "isRead": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "CoachCommentsResponse": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "comments": {
+     "type": "[CoachComment]",
+     "optional": false
+    }
+   }
+  },
+  "CoachFoodDay": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "calories": {
+     "type": "Double",
+     "optional": true
+    },
+    "protein": {
+     "type": "Double",
+     "optional": true
+    },
+    "fat": {
+     "type": "Double",
+     "optional": true
+    },
+    "carbs": {
+     "type": "Double",
+     "optional": true
+    },
+    "items": {
+     "type": "[String]",
+     "optional": false
+    }
+   }
+  },
   "CoachGreeting": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -822,6 +1138,117 @@
     },
     "until": {
      "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CoachInvite": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "appLink": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CoachInvitePreview": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "coachName": {
+     "type": "String",
+     "optional": false
+    },
+    "isOwn": {
+     "type": "Bool",
+     "optional": false
+    },
+    "alreadyLinked": {
+     "type": "Bool",
+     "optional": false
+    },
+    "visibility": {
+     "type": "CoachVisibility",
+     "optional": false
+    }
+   }
+  },
+  "CoachProgramDay": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "exerciseCount": {
+     "type": "Int",
+     "optional": true
+    },
+    "doneAt": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "CoachRemoveResult": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "removed": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "CoachRevokeResult": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "revoked": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "CoachState": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "isCoach": {
+     "type": "Bool",
+     "optional": false
+    },
+    "displayName": {
+     "type": "String",
+     "optional": true
+    },
+    "invite": {
+     "type": "CoachInvite",
+     "optional": true
+    },
+    "clientCount": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "CoachVisibility": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "bodyweight": {
+     "type": "Bool",
+     "optional": false
+    },
+    "food": {
+     "type": "Bool",
      "optional": false
     }
    }
@@ -1986,6 +2413,40 @@
     }
    }
   },
+  "MyCoach": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "coachId": {
+     "type": "Int",
+     "optional": false
+    },
+    "coachName": {
+     "type": "String",
+     "optional": true
+    },
+    "myName": {
+     "type": "String",
+     "optional": false
+    },
+    "linkedAt": {
+     "type": "String",
+     "optional": false
+    },
+    "visibility": {
+     "type": "CoachVisibility",
+     "optional": false
+    }
+   }
+  },
+  "MyCoachesResponse": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "coaches": {
+     "type": "[MyCoach]",
+     "optional": false
+    }
+   }
+  },
   "MyShare": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -2076,6 +2537,11 @@
      "type": "String",
      "optional": true,
      "default": true
+    },
+    "coachName": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -2118,6 +2584,11 @@
     },
     "unarchived": {
      "type": "[UnarchivedExercise]",
+     "optional": true,
+     "default": true
+    },
+    "coachName": {
+     "type": "String",
      "optional": true,
      "default": true
     }
@@ -3402,6 +3873,132 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.coachState",
+   "method": "GET",
+   "path": "/coach",
+   "root": "CoachState",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.becomeCoach",
+   "method": "POST",
+   "path": "/coach",
+   "root": "CoachState",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.myCoaches",
+   "method": "GET",
+   "path": "/coach-links",
+   "root": "MyCoachesResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.revokeMyCoach",
+   "method": "DELETE",
+   "path": "/coach-links/{}",
+   "root": "CoachRevokeResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateMyCoach",
+   "method": "PATCH",
+   "path": "/coach-links/{}",
+   "root": "MyCoach",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachAISummary",
+   "method": "POST",
+   "path": "/coach/ai-summary",
+   "root": "CoachAISummary",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClients",
+   "method": "GET",
+   "path": "/coach/clients",
+   "root": "CoachClientsResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.removeCoachClient",
+   "method": "DELETE",
+   "path": "/coach/clients/{}",
+   "root": "CoachRemoveResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClient",
+   "method": "GET",
+   "path": "/coach/clients/{}",
+   "root": "CoachClientOverview",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClientBodyweight",
+   "method": "GET",
+   "path": "/coach/clients/{}/bodyweight",
+   "root": "CoachClientBodyweight",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClientFood",
+   "method": "GET",
+   "path": "/coach/clients/{}/food",
+   "root": "CoachClientFood",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.assignProgram",
+   "method": "POST",
+   "path": "/coach/clients/{}/programs",
+   "root": "CoachAssignResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClientWorkouts",
+   "method": "GET",
+   "path": "/coach/clients/{}/workouts",
+   "root": "CoachClientWorkoutsResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClientWorkout",
+   "method": "GET",
+   "path": "/coach/clients/{}/workouts/{}",
+   "root": "CoachClientWorkoutDetail",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.commentClientWorkout",
+   "method": "POST",
+   "path": "/coach/clients/{}/workouts/{}/comments",
+   "root": "CoachComment",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.renewCoachInvite",
+   "method": "POST",
+   "path": "/coach/invite",
+   "root": "CoachInvite",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachInvitePreview",
+   "method": "GET",
+   "path": "/coach/invites/{}",
+   "root": "CoachInvitePreview",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.acceptCoachInvite",
+   "method": "POST",
+   "path": "/coach/invites/{}/accept",
+   "root": "MyCoach",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.dashboard",
    "method": "GET",
    "path": "/dashboard",
@@ -3962,6 +4559,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.coachComments",
+   "method": "GET",
+   "path": "/workouts/{}/coach-comments",
+   "root": "CoachCommentsResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.updateWorkoutDate",
    "method": "PATCH",
    "path": "/workouts/{}/date",
@@ -4039,5 +4643,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "5fc60783bb8e0b07c3c0f881d9be7fda78074e91"
+ "_ios_commit": "ad0fef0e8cefaf6825981844e3cafc9852014e36"
 }

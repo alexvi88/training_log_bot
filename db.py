@@ -1067,6 +1067,74 @@ CREATE TABLE IF NOT EXISTS support_messages (
 CREATE INDEX IF NOT EXISTS idx_support_messages_user ON support_messages (user_id, id);
 CREATE INDEX IF NOT EXISTS idx_support_messages_tg ON support_messages (tg_admin_message_id);
 CREATE INDEX IF NOT EXISTS idx_support_messages_tg_photo ON support_messages (tg_admin_photo_message_id);
+
+-- Сервис для тренеров (coach_service.py, api_v1_coach.py): живой человек-тренер
+-- смотрит дневник своих атлетов. Только по явному разрешению атлета и только
+-- то, что атлет открыл (см. докстринг coach_service).
+--
+-- coach_profiles — «я тренер»: имя, под которым тренера видят атлеты. Строка
+-- есть только у тех, кто нажал «Я тренер».
+CREATE TABLE IF NOT EXISTS coach_profiles (
+    user_id INTEGER PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Приглашение тренера: короткий код, который атлет вводит или открывает
+-- ссылкой. Один живой код на тренера — «новый код» гасит прежний. Код сам по
+-- себе ничего не открывает: доступ появляется только после «Разрешить» атлета.
+CREATE TABLE IF NOT EXISTS coach_invites (
+    code TEXT PRIMARY KEY,
+    owner_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coach_invites_owner ON coach_invites (owner_id);
+
+-- Связка «тренер ↔ атлет». client_name — как атлет сам назвался тренеру
+-- (ник Telegram, Apple ID и почта тренеру не видны никогда). Вес тела и
+-- дневник еды — только по флагам атлета, по умолчанию закрыты. Нет строки —
+-- нет доступа: отзыв атлетом и «убрать клиента» тренером удаляют её.
+-- У строки два хозяина, поэтому снос аккаунта чистит её по обеим колонкам
+-- (db._WIPE_PAIR_TABLES), а не одним _user_scoped_tables.
+CREATE TABLE IF NOT EXISTS coach_links (
+    coach_id INTEGER NOT NULL,
+    client_id INTEGER NOT NULL,
+    client_name TEXT NOT NULL,
+    show_bodyweight INTEGER NOT NULL DEFAULT 0,
+    show_food INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (coach_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_coach_links_client ON coach_links (client_id);
+
+-- Программа, назначенная тренером: program_id — КОПИЯ у атлета (своя строка
+-- programs с source='coach'), а не ссылка на программу тренера. Атлет может
+-- её править и удалять как свою; подпись «от тренера» и прогресс по дням
+-- тренер видит, пока строка здесь и связка жива.
+CREATE TABLE IF NOT EXISTS coach_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    coach_id INTEGER NOT NULL,
+    client_id INTEGER NOT NULL,
+    program_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coach_assignments_client ON coach_assignments (client_id);
+CREATE INDEX IF NOT EXISTS idx_coach_assignments_program ON coach_assignments (program_id);
+
+-- Комментарий тренера к законченной тренировке атлета. read_at — когда атлет
+-- его увидел. Уходит вместе с тренировкой (discard_workout) и с аккаунтом
+-- любой из сторон.
+CREATE TABLE IF NOT EXISTS coach_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workout_id INTEGER NOT NULL,
+    coach_id INTEGER NOT NULL,
+    client_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_coach_comments_workout ON coach_comments (workout_id, id);
+CREATE INDEX IF NOT EXISTS idx_coach_comments_client ON coach_comments (client_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -2991,6 +3059,16 @@ async def update_user(telegram_id: int, **fields: Any) -> None:
 # см. _user_scoped_tables.
 _WIPE_USER_COLUMNS = ("user_id", "telegram_id", "owner_id")
 
+# Таблицы с ДВУМЯ хозяевами — тренер и атлет (сервис для тренеров, см.
+# coach_service.py). Ни одной колонки из _WIPE_USER_COLUMNS у них нет, и
+# _user_scoped_tables их не видит: снос любой из сторон чистит строку по обеим
+# колонкам здесь, а user_data_left считает их тут же.
+_WIPE_PAIR_TABLES: tuple[tuple[str, str, str], ...] = (
+    ("coach_comments", "coach_id", "client_id"),
+    ("coach_assignments", "coach_id", "client_id"),
+    ("coach_links", "coach_id", "client_id"),
+)
+
 # Дети, у которых своей колонки с владельцем нет: они привязаны к тренировке или
 # к шаблону и вычищаются подзапросом — до того, как исчезнет родитель, иначе
 # «чей это подход» уже не спросить. Порядок внутри списка — сверху вниз, от
@@ -3082,6 +3160,14 @@ async def user_data_left(telegram_id: int) -> dict[str, int]:
         (count,) = await cur.fetchone()
         if count:
             left[table] = count
+    for table, first, second in _WIPE_PAIR_TABLES:
+        cur = await db.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {first} = ? OR {second} = ?",
+            (telegram_id, telegram_id),
+        )
+        (count,) = await cur.fetchone()
+        if count:
+            left[table] = count
     return left
 
 
@@ -3131,6 +3217,11 @@ async def wipe_user_account(telegram_id: int) -> None:
         try:
             for sql in _WIPE_ORPHAN_DELETES:
                 await db.execute(sql, (telegram_id,))
+            for table, first, second in _WIPE_PAIR_TABLES:
+                await db.execute(
+                    f"DELETE FROM {table} WHERE {first} = ? OR {second} = ?",
+                    (telegram_id, telegram_id),
+                )
             for table, column in scoped:
                 await db.execute(f"DELETE FROM {table} WHERE {column} = ?", (telegram_id,))
             await db.commit()
@@ -5085,6 +5176,8 @@ async def discard_workout(workout_id: int) -> None:
             )
             await db.execute("DELETE FROM workout_blocks WHERE workout_id = ?", (workout_id,))
             await db.execute("DELETE FROM exercise_notes WHERE workout_id = ?", (workout_id,))
+            # Комментарии тренера к этой тренировке — без неё им не к чему висеть.
+            await db.execute("DELETE FROM coach_comments WHERE workout_id = ?", (workout_id,))
             await db.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
             await db.commit()
         except Exception:
@@ -7570,6 +7663,18 @@ async def link_telegram_to_app_account(
                 await db.execute(
                     f"DELETE FROM {table} WHERE {column} = ?", (app_user_id,)
                 )
+            # Связки с тренером и клиентами (две колонки-хозяина, их нет в
+            # scoped): переезжают за человеком с обеих сторон. Своя связка
+            # приёмника на конфликте побеждает, а связка «сам с собой» (app-
+            # аккаунт был тренером этого же телеграм-аккаунта) смысла не имеет.
+            for table, first, second in _WIPE_PAIR_TABLES:
+                for column in (first, second):
+                    await db.execute(
+                        f"UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?",
+                        (telegram_id, app_user_id),
+                    )
+                    await db.execute(f"DELETE FROM {table} WHERE {column} = ?", (app_user_id,))
+            await db.execute("DELETE FROM coach_links WHERE coach_id = client_id")
 
             if target_row is None:
                 # Самый частый случай: телеграм-аккаунта ещё нет вообще —
@@ -12389,3 +12494,242 @@ async def list_session_fingerprints(
             item["sets"].append((r["ex_id"], round(float(r["weight"]), 1), int(r["reps"])))
     return list(by_id.values())
 
+
+
+# ---------- сервис для тренеров (coach_service.py) ----------
+#
+# Здесь только строки. Кто что видит и что можно — правила в coach_service.py:
+# любая выборка по атлету для тренера проходит через его проверку связки.
+
+
+async def get_coach_profile(user_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM coach_profiles WHERE user_id = ?", (user_id,))
+    return await cur.fetchone()
+
+
+async def upsert_coach_profile(user_id: int, display_name: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO coach_profiles (user_id, display_name, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id) DO UPDATE SET display_name = excluded.display_name",
+            (user_id, display_name, now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_coach_invite_for(owner_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM coach_invites WHERE owner_id = ? ORDER BY created_at DESC LIMIT 1",
+        (owner_id,),
+    )
+    return await cur.fetchone()
+
+
+async def get_coach_invite(code: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM coach_invites WHERE code = ?", (code,))
+    return await cur.fetchone()
+
+
+async def replace_coach_invite(owner_id: int, code: str) -> None:
+    """Новый код тренера вместо прежнего: старый перестаёт открываться сразу."""
+    async with _write_lock:
+        db = conn()
+        try:
+            await db.execute("DELETE FROM coach_invites WHERE owner_id = ?", (owner_id,))
+            await db.execute(
+                "INSERT INTO coach_invites (code, owner_id, created_at) VALUES (?, ?, ?)",
+                (code, owner_id, now_iso()),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def get_coach_link(coach_id: int, client_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM coach_links WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
+    )
+    return await cur.fetchone()
+
+
+async def create_coach_link(
+    coach_id: int, client_id: int, client_name: str, *, show_bodyweight: bool, show_food: bool
+) -> bool:
+    """False — связка уже есть (повторное «Разрешить» ничего не меняет)."""
+    async with _write_lock:
+        try:
+            await conn().execute(
+                "INSERT INTO coach_links (coach_id, client_id, client_name, show_bodyweight, "
+                "show_food, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (coach_id, client_id, client_name, int(show_bodyweight), int(show_food), now_iso()),
+            )
+        except aiosqlite.IntegrityError:
+            return False
+        await conn().commit()
+        return True
+
+
+async def update_coach_link_visibility(
+    coach_id: int,
+    client_id: int,
+    *,
+    show_bodyweight: Optional[bool] = None,
+    show_food: Optional[bool] = None,
+    client_name: Optional[str] = None,
+) -> bool:
+    sets: list[str] = []
+    params: list[Any] = []
+    if show_bodyweight is not None:
+        sets.append("show_bodyweight = ?")
+        params.append(int(show_bodyweight))
+    if show_food is not None:
+        sets.append("show_food = ?")
+        params.append(int(show_food))
+    if client_name is not None:
+        sets.append("client_name = ?")
+        params.append(client_name)
+    if not sets:
+        return await get_coach_link(coach_id, client_id) is not None
+    async with _write_lock:
+        cur = await conn().execute(
+            f"UPDATE coach_links SET {', '.join(sets)} WHERE coach_id = ? AND client_id = ?",
+            (*params, coach_id, client_id),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def delete_coach_link(coach_id: int, client_id: int) -> bool:
+    """Разорвать связку. Комментарии и назначенные программы остаются у атлета
+    (это уже его дневник), но тренер без связки их больше не видит."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM coach_links WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def list_coach_clients(coach_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM coach_links WHERE coach_id = ? ORDER BY created_at, client_id", (coach_id,)
+    )
+    return await cur.fetchall()
+
+
+async def list_client_coaches(client_id: int) -> list[aiosqlite.Row]:
+    """Тренеры атлета с их именами — экран «Мой тренер»."""
+    cur = await conn().execute(
+        "SELECT l.*, p.display_name AS coach_name FROM coach_links l "
+        "LEFT JOIN coach_profiles p ON p.user_id = l.coach_id "
+        "WHERE l.client_id = ? ORDER BY l.created_at, l.coach_id",
+        (client_id,),
+    )
+    return await cur.fetchall()
+
+
+async def add_coach_assignment(coach_id: int, client_id: int, program_id: int) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO coach_assignments (coach_id, client_id, program_id, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (coach_id, client_id, program_id, now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_coach_assignments(coach_id: int, client_id: int) -> list[aiosqlite.Row]:
+    """Назначенные программы, которые у атлета ещё есть (удалил — выпадает)."""
+    cur = await conn().execute(
+        "SELECT a.id, a.program_id, a.created_at, p.name AS program_name "
+        "FROM coach_assignments a JOIN programs p ON p.id = a.program_id AND p.user_id = a.client_id "
+        "WHERE a.coach_id = ? AND a.client_id = ? ORDER BY a.created_at DESC, a.id DESC",
+        (coach_id, client_id),
+    )
+    return await cur.fetchall()
+
+
+async def coach_names_by_program(client_id: int) -> dict[int, str]:
+    """program_id → имя тренера, который её назначил — подпись «от тренера»
+    в списке программ атлета. Имя — из профиля тренера на сейчас."""
+    cur = await conn().execute(
+        "SELECT a.program_id, p.display_name FROM coach_assignments a "
+        "JOIN coach_profiles p ON p.user_id = a.coach_id "
+        "WHERE a.client_id = ? ORDER BY a.id",
+        (client_id,),
+    )
+    return {row["program_id"]: row["display_name"] for row in await cur.fetchall()}
+
+
+async def last_finished_by_routine(user_id: int, program_id: int) -> dict[int, str]:
+    """routine_id → начало последней законченной тренировки по этому дню программы."""
+    cur = await conn().execute(
+        "SELECT w.routine_id, MAX(w.started_at) AS last_at FROM workouts w "
+        "JOIN routines r ON r.id = w.routine_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND r.program_id = ? "
+        "GROUP BY w.routine_id",
+        (user_id, program_id),
+    )
+    return {row["routine_id"]: row["last_at"] for row in await cur.fetchall()}
+
+
+async def count_program_workouts_since(user_id: int, program_id: int, since: str) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM workouts w JOIN routines r ON r.id = w.routine_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND r.program_id = ? AND w.started_at >= ?",
+        (user_id, program_id, since),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def add_coach_comment(coach_id: int, client_id: int, workout_id: int, text: str) -> aiosqlite.Row:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO coach_comments (workout_id, coach_id, client_id, text, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (workout_id, coach_id, client_id, text, now_iso()),
+        )
+        await conn().commit()
+        comment_id = cur.lastrowid
+    cur = await conn().execute("SELECT * FROM coach_comments WHERE id = ?", (comment_id,))
+    return await cur.fetchone()
+
+
+async def list_coach_comments(workout_id: int, coach_id: Optional[int] = None) -> list[aiosqlite.Row]:
+    """Комментарии к тренировке с именем тренера. coach_id — только свои
+    (тренер видит свои, атлет — от всех своих тренеров)."""
+    sql = (
+        "SELECT c.*, p.display_name AS coach_name FROM coach_comments c "
+        "LEFT JOIN coach_profiles p ON p.user_id = c.coach_id WHERE c.workout_id = ?"
+    )
+    params: tuple[Any, ...] = (workout_id,)
+    if coach_id is not None:
+        sql += " AND c.coach_id = ?"
+        params += (coach_id,)
+    cur = await conn().execute(sql + " ORDER BY c.id", params)
+    return await cur.fetchall()
+
+
+async def mark_coach_comments_read(workout_id: int, client_id: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE coach_comments SET read_at = ? "
+            "WHERE workout_id = ? AND client_id = ? AND read_at IS NULL",
+            (now_iso(), workout_id, client_id),
+        )
+        await conn().commit()
+
+
+async def count_coach_comments_by_workout(workout_ids: list[int]) -> dict[int, int]:
+    if not workout_ids:
+        return {}
+    placeholders = ",".join("?" * len(workout_ids))
+    cur = await conn().execute(
+        f"SELECT workout_id, COUNT(*) AS n FROM coach_comments WHERE workout_id IN ({placeholders}) "
+        "GROUP BY workout_id",
+        workout_ids,
+    )
+    return {row["workout_id"]: row["n"] for row in await cur.fetchall()}

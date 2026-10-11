@@ -231,6 +231,11 @@ LOCALIZED: list[str] = [
     # подсказка и подписи — weekly.* через i18n.t внутри use_lang(users.lang).
     "weekly_summary.py",
     "api_v1_weekly.py",
+    # Сервис для тренеров (iOS, REST /v1/coach*): правила и AI-сводка —
+    # coach_service, HTTP — api_v1_coach. Тексты ошибок, пуш и промпт сводки —
+    # api.error.* и coach.* через i18n.t; своих литералов нет.
+    "coach_service.py",
+    "api_v1_coach.py",
     # Фраза тренера на заставке приложения (поле coach_greeting в /dashboard):
     # своих литералов не держит — только ключи coach_greeting.* через i18n.t
     # внутри use_lang(users.lang) у api_v1_dashboard.

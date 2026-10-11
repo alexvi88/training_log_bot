@@ -115,7 +115,7 @@ async def _owned_workout(workout_id: int, user_id: int):
 
 # ---------- сериализация ----------
 
-def _program_list_json(row) -> dict[str, Any]:
+def _program_list_json(row, coach_name: str | None = None) -> dict[str, Any]:
     return {
         "id": row["id"],
         "name": row["name"],
@@ -123,11 +123,15 @@ def _program_list_json(row) -> dict[str, Any]:
         "source": row["source"],
         "day_count": row["day_count"],
         "last_trained_at": row["last_trained_at"],
+        # Имя тренера, назначившего программу (сервис для тренеров,
+        # coach_service.assign_program) — подпись «от тренера …»; null — своя.
+        "coach_name": coach_name,
     }
 
 
-def _program_detail_json(program, days) -> dict[str, Any]:
+def _program_detail_json(program, days, coach_name: str | None = None) -> dict[str, Any]:
     return {
+        "coach_name": coach_name,
         "id": program["id"],
         "name": program["name"],
         "description": program["description"],
@@ -283,7 +287,8 @@ async def _routine_detail_json(routine) -> dict[str, Any]:
 async def list_programs(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     programs = await db.list_programs(user_id)
-    return JSONResponse([_program_list_json(p) for p in programs])
+    coaches = await db.coach_names_by_program(user_id)
+    return JSONResponse([_program_list_json(p, coaches.get(p["id"])) for p in programs])
 
 
 async def create_program(request: Request) -> JSONResponse:
@@ -303,7 +308,8 @@ async def get_program(request: Request) -> JSONResponse:
     program_id = int(request.path_params["program_id"])
     program = await _owned_program(program_id, user_id)
     days = await db.list_program_days_by_id(program_id)
-    return JSONResponse(_program_detail_json(program, days))
+    coaches = await db.coach_names_by_program(user_id)
+    return JSONResponse(_program_detail_json(program, days, coaches.get(program_id)))
 
 
 async def update_program(request: Request) -> JSONResponse:
@@ -328,7 +334,8 @@ async def update_program(request: Request) -> JSONResponse:
         await db.set_program_deload(program_id, weeks)
     program = await _owned_program(program_id, user_id)
     days = await db.list_program_days_by_id(program_id)
-    return JSONResponse(_program_detail_json(program, days))
+    coaches = await db.coach_names_by_program(user_id)
+    return JSONResponse(_program_detail_json(program, days, coaches.get(program_id)))
 
 
 async def delete_program(request: Request) -> JSONResponse:
