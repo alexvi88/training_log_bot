@@ -767,6 +767,21 @@ def superset_next_id(active_id: int | None, ids: list[int]) -> int | None:
     return ids[(ids.index(active_id) + 1) % len(ids)]
 
 
+def superset_rotated(items: list[tuple[int, str]], active_id: int | None) -> list[tuple[int, str]]:
+    """Вкладки суперсета с активным первым, дальше по кругу.
+
+    [активное, следующее, следующее+1, …] — вторая вкладка всегда та, куда
+    ведёт «Дальше →». Активного нет среди открытых (или нет вовсе) — порядок
+    открытия как есть. Тот же поворот, что у ряда фишек в приложении
+    (SupersetCycle.rotated).
+    """
+    ids = [ex_id for ex_id, _ in items]
+    if active_id not in ids:
+        return list(items)
+    i = ids.index(active_id)
+    return list(items[i:]) + list(items[:i])
+
+
 def logging_keyboard(
     open_items: list[tuple[int, str]],
     active_id: int | None,
@@ -822,7 +837,11 @@ def logging_keyboard(
         # per row saved a line but cut every real exercise name down to a stub
         # ("triceps…"), which is the one thing the tab has to say; a full-width
         # row holds about twice the text and names them properly.
-        for ex_id, name in open_items:
+        #
+        # Активная вкладка — первой, остальные по кругу (superset_rotated):
+        # вторая — всегда та, куда ведёт «Дальше →», и порядок совпадает с
+        # рядом фишек в приложении.
+        for ex_id, name in superset_rotated(open_items, active_id):
             # The ▶ marker eats width the label would otherwise get.
             text = (
                 "▶ " + _tab_label(name, _TAB_NAME_MAX_WIDE - 2)
