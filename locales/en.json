@@ -1072,7 +1072,7 @@
   "limit.preview.spend": "~${spend} racked up today.",
   "limit.preview.tail": "Hit “Got it” — this limit lets you through for the rest of the day.",
   "limit.preview.title": "⚠️ LIMIT HIT: {kind}",
-  "limit.question": "Hit today's question limit 😮‍💨 Let me catch my breath — come back tomorrow.",
+  "limit.question": "I'm done with questions for today — back to them tomorrow. The log, programs and history still work as usual.",
   "limit.routines": "You've already got {existing, plural, one{# day} other{# days}} across your programs — {cap} is the ceiling. Delete a few in “🗂 Programs” and try again.",
   "limit.spend_hard": "I've talked myself out for today — back tomorrow. The log, programs and history still work as usual.",
   "limit.video.exact": "Broke down {n} videos today — that's the limit. Come back tomorrow, or ask by text for now.",
