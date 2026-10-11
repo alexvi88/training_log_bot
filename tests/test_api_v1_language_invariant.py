@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import re
 from typing import Any
 
@@ -35,6 +36,7 @@ import pytest
 import ai_trainer
 import api_v1
 import api_v1_feedback
+import coach_service
 import config
 import i18n
 import text_import
@@ -92,6 +94,8 @@ MACHINE_KEYS = {
     # упражнений так, как их написал сам атлет, — вход для /import/csv, а не
     # текст на экране.
     "csv",
+    # Ссылка приглашения тренера для приложения (trainingdiary://coach/<код>).
+    "app_link",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -194,6 +198,7 @@ USER_TEXT = {
         "program2": "Spare split", "day": "Heavy day", "routine": "Quick pump", "food": "Rice bowl",
         "question": "How is my progress?", "feedback": "Love the app", "post": "Squats kill knees",
         "answer": "Three days a week", "csv_exercise": "Bench Press", "voice": "100 8",
+        "coach_name": "Coach Mike", "client_name": "Masha",
     },
     "ru": {
         "group": "Кор", "exercise": "Скручивания в кроссовере", "exercise2": "Сгибания запястий",
@@ -201,6 +206,7 @@ USER_TEXT = {
         "program2": "Запасной сплит", "day": "Тяжёлый день", "routine": "Быстрая накачка", "food": "Гречка",
         "question": "Как мой прогресс?", "feedback": "Классное приложение", "post": "Присед убивает колени",
         "answer": "Три дня в неделю", "csv_exercise": "Жим лёжа", "voice": "100 8",
+        "coach_name": "Тренер Миша", "client_name": "Маша",
     },
 }
 
@@ -287,6 +293,13 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         return model["comment"]
 
     monkeypatch.setattr(ai_trainer, "comment_on_workout", fake_comment)
+
+    async def fake_coach_summary(coach_id, messages):
+        captured["langs"].append(i18n.get_lang())
+        captured["coach_prompt"] = messages[0]["content"]
+        return model["answer"]
+
+    monkeypatch.setattr(coach_service, "_model_answer", fake_coach_summary)
 
     async def fake_extract_sets(user_id, text, today, lang=None):
         return text_import.ExtractResult(rows=[{
@@ -607,6 +620,9 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("DELETE", f"/share/{share_rt['token']}", expect=200)
     await w.call("GET", f"/share/{share_rt['token']}", expect=404)
 
+    # --- сервис для тренеров: 111 — тренер, 222 — его атлет того же языка ---
+    await _coach_scenario(fresh_db, w, headers, lang, text, catalog_program["id"])
+
     # --- тренер ---
     await w.call("GET", "/ai/limits", expect=200)
     asked = (await w.call("POST", "/ai/ask", json={"question": text["question"]}, expect=200)).json()
@@ -710,6 +726,76 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     return w
 
 
+async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: dict, program_id: int) -> None:
+    """Обе стороны сервиса для тренеров: тренер (111, walker сценария) и его
+    атлет (222, свой walker) — каждая ручка /coach* и /coach-links*."""
+    await w.call("GET", "/coach", expect=200)
+    await w.call("GET", "/coach/clients", expect=403)
+    await w.call("POST", "/coach", json={"display_name": " "}, expect=400)
+    await w.call("POST", "/coach", json={"display_name": text["coach_name"]}, expect=200)
+    invite = (await w.call("POST", "/coach/invite", expect=201)).json()
+    await w.call("GET", "/coach/clients", expect=200)
+
+    await fresh_db.get_or_create_user(telegram_id=222, username="athlete")
+    await fresh_db.set_user_lang(222, lang)
+    athlete = _client()
+    athlete.headers.update(headers)
+    athlete.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(222)}"
+    a = _Walker(athlete, lang)
+    code = invite["code"]
+    await a.call("GET", f"/coach/invites/{code}", expect=200)
+    await a.call("GET", "/coach/invites/NOPE2345", expect=404)
+    await w.call("POST", f"/coach/invites/{code}/accept", json={"name": text["client_name"]}, expect=400)
+    await a.call("POST", f"/coach/invites/{code}/accept", json={"name": text["client_name"]}, expect=201)
+    await a.call("POST", f"/coach/invites/{code}/accept", json={"name": text["client_name"]}, expect=409)
+    await a.call("GET", "/coach-links", expect=200)
+    await w.call("GET", "/coach/clients/222/bodyweight", expect=403)
+    await a.call("PATCH", "/coach-links/111", json={"show_bodyweight": True, "show_food": True}, expect=200)
+    await a.call("PATCH", "/settings", json={"ai_consent": True}, expect=200)
+
+    ex = (await a.call("POST", "/exercises", json={"name": text["exercise"]}, expect=201)).json()["id"]
+    # Две тренировки: старая легче — у свежей рекорд недели (records в карточке атлета).
+    old = (await a.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
+    await a.call("POST", f"/workouts/{old}/sets", json={"exercise_id": ex, "weight": 50, "reps": 5}, expect=201)
+    await a.call("POST", f"/workouts/{old}/finish", json={}, expect=200)
+    old_day = (dt.date.today() - dt.timedelta(days=20)).isoformat()
+    await a.call("PATCH", f"/workouts/{old}/date", json={"date": old_day}, expect=200)
+    wid = (await a.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
+    await a.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 60, "reps": 5}, expect=201)
+    await a.call("POST", f"/workouts/{wid}/finish", json={}, expect=200)
+    await a.call("POST", "/bodyweight", json={"weight": 70.5}, expect=201)
+    await a.call("POST", "/food", json={"name": text["food"], "kcal": 300}, expect=201)
+
+    await w.call("GET", "/coach/clients", expect=200)
+    await w.call("GET", "/coach/clients/222", expect=200)
+    await w.call("GET", "/coach/clients/222/workouts", expect=200)
+    await w.call("GET", f"/coach/clients/222/workouts/{wid}", expect=200)
+    await w.call("GET", "/coach/clients/222/bodyweight", expect=200)
+    await w.call("GET", "/coach/clients/222/food", expect=200)
+    await w.call("GET", "/coach/clients/999/workouts", expect=404)
+    await w.call("POST", f"/coach/clients/222/workouts/{wid}/comments", json={"text": text["note"]}, expect=201)
+    await w.call("POST", f"/coach/clients/222/workouts/{wid}/comments", json={"text": ""}, expect=400)
+    await w.call("POST", "/coach/clients/222/programs", json={"program_id": program_id}, expect=201)
+    empty = (await w.call("POST", "/programs", json={"name": text["program2"]}, expect=201)).json()["id"]
+    await w.call("POST", "/coach/clients/222/programs", json={"program_id": empty}, expect=400)
+    await w.call("DELETE", f"/programs/{empty}", expect=200)
+    await w.call("GET", "/coach/clients/222", expect=200)
+    await w.call("POST", "/coach/ai-summary", json={}, expect=200)
+    await w.call("POST", "/coach/ai-summary", json={"client_id": 222}, expect=200)
+    await a.call("GET", f"/workouts/{wid}/coach-comments", expect=200)
+    await a.call("GET", "/programs", expect=200)
+    await a.call("PATCH", "/coach-links/111", json={"show_food": False}, expect=200)
+    await w.call("GET", "/coach/clients/222/food", expect=403)
+    await w.call("DELETE", "/coach/clients/222", expect=200)
+    await a.call("POST", f"/coach/invites/{code}/accept", json={"name": text["client_name"]}, expect=201)
+    await a.call("DELETE", "/coach-links/111", expect=200)
+    await a.call("DELETE", "/coach-links/111", expect=404)
+
+    w.walked |= a.walked
+    w.violations += a.violations
+    w.responses += a.responses
+
+
 @pytest.mark.parametrize("lang", ["en", "ru"])
 async def test_no_foreign_language_in_any_v1_response(fresh_db, monkeypatch, tmp_path, lang):
     walker = await _scenario(fresh_db, monkeypatch, tmp_path, lang)
@@ -720,6 +806,8 @@ async def test_no_foreign_language_in_any_v1_response(fresh_db, monkeypatch, tmp
     # его языка — иначе модель ответила бы на чужом.
     assert walker.captured["langs"] and set(walker.captured["langs"]) == {lang}
     assert walker.captured["system_prompt"].endswith(i18n.t_in(lang, "ai.language_tail"))
+    # AI-сводка тренеру — тот же языковой хвост языка тренера.
+    assert walker.captured["coach_prompt"].endswith(i18n.t_in(lang, "ai.language_tail"))
 
 
 async def test_every_route_is_walked(fresh_db, monkeypatch, tmp_path):

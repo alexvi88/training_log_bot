@@ -301,3 +301,18 @@ def support_thread_route(user_id: int) -> dict:
     "user_id": <id атлета>}` — id числом (у app-only аккаунта он
     отрицательный, см. db.create_app_only_user)."""
     return {"screen": SCREEN_SUPPORT_THREAD, "user_id": int(user_id)}
+
+
+# Комментарий живого тренера к законченной тренировке (сервис для тренеров,
+# api_v1_coach.py). Не категория ротации: текст — реплика человека, а не пул
+# вариантов, поэтому в CATEGORIES её нет; строка — только collapse-id банера и
+# метка `push_category` для push_open.
+COACH_COMMENT = "coach_comment"
+# Карточка одной законченной тренировки — там атлет видит комментарий.
+SCREEN_WORKOUT_DETAIL = "workout_detail"
+
+
+def workout_detail_route(workout_id: int) -> dict:
+    """Маршрут банера «комментарий тренера»: `{"screen": "workout_detail",
+    "workout_id": <id>}`. Старые сборки экран не знают и просто открываются."""
+    return {"screen": SCREEN_WORKOUT_DETAIL, "workout_id": int(workout_id)}

@@ -69,6 +69,10 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # shown|accept|later. По тройке видно, сколько видят предложение, сколько
     # идут к тренеру собирать программу и сколько откладывают на неделю.
     "plan_offer": frozenset({"action"}),
+    # Сервис для тренеров: тренер отправил код приглашения (action shared|copied).
+    # Сама связка, назначение и комментарий видны и так — меняющими запросами
+    # (`action` с шаблоном маршрута /coach*).
+    "coach_invite": frozenset({"action"}),
 }
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")
