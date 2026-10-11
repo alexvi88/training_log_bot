@@ -4,7 +4,6 @@ import asyncio
 import datetime as dt
 import logging
 import sqlite3
-from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from html import escape
@@ -42,6 +41,7 @@ import formatting
 import i18n
 import keyboards
 import progression_data
+import set_sanity
 import timeutil
 import ui
 import view_builder
@@ -413,86 +413,10 @@ async def _explain_workout_closed(event: Message | CallbackQuery, state: FSMCont
         await event.answer(text)
 
 
-# Below this fraction (or above this multiple) of the heaviest set this exercise
-# has seen — last session или уже сегодня, — a just-logged weight is flagged as a
-# likely typo rather than a deliberate change.
-#
-# Верхний порог был 3.0 и пропускал ровно тот случай, ради которого всё и
-# делалось: восемь подходов по 200, потом «500 5» — вопроса не последовало, и
-# 500 кг молча стали вечным рекордом упражнения. Прибавка в полтора раза за один
-# подход настоящей тренировкой почти не бывает; цена ложного срабатывания — один
-# тап «Да», цена пропуска — рекорд, тоннаж и ачивки, которых уже не отобрать
-# (см. _weight_confirm_prompt).
-#
-# Нижний порог, наоборот, ослаблен с 0.4 до 0.15 — из-за разминки. Кто пишет
-# разминочные подходы в тот же список (а таких много), на 60кг перед рабочими
-# 200 получал «60кг? в прошлый раз 210кг» — вопрос на ровном месте, каждую
-# тренировку. Настоящая опечатка в эту сторону — потерянный разряд («14» вместо
-# «140», «1 1» вместо «140 6»), то есть десятая часть веса и меньше; 0.15 ловит
-# весь этот класс и молчит на разминке, откате и лёгком добивочном подходе.
-_SUSPICIOUS_WEIGHT_LOW_FRACTION = 0.15
-_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 1.5
-
-
-def _working_weight_today(today_sets: list[tuple[float, int]]) -> float:
-    """Самый тяжёлый вес, который сегодня в этом упражнении встретился минимум
-    дважды, — то есть рабочий, а не ступенька разминки.
-
-    Одного подхода мало: разминка на новом упражнении выглядит как 60, потом
-    200, и если считать планкой первую же цифру, рабочий подход сам окажется
-    «подозрительно тяжёлым» — бот спросит про нормальный вес ровно там, где
-    сравнивать ещё не с чем. Повторённый вес — это уже заявление о том, с чем
-    человек сегодня работает.
-    """
-    counts = Counter(w for w, _r in today_sets if w > 0)
-    return max((w for w, times in counts.items() if times >= 2), default=0.0)
-
-
-def _suspicious_weight_warning(
-    last_session: list[tuple[float, int, float | None]] | None,
-    today_sets: list[tuple[float, int]] | None,
-    unit: str = "kg",
-) -> str | None:
-    """A soft nudge — never blocks logging, unlike parser.MAX_WEIGHT's hard
-    ceiling — when the just-logged set's weight looks like a typo next to what
-    this exercise was loaded with, in *either* direction: a dropped digit
-    ("1 1" meant "140 6") reads the same as an extra one ("1400" meant "140"),
-    even though only the low end used to be checked here. Bodyweight exercises
-    (0 kg either time) are exempt: a light set there is normal, not a typo.
-
-    Сравнение идёт с самым тяжёлым подходом этого упражнения И в прошлый раз, И
-    уже сегодня (сегодняшний — только рабочий, см. _working_weight_today).
-    Сегодняшние раньше не учитывались вовсе, и на упражнении без истории
-    проверки не было никакой — при том что восемь подходов по 200, набранные
-    полчаса назад, говорят о правдоподобном весе больше, чем любая прошлая
-    тренировка.
-    """
-    if not today_sets:
-        return None
-    last_weight, _last_reps = today_sets[-1]
-    if last_weight <= 0:
-        return None
-    prev_max_weight = max((w for w, _r, _rpe in last_session or []), default=0.0)
-    today_max_weight = _working_weight_today(today_sets[:-1])
-    baseline = max(prev_max_weight, today_max_weight)
-    if baseline <= 0:
-        return None
-    too_low = last_weight < _SUSPICIOUS_WEIGHT_LOW_FRACTION * baseline
-    too_high = last_weight > _SUSPICIOUS_WEIGHT_HIGH_MULTIPLE * baseline
-    if not (too_low or too_high):
-        return None
-    u = formatting.unit_label(unit)
-    # «сегодня», когда планка взялась из этой же тренировки: «в прошлый раз
-    # 200кг» под списком, где 200 стоит восемь раз подряд сегодня, читалось бы
-    # как ошибка самого бота.
-    since_key = "workout.since_last_time" if baseline == prev_max_weight else "workout.since_today"
-    return i18n.t(
-        "workout.suspicious_weight_warning",
-        weight=formatting.format_weight(last_weight),
-        u=u,
-        since=i18n.t(since_key),
-        baseline=formatting.format_weight(baseline),
-    )
+# Пороги и сами проверки подозрительного подхода живут в set_sanity — одна
+# копия на бота и на `/v1` (приложение спрашивает то же самое и теми же
+# словами). Прежние имена оставлены: на них завязаны экран записи и тесты.
+_suspicious_weight_warning = set_sanity.suspicious_weight_warning
 
 
 # Первые три раза за жизнь аккаунта, когда под сообщением встаёт ряд голых
@@ -2627,26 +2551,7 @@ def _resolve_parsed_weights(data: dict, active: int, parsed: list[ParsedSet]) ->
     return resolved
 
 
-# Выше этого числа повторов под весом бот переспрашивает. Тридцать — это уже
-# сильно за пределами силовой работы, а вот типовые промахи ввода попадают сюда
-# все: «сто пятьдесят» без повторов (голос слышит одно число и берёт вес с
-# прошлого подхода — 100×150), «три подхода по сто на восемь» (3×100), «восемь по
-# сто» (8×100). Своим весом не ограничиваем: 50 отжиманий — обычное дело, а веса
-# там нет.
-_REPS_CONFIRM_ABOVE = 30
-
-
-def _suspicious_reps_warning(weight: float, reps: int) -> str | None:
-    """«100 кг × 150 повторов? Похоже на промах» — или None, если всё в порядке.
-
-    Вес до этого проверялся, повторы — нет вовсе (`parser.MAX_REPS` = 500, то
-    есть практически ничего). А цена промаха такая же: e1RM от 100×150 — это
-    600 кг, и оно становится вечным рекордом упражнения, попадает в тоннаж и в
-    Зал славы, откуда его уже не убрать.
-    """
-    if weight <= 0 or reps <= _REPS_CONFIRM_ABOVE:
-        return None
-    return i18n.t("workout.suspicious_reps_warning", set=formatting.format_set(weight, reps))
+_suspicious_reps_warning = set_sanity.suspicious_reps_warning
 
 
 async def _today_sets_of(data: dict, active: int | None) -> list[tuple[float, int]]:
@@ -2689,23 +2594,8 @@ def _weight_confirm_prompt(
     свидетельство о правдоподобном весе, какое вообще есть.
     """
     last_session = None if data.get("is_backfill") else (data.get("last_session_sets") or {}).get(active)
-    done_today = list(today_sets or [])
-    for ps in resolved:
-        warning = _suspicious_weight_warning(last_session, [*done_today, (ps.weight, ps.reps)], unit)
-        if warning:
-            return warning
-        # Вопрос про повторы — про перепутанные местами числа, и он уместен, пока
-        # роли чисел заданы порядком. «15 kg / 90 reps» задаёт их словами:
-        # спрашивать «не перепутал ли вес и повторы» у человека, который только
-        # что написал, где вес и где повторы, — отвечать на незаданный вопрос
-        # (живой QA поймал это на первом же вводе). Проверка веса остаётся: она
-        # про величину на фоне истории, а не про порядок чисел.
-        if ps.unit_explicit:
-            continue
-        warning = _suspicious_reps_warning(ps.weight, ps.reps)
-        if warning:
-            return warning
-    return None
+    found = set_sanity.find_suspicion(last_session, resolved, unit, today_sets)
+    return found.text if found else None
 
 
 # Голос спрятан в _HELP_SHORT, куда новичок не заходит сам — так что учим по

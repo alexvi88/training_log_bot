@@ -75,6 +75,7 @@ import parser
 import review_demo
 import seed_data
 import server_timing
+import set_sanity
 import timeutil
 import view_builder
 import voice_parse
@@ -1139,10 +1140,13 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
     сообщение приедет на языке того, кто первым дёрнул модуль в этом процессе
     (ловушка описана в CLAUDE.md).
 
-    Бот на подозрительном вводе ещё и переспрашивает («не перепутаны ли вес и
-    повторы», handlers.workout._weight_confirm_prompt). Здесь переспросить
-    некому: HTTP-ответ не диалог. Подход пишется как разобран, а исправляется
-    правкой или отменой последнего — оба маршрута уже есть.
+    Подозрительный ввод («8 60» — 8 кг × 60 повторов, «1400 5» после рабочих
+    140) бот переспрашивает до записи (handlers.workout._weight_confirm_prompt).
+    Приложение просит того же флагом `confirm_suspicious: true` — тогда на
+    подозрительной строке без `confirmed: true` ничего не пишется, а в ответ
+    уходит 200 (не 201: записи не было) с вопросом тренера — см.
+    `_suspicious_line_answer`. Без флага — как раньше: выпущенные сборки
+    приложения флага не шлют, и для них строка пишется как разобрана.
     """
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
@@ -1168,11 +1172,86 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
             # «не разобрал» от «сервер лёг», — но показывать он должен message.
             raise ApiError(400, "unparsed_input", "set line not parsed", human=exc.message) from exc
 
+    if body.get("confirm_suspicious") is True and body.get("confirmed") is not True:
+        answer = await _suspicious_line_answer(
+            workout, exercise_id, parsed, user_id, user, idempotency_key
+        )
+        if answer is not None:
+            return JSONResponse(answer, status_code=200)
+
     created = await _store_parsed_sets(
         workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key,
         created_at=common.set_created_at(body, workout),
     )
     return JSONResponse({"sets": created}, status_code=201)
+
+
+def _line_number(value: float) -> str:
+    """Число для строки подхода, которую клиент отправит обратно: «60», «62.5» —
+    без локальной запятой и без единиц, чтобы её разобрал тот же parser."""
+    return f"{value:g}"
+
+
+async def _suspicious_line_answer(
+    workout, exercise_id: int, parsed, user_id: int, user, idempotency_key: Optional[str]
+) -> Optional[dict[str, Any]]:
+    """Ответ «сначала спроси» на подозрительную строку — или None, если всё в
+    порядке и строку надо писать.
+
+    Проверки — те же функции, что у бота (`set_sanity.find_suspicion`), и на тех
+    же данных: «прошлый раз» — последняя законченная тренировка с этим
+    упражнением (у занесения задним числом его нет, как и у бота), «уже
+    сегодня» — подходы упражнения в этой тренировке, голые повторы — с весом
+    прошлого подхода, как их запишет `db.store_parsed_sets`.
+
+    Ответ ничего не пишет — ни подходов, ни строки ключа попытки: тот же
+    `idempotency_key` придёт ещё раз вместе с `confirmed: true` (или с
+    исправленной строкой) и должен записать её как первую попытку. А если под
+    ключом уже что-то записано (повтор после потерянного ответа), спрашивать
+    поздно и незачем — строка уходит в обычный путь, который вернёт записанное.
+
+    Форма: `{"sets": [], "needs_confirmation": true, "question": "…",
+    "suggestion": {"text": "60 8", "weight": 60, "reps": 8} | null}`.
+    `suggestion` — только когда смутили повторы (вес и повторы, похоже,
+    перепутаны местами) в строке из одного подхода: её клиент может отправить
+    вместо исходной.
+    """
+    if idempotency_key and await db.replayed_set_ids(user_id, workout["id"], idempotency_key):
+        return None
+    history = await db.list_sets_for_exercise(exercise_id, exclude_workout_id=workout["id"])
+    session = [r for r in history if r["workout_id"] == history[-1]["workout_id"]] if history else []
+    last_session = (
+        None if workout["status"] == "backfill"
+        else [(r["weight"], r["reps"], r["rpe"]) for r in session]
+    )
+    today = await db.list_sets_for_workout_exercise(workout["id"], exercise_id)
+    today_sets = [(r["weight"], r["reps"]) for r in today]
+    prev_weight = today[-1]["weight"] if today else (session[0]["weight"] if session else 0.0)
+    resolved = []
+    for ps in parsed:
+        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
+        resolved.append(parser.ParsedSet(
+            weight=weight, reps=ps.reps, rpe=ps.rpe, unit_explicit=ps.unit_explicit
+        ))
+        prev_weight = weight
+
+    with i18n.use_lang(user["lang"] if user else "ru"):
+        found = set_sanity.find_suspicion(last_session, resolved, user["unit"], today_sets)
+        if found is None:
+            return None
+        question = f"{found.text}\n{i18n.t('workout.log_confirm_question')}"
+
+    suggestion = None
+    if found.kind == set_sanity.KIND_REPS and len(resolved) == 1:
+        ps = resolved[0]
+        swap = set_sanity.swapped(ps.weight, ps.reps)
+        if swap is not None:
+            weight, reps = swap
+            text = f"{_line_number(weight)} {reps}"
+            if ps.rpe is not None:
+                text += f" @{_line_number(ps.rpe)}"
+            suggestion = {"text": text, "weight": weight, "reps": reps}
+    return {"sets": [], "needs_confirmation": True, "question": question, "suggestion": suggestion}
 
 
 async def _store_parsed_sets(

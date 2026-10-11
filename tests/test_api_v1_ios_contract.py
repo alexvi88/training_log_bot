@@ -498,6 +498,11 @@ async def _state_offline_replay(fresh_db, lang: str) -> list[_Walker]:
     sent = {"exercise_id": own, "weight": 0, "reps": 5, "idempotency_key": "0b9f6c1e-6f57-4a3c-9d0e-6a1f2b3c4d60"}
     await w.call("POST", f"/workouts/{wid}/sets", json=sent, expect=(200, 201))
     await w.call("POST", f"/workouts/{wid}/sets", json=sent, expect=(200, 201))  # повтор из очереди
+    # «8 60» у клиента, который просит спросить: вопрос с подсказкой «60 8»
+    # (SetLineSuggestion), ничего не записано и ключ попытки не потрачен.
+    await w.call("POST", f"/workouts/{wid}/sets/parse",
+                 json={"exercise_id": own, "text": "8 60", "idempotency_key": "abc-0",
+                       "confirm_suspicious": True, "confirmed": False}, expect=200)
     await w.call("POST", f"/workouts/{wid}/sets/parse",
                  json={"exercise_id": own, "text": "20x10, 22.5x8", "idempotency_key": "abc-1"}, expect=201)
     await w.call("GET", f"/workouts/{wid}", expect=200)

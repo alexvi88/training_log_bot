@@ -1306,6 +1306,11 @@
      "type": "String",
      "optional": true,
      "default": true
+    },
+    "popularity": {
+     "type": "Int",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1898,6 +1903,18 @@
     "sets": {
      "type": "[SetLog]",
      "optional": false
+    },
+    "needsConfirmation": {
+     "type": "Bool",
+     "optional": true
+    },
+    "question": {
+     "type": "String",
+     "optional": true
+    },
+    "suggestion": {
+     "type": "SetLineSuggestion",
+     "optional": true
     }
    }
   },
@@ -2275,6 +2292,23 @@
     "progression": {
      "type": "AIProgression",
      "optional": true
+    }
+   }
+  },
+  "SetLineSuggestion": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "reps": {
+     "type": "Int",
+     "optional": false
     }
    }
   },
@@ -3995,5 +4029,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "a15ccfe7877917ad194d22d1b96385edf335247f"
+ "_ios_commit": "947471c9531f5d70a15596f2515e7b73a5eb19bf"
 }
