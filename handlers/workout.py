@@ -34,6 +34,7 @@ import chat_bottom
 import config
 import dashboard_data
 import db
+import exercise_alternatives
 import exercise_descriptions
 import exercise_media
 import exercise_photos
@@ -757,9 +758,12 @@ async def _render_logging_screen(bot, state: FSMContext, user):
 
     names: dict[int, str] = {}
     active_note: str | None = None
+    can_swap = False
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
+        if ex_id == active:
+            can_swap = bool(exercise_alternatives.alternatives_for(exercise_media.catalog_key(ex)))
     if active is not None:
         active_note = await db.get_workout_exercise_note(data["workout_id"], active)
 
@@ -827,6 +831,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         open_items, active, has_sets,
         last_reps=reps_basis[1] if reps_basis else None,
         is_first_set=not today_sets,
+        can_swap=can_swap,
     )
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
@@ -2395,6 +2400,91 @@ async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
+
+
+# ---------- «🔁 Замена»: тренажёр занят — чем заменить активное упражнение ----------
+#
+# Замены — семейства каталога (exercise_alternatives), те же, что отдаёт
+# приложению GET /v1/exercises/{id}/alternatives. Выбор закрывает текущее
+# упражнение ровно как «✅ Закончить упражнение» (пустой блок удаляется,
+# записанные подходы остаются в тренировке) и открывает замену тем же путём,
+# что и обычный выбор следующего (_on_exercise_chosen): прошлый раз, цель,
+# шаг веса — всё уже её.
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:swap")
+async def live_swap(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    ex = await db.get_exercise(active) if active is not None else None
+    if ex is None:
+        await callback.answer()
+        return
+    alternatives = await exercise_alternatives.for_exercise(callback.from_user.id, ex)
+    name = escape(ex["display_name"])
+    if not alternatives:
+        await callback.answer(i18n.t("workout.swap.empty", name=ex["display_name"]), show_alert=True)
+        return
+    has_sets = False
+    block_id = (data.get("open_blocks") or {}).get(active)
+    if block_id is not None:
+        has_sets = bool(await db.list_sets_for_block(block_id))
+    hint = i18n.t("workout.swap.title", name=name)
+    if has_sets:
+        hint += "\n" + i18n.t("workout.swap.sets_stay")
+    kb = keyboards.exercise_alternatives_keyboard(
+        alternatives, own_cb="live:swapex:{}", template_cb="live:swaptpl:{}", back_cb="live:swapback",
+    )
+    user = await db.get_user(callback.from_user.id)
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:swapback")
+async def live_swap_back(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await _render_logging_screen(callback.bot, state, user)
+    await callback.answer()
+
+
+async def _swap_active_exercise(callback: CallbackQuery, state: FSMContext, new_ex_id: int) -> None:
+    data = await state.get_data()
+    data = await _discard_superseded_confirmation(callback.bot, state, data)
+    active = data.get("active_exercise_id")
+    if active is not None and active != new_ex_id:
+        block_id = (data.get("open_blocks") or {}).get(active)
+        if block_id is not None and not await db.list_sets_for_block(block_id):
+            await db.delete_block(block_id)
+        open_blocks = dict(data.get("open_blocks") or {})
+        open_blocks.pop(active, None)
+        await state.update_data(
+            open_exercises=[eid for eid in (data.get("open_exercises") or []) if eid != active],
+            open_blocks=open_blocks,
+        )
+    await _on_exercise_chosen(callback, state, new_ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:swapex:"))
+async def live_swap_to_own(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id or ex["is_archived"]:
+        await ui.alert_exercise_not_found(callback)
+        return
+    await _swap_active_exercise(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:swaptpl:"))
+async def live_swap_to_template(callback: CallbackQuery, state: FSMContext):
+    template_id = int(callback.data.split(":")[2])
+    template = await db.get_exercise(template_id)
+    if template is None or not template["is_template"]:
+        await callback.answer(i18n.t("workout.template_not_found"), show_alert=True)
+        return
+    # Тот же форк, что у pick:tpladd: своя копия под локализованным именем, с
+    # идентичностью (original_name) шаблона; уже заведённая — та же самая.
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await _swap_active_exercise(callback, state, ex_id)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:note:"))

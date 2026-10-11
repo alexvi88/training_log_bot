@@ -687,6 +687,30 @@ async def _screen_ai_trainer_new_chat(db, user_id: int) -> str:
     return f"{at.NEW_CHAT_TEXT}\n{buttons}"
 
 
+async def _screen_exercise_alternatives(db, user_id: int) -> str:
+    """«🔁 Замена» (трекер и карточка упражнения): заголовки, подписи и список
+    замен — имена из каталога шаблонов, а не русская идентичность."""
+    import exercise_alternatives
+
+    template = (await db.find_global_templates_by_names(["Жим штанги лёжа"]))["Жим штанги лёжа"]
+    ex = await db.get_exercise(await db.fork_exercise_from_template(user_id, template["id"]))
+    alternatives = await exercise_alternatives.for_exercise(user_id, ex)
+    kb = keyboards.exercise_alternatives_keyboard(
+        alternatives, own_cb="o:{}", template_cb="t:{}", back_cb="b"
+    )
+    live = keyboards.logging_keyboard([(ex["id"], ex["display_name"])], ex["id"], can_swap=True)
+    name = ex["display_name"]
+    lines = [
+        i18n.t("workout.swap.title", name=name), i18n.t("workout.swap.sets_stay"),
+        i18n.t("workout.swap.empty", name=name),
+        i18n.t("exercises.alternatives.title", name=name),
+        i18n.t("exercises.alternatives.empty", name=name),
+    ]
+    lines += [b.text for row in kb.inline_keyboard for b in row]
+    lines += [b.text for row in live.inline_keyboard for b in row]
+    return "\n".join(lines)
+
+
 async def _screen_ai_trainer_setup_question(db, user_id: int) -> str:
     """Вопрос опросника перед сборкой программы: заголовок «ВОПРОС N ИЗ M»,
     сам вопрос про цель (первый и обязательный, см. handlers.ai_trainer.
@@ -852,6 +876,7 @@ SCREENS: list[tuple[str, object]] = [
     ("main_error_fallback", _screen_main_error_fallback),
     ("ai_trainer_intro", _screen_ai_trainer_intro),
     ("ai_trainer_new_chat", _screen_ai_trainer_new_chat),
+    ("exercise_alternatives", _screen_exercise_alternatives),
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),

@@ -762,6 +762,7 @@ def logging_keyboard(
     has_sets: bool = True,
     last_reps: int | None = None,
     is_first_set: bool = False,
+    can_swap: bool = False,
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
@@ -770,6 +771,11 @@ def logging_keyboard(
 
     The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
     "↩️ Удалить последний" appears directly above "✅ Закончить упражнение".
+
+    can_swap — у активного упражнения есть замены из каталога
+    (exercise_alternatives): в тот же ряд встаёт «🔁 Замена» на случай, когда
+    тренажёр занят. Своё упражнение не из каталога кнопку не получает — замен
+    ему мы не знаем, и тап вёл бы в пустой экран.
 
     last_reps — повторы последнего записанного подхода. Есть они, значит есть и
     вес, и над остальными кнопками встаёт ряд цифр «тот же вес, другие
@@ -816,10 +822,37 @@ def logging_keyboard(
     top_row = [InlineKeyboardButton(text=i18n.t("btn.superset"), callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text=i18n.t("btn.note"), callback_data=f"live:note:{active_id}"))
+        if can_swap:
+            top_row.append(InlineKeyboardButton(text=i18n.t("btn.swap"), callback_data="live:swap"))
     b.row(*top_row)
     if has_sets:
         b.row(InlineKeyboardButton(text=i18n.t("btn.undo_last"), callback_data="live:undo"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.finish_exercise"), callback_data="live:finish_exercise"))
+    return b.as_markup()
+
+
+def exercise_alternatives_keyboard(
+    alternatives: Sequence[dict],
+    own_cb: str,
+    template_cb: str,
+    back_cb: str,
+) -> InlineKeyboardMarkup:
+    """Список замен упражнению (exercise_alternatives.for_exercise) — в живом
+    трекере и в карточке упражнения.
+
+    Своё (уже заведённое) упражнение — голым именем и `own_cb.format(id)`;
+    ещё не добавленное из каталога — с 📋, как шаблоны в выдаче поиска
+    (exercises_keyboard), и `template_cb.format(template_id)`: тап сначала
+    заводит копию, потом открывает её. Каждое своей строкой — имена длинные.
+    """
+    b = InlineKeyboardBuilder()
+    for alt in alternatives:
+        if alt.get("exercise_id"):
+            text, cb = alt["name"], own_cb.format(alt["exercise_id"])
+        else:
+            text, cb = f"📋 {alt['name']}", template_cb.format(alt["template_id"])
+        b.row(InlineKeyboardButton(text=_tab_label(text, _SUGGEST_NAME_MAX), callback_data=cb))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=back_cb))
     return b.as_markup()
 
 
