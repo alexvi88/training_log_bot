@@ -84,7 +84,7 @@ async def test_invite_preview_shows_coach_and_what_is_visible_before_consent(fre
     preview = (await athlete.get(f"/coach/invites/{code.lower()}")).json()
     assert preview["coach_name"] == "Иван"
     assert preview["already_linked"] is False and preview["is_own"] is False
-    assert preview["visibility"] == {"bodyweight": False, "food": False}
+    assert preview["visibility"] == {"bodyweight": False}
     assert "ai_chats" in coach_service.NEVER_VISIBLE and "workouts" in coach_service.VISIBLE_ALWAYS
     # Превью ничего не открывает: тренер атлета ещё не видит.
     assert (await coach.get("/coach/clients")).json()["clients"] == []
@@ -96,8 +96,7 @@ async def test_accept_links_with_defaults_and_errors(fresh_db):
 
     clients = (await coach.get("/coach/clients")).json()["clients"]
     assert [c["name"] for c in clients] == ["Маша"]
-    assert clients[0]["visibility"]["bodyweight"] is False
-    assert clients[0]["visibility"]["food"] is False
+    assert clients[0]["visibility"] == {"bodyweight": False}
     assert set(clients[0]["signals"]) >= {
         "workouts_this_week", "days_since_last_workout", "missing", "new_records", "behind_program",
     }
@@ -144,7 +143,6 @@ async def test_non_linked_coach_sees_nothing(fresh_db):
     for path in (
         f"/coach/clients/{CLIENT}", f"/coach/clients/{CLIENT}/workouts",
         f"/coach/clients/{CLIENT}/workouts/{wid}", f"/coach/clients/{CLIENT}/bodyweight",
-        f"/coach/clients/{CLIENT}/food",
     ):
         resp = await other_coach.get(path)
         assert resp.status_code == 404, path
@@ -155,32 +153,39 @@ async def test_non_linked_coach_sees_nothing(fresh_db):
     assert (await athlete.get(f"/coach/clients/{COACH}")).status_code == 404
 
 
-async def test_bodyweight_and_food_need_the_athletes_toggle(fresh_db):
+async def test_bodyweight_needs_the_athletes_toggle(fresh_db):
     coach, athlete, _ = await _linked(fresh_db)
     await athlete.post("/bodyweight", json={"weight": 70.5})
-    await athlete.post("/food", json={"name": "Гречка", "kcal": 300})
 
-    for section in ("bodyweight", "food"):
-        resp = await coach.get(f"/coach/clients/{CLIENT}/{section}")
-        assert resp.status_code == 403 and resp.json()["error"] == "coach_hidden"
+    resp = await coach.get(f"/coach/clients/{CLIENT}/bodyweight")
+    assert resp.status_code == 403 and resp.json()["error"] == "coach_hidden"
 
     patched = await athlete.patch(f"/coach-links/{COACH}", json={"show_bodyweight": True})
-    assert patched.status_code == 200 and patched.json()["visibility"]["bodyweight"] is True
+    assert patched.status_code == 200 and patched.json()["visibility"] == {"bodyweight": True}
     weights = (await coach.get(f"/coach/clients/{CLIENT}/bodyweight")).json()
     assert [e["weight"] for e in weights["entries"]] == [70.5] and weights["unit"] == "kg"
-    assert (await coach.get(f"/coach/clients/{CLIENT}/food")).status_code == 403
-
-    await athlete.patch(f"/coach-links/{COACH}", json={"show_food": True})
-    food = (await coach.get(f"/coach/clients/{CLIENT}/food")).json()
-    assert food["days"][0]["items"] == ["Гречка"]
 
     await athlete.patch(f"/coach-links/{COACH}", json={"show_bodyweight": False})
     assert (await coach.get(f"/coach/clients/{CLIENT}/bodyweight")).status_code == 403
-    assert (await athlete.patch(f"/coach-links/{COACH}", json={"show_food": "yes"})).status_code == 400
+    assert (await athlete.patch(f"/coach-links/{COACH}", json={"show_bodyweight": "yes"})).status_code == 400
+
+
+async def test_food_diary_is_not_part_of_the_coach_service(fresh_db):
+    """Дневник питания тренеру не открывается ничем: ни ручки, ни флага.
+    Тело от сборки первой версии (`show_food`) не ломает запрос — поле молча
+    пропускается."""
+    coach, athlete, _ = await _linked(fresh_db, show_bodyweight=True, show_food=True)
+    await athlete.post("/food", json={"name": "Гречка", "kcal": 300})
+    patched = await athlete.patch(f"/coach-links/{COACH}", json={"show_food": True})
+    assert patched.status_code == 200 and patched.json()["visibility"] == {"bodyweight": True}
+    assert not (await fresh_db.get_coach_link(COACH, CLIENT))["show_food"]
+    assert (await coach.get(f"/coach/clients/{CLIENT}/food")).status_code == 404
+    assert "Гречка" not in (await coach.get(f"/coach/clients/{CLIENT}")).text
+    assert "food" not in coach_service.VISIBLE_OPT_IN
 
 
 async def test_ai_chats_and_ai_comments_never_reach_the_coach(fresh_db):
-    coach, athlete, _ = await _linked(fresh_db, show_bodyweight=True, show_food=True)
+    coach, athlete, _ = await _linked(fresh_db, show_bodyweight=True)
     ex = await _exercise(athlete, "Жим")
     wid = await _finished_workout(athlete, ex, 60)
     secret_answer = "СЕКРЕТНЫЙ-ОТВЕТ-AI"
@@ -191,7 +196,6 @@ async def test_ai_chats_and_ai_comments_never_reach_the_coach(fresh_db):
     for path in (
         "/coach/clients", f"/coach/clients/{CLIENT}", f"/coach/clients/{CLIENT}/workouts",
         f"/coach/clients/{CLIENT}/workouts/{wid}", f"/coach/clients/{CLIENT}/bodyweight",
-        f"/coach/clients/{CLIENT}/food",
     ):
         resp = await coach.get(path)
         assert resp.status_code == 200, path

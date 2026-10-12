@@ -11,8 +11,8 @@
 
 Каждый id атлета из URL проверяется связкой (`_linked_client`) до любого чтения:
 нет связки — 404 `not_linked`, и чужой дневник не отличить от
-несуществующего. Вес тела и еда — 403 `coach_hidden`, пока атлет их не
-открыл. Переписки с AI-тренером здесь нет ни в одном ответе.
+несуществующего. Вес тела — 403 `coach_hidden`, пока атлет его не открыл.
+Переписки с AI-тренером здесь нет ни в одном ответе.
 """
 
 from __future__ import annotations
@@ -286,25 +286,6 @@ async def client_bodyweight(request: Request) -> JSONResponse:
     })
 
 
-async def client_food(request: Request) -> JSONResponse:
-    user_id = await common.authed_user_id(request)
-    link, _ = await _linked_client(user_id, _client_id(request))
-    if not link["show_food"]:
-        raise ApiError(403, "coach_hidden", "food diary is not shared with the coach")
-    limit = common.query_int(request, "days", 7, minimum=1, maximum=31)
-    days = []
-    for row in await db.list_food_days(link["client_id"], limit=limit):
-        days.append({
-            "date": row["eaten_on"],
-            "calories": row["calories"],
-            "protein": row["protein"],
-            "fat": row["fat"],
-            "carbs": row["carbs"],
-            "items": [line for line in (row["descriptions"] or "").split("\n") if line],
-        })
-    return JSONResponse({"days": days})
-
-
 async def ai_summary(request: Request) -> JSONResponse:
     """AI-сводка тренеру: по всем клиентам или по одному (`client_id`).
     Тот же лимит вопроса тренеру, что у чата (ai_limits через paid_call), то
@@ -376,10 +357,7 @@ async def accept_invite(request: Request) -> JSONResponse:
     body = await common.json_body(request)
     name = _display_name(body.get("name"))
     show_bodyweight = bool(_bool_field(body, "show_bodyweight"))
-    show_food = bool(_bool_field(body, "show_food"))
-    created = await db.create_coach_link(
-        coach_id, user_id, name, show_bodyweight=show_bodyweight, show_food=show_food
-    )
+    created = await db.create_coach_link(coach_id, user_id, name, show_bodyweight=show_bodyweight)
     if not created:
         raise ApiError(409, "coach_already_linked", "this coach is already linked")
     link = await db.get_coach_link(coach_id, user_id)
@@ -410,7 +388,8 @@ async def _my_link(user_id: int, coach_id: int):
 
 
 async def update_my_coach(request: Request) -> JSONResponse:
-    """Что открыто тренеру: вес тела и еда — каждое отдельно; имя для тренера."""
+    """Что открыто тренеру (вес тела) и имя для тренера. Незнакомые поля тела
+    молча пропускаются."""
     user_id = await common.authed_user_id(request)
     coach_id = int(request.path_params["coach_id"])
     await _my_link(user_id, coach_id)
@@ -419,7 +398,6 @@ async def update_my_coach(request: Request) -> JSONResponse:
     await db.update_coach_link_visibility(
         coach_id, user_id,
         show_bodyweight=_bool_field(body, "show_bodyweight"),
-        show_food=_bool_field(body, "show_food"),
         client_name=name,
     )
     link = await db.get_coach_link(coach_id, user_id)
@@ -462,7 +440,6 @@ routes = [
     ),
     Route("/coach/clients/{client_id:int}/programs", assign_program, methods=["POST"]),
     Route("/coach/clients/{client_id:int}/bodyweight", client_bodyweight, methods=["GET"]),
-    Route("/coach/clients/{client_id:int}/food", client_food, methods=["GET"]),
     Route("/coach/ai-summary", ai_summary, methods=["POST"]),
     Route("/coach/invites/{code}", invite_preview, methods=["GET"]),
     Route("/coach/invites/{code}/accept", accept_invite, methods=["POST"]),

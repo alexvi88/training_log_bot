@@ -906,15 +906,6 @@
     }
    }
   },
-  "CoachClientFood": {
-   "file": "TrainingLog/Models/CoachModels.swift",
-   "fields": {
-    "days": {
-     "type": "[CoachFoodDay]",
-     "optional": false
-    }
-   }
-  },
   "CoachClientOverview": {
    "file": "TrainingLog/Models/CoachModels.swift",
    "fields": {
@@ -1092,35 +1083,6 @@
     }
    }
   },
-  "CoachFoodDay": {
-   "file": "TrainingLog/Models/CoachModels.swift",
-   "fields": {
-    "date": {
-     "type": "String",
-     "optional": false
-    },
-    "calories": {
-     "type": "Double",
-     "optional": true
-    },
-    "protein": {
-     "type": "Double",
-     "optional": true
-    },
-    "fat": {
-     "type": "Double",
-     "optional": true
-    },
-    "carbs": {
-     "type": "Double",
-     "optional": true
-    },
-    "items": {
-     "type": "[String]",
-     "optional": false
-    }
-   }
-  },
   "CoachGreeting": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -1244,10 +1206,6 @@
    "file": "TrainingLog/Models/CoachModels.swift",
    "fields": {
     "bodyweight": {
-     "type": "Bool",
-     "optional": false
-    },
-    "food": {
      "type": "Bool",
      "optional": false
     }
@@ -3943,13 +3901,6 @@
    "nullable": false
   },
   {
-   "swift": "APIClient.coachClientFood",
-   "method": "GET",
-   "path": "/coach/clients/{}/food",
-   "root": "CoachClientFood",
-   "nullable": false
-  },
-  {
    "swift": "APIClient.assignProgram",
    "method": "POST",
    "path": "/coach/clients/{}/programs",
@@ -4643,5 +4594,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "ad0fef0e8cefaf6825981844e3cafc9852014e36"
+ "_ios_commit": "7a22b8b33333bf0439447a9123444bc8d8cd57c3"
 }

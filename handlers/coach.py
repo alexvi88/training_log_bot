@@ -8,16 +8,16 @@
 
 Сторона атлета:
 - ссылка или «У меня есть код тренера» → кто зовёт, что увидит и чего не
-  увидит никогда, переключатели веса тела и еды (по умолчанию закрыты) →
+  увидит никогда, переключатель веса тела (по умолчанию закрыт) →
   «Разрешить» → как назваться тренеру. До «Разрешить» не открыто ничего;
-- «Мой тренер»: переключатели и «Закрыть доступ»;
+- «Мой тренер»: переключатель веса тела и «Закрыть доступ»;
 - комментарий тренера приходит сообщением (coach_notify) и стоит под
   тренировкой в истории (`athlete_comments_block`).
 
 Сторона тренера:
 - «Я тренер»: имя, код и ссылка, «Новый код»;
 - «Мои клиенты» с сигналами → карточка клиента (программы и сделанные дни,
-  рекорды, тренировки, вес и еда — только открытые атлетом) → тренировка на
+  рекорды, тренировки, вес тела — только открытый атлетом) → тренировка на
   чтение с комментариями → «Написать комментарий»; «Назначить программу»,
   «Сводка от AI», «Убрать из клиентов».
 
@@ -223,7 +223,7 @@ async def coach_code_entered(message: Message, state: FSMContext):
             ]),
         )
         return
-    await _show_preview(message, state, message.from_user.id, code, False, False)
+    await _show_preview(message, state, message.from_user.id, code, False)
 
 
 async def _invite_and_profile(code: str):
@@ -234,15 +234,15 @@ async def _invite_and_profile(code: str):
     return invite, profile
 
 
-def _flags(bw: bool, food: bool) -> str:
-    return f"{int(bw)}{int(food)}"
+def _flags(bw: bool) -> str:
+    return str(int(bw))
 
 
 def _toggle_label(key_on: str, key_off: str, on: bool) -> str:
     return i18n.t(key_on) if on else i18n.t(key_off)
 
 
-async def _preview_view(user_id: int, code: str, bw: bool, food: bool) -> tuple[str, InlineKeyboardMarkup, bool]:
+async def _preview_view(user_id: int, code: str, bw: bool) -> tuple[str, InlineKeyboardMarkup, bool]:
     """(текст, кнопки, можно ли разрешать). Превью ничего не открывает."""
     invite, profile = await _invite_and_profile(code)
     retry_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -272,20 +272,16 @@ async def _preview_view(user_id: int, code: str, bw: bool, food: bool) -> tuple[
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=_toggle_label("coach.btn.bodyweight_on", "coach.btn.bodyweight_off", bw),
-            callback_data=f"coach:inv:{c}:{_flags(not bw, food)}",
+            callback_data=f"coach:inv:{c}:{_flags(not bw)}",
         )],
-        [InlineKeyboardButton(
-            text=_toggle_label("coach.btn.food_on", "coach.btn.food_off", food),
-            callback_data=f"coach:inv:{c}:{_flags(bw, not food)}",
-        )],
-        [InlineKeyboardButton(text=i18n.t("coach.btn.allow"), callback_data=f"coach:ok:{c}:{_flags(bw, food)}")],
+        [InlineKeyboardButton(text=i18n.t("coach.btn.allow"), callback_data=f"coach:ok:{c}:{_flags(bw)}")],
         [InlineKeyboardButton(text=i18n.t("coach.btn.not_now"), callback_data="coach:no")],
     ])
     return text, kb, True
 
 
-async def _show_preview(event, state: FSMContext, user_id: int, code: str, bw: bool, food: bool) -> None:
-    text, kb, ok = await _preview_view(user_id, code, bw, food)
+async def _show_preview(event, state: FSMContext, user_id: int, code: str, bw: bool) -> None:
+    text, kb, ok = await _preview_view(user_id, code, bw)
     if ok or isinstance(event, CallbackQuery):
         await _leave_input(state)
     await _show(event, text, kb)
@@ -312,20 +308,21 @@ async def open_coach_invite(message: Message, command: CommandObject, state: FSM
             user_id, acquisition.SOURCE_COACH_INVITE, invite["owner_id"] if invite is not None else None
         )
     await clear_state_keep_workout(state)
-    await _show_preview(message, state, user_id, code, False, False)
+    await _show_preview(message, state, user_id, code, False)
 
 
-def _parse_flags(raw: str) -> tuple[bool, bool]:
-    raw = (raw or "00") + "00"
-    return raw[0] == "1", raw[1] == "1"
+def _parse_flags(raw: str) -> bool:
+    """Флаг веса тела из callback_data. Кнопки в уже отправленных
+    сообщениях несут второй, старый разряд (`10`, `01`) — он не читается."""
+    return (raw or "0")[0] == "1"
 
 
 @router.callback_query(F.data.startswith("coach:inv:"))
 async def coach_invite_toggle(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     code = parts[2] if len(parts) > 2 else ""
-    bw, food = _parse_flags(parts[3] if len(parts) > 3 else "")
-    await _show_preview(callback, state, callback.from_user.id, code, bw, food)
+    bw = _parse_flags(parts[3] if len(parts) > 3 else "")
+    await _show_preview(callback, state, callback.from_user.id, code, bw)
     await callback.answer()
 
 
@@ -346,15 +343,15 @@ async def coach_invite_allow(callback: CallbackQuery, state: FSMContext):
     имени: тренер знает атлета по имени, которым тот назвался сам."""
     parts = callback.data.split(":")
     code = parts[2] if len(parts) > 2 else ""
-    bw, food = _parse_flags(parts[3] if len(parts) > 3 else "")
-    text, kb, ok = await _preview_view(callback.from_user.id, code, bw, food)
+    bw = _parse_flags(parts[3] if len(parts) > 3 else "")
+    text, kb, ok = await _preview_view(callback.from_user.id, code, bw)
     if not ok:
         await _show(callback, text, kb)
         await callback.answer()
         return
     _, profile = await _invite_and_profile(code)
     await state.set_state(CoachFlow.naming_self)
-    await state.update_data(coach_pending={"code": code, "bw": bw, "food": food})
+    await state.update_data(coach_pending={"code": code, "bw": bw})
     rows = []
     first, _err = _validated_name(getattr(callback.from_user, "first_name", None))
     if first:
@@ -392,14 +389,14 @@ async def _accept(event, state: FSMContext, name: str) -> None:
     await _leave_input(state)
     await state.update_data(coach_pending=None)
     code = pending.get("code") or ""
-    text, kb, ok = await _preview_view(user_id, code, bool(pending.get("bw")), bool(pending.get("food")))
+    text, kb, ok = await _preview_view(user_id, code, bool(pending.get("bw")))
     if not ok:
         await _show(event, text, kb)
         return
     invite, profile = await _invite_and_profile(code)
     created = await db.create_coach_link(
         invite["owner_id"], user_id, name,
-        show_bodyweight=bool(pending.get("bw")), show_food=bool(pending.get("food")),
+        show_bodyweight=bool(pending.get("bw")),
     )
     coach_name = escape(profile["display_name"])
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -422,7 +419,7 @@ async def _my_coach_view(user_id: int, coach_id: int) -> Optional[tuple[str, Inl
         return None
     profile = await db.get_coach_profile(coach_id)
     name = _coach_name(profile["display_name"] if profile is not None else None)
-    bw, food = bool(link["show_bodyweight"]), bool(link["show_food"])
+    bw = bool(link["show_bodyweight"])
     text = "\n\n".join([
         f"🧑‍🏫 <b>{escape(name)}</b>\n<i>{i18n.t('coach.knows_you_as', name=escape(link['client_name']))}</i>",
         i18n.t("coach.my.sees"),
@@ -432,10 +429,6 @@ async def _my_coach_view(user_id: int, coach_id: int) -> Optional[tuple[str, Inl
         [InlineKeyboardButton(
             text=_toggle_label("coach.btn.bodyweight_on", "coach.btn.bodyweight_off", bw),
             callback_data=f"coach:myt:{coach_id}:bw",
-        )],
-        [InlineKeyboardButton(
-            text=_toggle_label("coach.btn.food_on", "coach.btn.food_off", food),
-            callback_data=f"coach:myt:{coach_id}:food",
         )],
         [InlineKeyboardButton(text=i18n.t("coach.btn.revoke"), callback_data=f"coach:rv:{coach_id}")],
         _back_row("coach:hub"),
@@ -470,15 +463,12 @@ async def coach_my_toggle(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     link = await db.get_coach_link(coach_id, callback.from_user.id)
-    if link is not None:
-        if parts[-1] == "bw":
-            await db.update_coach_link_visibility(
-                coach_id, callback.from_user.id, show_bodyweight=not bool(link["show_bodyweight"])
-            )
-        elif parts[-1] == "food":
-            await db.update_coach_link_visibility(
-                coach_id, callback.from_user.id, show_food=not bool(link["show_food"])
-            )
+    # Другой хвост (старая кнопка второго переключателя в уже отправленном
+    # сообщении) ничего не меняет — просто перерисовывает экран.
+    if link is not None and parts[-1] == "bw":
+        await db.update_coach_link_visibility(
+            coach_id, callback.from_user.id, show_bodyweight=not bool(link["show_bodyweight"])
+        )
     await _show_my_coach(callback, state, coach_id)
 
 
@@ -701,13 +691,8 @@ async def _linked(callback: CallbackQuery, client_id: int):
 
 
 def visibility_line(link: Any) -> str:
-    bw, food = bool(link["show_bodyweight"]), bool(link["show_food"])
-    if bw and food:
-        return i18n.t("coach.visibility.both")
-    if bw:
+    if link["show_bodyweight"]:
         return i18n.t("coach.visibility.bodyweight")
-    if food:
-        return i18n.t("coach.visibility.food")
     return i18n.t("coach.visibility.none")
 
 
@@ -769,13 +754,8 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     if more:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.all_workouts"), callback_data=f"coach:ws:{client_id}:0"))
-    optional = []
     if link["show_bodyweight"]:
-        optional.append(InlineKeyboardButton(text=i18n.t("coach.btn.bodyweight"), callback_data=f"coach:bw:{client_id}"))
-    if link["show_food"]:
-        optional.append(InlineKeyboardButton(text=i18n.t("coach.btn.food"), callback_data=f"coach:fd:{client_id}"))
-    if optional:
-        kb.row(*optional)
+        kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.bodyweight"), callback_data=f"coach:bw:{client_id}"))
     kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.assign"), callback_data=f"coach:asg:{client_id}"))
     kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.ai_summary"), callback_data=f"coach:ai:{client_id}"))
     kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.remove"), callback_data=f"coach:rm:{client_id}"))
@@ -1006,7 +986,7 @@ async def coach_comment_send(callback: CallbackQuery, state: FSMContext):
     await _show_client_workout(callback, state, draft["cid"], draft["wid"], notice=notice)
 
 
-# ---------- вес тела и еда — только открытые атлетом ----------
+# ---------- вес тела — только открытый атлетом ----------
 
 
 @router.callback_query(F.data.startswith("coach:bw:"))
@@ -1034,31 +1014,12 @@ async def coach_client_bodyweight(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("coach:fd:"))
-async def coach_client_food(callback: CallbackQuery, state: FSMContext):
+async def coach_client_legacy_button(callback: CallbackQuery, state: FSMContext):
+    """Кнопка первой версии карточки клиента в уже отправленном сообщении:
+    такого экрана больше нет — открываем саму карточку."""
     args = await _int_args(callback, 1)
-    if args is None:
-        return
-    link, client = await _linked(callback, args[0])
-    if link is None:
-        return
-    if not link["show_food"]:
-        await callback.answer(i18n.t("api.error.coach_hidden"), show_alert=True)
-        return
-    days = await db.list_food_days(args[0], limit=7)
-    blocks = [i18n.t("coach.food.title", name=escape(link["client_name"]))]
-    if not days:
-        blocks.append(i18n.t("coach.food.empty"))
-    today = timeutil.user_today(client)
-    for row in days:
-        when = formatting.format_day_month_ru(dt.date.fromisoformat(row["eaten_on"]), today)
-        head = f"<b>{escape(when)}</b>"
-        if row["calories"] is not None:
-            head += " · " + i18n.t("coach.kcal", kcal=round(row["calories"]))
-        items = [line for line in (row["descriptions"] or "").split("\n") if line]
-        blocks.append(head + ("\n" + escape(", ".join(items)) if items else ""))
-    kb = InlineKeyboardMarkup(inline_keyboard=[_back_row(f"coach:cl:{args[0]}")])
-    await _show(callback, "\n\n".join(blocks), kb)
-    await callback.answer()
+    if args is not None:
+        await _show_client(callback, state, args[0])
 
 
 # ---------- назначить программу ----------
