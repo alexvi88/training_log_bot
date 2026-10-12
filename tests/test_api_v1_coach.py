@@ -393,7 +393,9 @@ async def test_ai_summary_only_sends_clients_who_consented(fresh_db, fake_model)
     ex = await _exercise(athlete, "Жим")
     await _finished_workout(athlete, ex, 60)
 
-    # Без согласия атлета на AI его данных в модели нет, и модель не зовётся.
+    # Атлет приложения (есть iOS-токен) без согласия на AI — его данных в модели
+    # нет, и модель не зовётся.
+    await fresh_db.register_push_token(CLIENT, "ios", "a" * 64)
     result = (await coach.post("/coach/ai-summary", json={})).json()
     assert result == {"text": None, "clients": 0, "skipped_no_consent": 1}
     assert _summary_calls(fake_model) == []
@@ -411,6 +413,16 @@ async def test_ai_summary_only_sends_clients_who_consented(fresh_db, fake_model)
     one = (await coach.post("/coach/ai-summary", json={"client_id": CLIENT})).json()
     assert one["clients"] == 1
     assert (await coach.post("/coach/ai-summary", json={"client_id": STRANGER})).status_code == 404
+
+
+async def test_ai_summary_includes_telegram_only_client_without_consent(fresh_db, fake_model):
+    """Чисто телеграмный атлет листа согласия не видит — его данные идут в
+    сводку тренера так же, как в его недельный итог (_background_ai_allowed)."""
+    coach, athlete, _ = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    await _finished_workout(athlete, ex, 60)
+    result = (await coach.post("/coach/ai-summary", json={})).json()
+    assert result["clients"] == 1 and result["skipped_no_consent"] == 0
 
 
 async def test_ai_summary_respects_the_coach_consent_and_limits(fresh_db, fake_model, monkeypatch):

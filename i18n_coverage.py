@@ -236,6 +236,11 @@ LOCALIZED: list[str] = [
     # api.error.* и coach.* через i18n.t; своих литералов нет.
     "coach_service.py",
     "api_v1_coach.py",
+    # Те же сервисы в боте: экраны тренера и атлета (handlers/coach.py) и
+    # доставка комментария тренера в APNs и Telegram (coach_notify.py) —
+    # тексты только через i18n.t, на языке атлета у фоновой отправки.
+    "handlers/coach.py",
+    "coach_notify.py",
     # Фраза тренера на заставке приложения (поле coach_greeting в /dashboard):
     # своих литералов не держит — только ключи coach_greeting.* через i18n.t
     # внутри use_lang(users.lang) у api_v1_dashboard.

@@ -20,9 +20,11 @@
   ник и id в Telegram. Тренер знает атлета по имени, которым тот сам назвался
   на экране согласия.
 
-AI-сводка для тренера отдаёт модели данные атлетов — только тех, кто сам
-разрешил передачу своих данных AI (users.ai_consent_at); остальные в сводку не
-попадают, и ответ говорит, сколько их.
+AI-сводка для тренера отдаёт модели данные атлетов по тому же правилу, что
+остальные фоновые вызовы модели (`ai_trainer._background_ai_allowed`): атлет
+приложения — только с согласием (users.ai_consent_at), чисто телеграмный — как
+недельный итог и комментарий после тренировки, без отдельного листа согласия.
+Остальные в сводку не попадают, и ответ говорит, сколько их.
 
 Строк, вычисленных на импорте, в модуле нет — язык берётся в момент вызова
 (см. CLAUDE.md, «Ловушка, встретившаяся шесть раз»).
@@ -313,8 +315,9 @@ async def _model_answer(coach_id: int, messages: list[dict[str, Any]]) -> str:
 
 async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str, Any]:
     """Сводка по всем клиентам («кого пора пнуть», рекорды, застои) или по
-    одному. Язык — тренера (выставлен запросом). Клиенты без согласия на AI
-    в данные модели не попадают — их число уходит в `skipped_no_consent`."""
+    одному. Язык — тренера (выставлен запросом). Клиенты, чьи данные модели
+    отдавать нельзя (`ai_trainer._background_ai_allowed`), в данные не
+    попадают — их число уходит в `skipped_no_consent`."""
     links = await db.list_coach_clients(coach_id)
     if client_id is not None:
         links = [link for link in links if link["client_id"] == client_id]
@@ -324,7 +327,7 @@ async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str
         client = await db.get_user(link["client_id"])
         if client is None:
             continue
-        if not client["ai_consent_at"]:
+        if not await ai_trainer._background_ai_allowed(client):
             skipped += 1
             continue
         briefs.append(await _client_brief(coach_id, client, link))

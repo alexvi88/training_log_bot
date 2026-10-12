@@ -836,6 +836,138 @@ async def _screen_merge_done(db, user_id: int) -> str:
     return text
 
 
+async def _coach_pair(db, user_id: int) -> tuple[int, int]:
+    """Тренер (user_id) и связанный с ним атлет с английскими именами и одной
+    законченной тренировкой: кириллица на экранах сервиса тренеров может
+    взяться только из кода, не из данных."""
+    athlete = user_id + 1
+    await db.get_or_create_user(telegram_id=athlete, username="athlete")
+    await db.set_user_lang(athlete, "en")
+    await db.upsert_coach_profile(user_id, "Coach Alex")
+    await db.replace_coach_invite(user_id, "K7MP2QXA")
+    await db.create_coach_link(user_id, athlete, "Sam", show_bodyweight=True, show_food=True)
+    gid = await db.create_muscle_group(athlete, "Chest")
+    ex = await db.create_exercise(athlete, "Bench Press", gid)
+    wid = await db.create_workout(athlete)
+    block = await db.create_block(wid, "single")
+    await db.add_block_exercise(block, ex, 0)
+    await db.add_set(block, ex, 1, 0, 80.0, 5)
+    await db.finish_workout(wid)
+    await db.add_coach_comment(user_id, athlete, wid, "Nice pace")
+    return athlete, wid
+
+
+async def _coach_screen(user_id: int, data: str) -> str:
+    """Экран сервиса тренеров через его роутер: текст плюс подписи кнопок."""
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from handlers import coach
+
+    callback = _make_fake_callback(user_id, data)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None, first_name="Sam")
+    callback.bot = MagicMock()
+    callback.bot.get_me = AsyncMock(return_value=SimpleNamespace(username="testbot"))
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await coach.router.callback_query.trigger(callback, state=state)
+    texts = [c.args[0] for c in callback.message.answer.await_args_list]
+    alerts = [c.args[0] for c in callback.answer.await_args_list if c.args]
+    buttons = [
+        _kb_texts(c.kwargs["reply_markup"]) for c in callback.message.answer.await_args_list
+        if c.kwargs.get("reply_markup") is not None
+    ]
+    return "\n".join(texts + alerts + buttons)
+
+
+async def _screen_coach_hub_and_invite(db, user_id: int) -> str:
+    """🧑‍🏫 Тренер: «Мой тренер» и «Я тренер», приглашение с кодом и ссылкой,
+    подтверждение нового кода."""
+    athlete, _wid = await _coach_pair(db, user_id)
+    out = [await _coach_screen(user_id, "coach:hub"), await _coach_screen(athlete, "coach:hub")]
+    out.append(await _coach_screen(user_id, "coach:invite"))
+    out.append(await _coach_screen(user_id, "coach:renew"))
+    out.append(await _coach_screen(user_id, "coach:become"))
+    return "\n".join(out)
+
+
+async def _screen_coach_athlete_side(db, user_id: int) -> str:
+    """Атлет: ввод кода, превью приглашения с переключателями, имя, «Мой
+    тренер», закрыть доступ, сообщение о комментарии и блок под тренировкой."""
+    import coach_notify
+    from handlers import coach
+
+    athlete, wid = await _coach_pair(db, user_id)
+    newcomer = user_id + 2
+    await db.get_or_create_user(telegram_id=newcomer, username="newcomer")
+    await db.set_user_lang(newcomer, "en")
+    out = [
+        await _coach_screen(newcomer, "coach:code"),
+        await _coach_screen(newcomer, "coach:inv:K7MP2QXA:11"),
+        await _coach_screen(newcomer, "coach:ok:K7MP2QXA:00"),
+        await _coach_screen(newcomer, "coach:no"),
+        await _coach_screen(newcomer, "coach:inv:NOPE2345:00"),
+        await _coach_screen(user_id, "coach:inv:K7MP2QXA:00"),
+        await _coach_screen(athlete, "coach:inv:K7MP2QXA:00"),
+        await _coach_screen(athlete, f"coach:my:{user_id}"),
+        await _coach_screen(athlete, f"coach:rv:{user_id}"),
+    ]
+    body, kb = await coach_notify.telegram_comment_message(await db.get_user(athlete), "Coach Alex", "Nice", wid)
+    out += [body, _kb_texts(kb), await coach.athlete_comments_block(wid, await db.get_user(athlete))]
+    out += [
+        coach._validated_name("")[1], coach._validated_name("x" * 99)[1],
+        i18n.t("coach.code.empty"), i18n.t("coach.linked_done", name="Coach Alex"),
+        i18n.t("coach.linked_done_hint"), i18n.t("coach.access_closed", name="Coach Alex"),
+        i18n.t("coach.link_gone"), i18n.t("coach.name_saved", name="Coach Alex"),
+        i18n.t("coach.invite_renewed"), i18n.t("program.from_coach", name="Coach Alex"),
+    ]
+    out.append(await _coach_screen(athlete, f"coach:rvy:{user_id}"))
+    return "\n".join(out)
+
+
+async def _screen_coach_clients(db, user_id: int) -> str:
+    """Тренер: «Мои клиенты» с сигналами, карточка клиента, все тренировки,
+    тренировка с комментариями, ввод комментария, вес, еда, назначение,
+    «убрать», отказ чужому."""
+    from handlers import coach
+
+    athlete, wid = await _coach_pair(db, user_id)
+    await db.add_bodyweight_log(athlete, 70.5)
+    await db.add_food_entry(athlete, "2026-10-01", "Oats", calories=300)
+    out = [
+        await _coach_screen(user_id, "coach:clients:0"),
+        await _coach_screen(user_id, f"coach:cl:{athlete}"),
+        await _coach_screen(user_id, f"coach:ws:{athlete}:0"),
+        await _coach_screen(user_id, f"coach:w:{athlete}:{wid}"),
+        await _coach_screen(user_id, f"coach:cm:{athlete}:{wid}"),
+        await _coach_screen(user_id, f"coach:bw:{athlete}"),
+        await _coach_screen(user_id, f"coach:fd:{athlete}"),
+        await _coach_screen(user_id, f"coach:asg:{athlete}"),
+        await _coach_screen(user_id, f"coach:rm:{athlete}"),
+        await _coach_screen(athlete, f"coach:cl:{user_id}"),
+        await _coach_screen(athlete, "coach:clients:0"),
+    ]
+    signals = {"missing": True, "days_since_last_workout": 9, "behind_program": True,
+               "new_records": 2, "workouts_this_week": 3}
+    out += coach.signal_texts(signals)
+    out += coach.signal_texts({**signals, "days_since_last_workout": None})
+    for key in (
+        "coach.visibility.both", "coach.visibility.bodyweight", "coach.visibility.food", "coach.visibility.none",
+        "coach.comment.draft_gone", "coach.assign.retry", "coach.summary_none", "coach.summary_none_one",
+        "coach.ai_summary.thinking", "coach.ai_summary.header_all", "coach.clients.empty",
+        "coach.bodyweight.empty", "coach.food.empty", "coach.assign.empty", "coach.signal.none",
+    ):
+        out.append(i18n.t(key))
+    out += [
+        i18n.t("coach.comment.preview", name="Sam", text="Nice"), i18n.t("coach.comment.sent", name="Sam"),
+        i18n.t("coach.comment.too_long", n=1200, max=1000), i18n.t("coach.summary_skipped", n=2),
+        i18n.t("coach.ai_summary.header_one", name="Sam"), i18n.t("coach.removed", name="Sam"),
+        i18n.t("coach.program_assigned", name="Split"),
+    ]
+    out.append(await _coach_screen(user_id, f"coach:rmy:{athlete}"))
+    return "\n".join(out)
+
+
 def _leaks(text: str) -> list[str]:
     return [word for word in _strip_autonyms(text).split() if i18n_coverage.has_cyrillic(word)]
 
@@ -899,6 +1031,9 @@ SCREENS: list[tuple[str, object]] = [
     ("import_result_and_undo", _screen_import_result),
     ("import_resolve_templates", _screen_import_resolve),
     ("exercise_merge_done", _screen_merge_done),
+    ("coach_hub_and_invite", _screen_coach_hub_and_invite),
+    ("coach_athlete_side", _screen_coach_athlete_side),
+    ("coach_clients_and_card", _screen_coach_clients),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

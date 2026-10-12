@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 # Зарезервированные источники — у них нет префикса, поэтому подделать их
-# payload'ом нельзя: всё, что не `src_`/`ref_`, схлопывается в UNKNOWN.
+# payload'ом нельзя: всё, что не `src_`/`ref_`/`coach_`, схлопывается в UNKNOWN.
 SOURCE_ORGANIC = "organic"  # пришёл сам: поиск, каталог ботов, ссылка без метки
 SOURCE_REFERRAL = "referral"  # по ссылке из карточки тренировки другого атлета
 SOURCE_SHARED_CARD = "shared_card"  # по визитке программы/упражнения (sh_-ссылка)
+SOURCE_COACH_INVITE = "coach_invite"  # по ссылке-приглашению живого тренера (coach_<код>)
 SOURCE_UNKNOWN = "unknown"  # payload был, но не разобрался
 # Те, кто уже был в боте до появления атрибуции. Стоит в базе с миграции, из
 # воронки исключается: считать их «органикой» — врать самим себе в отчёте.
@@ -27,6 +28,11 @@ SOURCE_LEGACY = "legacy"
 
 REFERRAL_PREFIX = "ref_"
 CHANNEL_PREFIX = "src_"
+# Приглашение тренера: `?start=coach_<код>` (handlers/coach.py). Тот же
+# «пришёл по приглашению живого человека», что и ref_, но своей строкой в
+# воронке: так видно, сколько людей приводит сервис для тренеров. Автора
+# (тренера) по коду находит хендлер — здесь, без БД, он неизвестен.
+COACH_PREFIX = "coach_"
 # id автора в `ref_<id>`: только ASCII-цифры, с необязательным минусом —
 # см. parse_start_payload.
 _REFERRER_ID = re.compile(r"-?[0-9]+")
@@ -69,6 +75,8 @@ def parse_start_payload(payload: Optional[str]) -> Attribution:
         # пропускал, и такие приглашения теряли автора; к тому же он
         # пропускал не-ASCII цифры вроде «²», на которых `int()` падал.
         return Attribution(SOURCE_REFERRAL, int(rest) if _REFERRER_ID.fullmatch(rest) else None)
+    if raw.startswith(COACH_PREFIX):
+        return Attribution(SOURCE_COACH_INVITE)
     if raw.startswith(CHANNEL_PREFIX):
         slug = _slug(raw[len(CHANNEL_PREFIX):])
         return Attribution(f"{CHANNEL_PREFIX}{slug}" if slug else SOURCE_UNKNOWN)
@@ -117,6 +125,8 @@ def _source_title(source: str) -> str:
         return "🤝 По приглашению"
     if source == SOURCE_SHARED_CARD:
         return "📤 По визитке"
+    if source == SOURCE_COACH_INVITE:
+        return "🧑‍🏫 По коду тренера"
     if source == SOURCE_UNKNOWN:
         return "❓ Метка не разобралась"
     return f"📣 {source[len(CHANNEL_PREFIX):]}" if source.startswith(CHANNEL_PREFIX) else source

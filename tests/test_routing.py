@@ -128,6 +128,25 @@ async def test_share_deep_link_reaches_sharing_not_the_main_menu(dispatcher):
     assert await _feed(dispatcher, "/start sh_TOKEN123") == ["handlers.sharing.open_shared"]
 
 
+async def test_coach_invite_deep_link_reaches_the_coach_preview(dispatcher):
+    """"/start coach_<код>" — приглашение тренера (handlers/coach.py), а не
+    главное меню: тот же порядок роутеров, что у визитки."""
+    assert await _feed(dispatcher, "/start coach_K7MP2QXA") == ["handlers.coach.open_coach_invite"]
+
+
+async def test_text_while_writing_a_coach_comment_reaches_the_coach_flow(dispatcher):
+    """Комментарий тренера — ожидание текста под StateFilter: текст не уходит
+    ни в трекер, ни в фолбэк."""
+    from fsm import CoachFlow
+
+    fsm = _fsm(dispatcher)
+    await fsm.set_state(CoachFlow.writing_comment)
+    try:
+        assert await _feed(dispatcher, "Держи темп") == ["handlers.coach.coach_comment_written"]
+    finally:
+        await fsm.clear()
+
+
 async def test_plain_start_still_opens_the_main_menu(dispatcher):
     """При этом обычный /start обязан остаться за workout.cmd_start —
     лечение не должно увести к шарингу всех подряд."""

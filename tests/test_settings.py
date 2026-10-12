@@ -264,11 +264,13 @@ async def test_settings_keyboard_groups_into_three_blocks():
     assert rows[10] == ["settings:import"]
     assert rows[11] == ["settings:mcp"]
     assert rows[12] == ["feedback:open"]
-    assert rows[13] == ["invite:show"]
+    # Сервис для тренеров — кто видит твой дневник (handlers/coach.py).
+    assert rows[13] == ["coach:hub"]
+    assert rows[14] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[14] == ["settings:delete"]
-    assert rows[15] == ["settings:back"]
+    assert rows[15] == ["settings:delete"]
+    assert rows[16] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():

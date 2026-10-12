@@ -1,0 +1,598 @@
+"""Сервис для тренеров в боте (handlers/coach.py, coach_notify.py): ссылка-
+приглашение и превью с переключателями, «Разрешить» с именем, «Мой тренер» и
+отзыв доступа, «Мои клиенты» и карточка клиента, комментарий тренера с
+сообщением атлету на его языке, назначение программы, AI-сводка с подменённой
+моделью и отказ всем, у кого нет связки."""
+
+from __future__ import annotations
+
+import datetime as dt
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from aiogram.dispatcher.event.bases import UNHANDLED
+from aiogram.filters import CommandObject
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import CallbackQuery
+
+import acquisition
+import ai_limits
+import ai_trainer
+import apns
+import coach_notify
+import coach_service
+import i18n
+import i18n_coverage
+from fsm import CoachFlow
+from handlers import coach, history
+
+pytestmark = pytest.mark.asyncio
+
+COACH = 601
+ATHLETE = 602
+STRANGER = 603
+
+
+def _bot():
+    bot = MagicMock()
+    bot.get_me = AsyncMock(return_value=SimpleNamespace(username="TrainLogBot"))
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=900))
+    return bot
+
+
+def _callback(user_id: int, data: str, *, bot=None, first_name: str | None = None):
+    message = MagicMock()
+    message.text = "previous screen"
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
+    message.edit_text = AsyncMock(return_value=message)
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2, delete=AsyncMock()))
+    message.reply = AsyncMock()
+    message.delete = AsyncMock()
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None, first_name=first_name)
+    callback.message = message
+    callback.bot = bot or _bot()
+    callback.data = data
+    callback.answer = AsyncMock()
+    return callback
+
+
+def _message(user_id: int, text: str, *, language_code: str | None = None, bot=None):
+    msg = MagicMock()
+    msg.chat = SimpleNamespace(id=user_id)
+    msg.from_user = SimpleNamespace(id=user_id, username="someone", language_code=language_code)
+    msg.text = text
+    msg.bot = bot or _bot()
+    msg.answer = AsyncMock(return_value=SimpleNamespace(message_id=3))
+    return msg
+
+
+_STORAGE = {"storage": MemoryStorage()}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_storage():
+    """Состояние FSM — своё у каждого теста: id атлета и тренера общие."""
+    _STORAGE["storage"] = MemoryStorage()
+
+
+def _state(user_id: int) -> FSMContext:
+    return FSMContext(storage=_STORAGE["storage"], key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+
+
+async def _tap(user_id: int, data: str, **kwargs):
+    """Нажать кнопку через настоящий роутер — так ловятся и пересечения
+    префиксов callback_data, а не только сам обработчик."""
+    callback = _callback(user_id, data, **kwargs)
+    result = await coach.router.callback_query.trigger(callback, state=_state(user_id))
+    assert result is not UNHANDLED, f"кнопку {data} не забрал никто"
+    return callback
+
+
+def _screen(callback) -> str:
+    return callback.message.answer.await_args.args[0]
+
+
+def _kb(callback):
+    return callback.message.answer.await_args.kwargs.get("reply_markup")
+
+
+def _buttons(markup) -> list[tuple[str, str | None]]:
+    return [(b.text, b.callback_data) for row in markup.inline_keyboard for b in row]
+
+
+def _alert(callback) -> str:
+    args = callback.answer.await_args
+    return args.args[0] if args and args.args else ""
+
+
+async def _user(db, telegram_id: int, lang: str = "ru"):
+    await db.get_or_create_user(telegram_id=telegram_id, username=f"user{telegram_id}")
+    await db.set_user_lang(telegram_id, lang)
+
+
+async def _coach_with_invite(db, name: str = "Иван Петров") -> str:
+    await _user(db, COACH)
+    await db.upsert_coach_profile(COACH, name)
+    await db.replace_coach_invite(COACH, "K7MP2QXA")
+    return "K7MP2QXA"
+
+
+async def _linked(db, *, athlete_lang: str = "ru", bw: bool = False, food: bool = False):
+    code = await _coach_with_invite(db)
+    await _user(db, ATHLETE, athlete_lang)
+    assert await db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=bw, show_food=food)
+    return code
+
+
+async def _finished_workout(db, user_id: int, exercise: str = "Жим лёжа", weight: float = 80.0, started_at=None):
+    """Законченная тренировка с одним подходом; упражнение с тем же именем
+    берётся то же самое — так вторая тренировка становится рекордом."""
+    cur = await db.conn().execute(
+        "SELECT id FROM exercises WHERE user_id = ? AND name = ?", (user_id, exercise)
+    )
+    row = await cur.fetchone()
+    if row is not None:
+        ex = row["id"]
+    else:
+        gid = await db.create_muscle_group(user_id, "Грудь")
+        ex = await db.create_exercise(user_id, exercise, gid)
+    wid = await db.create_workout(user_id, started_at=started_at) if started_at else await db.create_workout(user_id)
+    block = await db.create_block(wid, "single")
+    await db.add_block_exercise(block, ex, 0)
+    await db.add_set(block, ex, 1, 0, weight, 5)
+    await db.finish_workout(wid, finished_at=started_at) if started_at else await db.finish_workout(wid)
+    return wid
+
+
+def _days_ago(n: int) -> str:
+    return (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(days=n)).isoformat(timespec="seconds")
+
+
+# ---------- атлет: ссылка, превью, «Разрешить» ----------
+
+
+async def test_deep_link_preview_toggles_and_accept_with_typed_name(fresh_db):
+    code = await _coach_with_invite(fresh_db)
+    msg = _message(ATHLETE, f"/start coach_{code}", language_code="ru")
+    await coach.open_coach_invite(msg, CommandObject(command="start", args=f"coach_{code.lower()}"), _state(ATHLETE))
+
+    # Новичок по ссылке тренера: заведён, источник — код тренера с автором.
+    user = await fresh_db.get_user(ATHLETE)
+    assert user["source"] == acquisition.SOURCE_COACH_INVITE and user["referrer_id"] == COACH
+    text = msg.answer.await_args_list[-1].args[0]
+    assert "Иван Петров хочет вести тебя как тренер" in text
+    assert "Не увидит никогда" in text and "Apple ID" in text
+    buttons = _buttons(msg.answer.await_args_list[-1].kwargs["reply_markup"])
+    assert ("⚖️ Вес тела: закрыт", f"coach:inv:{code}:10") in buttons
+    assert ("✅ Разрешить", f"coach:ok:{code}:00") in buttons
+    # Превью ничего не открывает.
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is None
+
+    toggled = await _tap(ATHLETE, f"coach:inv:{code}:10")
+    assert ("⚖️ Вес тела: открыт", f"coach:inv:{code}:00") in _buttons(_kb(toggled))
+    assert ("✅ Разрешить", f"coach:ok:{code}:10") in _buttons(_kb(toggled))
+
+    allow = await _tap(ATHLETE, f"coach:ok:{code}:10", first_name="Мария")
+    assert "Как тебя назвать тренеру" in _screen(allow)
+    assert ("Назваться «Мария»", "coach:nm") in _buttons(_kb(allow))
+    state = _state(ATHLETE)
+    assert await state.get_state() == CoachFlow.naming_self.state
+
+    named = _message(ATHLETE, "  Маша  ")
+    await coach.coach_self_named(named, state)
+    link = await fresh_db.get_coach_link(COACH, ATHLETE)
+    assert link["client_name"] == "Маша"
+    assert bool(link["show_bodyweight"]) is True and bool(link["show_food"]) is False
+    assert "Готово — Иван Петров видит твой дневник" in named.answer.await_args.args[0]
+    assert await state.get_state() is None
+
+
+async def test_accept_with_telegram_first_name_button(fresh_db):
+    code = await _coach_with_invite(fresh_db)
+    await _user(fresh_db, ATHLETE)
+    await _tap(ATHLETE, f"coach:ok:{code}:01", first_name="Мария")
+    done = await _tap(ATHLETE, "coach:nm", first_name="Мария")
+    link = await fresh_db.get_coach_link(COACH, ATHLETE)
+    assert link["client_name"] == "Мария" and bool(link["show_food"]) is True
+    assert "видит твой дневник" in _screen(done)
+
+
+async def test_typed_code_bad_own_and_already_linked(fresh_db):
+    code = await _coach_with_invite(fresh_db)
+    await _user(fresh_db, ATHLETE)
+    state = _state(ATHLETE)
+    await _tap(ATHLETE, "coach:code")
+    assert await state.get_state() == CoachFlow.entering_code.state
+
+    bad = _message(ATHLETE, "NOPE2345")
+    await coach.coach_code_entered(bad, state)
+    assert "Такого кода нет" in bad.answer.await_args.args[0]
+    assert await state.get_state() == CoachFlow.entering_code.state  # можно ввести ещё раз
+
+    # Ссылка целиком (телеграмная или приложения) — тоже код.
+    for raw in (f"https://t.me/TrainLogBot?start=coach_{code}", f"trainingdiary://coach/{code.lower()}"):
+        ok = _message(ATHLETE, raw)
+        await coach.coach_code_entered(ok, state)
+        assert "хочет вести тебя как тренер" in ok.answer.await_args.args[0], raw
+
+    own = _message(COACH, code)
+    await coach.coach_code_entered(own, _state(COACH))
+    assert "собственный код" in own.answer.await_args.args[0]
+
+    await fresh_db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=False, show_food=False)
+    again = _message(ATHLETE, code)
+    await coach.coach_code_entered(again, state)
+    assert "уже видит твой дневник" in again.answer.await_args.args[0]
+
+
+async def test_not_now_opens_nothing(fresh_db):
+    code = await _coach_with_invite(fresh_db)
+    await _user(fresh_db, ATHLETE)
+    await _tap(ATHLETE, f"coach:ok:{code}:00")
+    declined = await _tap(ATHLETE, "coach:no")
+    assert "Ничего не открыл" in _screen(declined)
+    assert await _state(ATHLETE).get_state() is None
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is None
+
+
+async def test_coach_payload_is_its_own_acquisition_source():
+    assert acquisition.parse_start_payload("coach_K7MP2QXA").source == acquisition.SOURCE_COACH_INVITE
+
+
+# ---------- атлет: «Мой тренер» ----------
+
+
+async def test_my_coach_toggles_and_revoke(fresh_db):
+    await _linked(fresh_db)
+    hub = await _tap(ATHLETE, "coach:hub")
+    assert "Иван Петров" in _screen(hub) and "знает тебя как «Маша»" in _screen(hub)
+    assert ("🧑‍🏫 Иван Петров", f"coach:my:{COACH}") in _buttons(_kb(hub))
+
+    screen = await _tap(ATHLETE, f"coach:my:{COACH}")
+    assert "никогда" in _screen(screen)
+    await _tap(ATHLETE, f"coach:myt:{COACH}:food")
+    assert bool((await fresh_db.get_coach_link(COACH, ATHLETE))["show_food"]) is True
+    toggled = await _tap(ATHLETE, f"coach:myt:{COACH}:bw")
+    link = await fresh_db.get_coach_link(COACH, ATHLETE)
+    assert bool(link["show_bodyweight"]) is True
+    assert ("🍽 Дневник еды: открыт", f"coach:myt:{COACH}:food") in _buttons(_kb(toggled))
+
+    ask = await _tap(ATHLETE, f"coach:rv:{COACH}")
+    assert "останутся у тебя" in _screen(ask)
+    done = await _tap(ATHLETE, f"coach:rvy:{COACH}")
+    assert "Закрыл доступ: Иван Петров" in _screen(done)
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is None
+
+
+# ---------- тренер: «Я тренер», клиенты, карточка ----------
+
+
+async def test_become_coach_shows_code_and_deep_link(fresh_db):
+    await _user(fresh_db, COACH)
+    state = _state(COACH)
+    await _tap(COACH, "coach:become")
+    assert await state.get_state() == CoachFlow.naming_coach.state
+    named = _message(COACH, " Иван  Петров ")
+    await coach.coach_named(named, state)
+    assert (await fresh_db.get_coach_profile(COACH))["display_name"] == "Иван Петров"
+    code = (await fresh_db.get_coach_invite_for(COACH))["code"]
+    text = named.answer.await_args.args[0]
+    assert f"https://t.me/TrainLogBot?start=coach_{code}" in text and f"<code>{code}</code>" in text
+    share = next(b for row in named.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row if b.url)
+    assert share.url.startswith("https://t.me/share/url?url=")
+
+    renewed = await _tap(COACH, "coach:renewy")
+    new_code = (await fresh_db.get_coach_invite_for(COACH))["code"]
+    assert new_code != code and "старый больше не открывается" in _screen(renewed)
+    assert await fresh_db.get_coach_invite(code) is None
+
+
+async def test_clients_list_signals_and_pagination(fresh_db):
+    await _linked(fresh_db)
+    # Маша тренировалась 9 дней назад — сигнал «пропал».
+    await _finished_workout(fresh_db, ATHLETE, started_at=_days_ago(9))
+    for i in range(coach.CLIENTS_PAGE_SIZE + 1):
+        cid = 700 + i
+        await _user(fresh_db, cid)
+        await fresh_db.create_coach_link(COACH, cid, f"Атлет {i:02d}", show_bodyweight=False, show_food=False)
+
+    first = await _tap(COACH, "coach:clients:0")
+    text = _screen(first)
+    # С предупреждением — первой строкой.
+    assert text.index("Маша") < text.index("Атлет 00")
+    assert "9 дней без зала" in text
+    cbs = [cb for _t, cb in _buttons(_kb(first))]
+    assert f"coach:cl:{ATHLETE}" in cbs and "coach:clients:1" in cbs and "coach:ai" in cbs
+    second = await _tap(COACH, "coach:clients:1")
+    assert "Атлет 08" in _screen(second)
+
+
+async def test_client_card_and_read_only_workout_never_show_ai(fresh_db):
+    await _linked(fresh_db)
+    await _finished_workout(fresh_db, ATHLETE, weight=60.0, started_at=_days_ago(20))
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    await fresh_db.set_workout_ai_comment(wid, "СЕКРЕТНЫЙ-РАЗБОР-AI")
+
+    card = await _tap(COACH, f"coach:cl:{ATHLETE}")
+    text = _screen(card)
+    assert "Маша" in text and "Рекорды за неделю" in text and "Жим лёжа" in text
+    cbs = [cb for _t, cb in _buttons(_kb(card))]
+    assert f"coach:w:{ATHLETE}:{wid}" in cbs
+    # Вес и еда закрыты — их кнопок нет вовсе.
+    assert f"coach:bw:{ATHLETE}" not in cbs and f"coach:fd:{ATHLETE}" not in cbs
+
+    workout = await _tap(COACH, f"coach:w:{ATHLETE}:{wid}")
+    assert "Жим лёжа" in _screen(workout)
+    assert "СЕКРЕТНЫЙ" not in _screen(workout) and "user602" not in _screen(workout)
+
+    hidden = await _tap(COACH, f"coach:bw:{ATHLETE}")
+    assert "закрытым" in _alert(hidden)
+
+
+async def test_bodyweight_and_food_only_when_the_athlete_opened_them(fresh_db):
+    await _linked(fresh_db, bw=True, food=True)
+    await fresh_db.add_bodyweight_log(ATHLETE, 70.5)
+    await fresh_db.add_food_entry(ATHLETE, dt.date.today().isoformat(), "Гречка", calories=300)
+    card = await _tap(COACH, f"coach:cl:{ATHLETE}")
+    cbs = [cb for _t, cb in _buttons(_kb(card))]
+    assert f"coach:bw:{ATHLETE}" in cbs and f"coach:fd:{ATHLETE}" in cbs
+    assert "70.5кг" in _screen(await _tap(COACH, f"coach:bw:{ATHLETE}"))
+    food = _screen(await _tap(COACH, f"coach:fd:{ATHLETE}"))
+    assert "Гречка" in food and "300 ккал" in food
+
+
+async def test_non_linked_access_is_refused_everywhere(fresh_db):
+    await _linked(fresh_db)
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    await _user(fresh_db, STRANGER)
+    await fresh_db.upsert_coach_profile(STRANGER, "Чужой")
+    for data in (
+        f"coach:cl:{ATHLETE}", f"coach:w:{ATHLETE}:{wid}", f"coach:ws:{ATHLETE}:0",
+        f"coach:bw:{ATHLETE}", f"coach:fd:{ATHLETE}", f"coach:cm:{ATHLETE}:{wid}",
+        f"coach:asg:{ATHLETE}", f"coach:rm:{ATHLETE}", f"coach:rmy:{ATHLETE}", f"coach:ai:{ATHLETE}",
+    ):
+        callback = await _tap(STRANGER, data)
+        assert "не открыл тебе дневник" in _alert(callback), data
+        callback.message.answer.assert_not_awaited()
+    # Не тренер вовсе — «Мои клиенты» отправляют к «Я тренер».
+    await _user(fresh_db, 604)
+    refused = await _tap(604, "coach:clients:0")
+    assert "Я тренер" in _alert(refused)
+    # Атлет не подглядывает чужого «клиента» через свой id.
+    assert "не открыл тебе дневник" in _alert(await _tap(ATHLETE, f"coach:cl:{COACH}"))
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is not None
+
+
+async def test_remove_client_with_confirmation(fresh_db):
+    await _linked(fresh_db)
+    ask = await _tap(COACH, f"coach:rm:{ATHLETE}")
+    assert "Вернуть доступ можно только новым приглашением" in _screen(ask)
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is not None
+    done = await _tap(COACH, f"coach:rmy:{ATHLETE}")
+    assert "Убрал <b>Маша</b>" in _screen(done)
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is None
+
+
+# ---------- комментарий: тренер пишет → атлет получает ----------
+
+
+@pytest.mark.parametrize("athlete_lang, expected", [("ru", "КОММЕНТАРИЙ ТРЕНЕРА"), ("en", "YOUR COACH COMMENTED")])
+async def test_comment_reaches_the_athlete_in_their_language(fresh_db, monkeypatch, athlete_lang, expected):
+    await _linked(fresh_db, athlete_lang=athlete_lang)
+    monkeypatch.setattr(apns, "is_configured", lambda: False)
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    state = _state(COACH)
+
+    prompt = await _tap(COACH, f"coach:cm:{ATHLETE}:{wid}")
+    assert "Что скажешь атлету" in _screen(prompt)
+    assert await state.get_state() == CoachFlow.writing_comment.state
+    written = _message(COACH, "  Держи темп <3 ")
+    await coach.coach_comment_written(written, state)
+    assert "Держи темп &lt;3" in written.answer.await_args.args[0]
+    # До «Отправить» ничего не записано.
+    assert await fresh_db.list_coach_comments(wid) == []
+
+    bot = _bot()
+    with i18n.use_lang("ru"):  # язык тренера в контексте — атлету это не важно
+        sent = await _tap(COACH, "coach:cms", bot=bot)
+    comments = await fresh_db.list_coach_comments(wid)
+    assert [c["text"] for c in comments] == ["Держи темп <3"]
+    assert "Отправил" in _screen(sent)
+
+    chat_id, body = bot.send_message.await_args.args[:2]
+    assert chat_id == ATHLETE and expected in body and "Держи темп &lt;3" in body
+    assert "Иван Петров" in body
+    if athlete_lang == "en":
+        assert not i18n_coverage.has_cyrillic(body.replace("Иван Петров", "").replace("Держи темп", ""))
+    kb = bot.send_message.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == f"hist:item:{wid}"
+
+    # Второй тап по «Отправить» не шлёт тот же комментарий ещё раз.
+    again = await _tap(COACH, "coach:cms", bot=bot)
+    assert "Черновик потерялся" in _alert(again)
+    assert len(await fresh_db.list_coach_comments(wid)) == 1
+
+
+async def test_athlete_sees_coach_comments_under_the_workout_in_history(fresh_db):
+    await _linked(fresh_db)
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    await fresh_db.add_coach_comment(COACH, ATHLETE, wid, "Отлично, держи темп")
+    callback = _callback(ATHLETE, f"hist:item:{wid}")
+    assert await history.show_history_item(callback, wid)
+    text = _screen(callback)
+    assert "Твой тренер" in text and "Отлично, держи темп" in text and "Иван Петров" in text
+    # Открыл — прочитал; тренер видит отметку.
+    assert (await fresh_db.list_coach_comments(wid))[0]["read_at"] is not None
+    seen = await _tap(COACH, f"coach:w:{ATHLETE}:{wid}")
+    assert "атлет прочитал" in _screen(seen)
+
+
+async def test_telegram_delivery_skips_app_only_athletes(fresh_db):
+    await _linked(fresh_db)
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    bot = _bot()
+    client = dict(await fresh_db.get_user(ATHLETE))
+    client["telegram_linked"] = 0
+    assert await coach_notify.send_telegram_comment(bot, client, "Иван", "ок", wid) is False
+    bot.send_message.assert_not_awaited()
+    # Остановил бота — комментарий не падает, просто не доставлен.
+    bot.send_message = AsyncMock(side_effect=RuntimeError("Forbidden: bot was blocked"))
+    assert await coach_notify.send_telegram_comment(bot, await fresh_db.get_user(ATHLETE), "Иван", "ок", wid) is False
+
+
+async def test_rest_comment_also_goes_to_telegram(fresh_db, monkeypatch):
+    """Комментарий из приложения доезжает и в Telegram — тем же coach_notify."""
+    await _linked(fresh_db)
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    sent = AsyncMock(return_value=True)
+    monkeypatch.setattr(coach_notify, "_send_with_own_bot", sent)
+    import httpx
+
+    import api_v1
+
+    token = await fresh_db.issue_api_token(COACH)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api_v1.build_app()), base_url="http://test")
+    resp = await client.post(
+        f"/coach/clients/{ATHLETE}/workouts/{wid}/comments", json={"text": "Ок"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 201, resp.text
+    args = sent.await_args.args
+    assert args[0]["telegram_id"] == ATHLETE and args[2] == "Ок" and args[3] == wid
+
+
+# ---------- назначить программу ----------
+
+
+async def test_assign_program_and_coach_label_in_programs(fresh_db):
+    await _linked(fresh_db)
+    gid = await fresh_db.create_muscle_group(COACH, "Спина")
+    ex = await fresh_db.create_exercise(COACH, "Тяга штанги", gid)
+    program_id = await fresh_db.create_program(COACH, "Сплит")
+    day = await fresh_db.create_routine(COACH, "День А", program_id=program_id)
+    await fresh_db.add_routine_exercise(day, ex, 0, "3×8")
+    empty_id = await fresh_db.create_program(COACH, "Пусто")
+
+    pick = await _tap(COACH, f"coach:asg:{ATHLETE}")
+    cbs = [cb for _t, cb in _buttons(_kb(pick))]
+    assert f"coach:asp:{ATHLETE}:{program_id}" in cbs
+
+    done = await _tap(COACH, f"coach:asp:{ATHLETE}:{program_id}")
+    assert "Назначил «Сплит»" in _screen(done)
+    assert "сделано 0 из 1" in _screen(done)
+    empty = await _tap(COACH, f"coach:asp:{ATHLETE}:{empty_id}")
+    assert "нет упражнений" in _alert(empty)
+
+    # У атлета программа подписана «Тренер: Иван Петров» — в списке и на экране.
+    from handlers import routines
+
+    copy = next(p for p in await fresh_db.list_programs(ATHLETE) if p["name"] == "Сплит")
+    listing = _callback(ATHLETE, "rt:manage")
+    await routines.show_manage(listing, _state(ATHLETE))
+    labels = [t for t, _cb in _buttons(listing.message.answer.await_args.kwargs["reply_markup"])]
+    assert any("Тренер: Иван Петров" in label for label in labels)
+    screen = _callback(ATHLETE, f"rt:prg:{copy['id']}")
+    await routines._show_program(screen, _state(ATHLETE), copy["id"])
+    assert "Тренер: Иван Петров" in _screen(screen)
+    with i18n.use_lang("en"):
+        await routines._show_program(screen, _state(ATHLETE), copy["id"])
+    assert "Coach: Иван Петров" in _screen(screen)
+
+
+# ---------- AI-сводка ----------
+
+
+class _FakeCompletions:
+    def __init__(self, text: str):
+        self.text = text
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        usage = SimpleNamespace(prompt_tokens=100, completion_tokens=50, total_tokens=150,
+                                prompt_tokens_details=None, completion_tokens_details=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=self.text))], usage=usage)
+
+
+@pytest.fixture
+def fake_model(monkeypatch):
+    completions = _FakeCompletions("**Маше** пора в зал.")
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
+    return completions
+
+
+async def test_ai_summary_all_and_one_with_stubbed_model(fresh_db, fake_model):
+    await _linked(fresh_db)
+    await _finished_workout(fresh_db, ATHLETE)
+
+    # Атлет приложения (iOS-токен) не давал согласия на AI — модель не
+    # зовётся, честная строка. Чисто телеграмный атлет попал бы в сводку и без
+    # согласия (ai_trainer._background_ai_allowed).
+    await fresh_db.register_push_token(ATHLETE, "ios", "a" * 64)
+    nobody = await _tap(COACH, "coach:ai")
+    assert "ни один клиент не разрешил" in _screen(nobody)
+    assert fake_model.calls == []
+
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    summary = await _tap(COACH, "coach:ai")
+    text = _screen(summary)
+    assert "СВОДКА ПО КЛИЕНТАМ" in text and "<b>Маше</b> пора в зал." in text
+    assert "Маша" in fake_model.calls[-1]["messages"][1]["content"]
+    assert await fresh_db.get_ai_question_count_today(COACH) == 1
+
+    one = await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert "СВОДКА — Маша" in _screen(one)
+    from handlers import ai_trainer as ai_chat
+
+    assert COACH not in ai_chat._busy
+
+
+async def test_ai_summary_limit_shows_the_limit_text(fresh_db, fake_model, monkeypatch):
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+
+    async def blocked(user_id, kind):
+        assert kind == ai_limits.KIND_QUESTION
+        return ai_limits.Block(kind=kind, log="test", user_text="На сегодня вопросы кончились.")
+
+    monkeypatch.setattr(ai_limits, "check", blocked)
+    callback = await _tap(COACH, "coach:ai")
+    assert callback.message.reply.await_args.args[0] == "На сегодня вопросы кончились."
+    assert fake_model.calls == []
+
+
+# ---------- язык ----------
+
+
+async def test_english_coach_screens_have_no_cyrillic_beyond_user_data(fresh_db):
+    await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    with i18n.use_lang("en"):
+        screens = [
+            await _tap(COACH, "coach:hub"),
+            await _tap(COACH, "coach:invite"),
+            await _tap(COACH, "coach:clients:0"),
+            await _tap(COACH, f"coach:cl:{ATHLETE}"),
+            await _tap(COACH, f"coach:w:{ATHLETE}:{wid}"),
+            await _tap(COACH, f"coach:asg:{ATHLETE}"),
+        ]
+    for callback in screens:
+        text = _screen(callback) + " " + " ".join(t for t, _ in _buttons(_kb(callback)))
+        for data in ("Иван Петров", "Маша", "Жим лёжа", "Грудь"):
+            text = text.replace(data, "")
+        assert not i18n_coverage.has_cyrillic(text), text
+
+
+async def test_invite_code_extraction():
+    assert coach._extract_code(" k7mp-2qxa ") == "K7MP2QXA"
+    assert coach._extract_code("https://t.me/Bot?start=coach_K7MP2QXA") == "K7MP2QXA"
+    assert coach._extract_code("trainingdiary://coach/k7mp2qxa") == "K7MP2QXA"
+    assert coach_service.normalize_invite_code("") == ""

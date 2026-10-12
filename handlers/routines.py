@@ -167,6 +167,7 @@ async def show_manage(event, state: FSMContext, page: int = 0) -> None:
         back_to_picker=back_to_picker,
         page=page,
         has_next=has_next,
+        coach_names=await db.coach_names_by_program(user_id),
     )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
@@ -323,6 +324,11 @@ async def _show_program(event, state: FSMContext, program_id: int, page: int = 0
     # Счётчик и meta — одной строкой через «·», как в самой meta: две подряд
     # курсивные строки под заголовком читаются как сбитая вёрстка.
     subtitle = []
+    # Назначил живой тренер (coach_service.assign_program) — «Тренер: Иван»,
+    # той же подписью, что в приложении.
+    coach_name = (await db.coach_names_by_program(event.from_user.id)).get(program_id)
+    if coach_name:
+        subtitle.append(escape(i18n.t("program.from_coach", name=coach_name)))
     if total:
         subtitle.append(i18n.t("routine.program.workouts_count", n=total))
     if catalog is not None:
