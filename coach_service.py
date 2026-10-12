@@ -36,6 +36,7 @@ import datetime as dt
 import secrets
 from typing import Any, Optional
 
+import acquisition
 import ai_limits
 import ai_trainer
 import config
@@ -52,8 +53,16 @@ MAX_COMMENT_LENGTH = 1000
 INVITE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 INVITE_LENGTH = 8
 
-# Ссылка, которую открывает приложение (RootView.onOpenURL у iOS).
+# Схема приложения (RootView.onOpenURL у iOS). В тексте приглашения её больше
+# нет: мессенджеры не делают её кликабельной, а без приложения она не делает
+# ничего. Живёт кнопкой «Открыть в приложении» на странице приглашения и
+# запасным `app_link`, пока у сервера не задан публичный адрес.
 APP_LINK_PREFIX = "trainingdiary://coach/"
+
+# Страница приглашения на сервере: `<config.public_base_url()>/coach/<код>`
+# (coach_invite_page.py). Открывается у всех — и в браузере без приложения, и
+# Universal Link'ом в приложении (apple-app-site-association).
+WEB_LINK_PATH = "/coach/"
 
 # Окна сигналов списка клиентов.
 MISSING_DAYS = 7
@@ -73,9 +82,11 @@ def new_invite_code() -> str:
 
 def normalize_invite_code(raw: str) -> str:
     """Код из того, что вставил человек: сам код, «abcd-2345», ссылка
-    trainingdiary://coach/ABCD2345. Регистр, пробелы и дефисы не важны."""
+    https://<сервер>/coach/ABCD2345 или старая trainingdiary://coach/ABCD2345.
+    Регистр, пробелы и дефисы не важны; хвост `?…`/`#…` у ссылки — тоже."""
     text = (raw or "").strip()
     if "/" in text:
+        text = text.split("#", 1)[0].split("?", 1)[0]
         text = text.rstrip("/").rsplit("/", 1)[-1]
     return "".join(ch for ch in text.upper() if ch.isalnum())
 
@@ -88,8 +99,28 @@ def clean_display_name(raw: Any) -> Optional[str]:
     return name or None
 
 
+def web_link(code: str) -> Optional[str]:
+    """https-ссылка на страницу приглашения или None без публичного адреса."""
+    base = config.public_base_url()
+    return f"{base}{WEB_LINK_PATH}{code}" if base else None
+
+
+def invite_link(code: str) -> str:
+    """Главная ссылка приглашения — та, что уходит в текст «Поделиться»."""
+    return web_link(code) or f"{APP_LINK_PREFIX}{code}"
+
+
+def telegram_link(bot_username: str, code: str) -> str:
+    """Приглашение прямо в бота: `/start coach_<код>` (handlers/coach.py)."""
+    return f"https://t.me/{bot_username}?start={acquisition.COACH_PREFIX}{code}"
+
+
 def invite_json(code: str) -> dict[str, Any]:
-    return {"code": code, "app_link": f"{APP_LINK_PREFIX}{code}"}
+    # `app_link` — по историческому имени поля: приложение вставляет его в
+    # текст «Поделиться» как есть, поэтому здесь https-ссылка на страницу
+    # приглашения, а не схема trainingdiary://, которую мессенджеры не
+    # открывают. Старые сборки получают рабочую ссылку без обновления.
+    return {"code": code, "app_link": invite_link(code)}
 
 
 def visibility_json(link: Any) -> dict[str, Any]:

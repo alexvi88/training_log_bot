@@ -311,6 +311,32 @@ async def test_become_coach_shows_code_and_deep_link(fresh_db):
     assert await fresh_db.get_coach_invite(code) is None
 
 
+async def test_invite_screen_leads_with_https_page(fresh_db, monkeypatch):
+    """Главная ссылка приглашения — https-страница: схему trainingdiary://
+    мессенджеры не открывают, а без приложения она не делает ничего."""
+    from urllib.parse import unquote
+
+    import config
+
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    await _user(fresh_db, COACH)
+    state = _state(COACH)
+    await _tap(COACH, "coach:become")
+    named = _message(COACH, "ABishop")
+    await coach.coach_named(named, state)
+    code = (await fresh_db.get_coach_invite_for(COACH))["code"]
+    page = f"https://training-log.example.com/coach/{code}"
+    text = named.answer.await_args.args[0]
+    assert page in text and f"<code>{code}</code>" in text
+    buttons = [b for row in named.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+    share = next(b for b in buttons if b.url)
+    copy = next(b for b in buttons if b.copy_text)
+    assert unquote(share.url).startswith(f"https://t.me/share/url?url={page}&text=")
+    assert page in copy.copy_text.text and code in copy.copy_text.text
+    for shown in (text, unquote(share.url), copy.copy_text.text):
+        assert "trainingdiary://" not in shown
+
+
 async def test_clients_list_signals_and_pagination(fresh_db):
     await _linked(fresh_db)
     # Маша тренировалась 9 дней назад — сигнал «пропал».

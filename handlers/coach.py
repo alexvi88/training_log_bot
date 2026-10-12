@@ -4,7 +4,9 @@
 продукт у приложения — REST api_v1_coach.py. Здесь только экраны Telegram, и
 тексты у них те же, что у iOS (Features/CoachService), чтобы оба клиента
 говорили одно и то же. Вход — «🔧 Настройки» → «🧑‍🏫 Тренер» (`coach:hub`) и
-ссылка-приглашение `t.me/<бот>?start=coach_<код>`.
+ссылка-приглашение: тренер раздаёт https-страницу `<сервер>/coach/<код>`
+(coach_invite_page.py), её кнопка «Продолжить в Telegram» ведёт сюда
+`t.me/<бот>?start=coach_<код>`.
 
 Сторона атлета:
 - ссылка или «У меня есть код тренера» → кто зовёт, что увидит и чего не
@@ -77,7 +79,8 @@ WORKOUT_LABEL_LIMIT = 48
 # сами подходы (formatting.fit_workout_text оставляет сводке не меньше 200).
 COMMENTS_BUDGET = 1500
 
-# Код из ссылки целиком: t.me/<бот>?start=coach_<код> или trainingdiary://coach/<код>.
+# Код из ссылки целиком: https://<сервер>/coach/<код> (страница приглашения),
+# t.me/<бот>?start=coach_<код> или старая trainingdiary://coach/<код>.
 _CODE_IN_LINK = re.compile(r"coach[_/]([A-Za-z0-9-]+)", re.IGNORECASE)
 
 
@@ -116,7 +119,7 @@ def _extract_code(raw: str) -> str:
 
 
 def _deep_link(username: str, code: str) -> str:
-    return f"https://t.me/{username}?start={START_PREFIX}{code}"
+    return coach_service.telegram_link(username, code)
 
 
 def _coach_name(name: Optional[str]) -> str:
@@ -538,7 +541,11 @@ async def _invite_view(bot, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         await db.replace_coach_invite(user_id, coach_service.new_invite_code())
         invite = await db.get_coach_invite_for(user_id)
     code = invite["code"]
-    link = _deep_link(await sharing.get_bot_username(bot), code)
+    # Главная ссылка — https-страница приглашения: её открывает любой
+    # мессенджер и любой телефон (с приложением — сразу в нём, без — выбор
+    # «приложение, App Store или Telegram»). Без публичного адреса сервера —
+    # прежняя ссылка в бота.
+    link = coach_service.web_link(code) or _deep_link(await sharing.get_bot_username(bot), code)
     share_text = i18n.t("coach.invite_share_text", name=profile["display_name"], code=code)
     share_url = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote(share_text, safe='')}"
     text = i18n.t("coach.invite_screen", link=escape(link), code=code)
