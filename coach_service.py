@@ -123,6 +123,14 @@ def invite_json(code: str) -> dict[str, Any]:
     return {"code": code, "app_link": invite_link(code)}
 
 
+def shown_exercise_names(names: list[str]) -> list[str]:
+    """Имена упражнений атлета глазами тренера: каталожное — на языке
+    тренера (текущий язык запроса/апдейта), своё имя атлета — как есть.
+    У атлета упражнение лежит под именем на ЕГО языке, и без этого
+    англоязычный тренер читал «Жим штанги лёжа» в карточке русского атлета."""
+    return [sharing.shown_exercise_name(name) for name in names]
+
+
 def visibility_json(link: Any) -> dict[str, Any]:
     """Только то, что атлет переключает сам. Всегда видное (VISIBLE_ALWAYS) и
     никогда не видное (NEVER_VISIBLE) — правило продукта, а не настройка:
@@ -192,7 +200,7 @@ async def recent_records(client: Any) -> list[dict[str, Any]]:
     ):
         out.append({
             "exercise_id": row["exercise_id"],
-            "exercise": row["display_name"],
+            "exercise": sharing.shown_exercise_name(row["display_name"]),
             "weight": row["weight"],
             "reps": row["reps"],
             "e1rm": round(row["e1rm"], 1),
@@ -323,7 +331,8 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> str:
     for w in workouts:
         names, set_count = contents.get(w["id"], ([], 0))
         lines.append(i18n.t(
-            "coach.ai.data.workout", date=w["started_at"][:10], exercises=", ".join(names[:6]),
+            "coach.ai.data.workout", date=w["started_at"][:10],
+            exercises=", ".join(shown_exercise_names(names[:6])),
             n=set_count,
         ))
     return "\n".join(lines)

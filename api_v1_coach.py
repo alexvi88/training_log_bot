@@ -21,6 +21,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+from starlette.convertors import Convertor, register_url_convertor
 from starlette.requests import Request
 from starlette.routing import Route
 
@@ -37,6 +38,25 @@ from api_v1_common import JSONResponse
 logger = logging.getLogger(__name__)
 
 ApiError = common.ApiError
+
+
+class _UserIdConvertor(Convertor[int]):
+    """id атлета или тренера в пути. У аккаунта только из приложения он
+    синтетический и отрицательный (db.create_app_only_user), а встроенный
+    `:int` Starlette знает только `[0-9]+` — и `/coach/clients/-1000000000`
+    отвечал 404 без захода в обработчик: тренер не открывал клиента из
+    приложения, атлет не мог закрыть доступ тренеру без Telegram."""
+
+    regex = "-?[0-9]+"
+
+    def convert(self, value: str) -> int:
+        return int(value)
+
+    def to_string(self, value: int) -> str:
+        return str(int(value))
+
+
+register_url_convertor("user_id", _UserIdConvertor())
 
 # ---------- общие проверки ----------
 
@@ -200,7 +220,7 @@ async def client_workouts(request: Request) -> JSONResponse:
     for w in workouts:
         names, set_count = contents.get(w["id"], ([], 0))
         item = api_v1._workout_json(w)
-        item["exercise_names"] = names
+        item["exercise_names"] = coach_service.shown_exercise_names(names)
         item["set_count"] = set_count
         item["coach_comment_count"] = comments.get(w["id"], 0)
         items.append(item)
@@ -222,6 +242,10 @@ async def client_workout(request: Request) -> JSONResponse:
     viewer = dict(client)
     viewer["lang"] = i18n.get_lang()
     detail = await api_v1._workout_detail_json(workout, viewer)
+    # Каталожные упражнения — на языке тренера, как и остальные тексты.
+    for block in detail["blocks"]:
+        for exercise in block["exercises"]:
+            exercise["display_name"] = coach_service.shown_exercise_names([exercise["display_name"]])[0]
     comments = await db.list_coach_comments(workout["id"], coach_id=user_id)
     return JSONResponse({
         "workout": detail,
@@ -430,21 +454,21 @@ routes = [
     Route("/coach", set_coach, methods=["POST"]),
     Route("/coach/invite", renew_invite, methods=["POST"]),
     Route("/coach/clients", list_clients, methods=["GET"]),
-    Route("/coach/clients/{client_id:int}", get_client, methods=["GET"]),
-    Route("/coach/clients/{client_id:int}", remove_client, methods=["DELETE"]),
-    Route("/coach/clients/{client_id:int}/workouts", client_workouts, methods=["GET"]),
-    Route("/coach/clients/{client_id:int}/workouts/{workout_id:int}", client_workout, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}", get_client, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}", remove_client, methods=["DELETE"]),
+    Route("/coach/clients/{client_id:user_id}/workouts", client_workouts, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}/workouts/{workout_id:int}", client_workout, methods=["GET"]),
     Route(
-        "/coach/clients/{client_id:int}/workouts/{workout_id:int}/comments",
+        "/coach/clients/{client_id:user_id}/workouts/{workout_id:int}/comments",
         comment_workout, methods=["POST"],
     ),
-    Route("/coach/clients/{client_id:int}/programs", assign_program, methods=["POST"]),
-    Route("/coach/clients/{client_id:int}/bodyweight", client_bodyweight, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}/programs", assign_program, methods=["POST"]),
+    Route("/coach/clients/{client_id:user_id}/bodyweight", client_bodyweight, methods=["GET"]),
     Route("/coach/ai-summary", ai_summary, methods=["POST"]),
     Route("/coach/invites/{code}", invite_preview, methods=["GET"]),
     Route("/coach/invites/{code}/accept", accept_invite, methods=["POST"]),
     Route("/coach-links", list_my_coaches, methods=["GET"]),
-    Route("/coach-links/{coach_id:int}", update_my_coach, methods=["PATCH"]),
-    Route("/coach-links/{coach_id:int}", revoke_my_coach, methods=["DELETE"]),
+    Route("/coach-links/{coach_id:user_id}", update_my_coach, methods=["PATCH"]),
+    Route("/coach-links/{coach_id:user_id}", revoke_my_coach, methods=["DELETE"]),
     Route("/workouts/{workout_id:int}/coach-comments", my_workout_comments, methods=["GET"]),
 ]

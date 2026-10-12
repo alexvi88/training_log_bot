@@ -3564,7 +3564,7 @@ async def cancel_finish(callback: CallbackQuery, state: FSMContext):
 
 
 async def _finished_summary(
-    workout, user, note: str | None
+    workout, user, note: str | None, *, shown_name: Callable[[str], str] | None = None
 ) -> tuple[Callable[[int | None], str], float, float | None]:
     """Собирает карточку завершённой тренировки: билдер текста «шапка + подходы»,
     тоннаж этой сессии и её длительность.
@@ -3588,6 +3588,11 @@ async def _finished_summary(
         previous_before=workout["started_at"],
         mark_records=True,
     )
+    if shown_name is not None:
+        # Чужая тренировка глазами другого человека (тренер в handlers/coach.py):
+        # имя упражнения — на языке смотрящего, а не владельца.
+        for block in blocks:
+            block.exercise_name = shown_name(block.exercise_name)
     duration_seconds = await view_builder.workout_duration_seconds(workout)
     started_at = dt.datetime.fromisoformat(workout["started_at"])
     # По нагрузке, а не по записанному весу: подтягивания «0×12» — не ноль тонн,

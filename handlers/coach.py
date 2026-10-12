@@ -758,6 +758,7 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
     comments = await db.count_coach_comments_by_workout(ids)
     for w in workouts:
         names, _sets = contents.get(w["id"], ([], 0))
+        names = coach_service.shown_exercise_names(names)
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     if more:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.all_workouts"), callback_data=f"coach:ws:{client_id}:0"))
@@ -808,6 +809,7 @@ async def coach_client_workouts(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for w in workouts:
         names, _sets = contents.get(w["id"], ([], 0))
+        names = coach_service.shown_exercise_names(names)
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     nav = []
     if page > 0:
@@ -846,7 +848,10 @@ async def _coach_workout_text(coach_id: int, link: Any, client: Any, workout: An
     AI-тренера (его тренер не видит никогда) и с комментариями тренера."""
     from handlers.workout import _finished_summary
 
-    summary_fn, tonnage, _duration = await _finished_summary(workout, client, workout["note"])
+    # Каталожные упражнения атлета — на языке тренера (coach_service.shown_exercise_names).
+    summary_fn, tonnage, _duration = await _finished_summary(
+        workout, client, workout["note"], shown_name=sharing.shown_exercise_name
+    )
     suffix = ""
     equivalent = formatting.format_tonnage_equivalent(tonnage, seed=workout["id"], unit=client["unit"])
     if equivalent:
