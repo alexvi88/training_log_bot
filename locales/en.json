@@ -2388,6 +2388,7 @@
   "coach.btn.enter_code": "I have a coach code",
   "coach.btn.my_clients": "My clients · {n}",
   "coach.btn.my_clients_short": "My clients",
+  "btn.menu_my_clients": "🧑‍🏫 My clients · {n}",
   "coach.btn.invite": "Invite a client",
   "coach.btn.rename": "Change my name",
   "coach.btn.become": "I'm a coach",

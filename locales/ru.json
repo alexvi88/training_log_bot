@@ -2389,6 +2389,7 @@
   "coach.btn.enter_code": "У меня есть код тренера",
   "coach.btn.my_clients": "Мои клиенты · {n}",
   "coach.btn.my_clients_short": "Мои клиенты",
+  "btn.menu_my_clients": "🧑‍🏫 Мои клиенты · {n}",
   "coach.btn.invite": "Пригласить клиента",
   "coach.btn.rename": "Сменить имя",
   "coach.btn.become": "Я тренер",
