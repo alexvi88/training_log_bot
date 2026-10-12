@@ -31,6 +31,7 @@ import json
 import logging
 import random
 import re
+import uuid
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
@@ -6471,6 +6472,75 @@ class _StreamedToolCall:
         self.function = SimpleNamespace(name=slot["name"], arguments=slot["arguments"])
 
 
+# Готовые вопросы интро (handlers/ai_trainer._preset_questions), на которые
+# модель первым раундом всегда делает одно и то же — просит данные. Живой лог
+# пресета «слабые места» (/v1/ai/ask): раунд 1 — 16к входа и 64 выхода (только
+# tool_call), раунд 2 — 23к входа (16к из кэша) и 1325 выхода, сам ответ. Этот
+# первый раунд ничего не решает, поэтому данные берём сами, до вызова модели, и
+# дописываем в разговор так, будто она их уже попросила: assistant(tool_calls)
+# + tool-результаты сразу после вопроса. Модель отвечает за один раунд.
+#
+# Префикс не трогается: системный промпт и схемы те же, вставка идёт ПОСЛЕ
+# вопроса — ровно туда, куда легли бы её собственные вызовы. Результаты —
+# через тот же execute_tool, байт-в-байт как при вызове моделью. Захочет ещё
+# данных — инструменты при ней, раунды обычные.
+#
+# Ключ каталога, а не текст: вопрос сверяется с обоими языками на каждом
+# вызове (см. ловушку «замороженного языка» в CLAUDE.md).
+_PRESET_PREFETCH: dict[str, tuple[str, ...]] = {
+    # «что недорабатываю и что добавить»: упражнения с группами и частотой +
+    # недельный объём по группам против цели.
+    "ai.screen.preset.weak.question": ("get_training_overview", "get_weekly_volume_by_group"),
+    # «что растёт, что застряло и почему»: контекст и частота + разбор застоя
+    # по всем упражнениям (growing / dead_end / double_progression / regressing).
+    "ai.screen.preset.progress.question": ("get_training_overview", "get_stalled_lifts"),
+}
+
+
+def _preset_prefetch_tools(question: str) -> tuple[str, ...]:
+    """Какие инструменты заранее вызвать для этого вопроса; пусто — не пресет."""
+    asked = (question or "").strip()
+    if not asked:
+        return ()
+    for key, tools in _PRESET_PREFETCH.items():
+        if any(asked == i18n.t_in(lang, key).strip() for lang in i18n.SUPPORTED):
+            return tools
+    return ()
+
+
+async def _prefetch_preset_tools(user_id: int, question: str) -> list[dict[str, Any]]:
+    """assistant(tool_calls) + tool-результаты для готового вопроса, или [].
+
+    Одно assistant-сообщение со всеми вызовами разом — так же, как модель
+    отдаёт параллельные вызовы, — и за ним по tool-сообщению на каждый id.
+    id уникальны на всю историю: следующий ход дописывается к этой же, и
+    повторный тап того же пресета не должен дать двух одинаковых id.
+    """
+    tools = _preset_prefetch_tools(question)
+    if not tools:
+        return []
+    calls = [
+        {
+            "id": f"call_prefetch_{uuid.uuid4().hex[:24]}",
+            "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }
+        for name in tools
+    ]
+    results: list[dict[str, Any]] = []
+    for call in calls:
+        name = call["function"]["name"]
+        try:
+            tool_content = await execute_tool(user_id, name, {})
+        except Exception:
+            logger.exception("AI trainer prefetch tool %s failed", name)
+            # Без данных — обычный путь: модель сама попросит, что ей нужно.
+            return []
+        results.append({"role": "tool", "tool_call_id": call["id"], "content": tool_content})
+    logger.info("AI trainer prefetched %s for user %s (preset question)", ", ".join(tools), user_id)
+    return [{"role": "assistant", "content": "", "tool_calls": calls}, *results]
+
+
 async def _ask_plain(
     user_id: int,
     question: str,
@@ -6511,6 +6581,14 @@ async def _ask_plain(
     messages.append(
         {"role": "user", "content": _plain_user_content(question_with_date, image_data_url)}
     )
+
+    if with_tools:
+        prefetched = await _prefetch_preset_tools(user_id, question)
+        if prefetched:
+            if on_status:
+                first = prefetched[0]["tool_calls"][0]["function"]["name"]
+                await on_status(random.choice(_tool_status_variants(first)))
+            messages.extend(prefetched)
 
     content = ""
     reasoning = ""
