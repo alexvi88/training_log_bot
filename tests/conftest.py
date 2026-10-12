@@ -18,6 +18,17 @@ def _support_media_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SUPPORT_MEDIA_DIR", str(tmp_path / "support_media"))
 
 
+@pytest.fixture(autouse=True)
+def _fresh_bot_username(monkeypatch):
+    """handlers.sharing кэширует username бота на весь процесс — в проде он
+    один, а в тестах у каждого свой подставной бот («testbot», «TrainLogBot»…).
+    Без сброса тест получал имя бота того, кто первым дёрнул кэш в этом
+    воркере, и ссылка визитки разъезжалась через раз под -n auto."""
+    from handlers import sharing
+
+    monkeypatch.setattr(sharing, "_bot_username", None)
+
+
 @pytest_asyncio.fixture
 async def fresh_db():
     """A throwaway in-memory DB, fully migrated/seeded like the real one."""

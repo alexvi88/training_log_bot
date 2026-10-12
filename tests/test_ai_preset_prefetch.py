@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 WEAK = "ai.screen.preset.weak.question"
 PROGRESS = "ai.screen.preset.progress.question"
 EXPECTED = {
-    WEAK: ["get_training_overview", "get_weekly_volume_by_group"],
+    WEAK: ["get_training_overview", "get_weekly_volume_by_group", "get_full_workout_history"],
     PROGRESS: ["get_training_overview", "get_stalled_lifts"],
 }
 
