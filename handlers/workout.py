@@ -3623,7 +3623,7 @@ async def _rank_promotion(user_id: int, user) -> "analytics.Rank | None":
     return await dashboard_data.rank_promotion(user_id, user)
 
 
-async def _finished_workout_card_text(workout, user, note: str | None, comment=_UNSET) -> str:
+async def _finished_workout_card_text(workout, user, note: str | None, comment=_UNSET, extra: str = "") -> str:
     """The completion card's body for an already-finished workout: sets with
     their own 🔥 record lines, tonnage-equivalent and any AI-trainer comment — everything
     that's still true if you look at the workout again later, e.g. right after
@@ -3635,6 +3635,10 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     explicit value (including None) when the caller has just resolved one
     itself, e.g. history's show_history_item generating a fresh comment via
     ai_trainer.ensure_workout_comment.
+
+    `extra` — готовый блок под карточкой (комментарии живого тренера в
+    истории, handlers.coach.athlete_comments_block): входит в бюджет длины
+    так же, как комментарий AI.
     """
     summary_fn, session_tonnage, _duration = await _finished_summary(workout, user, note)
     suffix = ""
@@ -3647,6 +3651,7 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
         suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
+    suffix += extra
     if await _should_explain_e1rm(user, summary_fn):
         suffix += "\n\n" + formatting.E1RM_HINT
     return formatting.fit_workout_text(summary_fn, suffix)

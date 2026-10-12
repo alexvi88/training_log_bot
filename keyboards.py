@@ -1005,6 +1005,7 @@ def routines_manage_keyboard(
     back_to_picker: bool = False,
     page: int = 0,
     has_next: bool = False,
+    coach_names: Optional[dict[int, str]] = None,
 ) -> InlineKeyboardMarkup:
     """`programs` — многодневки одной строкой каждая (см. db.list_programs): их
     дни лежат за вторым экраном, иначе трёхдневный сплит занимает три кнопки и
@@ -1022,10 +1023,13 @@ def routines_manage_keyboard(
     а не в главное меню мимо тренировки, которая всё это время ждёт."""
     b = InlineKeyboardBuilder()
     for p in programs:
-        b.button(
-            text=f"🗂 {p['name']} · {i18n.t('btn.program_days', n=p['day_count'])}",
-            callback_data=f"rt:prg:{p['id']}",
-        )
+        label = f"🗂 {p['name']} · {i18n.t('btn.program_days', n=p['day_count'])}"
+        # Программа, назначенная живым тренером (db.coach_names_by_program), —
+        # с подписью «Тренер: Иван», как в приложении.
+        coach = (coach_names or {}).get(p["id"])
+        if coach:
+            label += f" · {i18n.t('program.from_coach', name=coach)}"
+        b.button(text=label, callback_data=f"rt:prg:{p['id']}")
     for r in routines:
         b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
     b.adjust(1)
@@ -1877,6 +1881,10 @@ def settings_keyboard(
     if show_feedback:
         b.button(text=i18n.t("btn.feedback_open"), callback_data="feedback:open")
 
+    # Сервис для тренеров (handlers/coach.py): кому открыт дневник и «Я тренер»
+    # — про то, кто видит твои данные, поэтому в блоке «Данные», а не в главном
+    # меню: заходят сюда редко, а главное меню — рабочий экран каждого дня.
+    b.button(text=i18n.t("btn.coach"), callback_data="coach:hub")
     # Добавлена в конец списка нарочно — экран настроек не раз перестраивался,
     # и лишняя кнопка в конце безопаснее вставки посередине.
     b.button(text=i18n.t("btn.invite_friend"), callback_data="invite:show")

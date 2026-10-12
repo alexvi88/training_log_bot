@@ -45,6 +45,7 @@ from handlers import (
     ai_trainer,
     backfill,
     bodyweight,
+    coach,
     community,
     csv_import,
     donate,
@@ -345,6 +346,11 @@ def setup_routers(dp: Dispatcher) -> None:
     # — registered after it, the deep link never reaches sharing and the
     # recipient just lands in the main menu with nothing imported.
     dp.include_router(sharing.router)
+    # Та же причина, что у визитки: приглашение тренера приходит как
+    # "/start coach_<код>", и голый Command("start") в workout.router забрал бы
+    # его раньше. Свои состояния ввода (код, имя, комментарий) у роутера
+    # только под StateFilter, так что чужой текст он не перехватывает.
+    dp.include_router(coach.router)
     dp.include_router(workout.router)
     dp.include_router(routines.router)
     dp.include_router(backfill.router)

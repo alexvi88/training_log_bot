@@ -27,21 +27,16 @@ from starlette.routing import Route
 import ai_trainer
 import api_v1_ai
 import api_v1_common as common
-import apns
+import coach_notify
 import coach_service
 import config
 import db
 import i18n
-import push_ios
 from api_v1_common import JSONResponse
 
 logger = logging.getLogger(__name__)
 
 ApiError = common.ApiError
-
-# Сколько символов комментария влезает в тело банера после имени тренера.
-_PUSH_TEXT_CLIP = 60
-
 
 # ---------- общие проверки ----------
 
@@ -253,40 +248,11 @@ async def comment_workout(request: Request) -> JSONResponse:
             max=coach_service.MAX_COMMENT_LENGTH,
         )
     row = await db.add_coach_comment(user_id, link["client_id"], workout["id"], text)
-    pushed = await _push_comment(client, profile["display_name"], text, workout["id"])
+    # Банер на iPhone и сообщение в Telegram — на языке атлета (coach_notify).
+    pushed, _ = await coach_notify.deliver_comment(client, profile["display_name"], text, workout["id"])
     data = _comment_json({**dict(row), "coach_name": profile["display_name"]})
     data["pushed"] = pushed
     return JSONResponse(data, status_code=201)
-
-
-async def _push_comment(client, coach_name: str, text: str, workout_id: int) -> int:
-    """Банер атлету «Комментарий к тренировке» на его языке, на каждое
-    устройство. Не бросает: комментарий уже записан."""
-    if not apns.is_configured():
-        return 0
-    client_id = client["telegram_id"]
-    try:
-        tokens = await db.get_push_tokens(client_id, "ios")
-        if not tokens:
-            return 0
-        lang = client["lang"] if client["lang"] in i18n.SUPPORTED else i18n.DEFAULT_LANG
-        title = i18n.t_in(lang, "coach.push.comment_title")
-        body = i18n.t_in(
-            lang, "coach.push.comment_body",
-            coach=push_ios._clip_param(coach_name, 20),
-            text=push_ios._clip_param(text, _PUSH_TEXT_CLIP),
-        )
-        accepted = 0
-        for token in tokens:
-            if await apns.send_alert(
-                client_id, token, title, body, category=push_ios.COACH_COMMENT,
-                route=push_ios.workout_detail_route(workout_id),
-            ):
-                accepted += 1
-        return accepted
-    except Exception:
-        logger.exception("coach: comment push failed for user %s", client_id)
-        return 0
 
 
 async def assign_program(request: Request) -> JSONResponse:

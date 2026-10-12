@@ -404,6 +404,7 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
     so a past workout doesn't read as a stripped-down version of the one you
     just logged. See handlers.workout._finished_workout_card_text.
     """
+    from handlers.coach import athlete_comments_block
     from handlers.workout import _finished_workout_card_text
 
     workout = await db.get_workout(workout_id)
@@ -412,7 +413,12 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
         return False
     user = await db.get_user(callback.from_user.id)
     comment = await ai_trainer.ensure_workout_comment(user, workout_id)
-    text = await _finished_workout_card_text(workout, user, workout["note"], comment=comment)
+    # Комментарии живого тренера (сервис для тренеров) — под карточкой, как в
+    # приложении; открыл карточку — прочитал.
+    coach_block = await athlete_comments_block(workout_id, user)
+    text = await _finished_workout_card_text(
+        workout, user, workout["note"], comment=comment, extra=coach_block
+    )
     kb = keyboards.history_item_keyboard(
         workout_id, show_ai_button=comment is None and ai_trainer.is_configured()
     )
