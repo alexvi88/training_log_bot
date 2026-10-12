@@ -32,6 +32,7 @@ import aiosqlite
 
 import analytics
 import config
+import exercise_descriptions
 import exercise_photos
 import i18n
 import review_watch
@@ -4113,8 +4114,17 @@ COPY_NAME_TAKEN = "taken"         # имя занято другим живым 
 COPY_NAME_ARCHIVED = "archived"   # имя занято упражнением в архиве
 
 
-async def _copy_name_clash(user_id: int, source, name: str, display_name: str) -> Optional[str]:
+async def _copy_name_clash(
+    user_id: int, source_id: Optional[int], source_names: Iterable[str], name: str, display_name: str
+) -> Optional[str]:
     """Чем занято имя копии — None, если свободно.
+
+    `source_names` — все имена источника, с которыми копия совпадать не может:
+    у своего упражнения его `name` и `display_name`, у шаблона каталога —
+    идентичность (русское имя) и показанное атлету на его языке.
+    `source_id` — id своего упражнения-источника (живое совпадение с ним самим
+    — «то же имя», а не «занято»); у шаблона None: шаблон в списке атлета не
+    лежит, а его форк — уже другое упражнение, и имя им занято.
 
     Сравнение то же, что у всех проверок уникальности имени упражнения:
     `_fold_exercise_name` (регистр, пробелы по краям, ё=е) по `name` И
@@ -4125,12 +4135,12 @@ async def _copy_name_clash(user_id: int, source, name: str, display_name: str) -
     архива» дала бы два упражнения под одним именем.
     """
     folded = {_fold_exercise_name(name), _fold_exercise_name(display_name)}
-    if folded & {_fold_exercise_name(source["name"]), _fold_exercise_name(source["display_name"])}:
+    if folded & {_fold_exercise_name(n) for n in source_names if n}:
         return COPY_SAME_NAME
     for candidate in (name, display_name):
         live = await find_exercise_by_name(user_id, candidate)
         if live is not None:
-            return COPY_SAME_NAME if live["id"] == source["id"] else COPY_NAME_TAKEN
+            return COPY_SAME_NAME if source_id is not None and live["id"] == source_id else COPY_NAME_TAKEN
     cur = await conn().execute(
         "SELECT name, display_name FROM exercises "
         "WHERE user_id = ? AND is_archived = 1 AND is_template = 0",
@@ -4166,10 +4176,62 @@ def _strip_copy_display_suffix(source, name: str) -> str:
     return " ".join((name[:at] + " " + name[at + len(suffix):]).split())
 
 
+async def _insert_copy(
+    user_id: int,
+    source,
+    new_name: str,
+    *,
+    source_id: Optional[int],
+    source_names: Iterable[str],
+    media_from: Optional[str],
+    description: Optional[str],
+    notes: Optional[str],
+    photo_file_id: Optional[str],
+) -> tuple[str, Optional[int]]:
+    """Правила «⧉ Сделать копию» — одни на оба источника (своё упражнение,
+    copy_exercise, и шаблон каталога, copy_template_exercise): хвост показа
+    из имени, пустое имя, отказы по имени (_copy_name_clash), группа «Другое»
+    вместо пустой, и сама строка с `original_name` = NULL. Что переносится
+    сверх настроек движения (описание, заметки, фото), решает вызывающий."""
+    name = _strip_copy_display_suffix(source, (new_name or "").strip())
+    if not name:
+        return COPY_EMPTY_NAME, None
+    display_name = build_display_name(
+        name, source["equipment"], bool(source["unilateral"]), source["attachment"]
+    )
+    clash = await _copy_name_clash(user_id, source_id, source_names, name, display_name)
+    if clash is not None:
+        return clash, None
+    group_id = source["primary_group_id"]
+    if group_id is None:
+        group_id = await other_muscle_group_id()
+    async with _write_lock:
+        try:
+            cur = await conn().execute(
+                "INSERT INTO exercises "
+                "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
+                " display_name, original_name, notes, created_at, bodyweight_load, "
+                " bodyweight_factor, description, custom_photo_file_id, media_from) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id, name, group_id, source["equipment"], int(source["unilateral"] or 0),
+                    source["attachment"], display_name, notes, now_iso(),
+                    source["bodyweight_load"], source["bodyweight_factor"],
+                    description, photo_file_id, media_from,
+                ),
+            )
+            await conn().commit()
+        except aiosqlite.IntegrityError:
+            return COPY_NAME_TAKEN, None
+    return COPY_OK, cur.lastrowid
+
+
 async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[str, Optional[int]]:
     """«⧉ Сделать копию»: новое своё упражнение с настройками источника и
     чистой историей. Один путь для бота (handlers/exercises.py) и
     `POST /v1/exercises/{id}/copy`. Возвращает (COPY_*, id копии или None).
+    Копия шаблона каталога — copy_template_exercise, правила у них общие
+    (_insert_copy).
 
     Переносится: группа, снаряд, одна рука, насадка, режим веса тела,
     описание, заметки и своё фото (файл копируется, ссылка Telegram — та же:
@@ -4189,42 +4251,64 @@ async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[
     source = await get_exercise(exercise_id)
     if source is None or source["user_id"] != user_id or source["is_template"]:
         return COPY_NOT_FOUND, None
-    name = _strip_copy_display_suffix(source, (new_name or "").strip())
-    if not name:
-        return COPY_EMPTY_NAME, None
-    display_name = build_display_name(
-        name, source["equipment"], bool(source["unilateral"]), source["attachment"]
+    outcome, new_id = await _insert_copy(
+        user_id, source, new_name,
+        source_id=source["id"],
+        source_names=(source["name"], source["display_name"]),
+        media_from=source["original_name"] or source["media_from"],
+        description=source["description"],
+        notes=source["notes"],
+        photo_file_id=source["custom_photo_file_id"],
     )
-    clash = await _copy_name_clash(user_id, source, name, display_name)
-    if clash is not None:
-        return clash, None
-    group_id = source["primary_group_id"]
-    if group_id is None:
-        group_id = await other_muscle_group_id()
-    media_from = source["original_name"] or source["media_from"]
-    async with _write_lock:
-        try:
-            cur = await conn().execute(
-                "INSERT INTO exercises "
-                "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
-                " display_name, original_name, notes, created_at, bodyweight_load, "
-                " bodyweight_factor, description, custom_photo_file_id, media_from) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    user_id, name, group_id, source["equipment"], int(source["unilateral"]),
-                    source["attachment"], display_name, source["notes"], now_iso(),
-                    source["bodyweight_load"], source["bodyweight_factor"],
-                    source["description"], source["custom_photo_file_id"], media_from,
-                ),
-            )
-            await conn().commit()
-        except aiosqlite.IntegrityError:
-            return COPY_NAME_TAKEN, None
-        new_id = cur.lastrowid
+    if outcome != COPY_OK:
+        return outcome, None
     photo_name = exercise_photos.duplicate(exercise_photos.stored_name(source), new_id)
     if photo_name is not None:
         await set_exercise_photo_path(new_id, photo_name)
     return COPY_OK, new_id
+
+
+async def copy_template_exercise(
+    user_id: int, template_id: int, new_name: str
+) -> tuple[str, Optional[int]]:
+    """«⧉ Сделать копию» шаблона каталога: своё упражнение с настройками
+    шаблона под своим именем — в отличие от «➕ Добавить»
+    (fork_exercise_from_template), который заводит сам каталожный снаряд.
+    Один путь для бота (превью шаблона, handlers/exercises.py) и
+    `POST /v1/exercise-templates/{id}/copy`; правила — общие с copy_exercise
+    (_insert_copy). Возвращает (COPY_*, id копии или None).
+
+    Переносится: группа, снаряд, одна рука, насадка, режим и доля веса тела
+    и описание техники каталога на языке атлета — текстом в `description`:
+    каталожное описание ищется по идентичности, а её у копии нет. Дальше это
+    его собственный текст, и смена языка его не переводит — как и имя,
+    которое он набрал сам.
+
+    Имя не может совпасть ни с идентичностью шаблона (русское имя), ни с
+    тем, что атлет видит на своём языке, ни с любым своим упражнением,
+    архив включительно — в том числе с уже добавленным форком этого шаблона.
+
+    `original_name` = NULL: копия — НЕ каталожное упражнение, и форк, дедуп,
+    поиск по идентичности, импорт и смена языка её с шаблоном не склеивают.
+    Картинки техники — шаблона, через `media_from` = его идентичность.
+    """
+    template = await get_exercise(template_id)
+    if template is None or not template["is_template"] or template["user_id"] is not None:
+        return COPY_NOT_FOUND, None
+    user = await get_user(user_id)
+    lang = user["lang"] if user is not None and user["lang"] else i18n.DEFAULT_LANG
+    return await _insert_copy(
+        user_id, template, new_name,
+        source_id=None,
+        source_names=(
+            template["name"], template["display_name"],
+            localized_exercise_name(template["name"], lang),
+        ),
+        media_from=template["name"],
+        description=exercise_descriptions.get_description(template["name"], lang),
+        notes=None,
+        photo_file_id=None,
+    )
 
 
 async def update_exercise_group(exercise_id: int, group_id: Optional[int]) -> None:

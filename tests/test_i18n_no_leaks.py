@@ -839,6 +839,10 @@ async def _screen_exercise_copy(db, user_id: int) -> str:
     text = _kb_texts(exercises_handlers._exercise_edit_menu_keyboard(ex))
     text += " " + i18n.t("exercises.copy.prompt", source="Bench")
     text += " " + _kb_texts(exercises_handlers._copy_prompt_keyboard(1))
+    # Копия шаблона: «⧉ Сделать копию» в превью шаблона и «Отмена» назад в него.
+    text += " " + _kb_texts(keyboards.template_preview_keyboard(1, with_copy=True))
+    text += " " + _kb_texts(keyboards.template_preview_keyboard(1, as_question=True, with_copy=True))
+    text += " " + _kb_texts(exercises_handlers._template_copy_prompt_keyboard(1))
     for key in ("exercises.copy.same_name", "exercises.copy.name_taken", "exercises.copy.name_archived"):
         text += " " + i18n.t(key, source="Bench")
     text += " " + i18n.t("exercises.copy.too_long", max=60)
