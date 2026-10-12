@@ -819,9 +819,28 @@ async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_
 async def test_calls_carry_the_cache_routing_header(fresh_db, user_id, monkeypatch):
     """xAI caches the repeated prefix by itself, but only if the request lands
     on the server that holds it — which is what x-grok-conv-id decides. Without
-    it, half the prompt tokens miss the cache and bill at full rate. Keyed per
-    user: the shared system prompt and tool schemas settle on that user's
-    server, and their own history grows on top of it."""
+    it, half the prompt tokens miss the cache and bill at full rate. The main
+    chat is keyed per language, not per user: the system prompt and tool
+    schemas are the same for everyone, so a shared id keeps them warm no
+    matter who asked last (config.AI_SHARED_CACHE switches back to per-user)."""
+    client = _fake_client([_response(content=_GATE_NO_SEARCH), _response(content="ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    with i18n.use_lang("ru"):
+        await ai_trainer.ask(user_id, "как жим?", history=[])
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == "trainer-shared-ru"
+
+    client = _fake_client([_response(content=_GATE_NO_SEARCH), _response(content="answer")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    with i18n.use_lang("en"):
+        await ai_trainer.ask(user_id, "how is my bench?", history=[])
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == "trainer-shared-en"
+
+
+async def test_shared_cache_switch_returns_the_per_user_id(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "AI_SHARED_CACHE", False)
     client = _fake_client([_response(content=_GATE_NO_SEARCH), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 

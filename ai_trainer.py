@@ -562,6 +562,28 @@ def _cache_headers(user_id: Optional[int], *, scope: str = "trainer") -> dict[st
     return {"x-grok-conv-id": f"{scope}-{user_id}"} if user_id is not None else {}
 
 
+def _main_chat_cache_headers(user_id: Optional[int]) -> dict[str, str]:
+    """conv-id основного чата: общий на всех атлетов одного языка.
+
+    Под личным `trainer-<user_id>` первый вопрос разговора почти всегда
+    холодный — в живом логе (октябрь 2026) раунд 1 пресета: 16 964 токена
+    входа, из кэша 384, ~$0.034 только за шапку, хотя тот же человек спрашивал
+    двадцать минут назад. Шапка (системный промпт + схемы инструментов) у всех
+    одна — отличается только языковой хвост промпта, поэтому id свой на язык.
+    Под общим id её держит в тепле любой, кто спросил перед тобой.
+
+    Чего ждём проверить по логу: раунд 1 нового разговора — из кэша ~16к;
+    второй ход разговора — по-прежнему с историей из кэша. Если второе
+    сломается (общий id делит один слот кэша, как гейт когда-то — см.
+    _cache_headers), — config.AI_SHARED_CACHE=false возвращает личный id.
+    """
+    if user_id is None:
+        return {}
+    if not config.AI_SHARED_CACHE:
+        return _cache_headers(user_id)
+    return {"x-grok-conv-id": f"trainer-shared-{i18n.get_lang()}"}
+
+
 async def _get_sdk_client() -> AsyncXAIClient:
     global _sdk_client
     if _sdk_client is None:
@@ -6387,7 +6409,7 @@ async def _completion_round(
             response = await client.chat.completions.create(
                 model=config.GROK_MODEL, max_tokens=2048, messages=messages,
                 extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
-                extra_headers=_cache_headers(user_id),
+                extra_headers=_main_chat_cache_headers(user_id),
                 **tools_kwarg,
             )
         await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
@@ -6397,7 +6419,7 @@ async def _completion_round(
     stream = await client.chat.completions.create(
         model=config.GROK_MODEL, max_tokens=2048, messages=messages,
         extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
-        extra_headers=_cache_headers(user_id),
+        extra_headers=_main_chat_cache_headers(user_id),
         stream=True, stream_options={"include_usage": True},
         **tools_kwarg,
     )

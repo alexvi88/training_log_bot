@@ -236,6 +236,14 @@ ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 # any failure. Set =false to always use the static digest.
 AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower() == "true"
 
+# Основной чат тренера ходит в xAI под ОБЩИМ на всех conv-id (свой на язык),
+# а не под `trainer-<user_id>`: шапка (системный промпт + схемы, ~16к токенов)
+# одинакова у всех и при общем id остаётся тёплой, кто бы ни спросил перед
+# тобой. Под личным id первый вопрос разговора почти всегда холодный (~$0.034
+# только за шапку). Выключатель — на случай, если общий id начнёт выбивать
+# историю разговоров друг у друга (см. ai_trainer._cache_headers).
+AI_SHARED_CACHE = os.getenv("AI_SHARED_CACHE", "true").lower() == "true"
+
 
 
 
