@@ -49,6 +49,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 import ai_trainer
 import api_v1
 import body_limit
+import coach_invite_page
 import config
 import db
 import i18n
@@ -240,6 +241,9 @@ def build_server() -> MCPServer:
     mcp_oauth.register_routes(mcp)
     # /privacy и /terms — публичные страницы для App Store (см. legal_pages.py).
     legal_pages.register_routes(mcp)
+    # /coach/<код> — страница приглашения тренера и AASA для Universal Links
+    # (см. coach_invite_page.py).
+    coach_invite_page.register_routes(mcp)
 
     @mcp.tool()
     async def get_training_overview() -> str:

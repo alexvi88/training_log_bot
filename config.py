@@ -1056,8 +1056,9 @@ COMMUNITY_CHAT_URL = os.getenv("COMMUNITY_CHAT_URL", "").strip()
 
 # Ссылка на приложение в App Store (https://apps.apple.com/app/id...). Друг с
 # iPhone, которому переслали приглашение или визитку, попадал только в
-# Telegram-бота, а не в приложение: Universal Links не сделать (личная
-# сборка на бесплатном Apple ID не умеет associated domains), поэтому рядом
+# Telegram-бота, а не в приложение: Universal Links у визиток нет (личная
+# сборка на бесплатном Apple ID не умеет associated domains; у приглашения
+# тренера они есть — coach_invite_page.py, только в релизной сборке), поэтому рядом
 # с t.me-ссылкой — строка «С iPhone — приложение: <url>»
 # (sharing.app_store_line, в приложение — полем `app_store_url` в /me).
 # Пусто — строки нет вовсе: ссылка в никуда хуже отсутствующей.
@@ -1067,6 +1068,36 @@ APP_STORE_URL = os.getenv("APP_STORE_URL", "").strip()
 def app_store_url() -> str | None:
     """Ссылка на App Store или None, если она не задана или не https."""
     return APP_STORE_URL if APP_STORE_URL.startswith("https://") else None
+
+
+# Публичный адрес сервера для ссылок, которые человек открывает в браузере:
+# страница приглашения тренера `<адрес>/coach/<код>` (coach_invite_page.py).
+# Тот же хост, что у /privacy и /v1 — приложение ходит на него же
+# (`TelegramLink.defaultServerURLString`). Отдельная переменная нужна, только
+# если страницы когда-нибудь переедут с адреса MCP; по умолчанию — он.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+
+def public_base_url() -> str | None:
+    """https-адрес сервера без слэша на конце или None, если он не задан."""
+    base = PUBLIC_BASE_URL or MCP_PUBLIC_URL
+    return base if base.startswith("https://") else None
+
+
+# Team ID аккаунта разработчика Apple для apple-app-site-association
+# (Universal Links: `<адрес>/coach/<код>` открывает приложение, а не Safari).
+# Это тот же Team ID, что подписывает пуши (APNS_TEAM_ID, он же
+# DEVELOPMENT_TEAM в project.yml приложения), поэтому по умолчанию берём его.
+# Значение — из портала Apple Developer владельца (App ID
+# H93ZYM2S8U.com.trainingdiary.ios), не секрет. Переменная окружения —
+# только на случай переезда в другую команду; пустая строка в ней выключает
+# файл вовсе: AASA с чужой командой хуже никакого.
+APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "H93ZYM2S8U").strip()
+
+
+def apple_app_id() -> str | None:
+    """`<Team ID>.<bundle id>` для AASA или None, если команда не задана."""
+    return f"{APPLE_TEAM_ID}.{APPLE_BUNDLE_ID}" if APPLE_TEAM_ID else None
 
 
 def community_available() -> bool:
