@@ -532,7 +532,10 @@ async def test_ai_summary_all_and_one_with_stubbed_model(fresh_db, fake_model):
     await _linked(fresh_db)
     await _finished_workout(fresh_db, ATHLETE)
 
-    # Атлет не давал согласия на AI — модель не зовётся, честная строка.
+    # Атлет приложения (iOS-токен) не давал согласия на AI — модель не
+    # зовётся, честная строка. Чисто телеграмный атлет попал бы в сводку и без
+    # согласия (ai_trainer._background_ai_allowed).
+    await fresh_db.register_push_token(ATHLETE, "ios", "a" * 64)
     nobody = await _tap(COACH, "coach:ai")
     assert "ни один клиент не разрешил" in _screen(nobody)
     assert fake_model.calls == []
