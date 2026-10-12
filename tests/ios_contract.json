@@ -4041,6 +4041,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.copyExercise",
+   "method": "POST",
+   "path": "/exercises/{}/copy",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.exerciseDescription",
    "method": "GET",
    "path": "/exercises/{}/description",
@@ -4594,5 +4601,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "7a22b8b33333bf0439447a9123444bc8d8cd57c3"
+ "_ios_commit": "0474ef75fcdc9c81a4c22d795e002bdfbec78d03"
 }

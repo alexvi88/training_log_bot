@@ -25,6 +25,7 @@ class ExerciseManage(StatesGroup):
     new_exercise_group = State()  # name typed from "📋 Все", group still to pick
     awaiting_photo = State()
     picking_merge_target = State()
+    copying_name = State()  # «⧉ Сделать копию»: ждём имя копии
 
 
 class HistoryFlow(StatesGroup):

@@ -366,9 +366,33 @@ def get_images(exercise_name: str) -> list[str]:
     return paths if all(os.path.exists(p) for p in paths) else []
 
 
+def media_key(ex) -> str:
+    """Под каким именем искать демонстрации (клип, пару кадров, миниатюру)
+    этой строки — `catalog_key`, а у копии упражнения («⧉ Сделать копию»,
+    db.copy_exercise) — идентичность её источника из `media_from`.
+
+    Отдельно от `catalog_key` нарочно: копия НЕ разделяет идентичность
+    источника (её `original_name` — NULL, и catalog_key у неё — своё имя), так
+    что альтернативы, описание каталога, прогрессия и дедуп её с источником не
+    путают. Общие у них только картинки, и ровно здесь — больше нигде.
+    Своё фото атлета выше по порядку и сюда не попадает: его показывают до
+    этих ступеней (см. handlers/exercises._send_exercise_images)."""
+    try:
+        original = ex["original_name"]
+    except (IndexError, KeyError):
+        original = None
+    if original:
+        return original
+    try:
+        media_from = ex["media_from"]
+    except (IndexError, KeyError):
+        media_from = None
+    return media_from or ex["name"]
+
+
 def get_images_for(ex) -> list[str]:
-    """get_images for an exercise row, keyed the rename-proof way."""
-    return get_images(catalog_key(ex))
+    """get_images for an exercise row, keyed the rename-proof way (media_key)."""
+    return get_images(media_key(ex))
 
 
 def media_url(path: str, sub: str = "") -> str:
@@ -417,8 +441,8 @@ def get_animation(exercise_name: str) -> str | None:
 
 
 def get_animation_for(ex) -> str | None:
-    """get_animation for an exercise row, keyed the rename-proof way."""
-    return get_animation(catalog_key(ex))
+    """get_animation for an exercise row, keyed the rename-proof way (media_key)."""
+    return get_animation(media_key(ex))
 
 
 # Telegram hands back a file_id for every uploaded photo, and re-sending that id

@@ -583,15 +583,18 @@ def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.photo"), callback_data=f"exm:addphoto:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.merge"), callback_data=f"exm:mergestart:{ex['id']}")
+    # «⧉ Сделать копию» — рядом с «Объединить»: обе про отношения этого
+    # упражнения с другими (db.copy_exercise / db.merge_exercises).
+    b.button(text=i18n.t("exercises.btn.copy"), callback_data=f"exm:copystart:{ex['id']}")
     # Не по одной колонке, а «есть ли фото вообще» (exercise_photos.has_photo):
     # у фото, приехавшего из приложения, file_id пустой, но удалять там есть что.
     if exercise_photos.has_photo(ex):
         b.button(text=i18n.t("exercises.btn.delete_photo"), callback_data=f"exm:delphotoask:{ex['id']}")
         b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
-        b.adjust(2, 2, 1, 1, 1)
+        b.adjust(2, 2, 2, 1, 1)
     else:
         b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
-        b.adjust(2, 2, 1, 1)
+        b.adjust(2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -700,7 +703,7 @@ async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_i
     StateFilter(
         ExerciseManage.picking_exercise, ExerciseManage.editing_name,
         ExerciseManage.editing_group, ExerciseManage.editing_description,
-        ExerciseManage.awaiting_photo,
+        ExerciseManage.awaiting_photo, ExerciseManage.copying_name,
     ),
     F.data.startswith("exm:ex:"),
 )
@@ -950,6 +953,79 @@ async def exm_unmerge(callback: CallbackQuery, state: FSMContext):
         reply_markup=None,
     )
     await callback.answer()
+
+
+def _copy_prompt_keyboard(ex_id: int) -> InlineKeyboardMarkup:
+    """Под вопросом об имени копии — только «✖️ Отмена» обратно в карточку.
+    «Оставить как есть» здесь нет и быть не может: то же имя запрещено."""
+    b = InlineKeyboardBuilder()
+    b.button(text=i18n.t("exercises.btn.copy_cancel"), callback_data=f"exm:ex:{ex_id}")
+    return b.as_markup()
+
+
+@router.callback_query(F.data.startswith("exm:copystart:"))
+async def exm_copy_start(callback: CallbackQuery, state: FSMContext):
+    """«⧉ Сделать копию»: спросить имя копии. Сама копия — db.copy_exercise,
+    тот же путь, что у POST /v1/exercises/{id}/copy."""
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await ui.alert_exercise_not_found(callback)
+        return
+    await state.update_data(exm_exercise_id=ex_id, exm_copy_source_id=ex_id)
+    await state.set_state(ExerciseManage.copying_name)
+    await ui.safe_edit(
+        callback,
+        i18n.t("exercises.copy.prompt", source=escape(ex["name"])),
+        reply_markup=_copy_prompt_keyboard(ex_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.copying_name), F.text)
+async def exm_copy_name_entered(message: Message, state: FSMContext):
+    data = await state.get_data()
+    source_id = data.get("exm_copy_source_id")
+    source = await db.get_exercise(source_id) if source_id else None
+    user_id = message.from_user.id
+    if source is None or source["user_id"] != user_id:
+        await state.set_state(ExerciseManage.picking_exercise)
+        await message.reply(i18n.t("ui.exercise_not_found"))
+        return
+    name = formatting.strip_control_chars(message.text or "").strip()
+    keyboard = _copy_prompt_keyboard(source_id)
+    if not name:
+        await message.reply(i18n.t("exercises.name.empty"), reply_markup=keyboard)
+        return
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        await message.reply(
+            i18n.t("exercises.copy.too_long", max=config.MAX_EXERCISE_NAME_LENGTH),
+            reply_markup=keyboard,
+        )
+        return
+    outcome, new_id = await db.copy_exercise(user_id, source_id, name)
+    if outcome != db.COPY_OK:
+        key = {
+            db.COPY_SAME_NAME: "exercises.copy.same_name",
+            db.COPY_NAME_TAKEN: "exercises.copy.name_taken",
+            db.COPY_NAME_ARCHIVED: "exercises.copy.name_archived",
+            db.COPY_EMPTY_NAME: "exercises.name.empty",
+        }.get(outcome)
+        if key is None:
+            await state.set_state(ExerciseManage.picking_exercise)
+            await message.reply(i18n.t("ui.exercise_not_found"))
+            return
+        await message.reply(
+            i18n.t(key, source=escape(source["name"])), reply_markup=keyboard, parse_mode="HTML"
+        )
+        return
+    await state.update_data(exm_copy_source_id=None)
+    copy = await db.get_exercise(new_id)
+    await message.answer(
+        i18n.t("exercises.copy.done", name=escape(copy["display_name"])), parse_mode="HTML"
+    )
+    await send_exercise_card(message, state, user_id, new_id)
 
 
 @router.callback_query(F.data.startswith("prog:card:"))

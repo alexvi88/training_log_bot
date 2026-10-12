@@ -829,6 +829,23 @@ async def _screen_import_resolve(db, user_id: int) -> str:
     return i18n.t("resolve.progress_similar", position=1, total=4, name="Bench Press") + " " + _kb_texts(kb)
 
 
+async def _screen_exercise_copy(db, user_id: int) -> str:
+    """«⧉ Сделать копию»: кнопка в меню правки, вопрос об имени с «Отменой»,
+    три отказа и подтверждение — всё, что человек видит по дороге."""
+    from handlers import exercises as exercises_handlers
+
+    ex = {"id": 1, "name": "Bench", "display_name": "Bench", "description": None,
+          "custom_photo_file_id": None}
+    text = _kb_texts(exercises_handlers._exercise_edit_menu_keyboard(ex))
+    text += " " + i18n.t("exercises.copy.prompt", source="Bench")
+    text += " " + _kb_texts(exercises_handlers._copy_prompt_keyboard(1))
+    for key in ("exercises.copy.same_name", "exercises.copy.name_taken", "exercises.copy.name_archived"):
+        text += " " + i18n.t(key, source="Bench")
+    text += " " + i18n.t("exercises.copy.too_long", max=60)
+    text += " " + i18n.t("exercises.copy.done", name="Bench close grip")
+    return text
+
+
 async def _screen_merge_done(db, user_id: int) -> str:
     text = i18n.t("exercises.merge.done_undo", source="Bench", target="Bench Press")
     text += " " + _kb_texts(keyboards.merge_done_keyboard(1, "m" * 32))
@@ -1029,6 +1046,7 @@ SCREENS: list[tuple[str, object]] = [
     ("import_result_and_undo", _screen_import_result),
     ("import_resolve_templates", _screen_import_resolve),
     ("exercise_merge_done", _screen_merge_done),
+    ("exercise_copy", _screen_exercise_copy),
     ("coach_hub_and_invite", _screen_coach_hub_and_invite),
     ("coach_athlete_side", _screen_coach_athlete_side),
     ("coach_clients_and_card", _screen_coach_clients),

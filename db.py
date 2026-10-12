@@ -191,6 +191,12 @@ CREATE TABLE IF NOT EXISTS exercises (
     -- Упражнение, которое завёл импорт (import_batches.id): отмена этого
     -- импорта сносит его, если по нему не осталось других подходов.
     import_batch_id TEXT,
+    -- Чьи демонстрации показывать копии («⧉ Сделать копию», copy_exercise):
+    -- идентичность каталога упражнения-источника. Копия — своё упражнение
+    -- атлета, `original_name` у неё NULL, чтобы дедуп, поиск по идентичности
+    -- и импорт никогда не склеили её с источником; а картинки техники при
+    -- этом остаются те же. Читает ТОЛЬКО exercise_media.media_key.
+    media_from TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
@@ -1525,6 +1531,9 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN custom_photo_path TEXT")
     if "description" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN description TEXT")
+    if "media_from" not in exercise_cols:
+        # Заполнять нечем: копий до этой колонки не было.
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN media_from TEXT")
 
     if "bodyweight_load" not in exercise_cols:
         await _conn.execute(
@@ -4091,6 +4100,131 @@ async def update_exercise_name(exercise_id: int, name: str) -> bool:
             return False
         await conn().commit()
         return True
+
+
+# Исходы «⧉ Сделать копию» (copy_exercise). Не bool, а причина — по той же
+# логике, что у MERGE_*: «то же имя», «занято другим» и «лежит в архиве» —
+# три разных следующих шага для человека.
+COPY_OK = "ok"
+COPY_NOT_FOUND = "not_found"      # нет такого, чужое или шаблон каталога
+COPY_EMPTY_NAME = "empty"
+COPY_SAME_NAME = "same"           # имя совпало с источником
+COPY_NAME_TAKEN = "taken"         # имя занято другим живым упражнением
+COPY_NAME_ARCHIVED = "archived"   # имя занято упражнением в архиве
+
+
+async def _copy_name_clash(user_id: int, source, name: str, display_name: str) -> Optional[str]:
+    """Чем занято имя копии — None, если свободно.
+
+    Сравнение то же, что у всех проверок уникальности имени упражнения:
+    `_fold_exercise_name` (регистр, пробелы по краям, ё=е) по `name` И
+    `display_name` — `find_exercise_by_name` для живых. Архив проверяется
+    отдельно и тоже запрещает: уникальный индекс по display_name архив не
+    исключает, а `create_exercise` на совпавшем имени достаёт старое из архива
+    — копия с таким именем либо упала бы на индексе, либо после «Вернуть из
+    архива» дала бы два упражнения под одним именем.
+    """
+    folded = {_fold_exercise_name(name), _fold_exercise_name(display_name)}
+    if folded & {_fold_exercise_name(source["name"]), _fold_exercise_name(source["display_name"])}:
+        return COPY_SAME_NAME
+    for candidate in (name, display_name):
+        live = await find_exercise_by_name(user_id, candidate)
+        if live is not None:
+            return COPY_SAME_NAME if live["id"] == source["id"] else COPY_NAME_TAKEN
+    cur = await conn().execute(
+        "SELECT name, display_name FROM exercises "
+        "WHERE user_id = ? AND is_archived = 1 AND is_template = 0",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        if folded & {_fold_exercise_name(row["name"]), _fold_exercise_name(row["display_name"])}:
+            return COPY_NAME_ARCHIVED
+    return None
+
+
+def _strip_copy_display_suffix(source, name: str) -> str:
+    """Убрать из имени копии хвост показа источника («· гантели», «· канат ·
+    штанга»), если он туда приехал.
+
+    Приложение подставляет в поле `display_name` источника — у бота голого
+    `name` в ответе `/v1` нет, — и копия «Тяга · гантели — узкий хват»
+    иначе получила бы `display_name` «Тяга · гантели — узкий хват ·
+    гантели»: хвост дважды. Хвост собирается тем же build_display_name, что
+    строит его у самого упражнения, а не руками, — разделитель и порядок
+    частей живут в одном месте. Ищется без регистра, где бы ни стоял: в
+    конце (прислали имя как есть) или посередине (дописали после него).
+    """
+    marker = "\x00"
+    suffix = build_display_name(
+        marker, source["equipment"], bool(source["unilateral"]), source["attachment"]
+    )[len(marker):]
+    if not suffix or not name:
+        return name
+    at = name.lower().find(suffix.lower())
+    if at < 0:
+        return name
+    return " ".join((name[:at] + " " + name[at + len(suffix):]).split())
+
+
+async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[str, Optional[int]]:
+    """«⧉ Сделать копию»: новое своё упражнение с настройками источника и
+    чистой историей. Один путь для бота (handlers/exercises.py) и
+    `POST /v1/exercises/{id}/copy`. Возвращает (COPY_*, id копии или None).
+
+    Переносится: группа, снаряд, одна рука, насадка, режим веса тела,
+    описание, заметки и своё фото (файл копируется, ссылка Telegram — та же:
+    это та же картинка). Своих настроек «диапазон повторов/цель» у упражнения
+    нет — диапазон живёт в `users`, цель — в дне программы (`routine_exercises`),
+    а членство в программах не копируется.
+
+    Не переносится: подходы, тренировки, рекорды, синонимы, программы,
+    архив, `import_batch_id`, `seeded_from_program`, `is_template`.
+
+    Идентичность против показа (CLAUDE.md): `original_name` копии — NULL.
+    Копия не форк каталога, и дедуп, поиск по идентичности и импорт не должны
+    её склеивать с источником. Картинки техники при этом те же — через
+    `media_from` (идентичность источника; у копии копии — его `media_from`),
+    который читает только exercise_media.media_key.
+    """
+    source = await get_exercise(exercise_id)
+    if source is None or source["user_id"] != user_id or source["is_template"]:
+        return COPY_NOT_FOUND, None
+    name = _strip_copy_display_suffix(source, (new_name or "").strip())
+    if not name:
+        return COPY_EMPTY_NAME, None
+    display_name = build_display_name(
+        name, source["equipment"], bool(source["unilateral"]), source["attachment"]
+    )
+    clash = await _copy_name_clash(user_id, source, name, display_name)
+    if clash is not None:
+        return clash, None
+    group_id = source["primary_group_id"]
+    if group_id is None:
+        group_id = await other_muscle_group_id()
+    media_from = source["original_name"] or source["media_from"]
+    async with _write_lock:
+        try:
+            cur = await conn().execute(
+                "INSERT INTO exercises "
+                "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
+                " display_name, original_name, notes, created_at, bodyweight_load, "
+                " bodyweight_factor, description, custom_photo_file_id, media_from) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id, name, group_id, source["equipment"], int(source["unilateral"]),
+                    source["attachment"], display_name, source["notes"], now_iso(),
+                    source["bodyweight_load"], source["bodyweight_factor"],
+                    source["description"], source["custom_photo_file_id"], media_from,
+                ),
+            )
+            await conn().commit()
+        except aiosqlite.IntegrityError:
+            return COPY_NAME_TAKEN, None
+        new_id = cur.lastrowid
+    photo_name = exercise_photos.duplicate(exercise_photos.stored_name(source), new_id)
+    if photo_name is not None:
+        await set_exercise_photo_path(new_id, photo_name)
+    return COPY_OK, new_id
 
 
 async def update_exercise_group(exercise_id: int, group_id: Optional[int]) -> None:
