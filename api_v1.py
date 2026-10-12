@@ -688,17 +688,52 @@ async def copy_exercise(request: Request) -> JSONResponse:
     outcome, new_id = await db.copy_exercise(user_id, exercise_id, name)
     if outcome == db.COPY_NOT_FOUND:
         raise ApiError(404, "not_found", "exercise not found")
+    _raise_copy_refusal(outcome, source["name"])
+    row = await db.get_exercise(new_id)
+    return JSONResponse(_exercise_json(row), status_code=201)
+
+
+def _raise_copy_refusal(outcome: str, source_name: str) -> None:
+    """Отказ «Сделать копию» по имени — один на копию своего упражнения и копию
+    шаблона каталога: 400 на пустое, 409 `exercise_name_taken` с текстом
+    тренера (то же имя / занято / лежит в архиве) и примером от `source_name`
+    — имени источника так, как его видит атлет."""
+    if outcome == db.COPY_OK:
+        return
     if outcome == db.COPY_EMPTY_NAME:
         raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
-    if outcome != db.COPY_OK:
-        key = {
-            db.COPY_SAME_NAME: "exercises.copy.same_name",
-            db.COPY_NAME_ARCHIVED: "exercises.copy.name_archived",
-        }.get(outcome, "exercises.copy.name_taken")
-        raise ApiError(
-            409, "exercise_name_taken", "another exercise already has this name",
-            key=key, source=source["name"],
-        )
+    key = {
+        db.COPY_SAME_NAME: "exercises.copy.same_name",
+        db.COPY_NAME_ARCHIVED: "exercises.copy.name_archived",
+    }.get(outcome, "exercises.copy.name_taken")
+    raise ApiError(
+        409, "exercise_name_taken", "another exercise already has this name",
+        key=key, source=source_name,
+    )
+
+
+async def copy_exercise_template(request: Request) -> JSONResponse:
+    """«Сделать копию» шаблона каталога (превью/список шаблонов в приложении)
+    — тот же db.copy_template_exercise, что у «⧉ Сделать копию» в превью
+    шаблона в боте. Тело — `{"name": "..."}`; 201 и своё упражнение в том же
+    формате, что у POST /exercise-templates/{id}/add. В отличие от «Добавить»
+    копия — НЕ каталожное упражнение (`original_name` пустой), а картинки
+    техники у неё те же. Отказы по имени — как у POST /exercises/{id}/copy:
+    имя обязано отличаться и от шаблона (на языке атлета и его русской
+    идентичности), и от любого своего упражнения, архив включительно."""
+    user_id = await _authed_user_id(request)
+    template_id = int(request.path_params["template_id"])
+    template = await db.get_exercise(template_id)
+    if template is None or not template["is_template"]:
+        raise ApiError(404, "not_found", "template not found")
+    body = await _json_body(request)
+    name = _exercise_name(body)
+    outcome, new_id = await db.copy_template_exercise(user_id, template_id, name)
+    if outcome == db.COPY_NOT_FOUND:
+        raise ApiError(404, "not_found", "template not found")
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None and user["lang"] else i18n.DEFAULT_LANG
+    _raise_copy_refusal(outcome, seed_data.localized_exercise_name(template["name"], lang))
     row = await db.get_exercise(new_id)
     return JSONResponse(_exercise_json(row), status_code=201)
 
@@ -2249,6 +2284,7 @@ routes = [
     Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/unarchive", unarchive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/copy", copy_exercise, methods=["POST"]),
+    Route("/exercise-templates/{template_id:int}/copy", copy_exercise_template, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),
     Route("/exercises/{exercise_id:int}/superset-partners", superset_partners, methods=["GET"]),
     Route("/workouts/active", active_workout, methods=["GET"]),

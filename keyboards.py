@@ -649,7 +649,11 @@ def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineK
 
 
 def template_preview_keyboard(
-    template_id: int, prefix: str = "exm", back_cb: str | None = None, as_question: bool = False
+    template_id: int,
+    prefix: str = "exm",
+    back_cb: str | None = None,
+    as_question: bool = False,
+    with_copy: bool = False,
 ) -> InlineKeyboardMarkup:
     """as_question: the media-group branch of _send_template_preview sends the
     pair of photos with no caption and this keyboard on a second, otherwise
@@ -657,10 +661,19 @@ def template_preview_keyboard(
     "➕ Добавить"/"⬅️ Назад" read as a second, disconnected card. That message's
     text is "Добавить?" instead (see _send_template_preview), so the buttons
     answer it plainly — "Да"/"Назад" — rather than re-naming the action.
+
+    with_copy: «⧉ Сделать копию» под «Добавить» — своё упражнение с настройками
+    и картинками шаблона под своим именем (`{prefix}:tplcopy:{id}`,
+    db.copy_template_exercise). Пока только в разделе «Упражнения» (exm):
+    вопрос об имени живёт в его состоянии ExerciseManage.copying_name.
     """
     b = InlineKeyboardBuilder()
     add_text = i18n.t("btn.yes") if as_question else i18n.t("btn.add")
     b.row(InlineKeyboardButton(text=add_text, callback_data=f"{prefix}:tpladd:{template_id}"))
+    if with_copy:
+        b.row(InlineKeyboardButton(
+            text=i18n.t("exercises.btn.copy"), callback_data=f"{prefix}:tplcopy:{template_id}"
+        ))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=back_cb or f"{prefix}:templates"))
     return b.as_markup()
 

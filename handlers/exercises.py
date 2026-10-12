@@ -238,19 +238,27 @@ async def exm_new_cancel(callback: CallbackQuery, state: FSMContext):
     await _show_exercise_list(callback, state)
 
 
-@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data.startswith("exm:tpl:"))
+@router.callback_query(
+    StateFilter(ExerciseManage.creating_exercise_name, ExerciseManage.copying_name),
+    F.data.startswith("exm:tpl:"),
+)
 async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     """Tapping a template previews it (photo + info) — it isn't added until
     the user confirms with "➕ Добавить", since they may just want a look at
-    what the exercise is before deciding."""
+    what the exercise is before deciding.
+
+    Сюда же возвращает «✖️ Отмена» из вопроса об имени копии шаблона
+    (exm_template_copy_start) — поэтому состояние ставится заново."""
     template_id = int(callback.data.split(":")[2])
     template = await db.get_exercise(template_id)
     if template is None:
         await callback.answer(i18n.t("exercises.template_not_found"), show_alert=True)
         return
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    await state.update_data(exm_copy_template_id=None)
     text = _exercise_info_text(_localized_template_row(template), with_created=False)
-    kb = keyboards.template_preview_keyboard(template_id)
-    confirm_kb = keyboards.template_preview_keyboard(template_id, as_question=True)
+    kb = keyboards.template_preview_keyboard(template_id, with_copy=True)
+    confirm_kb = keyboards.template_preview_keyboard(template_id, as_question=True, with_copy=True)
     # Media lookup stays on the raw (Russian) template name — that's the
     # catalog key `exercise_media` is built on, not what gets shown.
     images = exercise_media.get_images(template["name"])
@@ -972,7 +980,7 @@ async def exm_copy_start(callback: CallbackQuery, state: FSMContext):
     if ex is None or ex["user_id"] != callback.from_user.id:
         await ui.alert_exercise_not_found(callback)
         return
-    await state.update_data(exm_exercise_id=ex_id, exm_copy_source_id=ex_id)
+    await state.update_data(exm_exercise_id=ex_id, exm_copy_source_id=ex_id, exm_copy_template_id=None)
     await state.set_state(ExerciseManage.copying_name)
     await ui.safe_edit(
         callback,
@@ -983,18 +991,71 @@ async def exm_copy_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(
+    StateFilter(ExerciseManage.creating_exercise_name, ExerciseManage.picking_exercise),
+    F.data.startswith("exm:tplcopy:"),
+)
+async def exm_template_copy_start(callback: CallbackQuery, state: FSMContext):
+    """«⧉ Сделать копию» в превью шаблона каталога: тот же вопрос об имени, что
+    у копии своего упражнения, но источник — шаблон (db.copy_template_exercise,
+    тот же путь, что у POST /v1/exercise-templates/{id}/copy). «✖️ Отмена»
+    возвращает в превью шаблона, а не в карточку: своего упражнения ещё нет."""
+    template_id = int(callback.data.split(":")[2])
+    template = await db.get_exercise(template_id)
+    if template is None or not template["is_template"]:
+        await callback.answer(i18n.t("exercises.template_not_found"), show_alert=True)
+        return
+    await state.update_data(exm_copy_source_id=None, exm_copy_template_id=template_id)
+    await state.set_state(ExerciseManage.copying_name)
+    await ui.safe_edit(
+        callback,
+        i18n.t("exercises.copy.prompt", source=escape(_template_display_name(template))),
+        reply_markup=_template_copy_prompt_keyboard(template_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+def _template_copy_prompt_keyboard(template_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text=i18n.t("exercises.btn.copy_cancel"), callback_data=f"exm:tpl:{template_id}")
+    return b.as_markup()
+
+
+_COPY_REFUSAL_KEYS = {
+    db.COPY_SAME_NAME: "exercises.copy.same_name",
+    db.COPY_NAME_TAKEN: "exercises.copy.name_taken",
+    db.COPY_NAME_ARCHIVED: "exercises.copy.name_archived",
+    db.COPY_EMPTY_NAME: "exercises.name.empty",
+}
+
+
 @router.message(StateFilter(ExerciseManage.copying_name), F.text)
 async def exm_copy_name_entered(message: Message, state: FSMContext):
+    """Имя копии — своего упражнения (exm_copy_source_id) или шаблона каталога
+    (exm_copy_template_id). Проверки имени и отказы одни на оба: сами правила
+    в db (_insert_copy), здесь — только какой источник и куда «Отмена»."""
     data = await state.get_data()
-    source_id = data.get("exm_copy_source_id")
-    source = await db.get_exercise(source_id) if source_id else None
     user_id = message.from_user.id
-    if source is None or source["user_id"] != user_id:
-        await state.set_state(ExerciseManage.picking_exercise)
-        await message.reply(i18n.t("ui.exercise_not_found"))
-        return
+    template_id = data.get("exm_copy_template_id")
+    if template_id:
+        template = await db.get_exercise(template_id)
+        if template is None or not template["is_template"]:
+            await state.set_state(ExerciseManage.picking_exercise)
+            await message.reply(i18n.t("exercises.template_not_found"))
+            return
+        source_label = _template_display_name(template)
+        keyboard = _template_copy_prompt_keyboard(template_id)
+    else:
+        source_id = data.get("exm_copy_source_id")
+        source = await db.get_exercise(source_id) if source_id else None
+        if source is None or source["user_id"] != user_id:
+            await state.set_state(ExerciseManage.picking_exercise)
+            await message.reply(i18n.t("ui.exercise_not_found"))
+            return
+        source_label = source["name"]
+        keyboard = _copy_prompt_keyboard(source_id)
     name = formatting.strip_control_chars(message.text or "").strip()
-    keyboard = _copy_prompt_keyboard(source_id)
     if not name:
         await message.reply(i18n.t("exercises.name.empty"), reply_markup=keyboard)
         return
@@ -1004,23 +1065,23 @@ async def exm_copy_name_entered(message: Message, state: FSMContext):
             reply_markup=keyboard,
         )
         return
-    outcome, new_id = await db.copy_exercise(user_id, source_id, name)
+    if template_id:
+        outcome, new_id = await db.copy_template_exercise(user_id, template_id, name)
+    else:
+        outcome, new_id = await db.copy_exercise(user_id, source_id, name)
     if outcome != db.COPY_OK:
-        key = {
-            db.COPY_SAME_NAME: "exercises.copy.same_name",
-            db.COPY_NAME_TAKEN: "exercises.copy.name_taken",
-            db.COPY_NAME_ARCHIVED: "exercises.copy.name_archived",
-            db.COPY_EMPTY_NAME: "exercises.name.empty",
-        }.get(outcome)
+        key = _COPY_REFUSAL_KEYS.get(outcome)
         if key is None:
             await state.set_state(ExerciseManage.picking_exercise)
-            await message.reply(i18n.t("ui.exercise_not_found"))
+            await message.reply(
+                i18n.t("exercises.template_not_found" if template_id else "ui.exercise_not_found")
+            )
             return
         await message.reply(
-            i18n.t(key, source=escape(source["name"])), reply_markup=keyboard, parse_mode="HTML"
+            i18n.t(key, source=escape(source_label)), reply_markup=keyboard, parse_mode="HTML"
         )
         return
-    await state.update_data(exm_copy_source_id=None)
+    await state.update_data(exm_copy_source_id=None, exm_copy_template_id=None)
     copy = await db.get_exercise(new_id)
     await message.answer(
         i18n.t("exercises.copy.done", name=escape(copy["display_name"])), parse_mode="HTML"
