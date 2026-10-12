@@ -1670,6 +1670,16 @@
     "media": {
      "type": "ExerciseMedia",
      "optional": false
+    },
+    "originalName": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3978,6 +3988,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.copyExerciseTemplate",
+   "method": "POST",
+   "path": "/exercise-templates/{}/copy",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.archivedExercises",
    "method": "GET",
    "path": "/exercises",
@@ -4601,5 +4618,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "0474ef75fcdc9c81a4c22d795e002bdfbec78d03"
+ "_ios_commit": "c67462497a0e748e8282360726003c660d49ebd0"
 }
