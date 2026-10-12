@@ -527,3 +527,50 @@ async def test_english_copy_prompt_and_done(fresh_db, user_id):
     assert msg.answer.await_args_list[0].args[0] == (
         'Made a copy: "Bench Press — close grip". It gets its own sets, starting from zero.'
     )
+
+
+# --- имя показа источника в поле (приложение подставляет display_name) --------
+
+
+async def test_display_name_with_appended_text_does_not_double_suffix(fresh_db, user_id):
+    db = fresh_db
+    src = await db.create_exercise(user_id, "Тяга", await _group(db, user_id), equipment="гантели")
+    source = await db.get_exercise(src)
+    assert source["display_name"] == db.build_display_name("Тяга", "гантели")
+
+    outcome, copy_id = await db.copy_exercise(user_id, src, source["display_name"] + " — узкий хват")
+    assert outcome == db.COPY_OK
+    copy = await db.get_exercise(copy_id)
+    assert copy["name"] == "Тяга — узкий хват"
+    assert copy["display_name"] == db.build_display_name("Тяга — узкий хват", "гантели")
+    assert copy["display_name"].count("гантели") == 1
+
+
+async def test_display_name_sent_unchanged_is_the_same_name(fresh_db, user_id):
+    db = fresh_db
+    src = await db.create_exercise(
+        user_id, "Тяга", await _group(db, user_id), equipment="штанга", unilateral=True, attachment="канат"
+    )
+    display = (await db.get_exercise(src))["display_name"]
+    for sent in (display, display.upper(), f"  {display}  "):
+        outcome, copy_id = await db.copy_exercise(user_id, src, sent)
+        assert outcome == db.COPY_SAME_NAME, sent
+        assert copy_id is None
+
+
+async def test_api_display_name_suffix_is_not_doubled_and_unchanged_is_refused(fresh_db):
+    client = await _linked(fresh_db)
+    src = await fresh_db.create_exercise(USER, "Тяга", await _group(fresh_db, USER), equipment="гантели")
+    display = (await fresh_db.get_exercise(src))["display_name"]
+
+    resp = await client.post(f"/exercises/{src}/copy", json={"name": display})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "exercise_name_taken"
+    assert resp.json()["message"] == i18n.t_in("ru", "exercises.copy.same_name")
+
+    resp = await client.post(f"/exercises/{src}/copy", json={"name": display + " — узкий хват"})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["display_name"] == fresh_db.build_display_name("Тяга — узкий хват", "гантели")
+    assert body["display_name"].count("гантели") == 1
+    assert (await fresh_db.get_exercise(body["id"]))["name"] == "Тяга — узкий хват"

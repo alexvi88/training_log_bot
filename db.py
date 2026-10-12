@@ -4142,6 +4142,30 @@ async def _copy_name_clash(user_id: int, source, name: str, display_name: str) -
     return None
 
 
+def _strip_copy_display_suffix(source, name: str) -> str:
+    """Убрать из имени копии хвост показа источника («· гантели», «· канат ·
+    штанга»), если он туда приехал.
+
+    Приложение подставляет в поле `display_name` источника — у бота голого
+    `name` в ответе `/v1` нет, — и копия «Тяга · гантели — узкий хват»
+    иначе получила бы `display_name` «Тяга · гантели — узкий хват ·
+    гантели»: хвост дважды. Хвост собирается тем же build_display_name, что
+    строит его у самого упражнения, а не руками, — разделитель и порядок
+    частей живут в одном месте. Ищется без регистра, где бы ни стоял: в
+    конце (прислали имя как есть) или посередине (дописали после него).
+    """
+    marker = "\x00"
+    suffix = build_display_name(
+        marker, source["equipment"], bool(source["unilateral"]), source["attachment"]
+    )[len(marker):]
+    if not suffix or not name:
+        return name
+    at = name.lower().find(suffix.lower())
+    if at < 0:
+        return name
+    return " ".join((name[:at] + " " + name[at + len(suffix):]).split())
+
+
 async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[str, Optional[int]]:
     """«⧉ Сделать копию»: новое своё упражнение с настройками источника и
     чистой историей. Один путь для бота (handlers/exercises.py) и
@@ -4165,7 +4189,7 @@ async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[
     source = await get_exercise(exercise_id)
     if source is None or source["user_id"] != user_id or source["is_template"]:
         return COPY_NOT_FOUND, None
-    name = (new_name or "").strip()
+    name = _strip_copy_display_suffix(source, (new_name or "").strip())
     if not name:
         return COPY_EMPTY_NAME, None
     display_name = build_display_name(
