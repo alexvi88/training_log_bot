@@ -6489,8 +6489,12 @@ class _StreamedToolCall:
 # вызове (см. ловушку «замороженного языка» в CLAUDE.md).
 _PRESET_PREFETCH: dict[str, tuple[str, ...]] = {
     # «что недорабатываю и что добавить»: упражнения с группами и частотой +
-    # недельный объём по группам против цели.
-    "ai.screen.preset.weak.question": ("get_training_overview", "get_weekly_volume_by_group"),
+    # недельный объём по группам против цели + вся история. Без последней
+    # модель на проде всё равно шла вторым раундом за get_full_workout_history:
+    # вопрос сам говорит «посмотри мою историю тренировок».
+    "ai.screen.preset.weak.question": (
+        "get_training_overview", "get_weekly_volume_by_group", "get_full_workout_history",
+    ),
     # «что растёт, что застряло и почему»: контекст и частота + разбор застоя
     # по всем упражнениям (growing / dead_end / double_progression / regressing).
     "ai.screen.preset.progress.question": ("get_training_overview", "get_stalled_lifts"),
@@ -6614,6 +6618,10 @@ async def _ask_plain(
             if on_reasoning and reasoning:
                 await on_reasoning(reasoning)
             break
+        logger.info(
+            "AI trainer round tools for user %s: %s",
+            user_id, ", ".join(tc.function.name for tc in tool_calls),
+        )
         if on_status:
             variants = _tool_status_variants(tool_calls[0].function.name)
             await on_status(random.choice(variants))
