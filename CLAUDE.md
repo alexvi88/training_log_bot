@@ -1,6 +1,6 @@
 # training_log_bot
 
-Telegram-бот — дневник тренировок с AI-тренером (aiogram, SQLite, деплой на Amvera).
+Telegram-бот — дневник тренировок с AI-тренером (aiogram, SQLite, деплой на Fly.io, `fly.toml`).
 
 ## Тон голоса — обязательно к любому тексту
 
