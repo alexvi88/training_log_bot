@@ -166,7 +166,11 @@ async def recent_records(client: Any) -> list[dict[str, Any]]:
             "weight": row["weight"],
             "reps": row["reps"],
             "e1rm": round(row["e1rm"], 1),
-            "text": f"{formatting.format_weight(row['weight'])}{unit}×{row['reps']}",
+            # Тот же вид, что у рекордов «Итога недели» и у подходов в
+            # приложении: «42.5кг × 8» (`weekly.record.best`).
+            "text": i18n.t(
+                "weekly.record.best", weight=f"{formatting.format_weight(row['weight'])}{unit}", reps=row["reps"]
+            ),
         })
     return out
 

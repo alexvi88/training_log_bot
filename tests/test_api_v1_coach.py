@@ -235,6 +235,8 @@ async def test_workouts_signals_and_records(fresh_db):
     assert signals["days_since_last_workout"] == 0 and signals["missing"] is False
     assert signals["new_records"] == 1
     assert overview["records"][0]["exercise"] == "Жим"
+    # Тот же вид, что у рекордов «Итога недели» и подходов в приложении.
+    assert overview["records"][0]["text"] == "80кг × 5"
 
     # Идущая тренировка тренеру не видна.
     active = (await athlete.post("/workouts/active", json={})).json()["id"]
