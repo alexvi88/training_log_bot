@@ -122,10 +122,10 @@ async def _coach_with_invite(db, name: str = "Иван Петров") -> str:
     return "K7MP2QXA"
 
 
-async def _linked(db, *, athlete_lang: str = "ru", bw: bool = False, food: bool = False):
+async def _linked(db, *, athlete_lang: str = "ru", bw: bool = False):
     code = await _coach_with_invite(db)
     await _user(db, ATHLETE, athlete_lang)
-    assert await db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=bw, show_food=food)
+    assert await db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=bw)
     return code
 
 
@@ -168,16 +168,19 @@ async def test_deep_link_preview_toggles_and_accept_with_typed_name(fresh_db):
     assert "Иван Петров хочет вести тебя как тренер" in text
     assert "Не увидит никогда" in text and "Apple ID" in text
     buttons = _buttons(msg.answer.await_args_list[-1].kwargs["reply_markup"])
-    assert ("⚖️ Вес тела: закрыт", f"coach:inv:{code}:10") in buttons
-    assert ("✅ Разрешить", f"coach:ok:{code}:00") in buttons
+    assert ("⚖️ Вес тела: закрыт", f"coach:inv:{code}:1") in buttons
+    assert ("✅ Разрешить", f"coach:ok:{code}:0") in buttons
+    # Переключатель у превью один — вес тела.
+    assert [t for t, _cb in buttons if t.startswith("⚖️")] == ["⚖️ Вес тела: закрыт"]
+    assert len([cb for _t, cb in buttons if cb.startswith("coach:inv:")]) == 1
     # Превью ничего не открывает.
     assert await fresh_db.get_coach_link(COACH, ATHLETE) is None
 
-    toggled = await _tap(ATHLETE, f"coach:inv:{code}:10")
-    assert ("⚖️ Вес тела: открыт", f"coach:inv:{code}:00") in _buttons(_kb(toggled))
-    assert ("✅ Разрешить", f"coach:ok:{code}:10") in _buttons(_kb(toggled))
+    toggled = await _tap(ATHLETE, f"coach:inv:{code}:1")
+    assert ("⚖️ Вес тела: открыт", f"coach:inv:{code}:0") in _buttons(_kb(toggled))
+    assert ("✅ Разрешить", f"coach:ok:{code}:1") in _buttons(_kb(toggled))
 
-    allow = await _tap(ATHLETE, f"coach:ok:{code}:10", first_name="Мария")
+    allow = await _tap(ATHLETE, f"coach:ok:{code}:1", first_name="Мария")
     assert "Как тебя назвать тренеру" in _screen(allow)
     assert ("Назваться «Мария»", "coach:nm") in _buttons(_kb(allow))
     state = _state(ATHLETE)
@@ -187,7 +190,7 @@ async def test_deep_link_preview_toggles_and_accept_with_typed_name(fresh_db):
     await coach.coach_self_named(named, state)
     link = await fresh_db.get_coach_link(COACH, ATHLETE)
     assert link["client_name"] == "Маша"
-    assert bool(link["show_bodyweight"]) is True and bool(link["show_food"]) is False
+    assert bool(link["show_bodyweight"]) is True
     assert "Готово — Иван Петров видит твой дневник" in named.answer.await_args.args[0]
     assert await state.get_state() is None
 
@@ -195,11 +198,24 @@ async def test_deep_link_preview_toggles_and_accept_with_typed_name(fresh_db):
 async def test_accept_with_telegram_first_name_button(fresh_db):
     code = await _coach_with_invite(fresh_db)
     await _user(fresh_db, ATHLETE)
-    await _tap(ATHLETE, f"coach:ok:{code}:01", first_name="Мария")
+    await _tap(ATHLETE, f"coach:ok:{code}:1", first_name="Мария")
     done = await _tap(ATHLETE, "coach:nm", first_name="Мария")
     link = await fresh_db.get_coach_link(COACH, ATHLETE)
-    assert link["client_name"] == "Мария" and bool(link["show_food"]) is True
+    assert link["client_name"] == "Мария" and bool(link["show_bodyweight"]) is True
     assert "видит твой дневник" in _screen(done)
+
+
+async def test_old_two_flag_buttons_still_work_and_read_only_body_weight(fresh_db):
+    """Кнопки первой версии в уже отправленных сообщениях несли два разряда
+    (`10`, `01`): первый — вес тела, второй больше ничего не значит."""
+    code = await _coach_with_invite(fresh_db)
+    await _user(fresh_db, ATHLETE)
+    preview = await _tap(ATHLETE, f"coach:inv:{code}:01")
+    assert ("⚖️ Вес тела: закрыт", f"coach:inv:{code}:1") in _buttons(_kb(preview))
+    await _tap(ATHLETE, f"coach:ok:{code}:01", first_name="Мария")
+    await _tap(ATHLETE, "coach:nm", first_name="Мария")
+    link = await fresh_db.get_coach_link(COACH, ATHLETE)
+    assert bool(link["show_bodyweight"]) is False and not link["show_food"]
 
 
 async def test_typed_code_bad_own_and_already_linked(fresh_db):
@@ -224,7 +240,7 @@ async def test_typed_code_bad_own_and_already_linked(fresh_db):
     await coach.coach_code_entered(own, _state(COACH))
     assert "собственный код" in own.answer.await_args.args[0]
 
-    await fresh_db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=False, show_food=False)
+    await fresh_db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=False)
     again = _message(ATHLETE, code)
     await coach.coach_code_entered(again, state)
     assert "уже видит твой дневник" in again.answer.await_args.args[0]
@@ -233,7 +249,7 @@ async def test_typed_code_bad_own_and_already_linked(fresh_db):
 async def test_not_now_opens_nothing(fresh_db):
     code = await _coach_with_invite(fresh_db)
     await _user(fresh_db, ATHLETE)
-    await _tap(ATHLETE, f"coach:ok:{code}:00")
+    await _tap(ATHLETE, f"coach:ok:{code}:0")
     declined = await _tap(ATHLETE, "coach:no")
     assert "Ничего не открыл" in _screen(declined)
     assert await _state(ATHLETE).get_state() is None
@@ -255,12 +271,15 @@ async def test_my_coach_toggles_and_revoke(fresh_db):
 
     screen = await _tap(ATHLETE, f"coach:my:{COACH}")
     assert "никогда" in _screen(screen)
-    await _tap(ATHLETE, f"coach:myt:{COACH}:food")
-    assert bool((await fresh_db.get_coach_link(COACH, ATHLETE))["show_food"]) is True
+    # Старая кнопка второго переключателя из уже отправленного сообщения —
+    # ничего не меняет, только перерисовывает экран.
+    stale = await _tap(ATHLETE, f"coach:myt:{COACH}:food")
+    assert not (await fresh_db.get_coach_link(COACH, ATHLETE))["show_food"]
+    assert [cb for _t, cb in _buttons(_kb(stale)) if cb.startswith("coach:myt:")] == [f"coach:myt:{COACH}:bw"]
     toggled = await _tap(ATHLETE, f"coach:myt:{COACH}:bw")
     link = await fresh_db.get_coach_link(COACH, ATHLETE)
     assert bool(link["show_bodyweight"]) is True
-    assert ("🍽 Дневник еды: открыт", f"coach:myt:{COACH}:food") in _buttons(_kb(toggled))
+    assert ("⚖️ Вес тела: открыт", f"coach:myt:{COACH}:bw") in _buttons(_kb(toggled))
 
     ask = await _tap(ATHLETE, f"coach:rv:{COACH}")
     assert "останутся у тебя" in _screen(ask)
@@ -299,7 +318,7 @@ async def test_clients_list_signals_and_pagination(fresh_db):
     for i in range(coach.CLIENTS_PAGE_SIZE + 1):
         cid = 700 + i
         await _user(fresh_db, cid)
-        await fresh_db.create_coach_link(COACH, cid, f"Атлет {i:02d}", show_bodyweight=False, show_food=False)
+        await fresh_db.create_coach_link(COACH, cid, f"Атлет {i:02d}", show_bodyweight=False)
 
     first = await _tap(COACH, "coach:clients:0")
     text = _screen(first)
@@ -323,8 +342,8 @@ async def test_client_card_and_read_only_workout_never_show_ai(fresh_db):
     assert "Маша" in text and "Рекорды за неделю" in text and "Жим лёжа" in text
     cbs = [cb for _t, cb in _buttons(_kb(card))]
     assert f"coach:w:{ATHLETE}:{wid}" in cbs
-    # Вес и еда закрыты — их кнопок нет вовсе.
-    assert f"coach:bw:{ATHLETE}" not in cbs and f"coach:fd:{ATHLETE}" not in cbs
+    # Вес тела закрыт — его кнопки нет вовсе.
+    assert f"coach:bw:{ATHLETE}" not in cbs
 
     workout = await _tap(COACH, f"coach:w:{ATHLETE}:{wid}")
     assert "Жим лёжа" in _screen(workout)
@@ -334,16 +353,20 @@ async def test_client_card_and_read_only_workout_never_show_ai(fresh_db):
     assert "закрытым" in _alert(hidden)
 
 
-async def test_bodyweight_and_food_only_when_the_athlete_opened_them(fresh_db):
-    await _linked(fresh_db, bw=True, food=True)
+async def test_bodyweight_only_when_the_athlete_opened_it(fresh_db):
+    await _linked(fresh_db, bw=True)
     await fresh_db.add_bodyweight_log(ATHLETE, 70.5)
     await fresh_db.add_food_entry(ATHLETE, dt.date.today().isoformat(), "Гречка", calories=300)
     card = await _tap(COACH, f"coach:cl:{ATHLETE}")
     cbs = [cb for _t, cb in _buttons(_kb(card))]
-    assert f"coach:bw:{ATHLETE}" in cbs and f"coach:fd:{ATHLETE}" in cbs
+    assert f"coach:bw:{ATHLETE}" in cbs
+    assert not any(cb.startswith("coach:fd:") for cb in cbs)
+    assert "Гречка" not in _screen(card) and "ккал" not in _screen(card)
     assert "70.5кг" in _screen(await _tap(COACH, f"coach:bw:{ATHLETE}"))
-    food = _screen(await _tap(COACH, f"coach:fd:{ATHLETE}"))
-    assert "Гречка" in food and "300 ккал" in food
+    # Кнопка первой версии карточки в уже отправленном сообщении открывает
+    # саму карточку — дневника питания тренер не видит нигде.
+    legacy = _screen(await _tap(COACH, f"coach:fd:{ATHLETE}"))
+    assert "Маша" in legacy and "Гречка" not in legacy and "ккал" not in legacy
 
 
 async def test_non_linked_access_is_refused_everywhere(fresh_db):

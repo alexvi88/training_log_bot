@@ -1091,9 +1091,11 @@ CREATE TABLE IF NOT EXISTS coach_invites (
 CREATE INDEX IF NOT EXISTS idx_coach_invites_owner ON coach_invites (owner_id);
 
 -- Связка «тренер ↔ атлет». client_name — как атлет сам назвался тренеру
--- (ник Telegram, Apple ID и почта тренеру не видны никогда). Вес тела и
--- дневник еды — только по флагам атлета, по умолчанию закрыты. Нет строки —
--- нет доступа: отзыв атлетом и «убрать клиента» тренером удаляют её.
+-- (ник Telegram, Apple ID и почта тренеру не видны никогда). Вес тела —
+-- только по флагу атлета, по умолчанию закрыт. Нет строки — нет доступа:
+-- отзыв атлетом и «убрать клиента» тренером удаляют её. show_food — мёртвая
+-- колонка от первой версии сервиса: никто её не читает и не пишет, оставлена,
+-- чтобы не гонять разрушающую миграцию.
 -- У строки два хозяина, поэтому снос аккаунта чистит её по обеим колонкам
 -- (db._WIPE_PAIR_TABLES), а не одним _user_scoped_tables.
 CREATE TABLE IF NOT EXISTS coach_links (
@@ -12554,15 +12556,15 @@ async def get_coach_link(coach_id: int, client_id: int) -> Optional[aiosqlite.Ro
 
 
 async def create_coach_link(
-    coach_id: int, client_id: int, client_name: str, *, show_bodyweight: bool, show_food: bool
+    coach_id: int, client_id: int, client_name: str, *, show_bodyweight: bool
 ) -> bool:
     """False — связка уже есть (повторное «Разрешить» ничего не меняет)."""
     async with _write_lock:
         try:
             await conn().execute(
                 "INSERT INTO coach_links (coach_id, client_id, client_name, show_bodyweight, "
-                "show_food, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (coach_id, client_id, client_name, int(show_bodyweight), int(show_food), now_iso()),
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (coach_id, client_id, client_name, int(show_bodyweight), now_iso()),
             )
         except aiosqlite.IntegrityError:
             return False
@@ -12575,7 +12577,6 @@ async def update_coach_link_visibility(
     client_id: int,
     *,
     show_bodyweight: Optional[bool] = None,
-    show_food: Optional[bool] = None,
     client_name: Optional[str] = None,
 ) -> bool:
     sets: list[str] = []
@@ -12583,9 +12584,6 @@ async def update_coach_link_visibility(
     if show_bodyweight is not None:
         sets.append("show_bodyweight = ?")
         params.append(int(show_bodyweight))
-    if show_food is not None:
-        sets.append("show_food = ?")
-        params.append(int(show_food))
     if client_name is not None:
         sets.append("client_name = ?")
         params.append(client_name)

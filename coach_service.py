@@ -14,8 +14,8 @@
 
 - всегда: тренировки, подходы, заметки к ним, рекорды, программы и прогресс по
   ним;
-- только если атлет включил: вес тела (show_bodyweight) и дневник еды
-  (show_food), по умолчанию выключены;
+- только если атлет включил: вес тела (show_bodyweight), по умолчанию
+  выключен;
 - никогда: переписка с AI-тренером (и его разборы тренировок), почта, Apple ID,
   ник и id в Telegram. Тренер знает атлета по имени, которым тот сам назвался
   на экране согласия.
@@ -63,7 +63,7 @@ PROGRAM_BEHIND_DAYS = 7
 # Что видно тренеру — для справки и для тестов; экран согласия в приложении
 # говорит это своим текстом.
 VISIBLE_ALWAYS = ("workouts", "sets", "notes", "records", "programs")
-VISIBLE_OPT_IN = ("bodyweight", "food")
+VISIBLE_OPT_IN = ("bodyweight",)
 NEVER_VISIBLE = ("ai_chats", "email", "apple_id", "telegram")
 
 
@@ -98,7 +98,6 @@ def visibility_json(link: Any) -> dict[str, Any]:
     экран согласия в приложении пишет его своим текстом."""
     return {
         "bodyweight": bool(link["show_bodyweight"]) if link is not None else False,
-        "food": bool(link["show_food"]) if link is not None else False,
     }
 
 
@@ -273,7 +272,7 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
 async def _client_brief(coach_id: int, client: Any, link: Any) -> str:
     """Атлет текстом для модели: имя, неделя, пропуск, рекорды, назначенные
     программы, последние тренировки. Только то, что тренер и так видит на
-    экранах — ни веса тела, ни еды, ни переписки с AI-тренером."""
+    экранах — ни веса тела, ни переписки с AI-тренером."""
     signals = await client_signals(client, link, coach_id)
     lines = [i18n.t("coach.ai.data.client", name=link["client_name"])]
     lines.append(i18n.t("coach.ai.data.week", n=signals["workouts_this_week"]))

@@ -845,7 +845,7 @@ async def _coach_pair(db, user_id: int) -> tuple[int, int]:
     await db.set_user_lang(athlete, "en")
     await db.upsert_coach_profile(user_id, "Coach Alex")
     await db.replace_coach_invite(user_id, "K7MP2QXA")
-    await db.create_coach_link(user_id, athlete, "Sam", show_bodyweight=True, show_food=True)
+    await db.create_coach_link(user_id, athlete, "Sam", show_bodyweight=True)
     gid = await db.create_muscle_group(athlete, "Chest")
     ex = await db.create_exercise(athlete, "Bench Press", gid)
     wid = await db.create_workout(athlete)
@@ -903,12 +903,12 @@ async def _screen_coach_athlete_side(db, user_id: int) -> str:
     await db.set_user_lang(newcomer, "en")
     out = [
         await _coach_screen(newcomer, "coach:code"),
-        await _coach_screen(newcomer, "coach:inv:K7MP2QXA:11"),
-        await _coach_screen(newcomer, "coach:ok:K7MP2QXA:00"),
+        await _coach_screen(newcomer, "coach:inv:K7MP2QXA:1"),
+        await _coach_screen(newcomer, "coach:ok:K7MP2QXA:0"),
         await _coach_screen(newcomer, "coach:no"),
-        await _coach_screen(newcomer, "coach:inv:NOPE2345:00"),
-        await _coach_screen(user_id, "coach:inv:K7MP2QXA:00"),
-        await _coach_screen(athlete, "coach:inv:K7MP2QXA:00"),
+        await _coach_screen(newcomer, "coach:inv:NOPE2345:0"),
+        await _coach_screen(user_id, "coach:inv:K7MP2QXA:0"),
+        await _coach_screen(athlete, "coach:inv:K7MP2QXA:0"),
         await _coach_screen(athlete, f"coach:my:{user_id}"),
         await _coach_screen(athlete, f"coach:rv:{user_id}"),
     ]
@@ -927,13 +927,12 @@ async def _screen_coach_athlete_side(db, user_id: int) -> str:
 
 async def _screen_coach_clients(db, user_id: int) -> str:
     """Тренер: «Мои клиенты» с сигналами, карточка клиента, все тренировки,
-    тренировка с комментариями, ввод комментария, вес, еда, назначение,
+    тренировка с комментариями, ввод комментария, вес, назначение,
     «убрать», отказ чужому."""
     from handlers import coach
 
     athlete, wid = await _coach_pair(db, user_id)
     await db.add_bodyweight_log(athlete, 70.5)
-    await db.add_food_entry(athlete, "2026-10-01", "Oats", calories=300)
     out = [
         await _coach_screen(user_id, "coach:clients:0"),
         await _coach_screen(user_id, f"coach:cl:{athlete}"),
@@ -941,7 +940,6 @@ async def _screen_coach_clients(db, user_id: int) -> str:
         await _coach_screen(user_id, f"coach:w:{athlete}:{wid}"),
         await _coach_screen(user_id, f"coach:cm:{athlete}:{wid}"),
         await _coach_screen(user_id, f"coach:bw:{athlete}"),
-        await _coach_screen(user_id, f"coach:fd:{athlete}"),
         await _coach_screen(user_id, f"coach:asg:{athlete}"),
         await _coach_screen(user_id, f"coach:rm:{athlete}"),
         await _coach_screen(athlete, f"coach:cl:{user_id}"),
@@ -952,10 +950,10 @@ async def _screen_coach_clients(db, user_id: int) -> str:
     out += coach.signal_texts(signals)
     out += coach.signal_texts({**signals, "days_since_last_workout": None})
     for key in (
-        "coach.visibility.both", "coach.visibility.bodyweight", "coach.visibility.food", "coach.visibility.none",
+        "coach.visibility.bodyweight", "coach.visibility.none",
         "coach.comment.draft_gone", "coach.assign.retry", "coach.summary_none", "coach.summary_none_one",
         "coach.ai_summary.thinking", "coach.ai_summary.header_all", "coach.clients.empty",
-        "coach.bodyweight.empty", "coach.food.empty", "coach.assign.empty", "coach.signal.none",
+        "coach.bodyweight.empty", "coach.assign.empty", "coach.signal.none",
     ):
         out.append(i18n.t(key))
     out += [

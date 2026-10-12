@@ -157,7 +157,7 @@ async def test_coach_links_follow_the_app_account_into_telegram(fresh_db):
     await db.upsert_coach_profile(coach_id, "Тренер")
     app = await db.create_app_only_user(language_code="ru")
     app_id = app["telegram_id"]
-    assert await db.create_coach_link(coach_id, app_id, "Маша", show_bodyweight=False, show_food=False)
+    assert await db.create_coach_link(coach_id, app_id, "Маша", show_bodyweight=False)
 
     assert await db.link_telegram_to_app_account(app_id, telegram_id) == "ok"
 
