@@ -19,6 +19,7 @@ import apns
 import coach_service
 import config
 import db
+import timeutil
 
 pytestmark = pytest.mark.asyncio
 
@@ -250,7 +251,12 @@ async def test_workouts_signals_and_records(fresh_db):
 async def test_missing_signal_after_a_week_without_workouts(fresh_db):
     coach, athlete, _ = await _linked(fresh_db)
     ex = await _exercise(athlete, "Присед")
-    await _finished_workout(athlete, ex, 60, date=(dt.date.today() - dt.timedelta(days=9)).isoformat())
+    # «Сегодня» — по часам атлета (timeutil.user_today, часовой пояс из
+    # users), как считает coach_service.client_signals, а не по часам
+    # сервера: вечером по UTC у атлета на UTC+3 уже завтра, и dt.date.today()
+    # давал 10 дней вместо 9.
+    today = timeutil.user_today(await db.get_user(CLIENT))
+    await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=9)).isoformat())
     signals = (await coach.get("/coach/clients")).json()["clients"][0]["signals"]
     assert signals["missing"] is True and signals["days_since_last_workout"] == 9
     assert signals["workouts_this_week"] == 0

@@ -672,6 +672,37 @@ async def unarchive_exercise(request: Request) -> JSONResponse:
     return JSONResponse(_exercise_json(row))
 
 
+async def copy_exercise(request: Request) -> JSONResponse:
+    """«Сделать копию» на карточке упражнения — тот же db.copy_exercise, что у
+    кнопки «⧉ Сделать копию» в боте: новое своё упражнение с настройками,
+    описанием, заметками и фото источника и пустой историей. Тело —
+    `{"name": "..."}`; 201 и копия в том же формате, что у остальных ручек
+    упражнений. Имя обязано отличаться и от источника, и от любого другого
+    своего упражнения (включая архив) — 409 `exercise_name_taken` с текстом
+    тренера, что делать дальше."""
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    source = await _owned_exercise(exercise_id, user_id)
+    body = await _json_body(request)
+    name = _exercise_name(body)
+    outcome, new_id = await db.copy_exercise(user_id, exercise_id, name)
+    if outcome == db.COPY_NOT_FOUND:
+        raise ApiError(404, "not_found", "exercise not found")
+    if outcome == db.COPY_EMPTY_NAME:
+        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
+    if outcome != db.COPY_OK:
+        key = {
+            db.COPY_SAME_NAME: "exercises.copy.same_name",
+            db.COPY_NAME_ARCHIVED: "exercises.copy.name_archived",
+        }.get(outcome, "exercises.copy.name_taken")
+        raise ApiError(
+            409, "exercise_name_taken", "another exercise already has this name",
+            key=key, source=source["name"],
+        )
+    row = await db.get_exercise(new_id)
+    return JSONResponse(_exercise_json(row), status_code=201)
+
+
 async def merge_exercises(request: Request) -> JSONResponse:
     """Слить дубликат в целевое упражнение — самое ценное из всей карточки:
     «Жим лёжа» и «жим штанги лёжа», занесённые порознь, иначе делят историю и
@@ -2217,6 +2248,7 @@ routes = [
     Route("/exercises/{exercise_id:int}", update_exercise, methods=["PATCH"]),
     Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/unarchive", unarchive_exercise, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}/copy", copy_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),
     Route("/exercises/{exercise_id:int}/superset-partners", superset_partners, methods=["GET"]),
     Route("/workouts/active", active_workout, methods=["GET"]),

@@ -24,8 +24,10 @@ api_v1_media.py, как и у каталожных демонстраций. Х�
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import shutil
 import uuid
 
 import config
@@ -119,6 +121,36 @@ def save(exercise_id: int, raw: bytes, ext: str) -> str:
         fh.write(raw)
     os.replace(tmp_path, final_path)
     return name
+
+
+def duplicate(name: str | None, exercise_id: int) -> str | None:
+    """Своя копия файла фото для другого упражнения («⧉ Сделать копию»,
+    db.copy_exercise) — и имя этой копии для базы, или None, если копировать
+    нечего (фото нет или файл пропал с диска).
+
+    Именно копия, а не та же строка в колонке: каждое упражнение распоряжается
+    своим файлом само — замена или удаление фото (set_exercise_photo,
+    delete_exercise_photo) сносит прежний файл, и общий на двоих файл исчез бы
+    у второго упражнения молча. Имя новое, по тем же правилам, что у save().
+    """
+    source = path_for(name)
+    if source is None:
+        return None
+    ext = os.path.splitext(source)[1].lower().lstrip(".")
+    if ext not in ALLOWED_EXTENSIONS:
+        return None
+    new_name = f"ex{exercise_id}_{uuid.uuid4().hex[:12]}.{ext}"
+    final_path = os.path.join(photo_dir(), new_name)
+    tmp_path = final_path + ".part"
+    try:
+        shutil.copyfile(source, tmp_path)
+        os.replace(tmp_path, final_path)
+    except OSError:
+        logger.warning("exercise_photos: не удалось скопировать %s", source, exc_info=True)
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        return None
+    return new_name
 
 
 def delete(name: str | None) -> None:

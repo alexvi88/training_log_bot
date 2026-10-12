@@ -439,6 +439,13 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", f"/exercises/{own2_id}/archive", expect=200)
     await w.call("GET", "/exercises?archived=1", expect=200)
     await w.call("POST", f"/exercises/{own2_id}/unarchive", expect=200)
+    # «Сделать копию»: копия каталожного упражнения и все три отказа — текст
+    # ошибки (то же имя / занято / пусто / нет такого) на языке атлета.
+    await w.call("POST", f"/exercises/{forked_id}/copy", json={"name": text["exercise"] + " 2"}, expect=201)
+    await w.call("POST", f"/exercises/{own_id}/copy", json={"name": text["exercise"]}, expect=409)
+    await w.call("POST", f"/exercises/{own_id}/copy", json={"name": text["exercise2"]}, expect=409)
+    await w.call("POST", f"/exercises/{own_id}/copy", json={"name": " "}, expect=400)
+    await w.call("POST", "/exercises/999999/copy", json={"name": text["exercise"] + " 3"}, expect=404)
     await w.call("GET", "/exercises/999999/media", expect=404)
 
     # --- тренировка ---

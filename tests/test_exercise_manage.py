@@ -532,7 +532,7 @@ async def test_edit_menu_layout_is_two_buttons_per_row():
     rows = kb.inline_keyboard
     assert [b.text for b in rows[0]] == ["✏️ Название", "✏️ Группа"]
     assert [b.text for b in rows[1]] == ["✏️ Описание", "✏️ Фото"]
-    assert [b.text for b in rows[2]] == ["🔀 Объединить с другим"]
+    assert [b.text for b in rows[2]] == ["🔀 Объединить с другим", "⧉ Сделать копию"]
     assert [b.text for b in rows[3]] == ["⬅️ Назад"]
 
 
@@ -557,7 +557,7 @@ async def test_edit_menu_offers_delete_photo_button_when_one_exists():
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "🗑 Удалить фото" in labels
     rows = kb.inline_keyboard
-    assert [b.text for b in rows[2]] == ["🔀 Объединить с другим"]
+    assert [b.text for b in rows[2]] == ["🔀 Объединить с другим", "⧉ Сделать копию"]
     assert [b.text for b in rows[3]] == ["🗑 Удалить фото"]
     assert [b.text for b in rows[4]] == ["⬅️ Назад"]
 
