@@ -212,7 +212,7 @@ async def test_only_first_crash_of_its_kind_in_build_alerts(fresh_db, alerts):
     await asyncio.sleep(0)
     texts = _drain(queue)
     assert len(texts) == 3
-    assert "1.4 (57)" in texts[0] and "sig 11" in texts[0] and "id = 1" in texts[0]
+    assert "1.4 (57)" in texts[0] and "sig 11" in texts[0] and "/crash 1" in texts[0]
     assert "sig 6" in texts[1]
     assert "1.4 (58)" in texts[2]
 

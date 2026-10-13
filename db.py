@@ -10644,6 +10644,12 @@ async def diagnostics_summary(days: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+async def get_diagnostic(diagnostic_id: int) -> Optional[aiosqlite.Row]:
+    """Один отчёт MetricKit целиком — админская `/crash N`."""
+    cur = await conn().execute("SELECT * FROM diagnostics WHERE id = ?", (diagnostic_id,))
+    return await cur.fetchone()
+
+
 async def recent_crashes(days: int, limit: int) -> list[aiosqlite.Row]:
     """Последние падения за `days` суток с причиной из diagnosticMetaData —
     чтобы по сводке было видно, одно это падение или разные."""

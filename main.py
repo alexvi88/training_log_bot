@@ -422,6 +422,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="growth", description="Воронка по источникам (админ)"),
                 BotCommand(command="crashes", description="Сбои iOS-приложения по версиям (админ)"),
+                BotCommand(command="crash", description="Один отчёт о сбое iOS: /crash N (админ)"),
                 BotCommand(command="metrics", description="Метрики по дням + CSV (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
                 BotCommand(command="announce", description="Релизный анонс: проверить и разослать (админ)"),

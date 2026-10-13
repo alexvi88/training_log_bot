@@ -329,7 +329,7 @@ def crash_alert_text(
         lines.append(escape(", ".join(reason)))
     if termination:
         lines.append(escape(str(termination)[:300]))
-    lines.append(f"Стек: <code>SELECT payload FROM diagnostics WHERE id = {diagnostic_id}</code>")
+    lines.append(f"Стек: <code>/crash {diagnostic_id}</code>")
     return "\n".join(lines)
 
 
