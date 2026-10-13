@@ -938,6 +938,7 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
         # доната жив по старым кнопкам (menu:donate).
         show_donate=False,
         app_store_url=config.app_store_url(),
+        coach_clients=len(await db.list_coach_clients(user_id)),
     )
 
 

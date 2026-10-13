@@ -140,8 +140,14 @@ def main_menu(
     community_url: str | None = None,
     show_donate: bool = False,
     app_store_url: str | None = None,
+    coach_clients: int = 0,
 ) -> InlineKeyboardMarkup:
-    """show_import_button: offered while the diary is still empty (same condition
+    """coach_clients: сколько у человека клиентов как у тренера. Есть хоть
+    один — «🧑‍🏫 Мои клиенты · N» отдельной строкой над всеми пунктами меню:
+    тренеру список клиентов нужен каждый день, а не раз в месяц через
+    «⚙️ Настройки» → «🧑‍🏫 Тренер» (владелец). Нет клиентов — нет кнопки.
+
+    show_import_button: offered while the diary is still empty (same condition
     that used to gate the now-removed "✍️ Записать прошлую тренировку" quick-log
     button — see handlers.workout._main_menu_kb). A first-time user with a whole
     training history in Hevy or another app shouldn't start this diary from
@@ -162,6 +168,8 @@ def main_menu(
     кто уже был в боте; новичку про приложение говорит только эта кнопка.
     Нет ссылки — нет и кнопки: кнопка в никуда хуже отсутствующей."""
     b = InlineKeyboardBuilder()
+    if coach_clients > 0:
+        b.button(text=i18n.t("btn.menu_my_clients", n=coach_clients), callback_data="coach:clients:0")
     if has_active_workout:
         b.button(text=i18n.t("btn.resume_workout_caps"), callback_data="menu:resume_workout")
     else:
@@ -192,7 +200,7 @@ def main_menu(
     # под ним — приложение для iPhone (если есть ссылка), чат сообщества (если
     # заведён), и под всем — донат (если включён).
     b.adjust(
-        *([1, 1] if show_import_button else [1]), 2, 2, 2, 1, 1,
+        *([1] if coach_clients > 0 else []), *([1, 1] if show_import_button else [1]), 2, 2, 2, 1, 1,
         *([1] if app_store_url else []),
         *([1] if community_url else []), *([1] if show_donate else []),
     )

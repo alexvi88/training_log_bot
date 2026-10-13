@@ -645,3 +645,28 @@ async def test_invite_code_extraction():
     assert coach._extract_code("https://t.me/Bot?start=coach_K7MP2QXA") == "K7MP2QXA"
     assert coach._extract_code("trainingdiary://coach/k7mp2qxa") == "K7MP2QXA"
     assert coach_service.normalize_invite_code("") == ""
+
+
+async def test_main_menu_shows_my_clients_only_for_coach_with_clients():
+    import keyboards
+
+    def callbacks(markup):
+        return [b.callback_data for row in markup.inline_keyboard for b in row]
+
+    assert "coach:clients:0" not in callbacks(keyboards.main_menu(has_active_workout=False))
+    markup = keyboards.main_menu(has_active_workout=False, coach_clients=3)
+    rows = markup.inline_keyboard
+    # отдельной строкой над всеми пунктами меню
+    assert [b.callback_data for b in rows[0]] == ["coach:clients:0"]
+    assert rows[0][0].text.endswith("3")
+    assert rows[1][0].callback_data == "menu:start_workout"
+
+
+async def test_main_menu_kb_counts_coach_clients(fresh_db):
+    from handlers import workout
+
+    kb = await workout._main_menu_kb(COACH, None)
+    assert "coach:clients:0" not in [b.callback_data for row in kb.inline_keyboard for b in row]
+    await fresh_db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=False)
+    kb = await workout._main_menu_kb(COACH, None)
+    assert "coach:clients:0" in [b.callback_data for row in kb.inline_keyboard for b in row]
