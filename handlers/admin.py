@@ -4,6 +4,7 @@ activity_log.py)."""
 
 import asyncio
 import datetime as dt
+import json
 import logging
 from contextlib import suppress
 from html import escape
@@ -643,9 +644,87 @@ def format_crash_report(summary, recent, days: int) -> str:
             )
     lines += [
         "",
-        "Стек целиком: <code>SELECT payload FROM diagnostics WHERE id = N</code>",
+        "Стек целиком: <code>/crash N</code>",
     ]
     return "\n".join(lines)
+
+
+# Сколько кадров главного потока показать текстом в `/crash N`.
+CRASH_FRAMES_SHOWN = 15
+
+
+def _attributed_frames(payload: dict) -> list[dict]:
+    """Кадры потока, на котором случился сбой или зависание (MetricKit
+    `callStackTree`, поток с `threadAttributed`), сверху вниз — первая цепочка
+    `subFrames`. Нет такого потока — первый попавшийся."""
+    tree = payload.get("callStackTree") or {}
+    stacks = tree.get("callStacks") or []
+    if not stacks:
+        return []
+    stack = next((s for s in stacks if s.get("threadAttributed")), stacks[0])
+    frames: list[dict] = []
+    level = stack.get("callStackRootFrames") or []
+    while level and len(frames) < 200:
+        frame = level[0]
+        frames.append(frame)
+        level = frame.get("subFrames") or []
+    return frames
+
+
+def format_crash_detail(row, payload: dict) -> str:
+    """Текст `/crash N`: что за сбой, на какой сборке и верх стека — свои
+    кадры (`TrainingLog`) жирным, чтобы сразу было видно, наш ли код."""
+    meta = payload.get("diagnosticMetaData") or {}
+    who = f"id {row['user_id']}" if row["user_id"] is not None else "без входа"
+    lines = [
+        f"🧯 <b>#{row['id']} · {escape(_KIND_LABELS.get(row['kind'], row['kind']))}</b>",
+        f"{escape(str(row['app_version']))} ({escape(str(row['build']))}) · "
+        f"{escape(str(row['device']))} iOS {escape(str(row['os_version']))} · {who}",
+    ]
+    for key, label in (
+        ("hangDuration", "зависание"),
+        ("exceptionType", "exc"),
+        ("signal", "sig"),
+        ("terminationReason", "причина"),
+    ):
+        if meta.get(key) is not None:
+            lines.append(f"{label}: {escape(str(meta[key])[:200])}")
+    frames = _attributed_frames(payload)
+    if frames:
+        lines += ["", "<b>Верх стека:</b>"]
+        for frame in frames[:CRASH_FRAMES_SHOWN]:
+            name = str(frame.get("binaryName") or "?")
+            text = escape(f"{name} +{frame.get('offsetIntoBinaryTextSegment', '?')}")
+            lines.append(f"<b>{text}</b>" if name == "TrainingLog" else text)
+        if len(frames) > CRASH_FRAMES_SHOWN:
+            lines.append(f"… ещё {len(frames) - CRASH_FRAMES_SHOWN}")
+    lines += ["", "Полный отчёт — файлом ниже; адреса символизируются по dSYM этой сборки."]
+    return "\n".join(lines)
+
+
+@router.message(Command("crash"))
+async def cmd_crash(message: Message, state: FSMContext):
+    """Один отчёт MetricKit по номеру из алерта или `/crashes`: сводка с верхом
+    стека и сам JSON файлом."""
+    if not _is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    arg = parts[1].strip().lstrip("#") if len(parts) > 1 else ""
+    if not arg.isdigit():
+        await message.answer("Номер отчёта: <code>/crash 4</code>", parse_mode="HTML")
+        return
+    row = await db.get_diagnostic(int(arg))
+    if row is None:
+        await message.answer(f"Отчёта #{escape(arg)} нет — возможно, уже вычищен по сроку.", parse_mode="HTML")
+        return
+    try:
+        payload = json.loads(row["payload"])
+    except (TypeError, ValueError):
+        payload = {}
+    await message.answer(format_crash_detail(row, payload if isinstance(payload, dict) else {}), parse_mode="HTML")
+    await message.answer_document(
+        BufferedInputFile(str(row["payload"]).encode(), filename=f"diagnostic-{row['id']}.json"),
+    )
 
 
 @router.message(Command("crashes"))

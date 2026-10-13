@@ -204,3 +204,48 @@ async def test_storage_failure_payload_is_whitelisted_and_truncated(fresh_db, cl
     assert set(saved) == {"store", "op", "error", "diagnosticMetaData"}
     assert len(saved["error"]) == 120
     assert saved["diagnosticMetaData"] == {"appVersion": "1.5"}
+
+
+HANG = {
+    "callStackTree": {"callStacks": [
+        {"threadAttributed": False, "callStackRootFrames": [{"binaryName": "libsystem", "offsetIntoBinaryTextSegment": 1}]},
+        {"threadAttributed": True, "callStackRootFrames": [
+            {"binaryName": "SwiftUICore", "offsetIntoBinaryTextSegment": 10, "subFrames": [
+                {"binaryName": "TrainingLog", "offsetIntoBinaryTextSegment": 4242, "subFrames": [
+                    {"binaryName": "libsqlite3.dylib", "offsetIntoBinaryTextSegment": 77},
+                ]},
+            ]},
+        ]},
+    ]},
+    "diagnosticMetaData": {"appVersion": "1.0.4", "appBuildVersion": "59", "hangDuration": "1.2 sec"},
+}
+
+
+async def test_crash_command_shows_attributed_stack_and_sends_json(fresh_db, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    diag_id = await db.log_diagnostic(
+        user_id=None, app_version="1.0.4", build="59", os_version="iOS 27", device="iPhone12,5",
+        kind="hang", payload=json.dumps(HANG),
+    )
+    monkeypatch.setattr(admin, "_is_admin", lambda uid: True)
+    msg = MagicMock()
+    msg.from_user.id = 1
+    msg.text = f"/crash {diag_id}"
+    msg.answer = AsyncMock()
+    msg.answer_document = AsyncMock()
+    await admin.cmd_crash(msg, None)
+    text = msg.answer.await_args.args[0]
+    assert "зависание: 1.2 sec" in text
+    # поток с threadAttributed, сверху вниз, свой код — жирным
+    assert text.index("SwiftUICore +10") < text.index("<b>TrainingLog +4242</b>") < text.index("libsqlite3.dylib +77")
+    assert "libsystem" not in text
+    doc = msg.answer_document.await_args.args[0]
+    assert doc.filename == f"diagnostic-{diag_id}.json"
+
+    missing = MagicMock()
+    missing.from_user.id = 1
+    missing.text = "/crash 99999"
+    missing.answer = AsyncMock()
+    await admin.cmd_crash(missing, None)
+    assert "нет" in missing.answer.await_args.args[0]
