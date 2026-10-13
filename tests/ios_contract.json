@@ -910,6 +910,40 @@
     }
    }
   },
+  "CoachClientExercises": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "exercises": {
+     "type": "[CoachClientExercises.Item]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientExercises.Item": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "sessions": {
+     "type": "Int",
+     "optional": false
+    },
+    "lastWorkoutAt": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
   "CoachClientOverview": {
    "file": "TrainingLog/Models/CoachModels.swift",
    "fields": {
@@ -4237,6 +4271,20 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.coachClientExercises",
+   "method": "GET",
+   "path": "/coach/clients/{}/exercises",
+   "root": "CoachClientExercises",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClientExerciseProgress",
+   "method": "GET",
+   "path": "/coach/clients/{}/exercises/{}/progress",
+   "root": "ExerciseProgressSeries",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.assignProgram",
    "method": "POST",
    "path": "/coach/clients/{}/programs",
@@ -4979,5 +5027,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "64d4ba5d021bc219bfed89dc7cfab32117594141"
+ "_ios_commit": "12a381f9f7c40f9150e1b49652fba69615c3b394"
 }
