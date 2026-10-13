@@ -14,6 +14,7 @@
   <li><b>Support messages.</b> Messages and screenshots you send via “Support &amp; feedback” (or as feedback), and the service owner’s replies.</li>
   <li><b>Photos and video.</b> Your own exercise photos are stored on the server. A photo you send the coach in the app is kept in the chat history. A set video is not stored in full: after the review, a single preview frame is kept for the chat history. Voice messages are sent for speech recognition; only the recognized text is saved.</li>
   <li><b>Coach and clients.</b> If you tapped “I’m a coach” — the name athletes see you under, your invite code and your comments on their workouts. Anyone with your invite link or code sees your coach name: the invite page shows only that name and the code. If you opened your diary to a coach — the name you gave them, whether you opened your body weight to them (a separate switch), your coach’s comments on your workouts and the programs they assigned you (the program copy becomes yours).</li>
+  <li><b>Mini-games between sets</b> (in the app). The result of every game you play: the game, score, duration and time — used for your best score, badges and the leaderboard. Plus the setting for whether the leaderboard shows your name.</li>
   <li><b>Notifications.</b> The Apple Push Notification service (APNs) device token, to send push notifications to your iPhone.</li>
   <li><b>Service data.</b> Access tokens for the app and for AI clients you connected (MCP); an activity log (which buttons were tapped and what was typed); usage statistics (which screens were opened, when the app was opened and for how long, which notifications were opened, which app version — nothing you typed); the cost of AI requests; app crash reports from iOS (MetricKit: app and iOS version, iPhone model, call stack — no diary content; they are sent even before you sign in) and, if the phone fails to keep your sign-in key, the system error code with the app and iOS version and the iPhone model; the link tag you arrived through and who invited you; share links you created; before you sign in to the app — which onboarding step this install reached (a random ID the app creates itself, not tied to your account or your address); if you supported the project with Telegram Stars — the payment ID and amount.</li>
 </ul>
@@ -36,6 +37,7 @@
   <li><b>AI clients you connect yourself</b> (for example Claude or ChatGPT via MCP) get access to your log only after you grant it. You can revoke that access.</li>
 </ul>
 <p>These services operate in different countries, so your data may be processed outside your own.</p>
+<p>The mini-game leaderboard is visible to everyone who plays in the app: it shows your best score for the week or all time under the label “Athlete #NNNN” — a number with no link to your account that can’t be used to find you. Your Telegram username replaces the number only if you turn on showing your name in the mini-games yourself; you can turn it off at any time. An account without Telegram has no name and always stays “Athlete #NNNN”.</p>
 <p>A share link is a snapshot of a program, a day or an exercise. Anyone with the link can see it. The link lives for 180 days, and you can revoke it sooner.</p>
 
 <h2>How long it is kept</h2>
@@ -44,6 +46,7 @@
   <li>Activity log — 30 days; AI cost records and app crash reports — 90 days; usage statistics and pre-sign-in app steps — 13 months. Daily totals across all users combined (how many people visited, trained, came back) — kept indefinitely: they contain nothing about you personally.</li>
   <li>Past AI coach conversations in the app — 180 days; the current conversation — until you start a new one.</li>
   <li>The coach’s Sunday weekly reviews — 90 days.</li>
+  <li>Mini-game results — 400 days from the game.</li>
   <li>The list of history uploads and the log of exercise merges — 30 days: that’s how long they can be undone. The moved-over workouts themselves stay in your log.</li>
 </ul>
 <p><b>Backups.</b> The database is continuously copied to Tigris storage; once a day a separate copy is made — the last several are kept on the server, and the same copy is sent to the service owner on Telegram. The host also takes disk snapshots and keeps them for a few days. Backups exist only to recover from failures. After you delete your account, your data remains in them until they are replaced by newer ones, and in the owner's Telegram until they are deleted there.</p>
@@ -53,7 +56,7 @@
   <li>In the app: Profile → “🗑 Delete account”.</li>
   <li>In the bot: “🔧 Settings” → “🗑 Delete account”.</li>
 </ul>
-<p>Deletion immediately erases everything from the database: workouts, sets, records, food, weight, programs, AI coach chat, support messages, coach and client links, coach comments and records of assigned programs, tokens and the Apple ID link — and removes your exercise photos, AI chat photos and support screenshots from disk. Copies of support messages already delivered to the owner’s Telegram remain there until the owner deletes them. There is one account for the bot and the app: delete it in one place and it is gone in both. Deletion cannot be undone. To keep your history, export it first with “📤 Export CSV”.</p>
+<p>Deletion immediately erases everything from the database: workouts, sets, records, food, weight, programs, AI coach chat, support messages, coach and client links, coach comments and records of assigned programs, mini-game results and your place on the leaderboard, tokens and the Apple ID link — and removes your exercise photos, AI chat photos and support screenshots from disk. Copies of support messages already delivered to the owner’s Telegram remain there until the owner deletes them. There is one account for the bot and the app: delete it in one place and it is gone in both. Deletion cannot be undone. To keep your history, export it first with “📤 Export CSV”.</p>
 <p>Signing out of the app deletes nothing — it only unlinks that device.</p>
 
 <h2>Age</h2>

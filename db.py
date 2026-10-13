@@ -876,6 +876,34 @@ CREATE TABLE IF NOT EXISTS exercise_merges (
 );
 CREATE INDEX IF NOT EXISTS idx_exercise_merges_user ON exercise_merges (user_id, created_at);
 
+-- Мини-игры между подходами в приложении (games.py, api_v1_games.py): строка
+-- на каждую принятую партию — очки, длительность, время. Отвергнутая
+-- проверкой правдоподобия партия (games.is_plausible) не пишется вовсе.
+-- Лучший результат, значки и таблица лидеров считаются из этих строк на
+-- чтении. Живёт config.GAME_RESULTS_RETENTION_DAYS, при сносе аккаунта уходит
+-- вместе с ним (user_id).
+-- Не game_results выше: та — от выпиленных игр бота («Кач-Раннер» и
+-- «Кач-Отряд», другие правила счёта), её старые забеги в таблицу лидеров
+-- приложения попадать не должны.
+CREATE TABLE IF NOT EXISTS minigame_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    game TEXT NOT NULL,
+    score INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_minigame_results_user ON minigame_results (user_id, game, created_at);
+CREATE INDEX IF NOT EXISTS idx_minigame_results_game ON minigame_results (game, created_at);
+
+-- Настройки мини-игр: показывать ли в таблице лидеров имя атлета (users.username)
+-- вместо обезличенного «Атлет #NNNN». Нет строки — не показывать.
+CREATE TABLE IF NOT EXISTS minigame_settings (
+    user_id INTEGER PRIMARY KEY,
+    show_name INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
 -- Токен доступа к своим данным по MCP (см. mcp_server.py): пользователь
 -- вставляет его в конфиг внешнего AI-клиента, и тот читает историю тренировок
 -- напрямую. Ровно один живой токен на человека — «перевыпустить» удаляет
@@ -12955,3 +12983,126 @@ async def count_coach_comments_by_workout(workout_ids: list[int]) -> dict[int, i
         workout_ids,
     )
     return {row["workout_id"]: row["n"] for row in await cur.fetchall()}
+
+
+# ---------- мини-игры между подходами (games.py, api_v1_games.py) ----------
+
+
+async def add_game_result(user_id: int, game: str, score: int, duration_ms: int) -> int:
+    """Записать принятую партию. Проверку правдоподобия делает вызывающий
+    (games.is_plausible) — сюда приезжает только то, что её прошло."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO minigame_results (user_id, game, score, duration_ms, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, game, score, duration_ms, now_iso()),
+        )
+        await conn().commit()
+    return cur.lastrowid
+
+
+async def game_best(user_id: int, game: str) -> Optional[int]:
+    cur = await conn().execute(
+        "SELECT MAX(score) FROM minigame_results WHERE user_id = ? AND game = ?", (user_id, game)
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def game_summaries(user_id: int) -> dict[str, dict[str, Any]]:
+    """game → {best, best_at, plays}. best_at — время ПЕРВОЙ партии с лучшим
+    счётом: повторить рекорд — не то же самое, что его поставить."""
+    cur = await conn().execute(
+        "SELECT game, MAX(score) AS best, COUNT(*) AS plays FROM minigame_results "
+        "WHERE user_id = ? GROUP BY game",
+        (user_id,),
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for row in await cur.fetchall():
+        cur2 = await conn().execute(
+            "SELECT MIN(created_at) FROM minigame_results WHERE user_id = ? AND game = ? AND score = ?",
+            (user_id, row["game"], row["best"]),
+        )
+        (best_at,) = await cur2.fetchone()
+        out[row["game"]] = {"best": row["best"], "best_at": best_at, "plays": row["plays"]}
+    return out
+
+
+async def first_game_result_at_least(user_id: int, game: str, score: int) -> Optional[str]:
+    """Время первой партии `game` со счётом не ниже `score`, или None."""
+    cur = await conn().execute(
+        "SELECT MIN(created_at) FROM minigame_results WHERE user_id = ? AND game = ? AND score >= ?",
+        (user_id, game, score),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def list_game_scores(user_id: int, game: str) -> list[tuple[int, str]]:
+    """(score, created_at) всех партий `game` атлета по порядку — для значков
+    «за всё время», где важна сумма, а не одна партия."""
+    cur = await conn().execute(
+        "SELECT score, created_at FROM minigame_results WHERE user_id = ? AND game = ? "
+        "ORDER BY created_at, id",
+        (user_id, game),
+    )
+    return [(row[0], row[1]) for row in await cur.fetchall()]
+
+
+async def game_leaderboard_rows(
+    game: str, since: Optional[str], exclude_ids: Iterable[int], exclude_provider: str
+) -> list[aiosqlite.Row]:
+    """Лучший счёт каждого атлета в `game` с `since` (None — за всё время),
+    по убыванию; при равном счёте выше тот, кто набрал его раньше. Без
+    `exclude_ids` и без аккаунтов, вошедших через `exclude_provider`
+    (демо-вход App Review). Все строки, а не топ: место и число участников
+    нужны и тому, кто в топ не попал."""
+    excluded = sorted(set(exclude_ids))
+    not_in = f"AND r.user_id NOT IN ({','.join('?' * len(excluded))}) " if excluded else ""
+    sql = (
+        "WITH best AS ("
+        " SELECT r.user_id, MAX(r.score) AS best FROM minigame_results r"
+        " WHERE r.game = ? AND (? IS NULL OR r.created_at >= ?) "
+        + not_in
+        + " AND r.user_id NOT IN (SELECT user_id FROM auth_identities WHERE provider = ?)"
+        " GROUP BY r.user_id"
+        ") "
+        "SELECT b.user_id, b.best, MIN(r.created_at) AS reached_at, MIN(r.id) AS first_id, "
+        " u.username, COALESCE(s.show_name, 0) AS show_name "
+        "FROM best b "
+        "JOIN minigame_results r ON r.user_id = b.user_id AND r.game = ? AND r.score = b.best "
+        " AND (? IS NULL OR r.created_at >= ?) "
+        "LEFT JOIN users u ON u.telegram_id = b.user_id "
+        "LEFT JOIN minigame_settings s ON s.user_id = b.user_id "
+        "GROUP BY b.user_id "
+        "ORDER BY b.best DESC, reached_at ASC, first_id ASC"
+    )
+    params: list[Any] = [game, since, since, *excluded, exclude_provider, game, since, since]
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def get_game_show_name(user_id: int) -> bool:
+    cur = await conn().execute("SELECT show_name FROM minigame_settings WHERE user_id = ?", (user_id,))
+    row = await cur.fetchone()
+    return bool(row[0]) if row else False
+
+
+async def set_game_show_name(user_id: int, show_name: bool) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO minigame_settings (user_id, show_name, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_id) DO UPDATE SET show_name = excluded.show_name, "
+            "updated_at = excluded.updated_at",
+            (user_id, 1 if show_name else 0, now_iso()),
+        )
+        await conn().commit()
+
+
+async def prune_old_game_results(retention_days: int) -> int:
+    """Выкинуть партии старше retention_days (config.GAME_RESULTS_RETENTION_DAYS)."""
+    cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM minigame_results WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount

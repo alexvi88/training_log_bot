@@ -52,6 +52,7 @@ import api_v1_events
 import api_v1_feedback
 import api_v1_food
 import api_v1_funnel
+import api_v1_games
 import api_v1_hall_of_fame
 import api_v1_history
 import api_v1_import
@@ -2341,6 +2342,7 @@ routes += (
     + api_v1_diagnostics.routes
     + api_v1_events.routes
     + api_v1_coach.routes
+    + api_v1_games.routes
 )
 
 
