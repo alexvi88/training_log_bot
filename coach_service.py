@@ -245,15 +245,22 @@ async def _program_on_track(client_id: int, assignment: Any) -> bool:
     return await db.count_program_workouts_since(client_id, assignment["program_id"], since) > 0
 
 
-async def recent_records(client: Any, days: Optional[int] = None) -> list[dict[str, Any]]:
+async def recent_records(client: Any, days: Optional[int] = None, *, running: bool = False) -> list[dict[str, Any]]:
     """Рекорды e1RM за последние `days` дней (по умолчанию RECORD_WINDOW_DAYS)
-    — тот же критерий, что у «Итога недели» (db.e1rm_records_in_window)."""
+    — тот же критерий, что у «Итога недели» (db.e1rm_records_in_window).
+
+    `running` — для длинного окна «Прогресса» (28 дней): планка — всё, что
+    было до рекордного дня, а не только до начала окна
+    (db.e1rm_running_records_in_window). Иначе атлет, пришедший три недели
+    назад, на «Свежих рекордах» не получал ни одного, хотя в списке клиентов
+    у него «1 рекорд за неделю»."""
     days = days or RECORD_WINDOW_DAYS
     today = timeutil.user_today(client)
     start = today - dt.timedelta(days=days - 1)
     unit = formatting.unit_label(client["unit"])
     out = []
-    for row in await db.e1rm_records_in_window(
+    query = db.e1rm_running_records_in_window if running else db.e1rm_records_in_window
+    for row in await query(
         client["telegram_id"], start.isoformat(), today.isoformat(), client["e1rm_formula"]
     ):
         out.append({
@@ -434,7 +441,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
         ],
         "lifts": lifts,
         "records": records,
-        "recent_records": await recent_records(client, PROGRESS_RECORD_DAYS),
+        "recent_records": await recent_records(client, PROGRESS_RECORD_DAYS, running=True),
         "recent_record_days": PROGRESS_RECORD_DAYS,
     }
 

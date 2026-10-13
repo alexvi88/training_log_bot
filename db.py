@@ -6293,6 +6293,58 @@ async def e1rm_records_in_window(
     return await cur.fetchall()
 
 
+async def e1rm_running_records_in_window(
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+) -> list[aiosqlite.Row]:
+    """Рекорды длинного окна: день внутри [start_date, end_date], чей лучший
+    e1RM выше всего, что атлет делал в этом движении ДО этого дня — в том
+    числе раньше в том же окне. У e1rm_records_in_window планка — только то,
+    что было до начала окна: на неделю это то же самое, а на 28 дней новичок,
+    начавший три недели назад, не получал ни одного рекорда, хотя список
+    клиентов тут же писал «1 рекорд за неделю». Первая попытка движения — по-
+    прежнему не рекорд. Строка на упражнение — лучший из его рекордных
+    подходов окна; колонки те же, что у e1rm_records_in_window (earlier —
+    прежний максимум перед рекордным днём).
+    """
+    e1rm = _e1rm_sql(formula)
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        "WITH scoped AS ("
+        f"  SELECT s.id AS sid, s.exercise_id AS ex, {day} AS d, {e1rm} AS e,"
+        "          s.weight AS weight, s.reps AS reps"
+        "   FROM sets s"
+        "   JOIN workout_blocks b ON b.id = s.block_id"
+        "   JOIN workouts w ON w.id = b.workout_id"
+        "   WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
+        "), daily AS ("
+        "  SELECT ex, d, MAX(e) AS best FROM scoped GROUP BY ex, d"
+        "), ranked AS ("
+        "  SELECT ex, d, best, MAX(best) OVER ("
+        "    PARTITION BY ex ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING"
+        "  ) AS before FROM daily"
+        "), record_days AS ("
+        "  SELECT ex, d, before FROM ranked"
+        "  WHERE d >= ? AND d <= ? AND before IS NOT NULL AND before > 0 AND best > before"
+        "), inside AS ("
+        "  SELECT s.ex, s.e, s.weight, s.reps, r.before,"
+        "         ROW_NUMBER() OVER (PARTITION BY s.ex ORDER BY s.e DESC, s.sid) AS rn"
+        "  FROM scoped s JOIN record_days r ON r.ex = s.ex AND r.d = s.d"
+        ") "
+        "SELECT i.ex AS exercise_id, x.display_name, i.e AS e1rm, i.before AS earlier,"
+        "       i.weight, i.reps "
+        "FROM inside i JOIN exercises x ON x.id = i.ex "
+        "WHERE i.rn = 1 "
+        "ORDER BY (i.e - i.before) / i.before DESC, x.display_name",
+        (user_id, start_date, end_date),
+    )
+    return await cur.fetchall()
+
+
 async def count_workouts_finished_after(
     user_id: int, start_date: str, end_date: str, after: str, *, tz_offset: Optional[int] = None
 ) -> int:
