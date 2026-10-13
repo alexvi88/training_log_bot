@@ -479,12 +479,6 @@ def _logging_hint(
         base = i18n.t("workout.instruction_base")
         if has_sets:
             base += i18n.t("workout.instruction_reps_only")
-        # Голосовой ввод разбирает «сто на восемь» и дробные веса, но узнать о нём
-        # было неоткуда — а между подходами, с мелом на руках, это лучший способ
-        # записать. Строка только там, где инструкция и так показывается: мозолить
-        # ею глаза на каждом подходе незачем.
-        if ai_trainer.is_voice_configured():
-            base += i18n.t("workout.instruction_voice_hint")
     # The program's recommended sets×reps, if this exercise was opened from a
     # routine that carries one — shown above the history/warning lines since
     # it's the plan for today, not a look back at a previous session.
@@ -2604,20 +2598,6 @@ def _weight_confirm_prompt(
     return found.text if found else None
 
 
-# Голос спрятан в _HELP_SHORT, куда новичок не заходит сам — так что учим по
-# месту: на третьем подходе, набранном текстом за всю жизнь, тренер сам
-# упоминает кнопку, которой человек ещё не нашёл. Ровно один раз — дальше это
-# уже не открытие, а надоедливое напоминание (см. db.register_manual_sets_and_check_hint).
-async def _maybe_show_voice_hint(bot, data: dict, user_id: int, chat_id: int, sets_count: int) -> None:
-    # Бэкфилл и импорт — не живая тренировка: там подход не первый в жизни, а
-    # прошлый, задним числом, и учить голосу здесь не к месту (задание №9).
-    if data.get("is_backfill"):
-        return
-    if await db.register_manual_sets_and_check_hint(user_id, sets_count):
-        with suppress(TelegramBadRequest):
-            await bot.send_message(chat_id, i18n.t("workout.voice_hint"))
-
-
 async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active: int,
                                 logged: list[tuple[float, int, float | None]],
                                 chat_id: int, message_id: int,
@@ -2650,7 +2630,6 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
     # До перерисовки трекера: иначе подсказка легла бы НИЖЕ него и стала новым
     # «дном» чата, а следующий рендер живого экрана потерял бы дешёвое
     # редактирование на месте (см. chat_bottom.is_at_bottom в _refresh_live).
-    await _maybe_show_voice_hint(bot, data, user["telegram_id"], chat_id, len(logged))
     await _render_logging_screen(bot, state, user)
 
 

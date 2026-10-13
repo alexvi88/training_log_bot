@@ -1,6 +1,9 @@
-"""Одноразовая подсказка про голосовой ввод (задание №9): на третьем подходе,
-набранном текстом за всю жизнь пользователя, тренер один раз упоминает голос —
-он спрятан в /help, куда новичок сам не заходит. Дальше — тишина."""
+"""Голосовой ввод не рекламируется нигде (владелец: «давай нигде не говорить
+про голосовой ввод»): ни строкой в инструкции подхода, ни разовой подсказкой
+на третьем подходе, ни в справке /help, ни во вступлении AI-тренера. Сам
+голос работает как раньше — кто пришлёт голосовое, тому запишу."""
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,7 +15,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from fsm import WorkoutFlow
 from handlers import workout
 
-_HINT = "Кстати, можно голосом"
+_VOICE_WORDS = ("голос", "🎙", "🎤", "voice", "сто на восемь", "hundred for eight")
 
 
 def _make_message(user_id: int, text: str, message_id: int):
@@ -61,106 +64,25 @@ async def _setup_logging(db, user_id: int, *, is_backfill: bool = False):
     return state
 
 
-def _hint_sent(bot) -> bool:
-    return any(_HINT in text for text in bot.sent_texts)
+def _mentions_voice(text: str) -> bool:
+    low = text.lower()
+    return any(word in low for word in _VOICE_WORDS)
 
 
 @pytest.mark.asyncio
-async def test_no_hint_on_the_very_first_typed_set(fresh_db, user_id):
+async def test_typed_sets_never_pitch_voice(fresh_db, user_id):
     state = await _setup_logging(fresh_db, user_id)
-    message = _make_message(user_id, "50 10", message_id=1)
-
-    await workout.log_set_text(message, state)
-
-    assert not _hint_sent(message.bot)
-
-
-@pytest.mark.asyncio
-async def test_hint_appears_on_the_third_typed_set(fresh_db, user_id):
-    state = await _setup_logging(fresh_db, user_id)
-
-    for i in range(1, 3):
+    for i in range(1, 6):
         message = _make_message(user_id, "50 10", message_id=i)
         await workout.log_set_text(message, state)
-        assert not _hint_sent(message.bot)
-
-    third = _make_message(user_id, "50 10", message_id=3)
-    await workout.log_set_text(third, state)
-
-    assert _hint_sent(third.bot)
+        assert not any(_mentions_voice(t) for t in message.bot.sent_texts)
 
 
-@pytest.mark.asyncio
-async def test_hint_does_not_repeat_on_the_fourth_set(fresh_db, user_id):
-    state = await _setup_logging(fresh_db, user_id)
-    for i in range(1, 4):
-        message = _make_message(user_id, "50 10", message_id=i)
-        await workout.log_set_text(message, state)
-
-    fourth = _make_message(user_id, "50 10", message_id=4)
-    await workout.log_set_text(fourth, state)
-
-    assert not _hint_sent(fourth.bot)
-
-
-@pytest.mark.asyncio
-async def test_one_line_with_several_sets_crosses_the_threshold_in_one_go(fresh_db, user_id):
-    """"50 10, 50 9, 50 8" — три подхода одной строкой, а не три сообщения:
-    порог должен сработать и на таком скачке через него, а не только на
-    ровном третьем сообщении."""
-    state = await _setup_logging(fresh_db, user_id)
-    message = _make_message(user_id, "50 10, 50 9, 50 8", message_id=1)
-
-    await workout.log_set_text(message, state)
-
-    assert _hint_sent(message.bot)
-
-
-@pytest.mark.asyncio
-async def test_no_hint_during_backfill(fresh_db, user_id):
-    """Задним числом — не живая тренировка (задание №9): подход тут не первый
-    в жизни, а прошлый, и подсказка не к месту."""
-    state = await _setup_logging(fresh_db, user_id, is_backfill=True)
-
-    for i in range(1, 4):
-        message = _make_message(user_id, "50 10", message_id=i)
-        await workout.log_set_text(message, state)
-        assert not _hint_sent(message.bot)
-
-
-# ---------- db.register_manual_sets_and_check_hint напрямую ----------
-
-
-async def test_register_manual_sets_crosses_threshold_exactly_once(fresh_db, user_id):
-    db = fresh_db
-    assert await db.register_manual_sets_and_check_hint(user_id, 1) is False
-    assert await db.register_manual_sets_and_check_hint(user_id, 1) is False
-    assert await db.register_manual_sets_and_check_hint(user_id, 1) is True
-    # Порог уже пройден и подсказка отмечена показанной — дальше молчим.
-    assert await db.register_manual_sets_and_check_hint(user_id, 1) is False
-
-
-async def test_register_manual_sets_jump_over_threshold_still_fires(fresh_db, user_id):
-    db = fresh_db
-    assert await db.register_manual_sets_and_check_hint(user_id, 5) is True
-    assert await db.register_manual_sets_and_check_hint(user_id, 1) is False
-
-
-async def test_mark_voice_hint_shown_suppresses_future_crossings(fresh_db, user_id):
-    db = fresh_db
-    await db.mark_voice_hint_shown(user_id)
-    assert await db.register_manual_sets_and_check_hint(user_id, 10) is False
-
-
-@pytest.mark.asyncio
-async def test_voice_user_does_not_get_the_pitch_for_voice(fresh_db, user_id):
-    """Уже пользуется голосом (см. _finalize_voice_sets) — предлагать ему то же
-    самое второй раз незачем, даже если потом наберёт три подхода текстом."""
-    db = fresh_db
-    await db.mark_voice_hint_shown(user_id)
-    state = await _setup_logging(db, user_id)
-
-    for i in range(1, 4):
-        message = _make_message(user_id, "50 10", message_id=i)
-        await workout.log_set_text(message, state)
-        assert not _hint_sent(message.bot)
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("key", [
+    "workout.instruction_base", "workout.instruction_reps_only",
+    "workout.help_full", "workout.help_short", "ai.screen.intro",
+])
+def test_screens_do_not_mention_voice(lang, key):
+    catalog = json.loads((Path(__file__).resolve().parent.parent / "locales" / f"{lang}.json").read_text("utf-8"))
+    assert not _mentions_voice(catalog[key]), catalog[key]
