@@ -550,13 +550,19 @@ async def _invite_view(bot, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     # «приложение, App Store или Telegram»). Без публичного адреса сервера —
     # прежняя ссылка в бота.
     link = coach_service.web_link(code) or _deep_link(await sharing.get_bot_username(bot), code)
-    share_text = i18n.t("coach.invite_share_text", name=profile["display_name"], code=code)
+    full_text = coach_service.invite_share_text(profile["display_name"], code, link)
+    # Telegram сам ставит ссылку первой строкой над `text` — в `text` её нет,
+    # иначе в сообщении было бы две одинаковые ссылки.
+    share_text = "\n".join([
+        i18n.t("coach.invite_share.lead", name=profile["display_name"]),
+        i18n.t("coach.invite_share.code", code=code),
+    ])
     share_url = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote(share_text, safe='')}"
     text = i18n.t("coach.invite_screen", link=escape(link), code=code)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n.t("coach.btn.share"), url=share_url)],
         [InlineKeyboardButton(
-            text=i18n.t("coach.btn.copy_link"), copy_text=CopyTextButton(text=f"{share_text}\n{link}")
+            text=i18n.t("coach.btn.copy_link"), copy_text=CopyTextButton(text=full_text)
         )],
         [
             InlineKeyboardButton(text=i18n.t("coach.btn.my_clients_short"), callback_data="coach:clients:0"),

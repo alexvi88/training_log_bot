@@ -67,6 +67,8 @@ async def test_russian_page_shows_name_code_and_three_buttons(fresh_db, monkeypa
     assert f"id=code>{code}</div>" in body
     assert f'href="trainingdiary://coach/{code}"' in body and "Открыть в приложении" in body
     assert 'href="https://apps.apple.com/app/id123"' in body and "Скачать в App Store" in body
+    # Ссылка из App Store до приложения не доедет — кнопка кладёт код в буфер.
+    assert "id=store" in body and "getElementById('store')" in body
     assert f'href="https://t.me/TrainLogBot?start=coach_{code}"' in body
     assert "Продолжить в Telegram" in body
 
@@ -90,7 +92,8 @@ async def test_optional_buttons_hide_without_config(fresh_db):
     resp = await _get(f"/coach/{code}", headers={"Accept-Language": "en"})
 
     assert "Open in the app" in resp.text
-    assert "App Store" not in resp.text
+    # Подсказка про App Store в тексте остаётся (код вводят руками), кнопки нет.
+    assert "Download on the App Store" not in resp.text and "id=store" not in resp.text
     assert "t.me" not in resp.text
 
 
@@ -200,6 +203,12 @@ def test_invite_json_falls_back_to_scheme_without_public_url(monkeypatch):
         f"{BASE}/coach/br6ymnnd/",
         f"{BASE}/coach/BR6YMNND?lang=en#x",
         "trainingdiary://coach/BR6YMNND",
+        "br6y mnnd",
+        "Код для приложения: BR6YMNND",
+        "Code for the app: br6y-mnnd",
+        # Продиктовали, а набрали в русской раскладке: В и М — кириллица.
+        "ВR6YМNND",
+        "Это Иван — буду вести твои тренировки.\nhttps://x.example/coach/BR6YMNND\nКод для приложения: BR6YMNND",
     ],
 )
 def test_normalize_accepts_old_and_new_links(raw):

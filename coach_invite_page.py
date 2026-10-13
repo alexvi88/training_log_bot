@@ -82,6 +82,10 @@ p { margin: 0 0 16px; overflow-wrap: anywhere; }
 .muted { color: #c9ab94; font-size: 15px; }
 """
 
+# Кнопка App Store тоже кладёт код в буфер: ссылка из App Store до приложения
+# не доезжает (отложенных deep link у Apple нет), и после входа код останется
+# вставить в лист «Код тренера». Комментариев в самом скрипте нет — он уходит
+# на страницу как есть.
 _COPY_SCRIPT = """
 document.getElementById('copy').addEventListener('click', function () {
   var b = this, code = document.getElementById('code').textContent;
@@ -90,6 +94,12 @@ document.getElementById('copy').addEventListener('click', function () {
   else { var r = document.createRange(); r.selectNodeContents(document.getElementById('code'));
     var s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); done(); }
 });
+var store = document.getElementById('store');
+if (store && navigator.clipboard) {
+  store.addEventListener('click', function () {
+    navigator.clipboard.writeText(document.getElementById('code').textContent).catch(function () {});
+  });
+}
 """
 
 
@@ -137,7 +147,9 @@ def render_invite(lang: str, name: str, code: str, bot_username: str | None) -> 
                f'{escape(t("coach_page.btn.open_app"))}</a>']
     store = config.app_store_url()
     if store:
-        buttons.append(f'<a class=btn href="{escape(store)}">{escape(t("coach_page.btn.app_store"))}</a>')
+        buttons.append(
+            f'<a class=btn id=store href="{escape(store)}">{escape(t("coach_page.btn.app_store"))}</a>'
+        )
     if bot_username:
         tg = coach_service.telegram_link(bot_username, code)
         buttons.append(f'<a class=btn href="{escape(tg)}">{escape(t("coach_page.btn.telegram"))}</a>')
