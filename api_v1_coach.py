@@ -281,8 +281,8 @@ async def comment_workout(request: Request) -> JSONResponse:
 
 async def assign_program(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
-    await _coach_profile(user_id)
-    link, _ = await _linked_client(user_id, _client_id(request))
+    profile = await _coach_profile(user_id)
+    link, client = await _linked_client(user_id, _client_id(request))
     body = await common.json_body(request)
     program_id = common.require(body, "program_id", int)
     try:
@@ -294,6 +294,8 @@ async def assign_program(request: Request) -> JSONResponse:
             raise ApiError(409, "name_taken", "program name collision") from exc
         status = 400 if exc.code == "coach_program_empty" else 403
         raise ApiError(status, exc.code, f"cannot assign: {exc.code}") from exc
+    # Банер на iPhone и сообщение в Telegram — на языке атлета (coach_notify).
+    await coach_notify.deliver_program(client, profile["display_name"], name, new_id)
     return JSONResponse({"program_id": new_id, "name": name}, status_code=201)
 
 
@@ -385,6 +387,8 @@ async def accept_invite(request: Request) -> JSONResponse:
     if not created:
         raise ApiError(409, "coach_already_linked", "this coach is already linked")
     link = await db.get_coach_link(coach_id, user_id)
+    # Тренеру — «новый клиент» банером и в Telegram, на его языке.
+    await coach_notify.deliver_new_client(coach_id, link["client_name"])
     return JSONResponse(_my_coach_json(link, profile["display_name"]), status_code=201)
 
 

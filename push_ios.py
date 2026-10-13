@@ -316,3 +316,29 @@ def workout_detail_route(workout_id: int) -> dict:
     """Маршрут банера «комментарий тренера»: `{"screen": "workout_detail",
     "workout_id": <id>}`. Старые сборки экран не знают и просто открываются."""
     return {"screen": SCREEN_WORKOUT_DETAIL, "workout_id": int(workout_id)}
+
+
+# Живой тренер назначил атлету программу (api_v1_coach.assign_program и
+# «Назначить программу» в боте). Как и комментарий — не категория ротации:
+# collapse-id банера и метка `push_category`.
+COACH_PROGRAM = "coach_program"
+# Экран одной программы атлета — там дни и старт по ним.
+SCREEN_PROGRAM = "program"
+
+
+def program_route(program_id: int) -> dict:
+    """Маршрут банера «программа от тренера»: `{"screen": "program",
+    "program_id": <id копии у атлета>}`. Старые сборки экран не знают и
+    просто открываются."""
+    return {"screen": SCREEN_PROGRAM, "program_id": int(program_id)}
+
+
+# Тренеру: атлет принял приглашение («Разрешить» в боте или в приложении).
+COACH_NEW_CLIENT = "coach_new_client"
+# Список «Мои клиенты» — новый клиент уже в нём.
+SCREEN_COACH_CLIENTS = "coach_clients"
+
+
+def coach_clients_route() -> dict:
+    """Маршрут банера «новый клиент»: `{"screen": "coach_clients"}`."""
+    return {"screen": SCREEN_COACH_CLIENTS}

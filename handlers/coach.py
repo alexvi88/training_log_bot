@@ -14,14 +14,16 @@
   «Разрешить» → как назваться тренеру. До «Разрешить» не открыто ничего;
 - «Мой тренер»: переключатель веса тела и «Закрыть доступ»;
 - комментарий тренера приходит сообщением (coach_notify) и стоит под
-  тренировкой в истории (`athlete_comments_block`).
+  тренировкой в истории (`athlete_comments_block`); назначенная программа —
+  тоже сообщением, с кнопкой «Открыть программу».
 
 Сторона тренера:
 - «Я тренер»: имя, код и ссылка, «Новый код»;
 - «Мои клиенты» с сигналами → карточка клиента (программы и сделанные дни,
   рекорды, тренировки, вес тела — только открытый атлетом) → тренировка на
   чтение с комментариями → «Написать комментарий»; «Назначить программу»,
-  «Сводка от AI», «Убрать из клиентов».
+  «Сводка от AI», «Убрать из клиентов»;
+- атлет нажал «Разрешить» — тренеру сообщение «Новый клиент» (coach_notify).
 
 Каждый id атлета из callback_data проверяется связкой (`_linked`) до любого
 чтения — как у REST. Переписки с AI-тренером и AI-разбора тренировки тут нет
@@ -411,6 +413,8 @@ async def _accept(event, state: FSMContext, name: str) -> None:
         return
     text = f"<b>{i18n.t('coach.linked_done', name=coach_name)}</b>\n\n{i18n.t('coach.linked_done_hint')}"
     await _show(event, text, kb)
+    # Тренеру — «новый клиент» банером и в Telegram, на его языке.
+    await coach_notify.deliver_new_client(invite["owner_id"], name, bot=event.bot)
 
 
 # ---------- атлет: «Мой тренер» ----------
@@ -1077,15 +1081,19 @@ async def coach_assign(callback: CallbackQuery, state: FSMContext):
     client_id, program_id = args
     if not await _require_coach(callback, state):
         return
-    link, _client = await _linked(callback, client_id)
+    link, client = await _linked(callback, client_id)
     if link is None:
         return
     try:
-        _new_id, name = await coach_service.assign_program(callback.from_user.id, client_id, program_id)
+        new_id, name = await coach_service.assign_program(callback.from_user.id, client_id, program_id)
     except coach_service.AssignError as exc:
         await callback.answer(i18n.t(_ASSIGN_ERROR_KEYS.get(exc.code, "api.error.not_found")), show_alert=True)
         return
     await _show_client(callback, state, client_id, notice=i18n.t("coach.program_assigned", name=escape(name)))
+    # Атлету — «программа от тренера» банером и в Telegram, на его языке.
+    profile = await db.get_coach_profile(callback.from_user.id)
+    coach_name = profile["display_name"] if profile is not None else None
+    await coach_notify.deliver_program(client, coach_name, name, new_id, bot=callback.bot)
 
 
 # ---------- убрать из клиентов ----------

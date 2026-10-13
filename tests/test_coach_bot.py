@@ -553,6 +553,168 @@ async def test_assign_program_and_coach_label_in_programs(fresh_db):
     assert "Coach: Иван Петров" in _screen(screen)
 
 
+
+# ---------- тренерские события: программа атлету, новый клиент тренеру ----------
+
+
+async def _coach_program(db, name: str = "Сплит") -> int:
+    gid = await db.create_muscle_group(COACH, "Спина")
+    ex = await db.create_exercise(COACH, "Тяга штанги", gid)
+    program_id = await db.create_program(COACH, name)
+    day = await db.create_routine(COACH, "День А", program_id=program_id)
+    await db.add_routine_exercise(day, ex, 0, "3×8")
+    return program_id
+
+
+@pytest.mark.parametrize("athlete_lang, expected", [("ru", "ПРОГРАММА ОТ ТРЕНЕРА"), ("en", "A PROGRAM FROM YOUR COACH")])
+async def test_assigned_program_reaches_the_athlete_in_their_language(fresh_db, monkeypatch, athlete_lang, expected):
+    await _linked(fresh_db, athlete_lang=athlete_lang)
+    monkeypatch.setattr(apns, "is_configured", lambda: False)
+    program_id = await _coach_program(fresh_db)
+    bot = _bot()
+    with i18n.use_lang("ru"):  # язык тренера в контексте — атлету это не важно
+        await _tap(COACH, f"coach:asp:{ATHLETE}:{program_id}", bot=bot)
+    copy = next(p for p in await fresh_db.list_programs(ATHLETE) if p["name"] == "Сплит")
+    chat_id, body = bot.send_message.await_args.args[:2]
+    assert chat_id == ATHLETE and expected in body
+    assert "Иван Петров" in body and "Сплит" in body
+    if athlete_lang == "en":
+        assert not i18n_coverage.has_cyrillic(body.replace("Иван Петров", "").replace("Сплит", ""))
+    kb = bot.send_message.await_args.kwargs["reply_markup"]
+    assert [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row] == [
+        (i18n.t_in(athlete_lang, "btn.open_program"), f"rt:prg:{copy['id']}")
+    ]
+
+
+async def test_failed_assignment_sends_nothing(fresh_db):
+    await _linked(fresh_db)
+    empty_id = await fresh_db.create_program(COACH, "Пусто")
+    bot = _bot()
+    await _tap(COACH, f"coach:asp:{ATHLETE}:{empty_id}", bot=bot)
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize("coach_lang, expected", [("ru", "НОВЫЙ КЛИЕНТ"), ("en", "NEW CLIENT")])
+async def test_new_client_reaches_the_coach_in_their_language(fresh_db, monkeypatch, coach_lang, expected):
+    code = await _coach_with_invite(fresh_db)
+    await fresh_db.set_user_lang(COACH, coach_lang)
+    await _user(fresh_db, ATHLETE, "ru")
+    monkeypatch.setattr(apns, "is_configured", lambda: False)
+    await _tap(ATHLETE, f"coach:ok:{code}:0")
+    bot = _bot()
+    with i18n.use_lang("ru"):  # язык атлета в контексте — тренеру это не важно
+        await coach.coach_self_named(_message(ATHLETE, "Маша", bot=bot), _state(ATHLETE))
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is not None
+    chat_id, body = bot.send_message.await_args.args[:2]
+    assert chat_id == COACH and expected in body and "Маша" in body
+    if coach_lang == "en":
+        assert not i18n_coverage.has_cyrillic(body.replace("Маша", ""))
+    kb = bot.send_message.await_args.kwargs["reply_markup"]
+    assert [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row] == [
+        (i18n.t_in(coach_lang, "coach.btn.my_clients_short"), "coach:clients:0")
+    ]
+
+
+async def test_already_linked_does_not_notify_the_coach_again(fresh_db):
+    code = await _linked(fresh_db)
+    await _tap(ATHLETE, f"coach:ok:{code}:0")
+    bot = _bot()
+    await coach.coach_self_named(_message(ATHLETE, "Маша", bot=bot), _state(ATHLETE))
+    bot.send_message.assert_not_awaited()
+
+
+async def test_coach_event_banners_carry_routes(fresh_db, monkeypatch):
+    """Банеры: на языке получателя, с маршрутом в программу и в «Мои клиенты»."""
+    await _linked(fresh_db, athlete_lang="en")
+    await fresh_db.register_push_token(ATHLETE, "ios", "tok-athlete")
+    await fresh_db.register_push_token(COACH, "ios", "tok-coach")
+    alerts: list[dict] = []
+
+    async def send_alert(user_id, token, title, body, **kwargs):
+        alerts.append({"user_id": user_id, "token": token, "title": title, "body": body, **kwargs})
+        return True
+
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    monkeypatch.setattr(apns, "send_alert", send_alert)
+    athlete = await fresh_db.get_user(ATHLETE)
+    assert await coach_notify.push_ios_program(athlete, "Иван Петров", "Сплит", 77) == 1
+    assert await coach_notify.push_ios_new_client(await fresh_db.get_user(COACH), "Маша") == 1
+    program, client = alerts
+    assert program["user_id"] == ATHLETE and program["title"] == "A program from your coach"
+    assert "Иван Петров" in program["body"] and "Сплит" in program["body"]
+    assert program["route"] == {"screen": "program", "program_id": 77}
+    assert program["category"] == "coach_program"
+    assert client["user_id"] == COACH and client["title"] == "Новый клиент" and "Маша" in client["body"]
+    assert client["route"] == {"screen": "coach_clients"}
+    assert client["category"] == "coach_new_client"
+
+
+async def test_coach_event_delivery_never_raises(fresh_db, monkeypatch):
+    """Программа уже у атлета, связка уже заведена — сбой доставки не должен
+    стать ошибкой; аккаунту без Telegram в Telegram не пишем вовсе."""
+    await _linked(fresh_db)
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    monkeypatch.setattr(fresh_db, "get_push_tokens", AsyncMock(side_effect=RuntimeError("db is gone")))
+    bot = _bot()
+    bot.send_message = AsyncMock(side_effect=RuntimeError("Forbidden: bot was blocked"))
+    athlete = await fresh_db.get_user(ATHLETE)
+    assert await coach_notify.deliver_program(athlete, "Иван", "Сплит", 1, bot=bot) == (0, False)
+    assert await coach_notify.deliver_new_client(COACH, "Маша", bot=bot) == (0, False)
+    assert await coach_notify.deliver_new_client(999_999, "Маша", bot=bot) == (0, False)
+
+    # Без бота (REST) и без Telegram у получателя — короткоживущий бот даже
+    # не заводится.
+    import aiogram
+
+    import config
+
+    monkeypatch.setattr(config, "BOT_TOKEN", "123:TEST")
+    monkeypatch.setattr(aiogram, "Bot", MagicMock(side_effect=AssertionError("Bot for an app-only account")))
+    app_only = await fresh_db.create_app_only_user(language_code="en")
+    assert app_only["telegram_id"] < 0
+    assert await coach_notify.deliver_program(app_only, "Иван", "Сплит", 1) == (0, False)
+    assert await coach_notify.deliver_new_client(app_only["telegram_id"], "Маша") == (0, False)
+
+
+async def test_rest_assign_and_accept_notify_through_coach_notify(fresh_db, monkeypatch):
+    """REST /v1 зовёт те же доставки, что и бот, — без живого бота."""
+    import httpx
+
+    import api_v1
+
+    code = await _coach_with_invite(fresh_db)
+    await _user(fresh_db, ATHLETE)
+    delivered_program = AsyncMock(return_value=(0, True))
+    delivered_client = AsyncMock(return_value=(0, True))
+    monkeypatch.setattr(coach_notify, "deliver_program", delivered_program)
+    monkeypatch.setattr(coach_notify, "deliver_new_client", delivered_client)
+    transport = httpx.ASGITransport(app=api_v1.build_app())
+    athlete_api = httpx.AsyncClient(transport=transport, base_url="http://test")
+    athlete_api.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(ATHLETE)}"
+    resp = await athlete_api.post(f"/coach/invites/{code}/accept", json={"name": "Маша"})
+    assert resp.status_code == 201, resp.text
+    assert delivered_client.await_args.args == (COACH, "Маша")
+    assert "bot" not in delivered_client.await_args.kwargs
+
+    program_id = await _coach_program(fresh_db)
+    coach_api = httpx.AsyncClient(transport=transport, base_url="http://test")
+    coach_api.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(COACH)}"
+    resp = await coach_api.post(f"/coach/clients/{ATHLETE}/programs", json={"program_id": program_id})
+    assert resp.status_code == 201, resp.text
+    client, coach_name, name, new_id = delivered_program.await_args.args
+    assert client["telegram_id"] == ATHLETE and coach_name == "Иван Петров"
+    assert (name, new_id) == (resp.json()["name"], resp.json()["program_id"])
+
+    # Отказ (пустая программа) — без доставки.
+    delivered_program.reset_mock()
+    empty_id = await fresh_db.create_program(COACH, "Пусто")
+    resp = await coach_api.post(f"/coach/clients/{ATHLETE}/programs", json={"program_id": empty_id})
+    assert resp.status_code == 400
+    delivered_program.assert_not_awaited()
+    await athlete_api.aclose()
+    await coach_api.aclose()
+
+
 # ---------- AI-сводка ----------
 
 
