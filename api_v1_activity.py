@@ -35,6 +35,7 @@ import logging
 import re
 
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import ClientDisconnect
 
 import activity_log
 import db
@@ -190,7 +191,13 @@ async def _request_json(request) -> dict:
     что чтение здесь ничего у обработчика не отнимает."""
     if "json" not in request.headers.get("content-type", ""):
         return {}
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect:
+        # Телефон оборвал запрос, не дослав тело (ушёл в фон, пропала сеть) —
+        # это не сбой сервера, и трейсбэк в журнал тут ни к чему: записывать
+        # в ленту нечего, обработчик и сам получит тот же обрыв.
+        return {}
     if not body or len(body) > _MAX_DETAIL_BODY:
         return {}
     try:
