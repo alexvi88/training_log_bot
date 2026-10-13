@@ -453,6 +453,52 @@ async def test_ai_summary_respects_the_coach_consent_and_limits(fresh_db, fake_m
     assert _summary_calls(fake_model) == []
 
 
+async def test_saved_summary_comes_back_free_until_the_link_breaks(fresh_db, fake_model):
+    """POST собирает и запоминает сводку, GET отдаёт её без вызова модели;
+    другой язык — null; атлет закрыл дневник — сводки по нему и «по всем»
+    больше нет."""
+    coach, athlete, _ = await _linked(fresh_db)
+    assert (await coach.get("/coach/ai-summary")).json() == {"summary": None}
+    assert (await coach.get(f"/coach/ai-summary?client_id={CLIENT}")).json() == {"summary": None}
+    assert (await coach.get(f"/coach/ai-summary?client_id={STRANGER}")).status_code == 404
+    assert (await coach.get("/coach/ai-summary?client_id=abc")).status_code == 400
+    assert (await athlete.get("/coach/ai-summary")).status_code == 403
+
+    made = (await coach.post("/coach/ai-summary", json={})).json()
+    assert made["text"] == "Маше пора в зал." and made["created_at"]
+    one = (await coach.post("/coach/ai-summary", json={"client_id": CLIENT})).json()
+    assert len(_summary_calls(fake_model)) == 2
+
+    saved = (await coach.get("/coach/ai-summary")).json()["summary"]
+    assert saved == made
+    assert (await coach.get(f"/coach/ai-summary?client_id={CLIENT}")).json()["summary"] == one
+    assert (await coach.get("/coach/ai-summary?client_id=")).json()["summary"] == made
+    assert len(_summary_calls(fake_model)) == 2
+    assert await fresh_db.get_ai_question_count_today(COACH) == 2
+
+    # Тренер сменил язык — русскую сводку не отдаю, строка в базе остаётся.
+    await fresh_db.set_user_lang(COACH, "en")
+    assert (await coach.get("/coach/ai-summary")).json() == {"summary": None}
+    await fresh_db.set_user_lang(COACH, "ru")
+    assert (await coach.get("/coach/ai-summary")).json()["summary"] == made
+
+    assert (await athlete.delete(f"/coach-links/{COACH}")).status_code == 200
+    cur = await db.conn().execute("SELECT COUNT(*) FROM coach_summaries")
+    assert (await cur.fetchone())[0] == 0
+
+
+async def test_saved_summary_expires_after_the_retention(fresh_db, fake_model):
+    coach, _athlete, _ = await _linked(fresh_db)
+    await coach.post("/coach/ai-summary", json={})
+    old = (dt.datetime.utcnow() - dt.timedelta(days=config.COACH_SUMMARY_RETENTION_DAYS + 1)).isoformat(
+        timespec="seconds"
+    )
+    await db.conn().execute("UPDATE coach_summaries SET created_at = ?", (old,))
+    await db.conn().commit()
+    assert await db.prune_old_coach_summaries(config.COACH_SUMMARY_RETENTION_DAYS) == 1
+    assert (await coach.get("/coach/ai-summary")).json() == {"summary": None}
+
+
 # ---------- снос аккаунта ----------
 
 
@@ -472,31 +518,41 @@ async def _full_relationship(fresh_db, pushes=None):
 
 async def _pair_rows() -> dict[str, int]:
     out = {}
-    for table in ("coach_links", "coach_comments", "coach_assignments", "coach_invites", "coach_profiles"):
+    for table in (
+        "coach_links", "coach_comments", "coach_assignments", "coach_invites", "coach_profiles", "coach_summaries",
+    ):
         cur = await db.conn().execute(f"SELECT COUNT(*) FROM {table}")
         out[table] = (await cur.fetchone())[0]
     return out
 
 
-async def test_deleting_the_athlete_removes_links_comments_and_assignments(fresh_db):
+async def test_deleting_the_athlete_removes_links_comments_and_assignments(fresh_db, fake_model):
     coach, athlete = await _full_relationship(fresh_db)
+    await coach.post("/coach/ai-summary", json={})
+    await coach.post("/coach/ai-summary", json={"client_id": CLIENT})
     assert (await _pair_rows())["coach_comments"] == 1
+    assert (await _pair_rows())["coach_summaries"] == 2
     resp = await athlete.delete("/account?confirm=delete")
     assert resp.status_code == 200, resp.text
     assert await fresh_db.user_data_left(CLIENT) == {}
     rows = await _pair_rows()
     assert rows["coach_links"] == rows["coach_comments"] == rows["coach_assignments"] == 0
+    # И сводка по нему, и сводка «по всем» у тренера — в ней были его данные.
+    assert rows["coach_summaries"] == 0
     assert rows["coach_profiles"] == 1  # тренер остался тренером
     assert (await coach.get("/coach/clients")).json()["clients"] == []
 
 
-async def test_deleting_the_coach_removes_profile_invite_and_pairs(fresh_db):
+async def test_deleting_the_coach_removes_profile_invite_and_pairs(fresh_db, fake_model):
     coach, athlete = await _full_relationship(fresh_db)
+    await coach.post("/coach/ai-summary", json={})
+    await coach.post("/coach/ai-summary", json={"client_id": CLIENT})
     resp = await coach.delete("/account?confirm=delete")
     assert resp.status_code == 200, resp.text
     assert await fresh_db.user_data_left(COACH) == {}
     assert await _pair_rows() == {
         "coach_links": 0, "coach_comments": 0, "coach_assignments": 0, "coach_invites": 0, "coach_profiles": 0,
+        "coach_summaries": 0,
     }
     # Программа, назначенная тренером, осталась у атлета своей — без подписи.
     mine = (await athlete.get("/programs")).json()

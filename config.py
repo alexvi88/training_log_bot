@@ -926,6 +926,13 @@ AI_CONVERSATION_RETENTION_DAYS = int(os.getenv("AI_CONVERSATION_RETENTION_DAYS",
 # пару недель», дальше разбор про давно прошедшую неделю никому не нужен.
 WEEKLY_DIGEST_RETENTION_DAYS = int(os.getenv("WEEKLY_DIGEST_RETENTION_DAYS", "90"))
 
+# Сколько живёт последняя AI-сводка тренера по клиенту и «по всем клиентам»
+# (db.coach_summaries) — текст, который тренер уже оплатил, сохранённый, чтобы
+# открыть его ещё раз без второго вызова модели. Сводка — про то, как клиенты
+# тренируются сейчас: через три месяца она описывает уже другую жизнь. Срок
+# назван в политике конфиденциальности (legal/privacy.*.html).
+COACH_SUMMARY_RETENTION_DAYS = int(os.getenv("COACH_SUMMARY_RETENTION_DAYS", "90"))
+
 # Сколько дней импорт истории можно отменить целиком («↩️ Отменить импорт» в
 # боте, POST /v1/import/batches/{id}/undo) и сколько живёт строка пачки
 # (db.import_batches) — это один срок: дольше держать пачку незачем, отменить

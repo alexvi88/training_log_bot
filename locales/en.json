@@ -2521,6 +2521,8 @@
   "coach.summary_none": "Nothing to summarize: none of your clients allowed sharing their data with AI.",
   "coach.summary_none_one": "Nothing to summarize: this athlete hasn't allowed sharing their data with AI.",
   "coach.summary_skipped": "{n, plural, one{# athlete isn't in the summary: they haven't allowed sharing their data with AI.} other{# athletes aren't in the summary: they haven't allowed sharing their data with AI.}}",
+  "coach.ai_summary.saved_on": "Summary from {date}. Need a fresh one? Hit \"Refresh summary\".",
+  "coach.btn.ai_summary_refresh": "🤖 Refresh summary",
   "games.anon_name": "Athlete #{n}",
   "games.badge.catch_100.title": "100 Plates",
   "games.badge.catch_100.description": "Caught 100 plates across all your games",
