@@ -545,6 +545,30 @@ async def test_client_progress_weeks_lifts_and_records(fresh_db):
     assert (await coach.get(f"/coach/clients/{CLIENT}/progress?weeks=1")).status_code == 400
 
 
+async def test_client_progress_fresh_records_count_inside_the_window(fresh_db):
+    """Атлет пришёл три недели назад: рекорд второй тренировки — в «Свежих
+    рекордах за 28 дней», как и в «рекордах за неделю» списка клиентов;
+    первая попытка движения рекордом не считается."""
+    coach, athlete, _ = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    today = dt.date.today()
+    await _finished_workout(athlete, ex, 50, date=(today - dt.timedelta(days=11)).isoformat())
+    await _finished_workout(athlete, ex, 55, date=(today - dt.timedelta(days=3)).isoformat())
+
+    data = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    [fresh] = data["recent_records"]
+    assert fresh["exercise_id"] == ex and fresh["best_set"] == "55×5"
+    week = (await coach.get(f"/coach/clients/{CLIENT}")).json()["records"]
+    assert [r["best_set"] for r in week] == ["55×5"]
+
+    # Ниже прежнего лучшего — не рекорд, даже внутри окна.
+    other = await _exercise(athlete, "Тяга")
+    await _finished_workout(athlete, other, 80, date=(today - dt.timedelta(days=10)).isoformat())
+    await _finished_workout(athlete, other, 70, date=(today - dt.timedelta(days=2)).isoformat())
+    data = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    assert [r["exercise_id"] for r in data["recent_records"]] == [ex]
+
+
 async def test_client_progress_empty_and_bodyweight_exercise(fresh_db):
     coach, athlete, _ = await _linked(fresh_db)
     empty = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
