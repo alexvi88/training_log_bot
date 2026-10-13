@@ -343,3 +343,19 @@ async def test_a_non_admin_cannot_open_the_shared_feed(fresh_db, user_id, monkey
 
     callback.message.edit_text.assert_not_awaited()
     callback.message.answer.assert_not_awaited()
+
+
+async def test_api_action_body_read_survives_client_disconnect():
+    """Телефон оборвал запрос до конца тела — лента молчит, без трейсбэка в
+    журнале (ревьюер App Review уходил в фон посреди «поменял настройки»)."""
+    from starlette.requests import ClientDisconnect
+
+    import api_v1_activity
+
+    class _Req:
+        headers = {"content-type": "application/json"}
+
+        async def body(self):
+            raise ClientDisconnect()
+
+    assert await api_v1_activity._request_json(_Req()) == {}
