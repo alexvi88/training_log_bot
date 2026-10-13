@@ -52,6 +52,8 @@ WRITING_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 # действие, и повторяющегося поведения в ней было бы не разглядеть.
 ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("POST", "/workouts/active"): "начал тренировку",
+    ("POST", "/games/results"): "сыграл в мини-игру между подходами",
+    ("PATCH", "/games/settings"): "поменял показ имени в таблице лидеров",
     ("POST", "/workouts/{workout_id}/sets"): "записал подход",
     ("POST", "/workouts/{workout_id}/sets/parse"): "записал подход строкой",
     ("DELETE", "/workouts/{workout_id}/exercises/{exercise_id}/last-set"): "удалил подход",

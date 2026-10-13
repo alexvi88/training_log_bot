@@ -96,6 +96,8 @@ MACHINE_KEYS = {
     "csv",
     # Ссылка приглашения тренера для приложения (trainingdiary://coach/<код>).
     "app_link",
+    # Идентификатор мини-игры (catch/weigh/sort/runner) — название рисует приложение.
+    "game",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -569,6 +571,28 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", "/achievements/stats", expect=200)
     await w.call("GET", "/hall-of-fame", expect=200)
     await w.call("GET", "/hall-of-fame/rank-ladder", expect=200)
+
+    # --- мини-игры между подходами ---
+    # Пустой экран (все значки — цели), партия, отвергнутая партия, неизвестная
+    # игра, таблица лидеров. Имя в таблице — «Атлет #NNNN» на языке атлета;
+    # показ ника включается и выключается обратно ДО чтения таблицы: ник —
+    # латиница, выбранная самим атлетом, а не текст продукта.
+    import api_v1_games
+
+    api_v1_games.reset_rate_limit()
+    await w.call("GET", "/games", expect=200)
+    await w.call("POST", "/games/results", json={"game": "catch", "score": 60, "duration_ms": 60_000}, expect=201)
+    await w.call("POST", "/games/results", json={"game": "runner", "score": 50, "duration_ms": 10_000}, expect=201)
+    await w.call("POST", "/games/results", json={"game": "weigh", "score": 99, "duration_ms": 1_000}, expect=202)
+    await w.call("POST", "/games/results", json={"game": "chess", "score": 1, "duration_ms": 5_000}, expect=400)
+    await w.call("GET", "/games", expect=200)
+    await w.call("PATCH", "/games/settings", json={"show_name": True}, expect=200)
+    await w.call("PATCH", "/games/settings", json={"show_name": "yes"}, expect=400)
+    await w.call("PATCH", "/games/settings", json={"show_name": False}, expect=200)
+    await w.call("GET", "/games/catch/leaderboard", expect=200)
+    await w.call("GET", "/games/catch/leaderboard?period=all", expect=200)
+    await w.call("GET", "/games/catch/leaderboard?period=year", expect=400)
+    await w.call("GET", "/games/chess/leaderboard", expect=400)
 
     # --- вес тела и еда ---
     bw = (await w.call("POST", "/bodyweight", json={"weight": 80.5}, expect=201)).json()

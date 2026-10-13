@@ -2502,5 +2502,22 @@
   "coach.ai_summary.header_one": "🤖 <b>SUMMARY — {name}</b>",
   "coach.summary_none": "Nothing to summarize: none of your clients allowed sharing their data with AI.",
   "coach.summary_none_one": "Nothing to summarize: this athlete hasn't allowed sharing their data with AI.",
-  "coach.summary_skipped": "{n, plural, one{# athlete isn't in the summary: they haven't allowed sharing their data with AI.} other{# athletes aren't in the summary: they haven't allowed sharing their data with AI.}}"
+  "coach.summary_skipped": "{n, plural, one{# athlete isn't in the summary: they haven't allowed sharing their data with AI.} other{# athletes aren't in the summary: they haven't allowed sharing their data with AI.}}",
+  "games.anon_name": "Athlete #{n}",
+  "games.badge.catch_100.title": "100 Plates",
+  "games.badge.catch_100.description": "Caught 100 plates across all your games",
+  "games.badge.catch_100.goal": "Catch 100 plates — I count all your games together",
+  "games.badge.catch_50_run.title": "50 in One Game",
+  "games.badge.catch_50_run.description": "Caught 50 plates in one game",
+  "games.badge.catch_50_run.goal": "Catch 50 plates in one game",
+  "games.badge.weigh_10.title": "Ten Bars",
+  "games.badge.weigh_10.description": "Loaded 10 bars in a row in one game",
+  "games.badge.weigh_10.goal": "Load 10 bars in a row in one game",
+  "games.badge.sort_5.title": "Tidy Gym",
+  "games.badge.sort_5.description": "Cleared 5 rack-sorting levels in one game",
+  "games.badge.sort_5.goal": "Clear 5 rack-sorting levels in one game",
+  "games.badge.runner_1km.title": "One Kilometer",
+  "games.badge.runner_1km.description": "Ran 1000 m in one run",
+  "games.badge.runner_1km.goal": "Run 1000 m in one run",
+  "api.error.unknown_game": "I don't know that game. Update the app and try again"
 }
