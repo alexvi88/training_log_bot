@@ -8,9 +8,11 @@
 
 Каждая сторона действует своим каналом (T — хендлеры бота, A — REST, B — тот
 или другой по параметру) и проходит путь целиком: тренер включает режим и
-получает приглашение → атлет принимает кодом → пишет тренировку → тренер
+получает приглашение → атлет принимает кодом, тренеру «новый клиент» по
+всем его каналам → пишет тренировку → тренер
 видит клиента и тренировку (имена — на языке тренера) → комментирует →
 атлет получает комментарий по всем своим каналам и видит его под тренировкой →
+тренер назначает программу, атлет получает её по всем своим каналам →
 AI-сводка тренеру по правилу `_background_ai_allowed` → атлет закрывает доступ
 → снова принимает по ссылке → тренер убирает клиента → доступа нет нигде.
 
@@ -47,7 +49,7 @@ import config
 import i18n
 import i18n_coverage
 import seed_data
-from handlers import coach, history
+from handlers import coach, history, routines
 from handlers import sharing as sharing_handlers
 
 pytestmark = pytest.mark.asyncio
@@ -60,6 +62,7 @@ SUMMARY = "SUMMARY-OK"
 COACH_NAME = {"ru": "Тренер Миша", "en": "Coach Mike"}
 ATHLETE_NAME = {"ru": "Маша", "en": "Masha"}
 COMMENT = {"ru": "Держи темп", "en": "Keep the pace"}
+PROGRAM = {"ru": "Сила пять на пять", "en": "Strength five by five"}
 
 
 # ---------- подменённые каналы доставки ----------
@@ -469,6 +472,63 @@ async def athlete_has_no_coach(acc: Account, bot) -> None:
     assert i18n.t_in(acc.lang, "coach.hub.no_coach") in hub
 
 
+# ---------- доставка тренерских событий ----------
+
+
+def assert_delivered(
+    acc: Account, telegram: FakeTelegram, push: list[dict], *,
+    tg_key: str, tg_params: dict, button: tuple[str, str], title_key: str, route: dict, data: tuple[str, ...],
+) -> None:
+    """Событие доехало до `acc` по каждому его каналу и только по ним: одно
+    сообщение в Telegram (если он есть) и один банер (если есть iPhone), на
+    языке `acc`; данные (имена) — как есть."""
+    if acc.has_telegram:
+        assert len(telegram.sent) == 1, telegram.sent
+        kind, chat_id, body, kb = telegram.sent[0]
+        assert kind == "message" and chat_id == acc.uid
+        head = i18n.t_in(acc.lang, tg_key, **{k: "" for k in tg_params}).split("\n")[0]
+        assert head in body, body
+        for d in data:
+            assert d in body, body
+        assert _buttons(kb) == [button]
+        if acc.lang == "en":
+            assert not i18n_coverage.has_cyrillic(_strip(body, *data)), body
+    else:
+        assert telegram.sent == []
+    if acc.has_ios:
+        assert len(push) == 1, push
+        alert = push[0]
+        assert alert["user_id"] == acc.uid and alert["token"] == acc.token
+        assert alert["title"] == i18n.t_in(acc.lang, title_key)
+        for d in data:
+            assert d in alert["body"], alert
+        assert alert["route"] == route
+        if acc.lang == "en":
+            assert not i18n_coverage.has_cyrillic(_strip(alert["body"], *data)), alert
+    else:
+        assert push == []
+    assert all(chat_id > 0 for _k, chat_id, _b, _m in telegram.sent)
+
+
+async def coach_assign(acc: Account, client_id: int, program_id: int, bot) -> None:
+    if acc.channel == "rest":
+        resp = await acc.api.post(f"/coach/clients/{client_id}/programs", json={"program_id": program_id})
+        assert resp.status_code == 201, resp.text
+        return
+    done = await _tap(acc, f"coach:asp:{client_id}:{program_id}", bot)
+    assert i18n.t_in(acc.lang, "coach.program_assigned", name="X").split("X")[0] in _screen(done)
+
+
+async def athlete_opens_program_from_telegram(acc: Account, program_id: int, name: str, bot) -> None:
+    """Кнопка «Открыть программу» под сообщением — экран этой программы."""
+    callback = _callback(acc, f"rt:prg:{program_id}", bot)
+    with acc.lang_ctx():
+        result = await routines.router.callback_query.trigger(callback, state=acc.state())
+    assert result is not UNHANDLED
+    shown = callback.message.answer.await_args or callback.message.edit_text.await_args
+    assert name in shown.args[0]
+
+
 # ---------- матрица ----------
 
 
@@ -513,6 +573,17 @@ async def test_coach_athlete_flow(
     linked = await db.get_coach_link(trainer.uid, athlete.uid)
     assert linked is not None and linked["client_name"] == athlete_name
     assert not linked["show_bodyweight"]
+
+    # 2a. Тренеру — «новый клиент» по каждому его каналу, на его языке.
+    assert_delivered(
+        trainer, telegram, push,
+        tg_key="coach.tg.new_client", tg_params={"name": ""},
+        button=(i18n.t_in(coach_lang, "coach.btn.my_clients_short"), "coach:clients:0"),
+        title_key="coach.push.new_client_title", route={"screen": "coach_clients"},
+        data=(athlete_name,),
+    )
+    telegram.sent.clear()
+    push.clear()
 
     # 4. Атлет пишет тренировку своим каналом; тренер видит его и её своим.
     wid = await athlete_log_workout(athlete, db)
@@ -563,6 +634,26 @@ async def test_coach_athlete_flow(
         await athlete_opens_from_telegram(athlete, wid, text, coach_name, telegram)
     # Тренер видит свой комментарий под тренировкой.
     assert text in await coach_workout(trainer, athlete.uid, wid, telegram)
+
+    # 5b. Тренер назначает программу — атлет получает её по каждому своему
+    # каналу, на своём языке; кнопка и банер ведут в его копию программы.
+    program_name = PROGRAM[coach_lang]
+    source = await db.create_program(trainer.uid, program_name)
+    day = await db.create_routine(trainer.uid, "A", program_id=source)
+    await db.add_routine_exercise(day, await db.get_or_create_user_exercise_by_name(trainer.uid, BENCH), 0, "5×5")
+    telegram.sent.clear()
+    push.clear()
+    await coach_assign(trainer, athlete.uid, source, telegram)
+    copy = next(p for p in await db.list_programs(athlete.uid) if p["name"] == program_name)
+    assert_delivered(
+        athlete, telegram, push,
+        tg_key="coach.tg.program", tg_params={"coach": "", "name": ""},
+        button=(i18n.t_in(athlete_lang, "btn.open_program"), f"rt:prg:{copy['id']}"),
+        title_key="coach.push.program_title", route={"screen": "program", "program_id": copy["id"]},
+        data=(coach_name, program_name),
+    )
+    if athlete.has_telegram:
+        await athlete_opens_program_from_telegram(athlete, copy["id"], program_name, telegram)
 
     # 6. AI-сводка: атлет приложения (A и B — есть iOS-токен или нет Telegram)
     # попадает в неё только с согласием, чисто телеграмный — сразу.

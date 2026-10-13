@@ -914,7 +914,8 @@ async def _screen_coach_hub_and_invite(db, user_id: int) -> str:
 
 async def _screen_coach_athlete_side(db, user_id: int) -> str:
     """Атлет: ввод кода, превью приглашения с переключателями, имя, «Мой
-    тренер», закрыть доступ, сообщение о комментарии и блок под тренировкой."""
+    тренер», закрыть доступ, сообщения о комментарии, программе от тренера и
+    новом клиенте (тренеру), блок под тренировкой."""
     import coach_notify
     from handlers import coach
 
@@ -935,6 +936,11 @@ async def _screen_coach_athlete_side(db, user_id: int) -> str:
     ]
     body, kb = await coach_notify.telegram_comment_message(await db.get_user(athlete), "Coach Alex", "Nice", wid)
     out += [body, _kb_texts(kb), await coach.athlete_comments_block(wid, await db.get_user(athlete))]
+    # Программа от тренера — атлету; «новый клиент» — тренеру.
+    body, kb = await coach_notify.telegram_program_message(await db.get_user(athlete), "Coach Alex", "Push Pull", 1)
+    out += [body, _kb_texts(kb)]
+    body, kb = await coach_notify.telegram_new_client_message(await db.get_user(user_id), "Sam")
+    out += [body, _kb_texts(kb)]
     out += [
         coach._validated_name("")[1], coach._validated_name("x" * 99)[1],
         i18n.t("coach.code.empty"), i18n.t("coach.linked_done", name="Coach Alex"),
