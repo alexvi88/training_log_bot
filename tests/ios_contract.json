@@ -1764,6 +1764,150 @@
    ],
    "reason": "init(from:) через singleValueContainer: строка или целое"
   },
+  "GameBadge": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "description": {
+     "type": "String",
+     "optional": false
+    },
+    "earnedAt": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "GameLeaderboard": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "entries": {
+     "type": "[GameLeaderboardEntry]",
+     "optional": false
+    },
+    "me": {
+     "type": "GameLeaderboardMe",
+     "optional": true
+    },
+    "period": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "GameLeaderboardEntry": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "rank": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "score": {
+     "type": "Int",
+     "optional": false
+    },
+    "isMe": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "GameLeaderboardMe": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "rank": {
+     "type": "Int",
+     "optional": true
+    },
+    "total": {
+     "type": "Int",
+     "optional": false
+    },
+    "best": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "GameRecordEntry": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "game": {
+     "type": "String",
+     "optional": false
+    },
+    "best": {
+     "type": "Int",
+     "optional": true
+    },
+    "bestAt": {
+     "type": "String",
+     "optional": true
+    },
+    "plays": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "GameResultReceipt": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "best": {
+     "type": "Int",
+     "optional": true
+    },
+    "isNewBest": {
+     "type": "Bool",
+     "optional": true
+    },
+    "weekRank": {
+     "type": "Int",
+     "optional": true
+    },
+    "accepted": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "GameSettings": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "showName": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "GamesOverview": {
+   "file": "TrainingLog/Models/GameModels.swift",
+   "fields": {
+    "games": {
+     "type": "[GameRecordEntry]",
+     "optional": false
+    },
+    "badges": {
+     "type": "[GameBadge]",
+     "optional": false
+    },
+    "showName": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
   "HallOfFame": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -4107,6 +4251,34 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.gamesOverview",
+   "method": "GET",
+   "path": "/games",
+   "root": "GamesOverview",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.submitGameResult",
+   "method": "POST",
+   "path": "/games/results",
+   "root": "GameResultReceipt",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.setGamesShowName",
+   "method": "PATCH",
+   "path": "/games/settings",
+   "root": "GameSettings",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.gameLeaderboard",
+   "method": "GET",
+   "path": "/games/{}/leaderboard",
+   "root": "GameLeaderboard",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.hallOfFame",
    "method": "GET",
    "path": "/hall-of-fame",
@@ -4618,5 +4790,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "c67462497a0e748e8282360726003c660d49ebd0"
+ "_ios_commit": "a111f5dd2896769a747dd7acee6b1172ca025a9b"
 }
