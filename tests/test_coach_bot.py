@@ -890,7 +890,7 @@ async def test_progress_button_screen_and_lift_chart(fresh_db):
 
     screen = await _tap(COACH, f"coach:pg:{ATHLETE}")
     text = _screen(screen)
-    assert "Маша — прогресс" in text
+    assert "ПРОГРЕСС — Маша" in text
     assert "За 12 недель — 3 тренировки" in text and "в среднем 0.2 в неделю" in text
     assert "1 тренировка · 350кг" in text  # 70×5 на этой неделе
     assert "Свежие рекорды" in text and "Жим лёжа — 70×5" in text

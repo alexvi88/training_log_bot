@@ -233,3 +233,16 @@ Fly.io/Tigris), сроки чистки (`*_RETENTION_DAYS` в `config.py`), ч�
 
 - Тесты: `python -m pytest -q` — весь набор должен быть зелёным.
 - Линт: `ruff check .`.
+
+## Проход «глазами» — скриншоты на GitHub-раннере
+
+Просьба «проход с тестом», «чекни, что красиво», «посмотри экраны» — это
+**workflow `screenshots.yml` в iOS-репо** на self-hosted Mac-раннере, а не
+поиск телефона, симулятора или залогиненного Telegram. Запуск:
+`gh api -X POST repos/alexvi88/training_log_bot_ios/actions/workflows/screenshots.yml/dispatches -f ref=main -f 'inputs[ref]=<ветка>' -f 'inputs[mode]=<walk|coach|import|store>'`.
+Снимки — коммитом в ветку `screenshots` (`<ref>[-mode]/<язык>-<симулятор>/NN-шаг.png`),
+их надо открыть и посмотреть каждый. `walk` ходит в боевой бэкенд под WALK_DEMO,
+`coach`/`import` — на записанных ответах (`Fixtures/*_stub_*.json`, переснимать
+при новых ручках). Новый экран — дописать шаг в соответствующий UI-тест.
+Экраны бота в Telegram без живого клиента смотрятся через те же обработчики
+в тесте (`tests/test_coach_bot.py` — `_tap`/`_screen`), картинки — PNG из ответа.

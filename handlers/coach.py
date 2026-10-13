@@ -753,7 +753,7 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
     if records:
         rows = [i18n.t("coach.client.records_header")]
         rows += [
-            i18n.t("coach.client.record_line", exercise=escape(r["exercise"]), best=escape(r["text"]))
+            i18n.t("coach.client.record_line", exercise=escape(r["exercise"]), best=escape(r["best_set"]))
             for r in records
         ]
         blocks.append("\n".join(rows))
@@ -766,6 +766,8 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         + (i18n.t("coach.client.workouts_hint") if workouts else i18n.t("coach.client.no_workouts"))
     )
     kb = InlineKeyboardBuilder()
+    # Прогресс — первой кнопкой: под пятью тренировками он терялся.
+    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.progress"), callback_data=f"coach:pg:{client_id}"))
     ids = [w["id"] for w in workouts]
     contents = await db.list_workout_contents(ids)
     comments = await db.count_coach_comments_by_workout(ids)
@@ -775,7 +777,6 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     if more:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.all_workouts"), callback_data=f"coach:ws:{client_id}:0"))
-    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.progress"), callback_data=f"coach:pg:{client_id}"))
     if link["show_bodyweight"]:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.bodyweight"), callback_data=f"coach:bw:{client_id}"))
     kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.assign"), callback_data=f"coach:asg:{client_id}"))
@@ -961,7 +962,8 @@ async def coach_client_lift_chart(callback: CallbackQuery, state: FSMContext):
         charts.render_metric_over_sessions,
         points,
         f"{lift['exercise']} — {lift['metric_label']}",
-        lift["metric_label"],
+        # подпись оси — с единицами: «e1RM, кг»; у повторов единиц нет
+        lift["metric_label"] if lift["metric"] == "reps" else f"{lift['metric_label']}, {unit}",
         show_weekly_rate=False,
         mark_records=True,
     )
