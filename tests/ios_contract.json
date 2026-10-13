@@ -819,6 +819,10 @@
     "skippedNoConsent": {
      "type": "Int",
      "optional": false
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": true
     }
    }
   },
@@ -1340,6 +1344,15 @@
     "revoked": {
      "type": "Bool",
      "optional": false
+    }
+   }
+  },
+  "CoachSavedAISummary": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "summary": {
+     "type": "CoachAISummary",
+     "optional": true
     }
    }
   },
@@ -4182,6 +4195,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.coachSavedAISummary",
+   "method": "GET",
+   "path": "/coach/ai-summary",
+   "root": "CoachSavedAISummary",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.coachAISummary",
    "method": "POST",
    "path": "/coach/ai-summary",
@@ -4959,5 +4979,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "1abd3570fc14b04356d0bd591fa978d9215ad818"
+ "_ios_commit": "64d4ba5d021bc219bfed89dc7cfab32117594141"
 }
