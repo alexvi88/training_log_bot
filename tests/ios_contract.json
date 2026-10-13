@@ -923,6 +923,164 @@
     }
    }
   },
+  "CoachClientProgress": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "weeks": {
+     "type": "Int",
+     "optional": false
+    },
+    "totalWorkouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "frequency": {
+     "type": "CoachClientProgress.Frequency",
+     "optional": false
+    },
+    "weekly": {
+     "type": "[CoachClientProgress.Week]",
+     "optional": false
+    },
+    "lifts": {
+     "type": "[CoachClientProgress.Lift]",
+     "optional": false
+    },
+    "records": {
+     "type": "[CoachClientProgress.Record]",
+     "optional": false
+    },
+    "recentRecords": {
+     "type": "[CoachClientRecord]",
+     "optional": false
+    },
+    "recentRecordDays": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientProgress.Frequency": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "workouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "perWeek": {
+     "type": "Double",
+     "optional": false
+    },
+    "thisWeek": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientProgress.Lift": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "metric": {
+     "type": "String",
+     "optional": false
+    },
+    "metricLabel": {
+     "type": "String",
+     "optional": false
+    },
+    "points": {
+     "type": "[CoachClientProgress.Lift.Point]",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientProgress.Lift.Point": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "weekStart": {
+     "type": "String",
+     "optional": false
+    },
+    "value": {
+     "type": "Double",
+     "optional": false
+    },
+    "topSet": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "CoachClientProgress.Record": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "exercise": {
+     "type": "String",
+     "optional": false
+    },
+    "metric": {
+     "type": "String",
+     "optional": false
+    },
+    "sessions": {
+     "type": "Int",
+     "optional": false
+    },
+    "bestReps": {
+     "type": "Int",
+     "optional": false
+    },
+    "bestWeight": {
+     "type": "Double",
+     "optional": false
+    },
+    "bestSet": {
+     "type": "String",
+     "optional": false
+    },
+    "bestE1Rm": {
+     "type": "Double",
+     "optional": false
+    },
+    "bestDate": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CoachClientProgress.Week": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "weekStart": {
+     "type": "String",
+     "optional": false
+    },
+    "workouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "tonnage": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
   "CoachClientRecord": {
    "file": "TrainingLog/Models/CoachModels.swift",
    "fields": {
@@ -949,6 +1107,10 @@
     "text": {
      "type": "String",
      "optional": false
+    },
+    "bestSet": {
+     "type": "String",
+     "optional": true
     }
    }
   },
@@ -4062,6 +4224,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.coachClientProgress",
+   "method": "GET",
+   "path": "/coach/clients/{}/progress",
+   "root": "CoachClientProgress",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.coachClientWorkouts",
    "method": "GET",
    "path": "/coach/clients/{}/workouts",
@@ -4790,5 +4959,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "a111f5dd2896769a747dd7acee6b1172ca025a9b"
+ "_ios_commit": "1abd3570fc14b04356d0bd591fa978d9215ad818"
 }
