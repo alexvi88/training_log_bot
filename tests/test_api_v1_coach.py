@@ -502,3 +502,94 @@ async def test_deleting_the_coach_removes_profile_invite_and_pairs(fresh_db):
     mine = (await athlete.get("/programs")).json()
     assert [p["coach_name"] for p in mine] == [None]
     assert (await athlete.get("/coach-links")).json()["coaches"] == []
+
+
+# ---------- прогресс клиента ----------
+
+
+async def test_client_progress_weeks_lifts_and_records(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    today = dt.date.today()
+    await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=40)).isoformat())
+    await _finished_workout(athlete, ex, 62.5, date=(today - dt.timedelta(days=14)).isoformat())
+    await _finished_workout(athlete, ex, 70)
+
+    resp = await coach.get(f"/coach/clients/{CLIENT}/progress")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["unit"] == "kg" and data["weeks"] == 12 and data["total_workouts"] == 3
+    assert len(data["weekly"]) == 12
+    monday = today - dt.timedelta(days=today.weekday())
+    assert data["weekly"][-1]["week_start"] == monday.isoformat()
+    assert data["weekly"][-1] == {"week_start": monday.isoformat(), "workouts": 1, "tonnage": 350.0}
+    assert data["frequency"] == {"workouts": 3, "per_week": 0.2, "this_week": 1}
+
+    [lift] = data["lifts"]
+    assert lift["exercise_id"] == ex and lift["exercise"] == "Жим" and lift["metric"] == "e1rm"
+    assert [p["top_set"] for p in lift["points"]] == ["60×5", "62.5×5", "70×5"]
+    assert [p["value"] for p in lift["points"]] == [70.0, 72.9, 81.7]
+    assert lift["points"][-1]["week_start"] == monday.isoformat()
+
+    [record] = data["records"]
+    assert record["best_set"] == "70×5" and record["best_e1rm"] == 81.7 and record["best_weight"] == 70
+    assert record["sessions"] == 3 and record["metric"] == "e1rm"
+    [fresh] = data["recent_records"]
+    assert fresh["best_set"] == "70×5" and data["recent_record_days"] == 28
+
+    # Окно недель — из ?weeks= с потолком.
+    short = (await coach.get(f"/coach/clients/{CLIENT}/progress?weeks=4")).json()
+    assert len(short["weekly"]) == 4 and short["frequency"]["workouts"] == 2
+    assert [p["top_set"] for p in short["lifts"][0]["points"]] == ["62.5×5", "70×5"]
+    assert len((await coach.get(f"/coach/clients/{CLIENT}/progress?weeks=500")).json()["weekly"]) == 52
+    assert (await coach.get(f"/coach/clients/{CLIENT}/progress?weeks=1")).status_code == 400
+
+
+async def test_client_progress_empty_and_bodyweight_exercise(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    empty = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    assert empty["total_workouts"] == 0 and empty["lifts"] == [] and empty["records"] == []
+    assert empty["recent_records"] == [] and all(w["workouts"] == 0 for w in empty["weekly"])
+
+    ex = await _exercise(athlete, "Подтягивания")
+    await _finished_workout(athlete, ex, 0)
+    data = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    # Одна тренировка: упражнение ещё не «частое» (меньше двух сессий) —
+    # графика нет, но рекорд есть.
+    assert data["lifts"] == []
+    [record] = data["records"]
+    assert record["metric"] == "reps" and record["best_reps"] == 5
+
+
+async def test_client_progress_names_in_the_coachs_language(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    # Каталожное упражнение у русского атлета лежит под русским именем.
+    ex = await _exercise(athlete, "Жим штанги лёжа")
+    await _finished_workout(athlete, ex, 60, date=(dt.date.today() - dt.timedelta(days=8)).isoformat())
+    await _finished_workout(athlete, ex, 70)
+    data = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    assert data["lifts"][0]["exercise"] == "Barbell Bench Press"
+    assert data["records"][0]["exercise"] == "Barbell Bench Press"
+
+
+async def test_client_progress_refused_to_stranger_and_former_coach(fresh_db):
+    coach, athlete, code = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    await _finished_workout(athlete, ex, 60)
+    stranger = await _client(fresh_db, STRANGER)
+    await stranger.post("/coach", json={"display_name": "Чужой"})
+    resp = await stranger.get(f"/coach/clients/{CLIENT}/progress")
+    assert resp.status_code == 404 and resp.json()["error"] == "not_linked"
+    assert "Жим" not in resp.text
+    # Атлет закрыл доступ — бывший тренер прогресса больше не видит.
+    assert (await athlete.delete(f"/coach-links/{COACH}")).status_code == 200
+    resp = await coach.get(f"/coach/clients/{CLIENT}/progress")
+    assert resp.status_code == 404 and resp.json()["error"] == "not_linked"
+    # И тренер, убравший клиента сам, — тоже.
+    assert (await athlete.post(f"/coach/invites/{code}/accept", json={"name": "Маша"})).status_code == 201
+    assert (await coach.get(f"/coach/clients/{CLIENT}/progress")).status_code == 200
+    assert (await coach.delete(f"/coach/clients/{CLIENT}")).status_code == 200
+    assert (await coach.get(f"/coach/clients/{CLIENT}/progress")).status_code == 404
+    # Атлет не подглядывает «прогресс» тренера через свой id.
+    assert (await athlete.get(f"/coach/clients/{COACH}/progress")).status_code == 404

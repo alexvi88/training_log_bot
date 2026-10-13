@@ -3,7 +3,8 @@
 Две стороны одной связки:
 
 - тренер: `/coach` (стать тренером, имя, код приглашения), `/coach/clients…`
-  (список с сигналами, дневник атлета только на чтение, назначить программу,
+  (список с сигналами, дневник атлета только на чтение, прогресс — недели,
+  движения и рекорды, назначить программу,
   комментарий к тренировке, убрать клиента), `/coach/ai-summary`;
 - атлет: `/coach/invites/{code}` (кто зовёт и что увидит → «Разрешить»),
   `/coach-links…` (мои тренеры: что открыто, отозвать) и комментарии тренера
@@ -196,6 +197,20 @@ async def get_client(request: Request) -> JSONResponse:
         "records": await coach_service.recent_records(client),
         "programs": await coach_service.assigned_programs(user_id, link["client_id"]),
     })
+
+
+async def client_progress(request: Request) -> JSONResponse:
+    """«Прогресс клиента»: частота и тоннаж по неделям, основные движения
+    по неделям, рекорды за всё время и свежие (coach_service.client_progress).
+    Та же проверка связки, что у списка тренировок: чужой или бывший
+    клиент — 404 `not_linked`. Имена упражнений — на языке тренера."""
+    user_id = await common.authed_user_id(request)
+    _, client = await _linked_client(user_id, _client_id(request))
+    weeks = common.query_int(
+        request, "weeks", coach_service.PROGRESS_WEEKS,
+        minimum=coach_service.PROGRESS_MIN_WEEKS, maximum=coach_service.PROGRESS_MAX_WEEKS,
+    )
+    return JSONResponse(await coach_service.client_progress(client, weeks))
 
 
 async def remove_client(request: Request) -> JSONResponse:
@@ -461,6 +476,7 @@ routes = [
     Route("/coach/clients/{client_id:user_id}", get_client, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}", remove_client, methods=["DELETE"]),
     Route("/coach/clients/{client_id:user_id}/workouts", client_workouts, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}/progress", client_progress, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}/workouts/{workout_id:int}", client_workout, methods=["GET"]),
     Route(
         "/coach/clients/{client_id:user_id}/workouts/{workout_id:int}/comments",
