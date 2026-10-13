@@ -101,27 +101,14 @@ def _records_json(book: Optional[analytics.GoldBook], is_bodyweight: bool) -> Op
 
     Так же, как у бота: переключение «10 / 20 / все» меняет график и дельту, но
     рекорд остаётся рекордом — иначе он «терялся» бы при выборе короткого
-    периода. `null`, когда записанных подходов нет вовсе.
-
-    `best_set` — лучший подход в той метрике, которой подписан график: у
-    упражнения своим весом лучший e1RM всегда нулевой (вес снаряда ноль), и
-    «0×0» вместо «×11» было бы не рекордом, а мусором на экране.
+    периода. `null`, когда записанных подходов нет вовсе. Какой подход
+    «лучший» — progress_data.best_set_json (то же правило у «Прогресса
+    клиента» тренера).
     """
-    if book is None:
+    summary = progress_data.best_set_json(book, is_bodyweight)
+    if summary is None:
         return None
-    # best_e1rm == 0 и у упражнения с весом: e1RM считается только до
-    # analytics.counts_for_e1rm повторов, и если все подходы длиннее (15, 20…),
-    # лучшего «по e1RM» нет — тогда лучший по повторам, а не «0×0».
-    best_set = (
-        formatting.format_set(book.max_reps_weight, book.max_reps)
-        if is_bodyweight or book.best_e1rm == 0
-        else formatting.format_set(book.best_e1rm_weight, book.best_e1rm_reps)
-    )
-    return {
-        "best_weight": round(book.max_weight, 1),
-        "best_set": best_set,
-        "best_e1rm": round(book.best_e1rm, 1),
-    }
+    return {key: summary[key] for key in ("best_weight", "best_set", "best_e1rm")}
 
 
 def _comparison_json(

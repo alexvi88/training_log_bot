@@ -39,10 +39,12 @@ from typing import Any, Optional
 import acquisition
 import ai_limits
 import ai_trainer
+import analytics
 import config
 import db
 import formatting
 import i18n
+import progress_data
 import timeutil
 from handlers import sharing
 
@@ -68,6 +70,16 @@ WEB_LINK_PATH = "/coach/"
 MISSING_DAYS = 7
 RECORD_WINDOW_DAYS = 7
 PROGRAM_BEHIND_DAYS = 7
+
+# «Прогресс клиента» (client_progress): окно недель по умолчанию и его
+# границы у `?weeks=`, сколько основных движений на графике, сколько
+# упражнений в таблице рекордов и окно «свежих» рекордов.
+PROGRESS_WEEKS = 12
+PROGRESS_MIN_WEEKS = 4
+PROGRESS_MAX_WEEKS = 52
+PROGRESS_LIFTS = 3
+PROGRESS_BEST_EXERCISES = 8
+PROGRESS_RECORD_DAYS = 28
 
 # Что видно тренеру — для справки и для тестов; экран согласия в приложении
 # говорит это своим текстом.
@@ -188,11 +200,12 @@ async def _program_on_track(client_id: int, assignment: Any) -> bool:
     return await db.count_program_workouts_since(client_id, assignment["program_id"], since) > 0
 
 
-async def recent_records(client: Any) -> list[dict[str, Any]]:
-    """Рекорды e1RM за последние RECORD_WINDOW_DAYS дней — тот же критерий,
-    что у «Итога недели» (db.e1rm_records_in_window)."""
+async def recent_records(client: Any, days: Optional[int] = None) -> list[dict[str, Any]]:
+    """Рекорды e1RM за последние `days` дней (по умолчанию RECORD_WINDOW_DAYS)
+    — тот же критерий, что у «Итога недели» (db.e1rm_records_in_window)."""
+    days = days or RECORD_WINDOW_DAYS
     today = timeutil.user_today(client)
-    start = today - dt.timedelta(days=RECORD_WINDOW_DAYS - 1)
+    start = today - dt.timedelta(days=days - 1)
     unit = formatting.unit_label(client["unit"])
     out = []
     for row in await db.e1rm_records_in_window(
@@ -204,6 +217,8 @@ async def recent_records(client: Any) -> list[dict[str, Any]]:
             "weight": row["weight"],
             "reps": row["reps"],
             "e1rm": round(row["e1rm"], 1),
+            # «62.5×9» — вид подхода у графиков и рекордов прогресса.
+            "best_set": formatting.format_set(row["weight"], row["reps"]),
             # Тот же вид, что у рекордов «Итога недели» и у подходов в
             # приложении: «42.5кг × 8» (`weekly.record.best`).
             "text": i18n.t(
@@ -238,6 +253,145 @@ async def assigned_programs(coach_id: int, client_id: int) -> list[dict[str, Any
             "on_track": await _program_on_track(client_id, assignment),
         })
     return out
+
+
+# ---------- прогресс клиента ----------
+
+
+def _week_start(day: dt.date) -> dt.date:
+    return day - dt.timedelta(days=day.weekday())
+
+
+def _local_week(started_at: str, client: Any) -> dt.date:
+    local = timeutil.to_user_local(dt.datetime.fromisoformat(started_at), client)
+    return _week_start(local.date())
+
+
+def _lift_points(
+    series: progress_data.ChartSeries, client: Any, first_week: dt.date
+) -> list[dict[str, Any]]:
+    """Точка на НЕДЕЛЮ: лучшая тренировка недели по той же величине, что у
+    графика упражнения (progress_data.chart_series — e1RM или повторы у
+    упражнения своим весом). Недели без этого упражнения — без точки, а не
+    нулём: ноль на графике силы читался бы как обвал."""
+    best: dict[dt.date, tuple[float, Any]] = {}
+    for session, (_when, value) in zip(series.sessions, series.points, strict=True):
+        week = _local_week(session.started_at, client)
+        if week < first_week:
+            continue
+        if week not in best or value > best[week][0]:
+            best[week] = (value, session)
+    points = []
+    for week in sorted(best):
+        value, session = best[week]
+        top = session.top_set
+        points.append({
+            "week_start": week.isoformat(),
+            "value": int(value) if series.is_bodyweight else round(value, 1),
+            "top_set": formatting.format_set(top.weight, top.reps) if top else None,
+        })
+    return points
+
+
+async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str, Any]:
+    """«Прогресс клиента» глазами тренера: частота и тоннаж по неделям,
+    лучшая тренировка недели в основных движениях, рекорды за всё время и
+    свежие рекорды. Один расчёт на бота (handlers/coach.py) и REST
+    (`GET /coach/clients/{id}/progress`).
+
+    Только числа и имена: каталожное упражнение — на языке тренера
+    (`shown_exercise_names`), своё имя атлета — как есть. Веса — в единице
+    атлета (`unit` рядом). Недели — местные для атлета, с понедельника, от
+    старых к новым, последняя — текущая (неполная). Данных мало — списки
+    пустые, а не заполненные догадкой: что из этого рисовать, решает экран.
+    """
+    client_id = client["telegram_id"]
+    formula = client["e1rm_formula"]
+    tz = timeutil.offset_hours(client)
+    today = timeutil.user_today(client)
+    this_week = _week_start(today)
+    first_week = this_week - dt.timedelta(weeks=weeks - 1)
+    week_starts = [first_week + dt.timedelta(weeks=i) for i in range(weeks)]
+
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(client_id, tz_offset=tz)]
+    counts = {w: 0 for w in week_starts}
+    for day in dates:
+        week = _week_start(day)
+        if week in counts:
+            counts[week] += 1
+    tonnage = {w: 0.0 for w in week_starts}
+    for day, total in (
+        await db.daily_tonnage(client_id, first_week.isoformat(), today.isoformat(), tz_offset=tz)
+    ).items():
+        week = _week_start(dt.date.fromisoformat(day))
+        if week in tonnage:
+            tonnage[week] += total or 0.0
+    in_window = sum(counts.values())
+
+    sessions_cache: dict[int, list[Any]] = {}
+
+    async def sessions_of(exercise_id: int) -> list[Any]:
+        if exercise_id not in sessions_cache:
+            sessions_cache[exercise_id] = await progress_data.load_sessions(exercise_id, formula)
+        return sessions_cache[exercise_id]
+
+    lifts = []
+    for row in await db.top_exercises_by_frequency(
+        client_id, first_week.isoformat(), today.isoformat(), limit=PROGRESS_LIFTS, tz_offset=tz,
+    ):
+        series = progress_data.chart_series(await sessions_of(row["id"]))
+        points = _lift_points(series, client, first_week)
+        if not points:
+            continue
+        lifts.append({
+            "exercise_id": row["id"],
+            "exercise": sharing.shown_exercise_name(row["display_name"]),
+            "metric": "reps" if series.is_bodyweight else "e1rm",
+            "metric_label": i18n.t("history.chart_metric_reps") if series.is_bodyweight else "e1RM",
+            "points": points,
+        })
+
+    records = []
+    if dates:
+        for row in await db.top_exercises_by_frequency(
+            client_id, min(dates).isoformat(), today.isoformat(),
+            limit=PROGRESS_BEST_EXERCISES, min_sessions=1, tz_offset=tz,
+        ):
+            sessions = await sessions_of(row["id"])
+            is_bw = progress_data.chart_series(sessions).is_bodyweight
+            book = analytics.gold_book(sessions, formula)
+            summary = progress_data.best_set_json(book, is_bw)
+            if book is None or summary is None:
+                continue
+            records.append({
+                "exercise_id": row["id"],
+                "exercise": sharing.shown_exercise_name(row["display_name"]),
+                "metric": "reps" if is_bw else "e1rm",
+                "sessions": row["sessions"],
+                # Больше всего повторов в одном подходе — рекорд упражнения
+                # своим весом, где вес снаряда ноль.
+                "best_reps": book.max_reps,
+                **summary,
+            })
+
+    return {
+        "unit": client["unit"],
+        "weeks": weeks,
+        "total_workouts": len(dates),
+        "frequency": {
+            "workouts": in_window,
+            "per_week": round(in_window / weeks, 1),
+            "this_week": counts[this_week],
+        },
+        "weekly": [
+            {"week_start": w.isoformat(), "workouts": counts[w], "tonnage": round(tonnage[w], 1)}
+            for w in week_starts
+        ],
+        "lifts": lifts,
+        "records": records,
+        "recent_records": await recent_records(client, PROGRESS_RECORD_DAYS),
+        "recent_record_days": PROGRESS_RECORD_DAYS,
+    }
 
 
 # ---------- назначение программы ----------
