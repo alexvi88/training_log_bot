@@ -739,6 +739,52 @@ async def prog_search_text(message: Message, state: FSMContext):
 _progress_view_cache: dict[int, tuple[int, tuple, dict[int, tuple[str, bytes | None]]]] = {}
 
 
+async def progress_screen(
+    exercise_name: str, sessions: list, session_notes: dict[int, str], owner, limit: int
+) -> tuple[str, bytes | None]:
+    """Текст и картинка экрана прогресса упражнения — одна сборка на атлета
+    (`prog:ex`) и на его тренера (`coach:pe`, handlers/coach.py): тренер видит
+    ровно то, что атлет у себя. `owner` — хозяин упражнения: по его формуле и в
+    его единице; язык — текущий (у тренера свой).
+    """
+    # Точка на ТРЕНИРОВКУ (не на подход), значение — e1RM лучшего подхода,
+    # и только сессии одного режима: вся эта арифметика живёт в
+    # progress_data.chart_series (там же объяснено, почему именно так),
+    # потому что ровно её же отдаёт приложению /v1 — см. api_v1_progress.
+    series = progress_data.chart_series(sessions)
+    chart_is_bw = series.is_bodyweight
+    points: list[tuple[dt.datetime, float]] = series.points
+    comparison = analytics.compare_to_previous_session(sessions)
+    records = analytics.compute_personal_records(sessions)
+
+    text = formatting.format_progress_screen(
+        exercise_name, sessions, comparison, records, limit=limit, unit=owner["unit"],
+        session_notes=session_notes,
+        golds=analytics.gold_book(sessions, owner["e1rm_formula"]),
+        single_session_hint=len(points) == 1,
+    )
+
+    png = None
+    # A one-point "chart" is just a dot — same threshold bodyweight already
+    # uses (handlers/bodyweight.py._render). The stats lines above already
+    # cover a single session; format_progress_screen adds the "log it once
+    # more" nudge instead of the delta line when single_session_hint is set.
+    if len(points) >= 2:
+        # Уезжает в пиксели графика (charts.render_metric_over_sessions рисует
+        # заголовок/ось matplotlib'ом, никакой текстовый тест кириллицу там не
+        # увидит) — переводим явно, а не полагаемся на formatting.plural_ru.
+        metric = i18n.t("history.chart_metric_reps") if chart_is_bw else "e1RM"
+        png = await asyncio.to_thread(
+            charts.render_metric_over_sessions,
+            points[-limit:],
+            f"{exercise_name} — {metric}",
+            metric,
+            show_weekly_rate=False,
+            mark_records=True,
+        )
+    return text, png
+
+
 async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all"):
     """Build the text/chart/keyboard for an exercise's progress screen.
 
@@ -766,41 +812,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     if cached is not None:
         text, png = cached
     else:
-        # Точка на ТРЕНИРОВКУ (не на подход), значение — e1RM лучшего подхода,
-        # и только сессии одного режима: вся эта арифметика живёт в
-        # progress_data.chart_series (там же объяснено, почему именно так),
-        # потому что ровно её же отдаёт приложению /v1 — см. api_v1_progress.
-        series = progress_data.chart_series(sessions)
-        chart_is_bw = series.is_bodyweight
-        points: list[tuple[dt.datetime, float]] = series.points
-        comparison = analytics.compare_to_previous_session(sessions)
-        records = analytics.compute_personal_records(sessions)
-
-        text = formatting.format_progress_screen(
-            ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
-            session_notes=session_notes,
-            golds=analytics.gold_book(sessions, user["e1rm_formula"]),
-            single_session_hint=len(points) == 1,
-        )
-
-        png = None
-        # A one-point "chart" is just a dot — same threshold bodyweight already
-        # uses (handlers/bodyweight.py._render). The stats lines above already
-        # cover a single session; format_progress_screen adds the "log it once
-        # more" nudge instead of the delta line when single_session_hint is set.
-        if len(points) >= 2:
-            # Уезжает в пиксели графика (charts.render_metric_over_sessions рисует
-            # заголовок/ось matplotlib'ом, никакой текстовый тест кириллицу там не
-            # увидит) — переводим явно, а не полагаемся на formatting.plural_ru.
-            metric = i18n.t("history.chart_metric_reps") if chart_is_bw else "e1RM"
-            png = await asyncio.to_thread(
-                charts.render_metric_over_sessions,
-                points[-limit:],
-                f"{ex['display_name']} — {metric}",
-                metric,
-                show_weekly_rate=False,
-                mark_records=True,
-            )
+        text, png = await progress_screen(ex["display_name"], sessions, session_notes, user, limit)
         by_limit[limit] = (text, png)
         _progress_view_cache[user["telegram_id"]] = (ex_id, fingerprint, by_limit)
 

@@ -21,7 +21,8 @@
 - «Я тренер»: имя, код и ссылка, «Новый код»;
 - «Мои клиенты» с сигналами → карточка клиента (программы и сделанные дни,
   рекорды, тренировки, «📈 Прогресс» — частота, тоннаж по неделям, рекорды и
-  графики основных движений, вес тела — только открытый атлетом) → тренировка на
+  графики основных движений, а под ними «Все упражнения» → прогресс любого
+  упражнения тем же экраном, что у атлета (история прогресса, без правки), вес тела — только открытый атлетом) → тренировка на
   чтение с комментариями → «Написать комментарий»; «Назначить программу»,
   «Сводка от AI», «Убрать из клиентов»;
 - атлет нажал «Разрешить» — тренеру сообщение «Новый клиент» (coach_notify).
@@ -60,10 +61,12 @@ import db
 import formatting
 import i18n
 import keyboards
+import progress_data
 import timeutil
 import ui
 import weekly_summary
 from fsm import CoachFlow
+from handlers import history as history_screens
 from handlers import sharing
 from state_scaffold import clear_state_keep_workout
 
@@ -74,6 +77,8 @@ router = Router(name="coach")
 START_PREFIX = acquisition.COACH_PREFIX
 
 CLIENTS_PAGE_SIZE = 8
+# «Все упражнения» клиента в «📈 Прогрессе» — кнопками, по столько на страницу.
+EXERCISES_PAGE_SIZE = 8
 WORKOUTS_PAGE_SIZE = 8
 # Тренировок прямо в карточке клиента — дальше «📚 Все тренировки».
 CARD_WORKOUTS = 5
@@ -913,6 +918,9 @@ def _progress_view(link: Any, client: Any, data: dict[str, Any]) -> tuple[str, I
             text=keyboards._shorten_label(i18n.t("coach.btn.progress_lift", exercise=lift["exercise"]), WORKOUT_LABEL_LIMIT),
             callback_data=f"coach:pgl:{client_id}:{lift['exercise_id']}",
         ))
+    # Под основными движениями — любое другое: тот же экран прогресса
+    # упражнения, что атлет видит у себя (coach:px → coach:pe).
+    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.all_exercises"), callback_data=f"coach:px:{client_id}:0"))
     kb.row(*_back_row(f"coach:cl:{client_id}"))
     return "\n\n".join(blocks), kb.as_markup()
 
@@ -991,6 +999,99 @@ async def coach_client_lift_chart(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit_photo(
         callback, png, "progress.png", "\n".join(lines), reply_markup=kb.as_markup(), parse_mode="HTML"
     )
+    await callback.answer()
+
+
+# ---------- 📈 любое упражнение клиента ----------
+
+
+async def _exercises_view(link: Any, client: Any, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    """«Все упражнения» клиента: всё, в чём есть законченные подходы, частые и
+    свежие выше (coach_service.client_exercises), страницами."""
+    client_id = link["client_id"]
+    items = await coach_service.client_exercises(client)
+    head = i18n.t("coach.exercises.title", name=escape(link["client_name"]))
+    kb = InlineKeyboardBuilder()
+    if not items:
+        kb.row(*_back_row(f"coach:pg:{client_id}"))
+        return f"{head}\n\n{i18n.t('coach.exercises.empty')}", kb.as_markup()
+    pages = max(1, (len(items) + EXERCISES_PAGE_SIZE - 1) // EXERCISES_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    for item in items[page * EXERCISES_PAGE_SIZE:(page + 1) * EXERCISES_PAGE_SIZE]:
+        kb.row(InlineKeyboardButton(
+            text=keyboards._shorten_label(
+                i18n.t("coach.exercises.button", exercise=item["exercise"], n=item["sessions"]),
+                WORKOUT_LABEL_LIMIT,
+            ),
+            callback_data=f"coach:pe:{client_id}:{item['exercise_id']}:{keyboards.DEFAULT_PROGRESS_LIMIT}:{page}",
+        ))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=keyboards.PAGE_PREV_TEXT(), callback_data=f"coach:px:{client_id}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text=keyboards.PAGE_NEXT_TEXT(), callback_data=f"coach:px:{client_id}:{page + 1}"))
+    if nav:
+        kb.row(*nav)
+    kb.row(*_back_row(f"coach:pg:{client_id}"))
+    return f"{head}\n\n{i18n.t('coach.exercises.hint')}", kb.as_markup()
+
+
+@router.callback_query(F.data.startswith("coach:px:"))
+async def coach_client_exercises(callback: CallbackQuery, state: FSMContext):
+    args = await _int_args(callback, 2)
+    if args is None:
+        return
+    await _leave_input(state)
+    client_id, page = args
+    link, client = await _linked(callback, client_id)
+    if link is None:
+        return
+    text, kb = await _exercises_view(link, client, page)
+    await _show(callback, text, kb)
+    await callback.answer()
+
+
+def _exercise_progress_keyboard(client_id: int, exercise_id: int, limit: int, page: int) -> InlineKeyboardMarkup:
+    """Те же периоды, что у атлета под графиком (keyboards.PROGRESS_PERIODS),
+    и без кнопок правки: дневник атлета тренеру — только на чтение."""
+    kb = InlineKeyboardBuilder()
+    for value, label in keyboards.PROGRESS_PERIODS:
+        text = f"• {label} •" if value == limit else str(label)
+        kb.button(text=text, callback_data=f"coach:pe:{client_id}:{exercise_id}:{value}:{page}")
+    kb.adjust(len(keyboards.PROGRESS_PERIODS))
+    kb.row(*_back_row(f"coach:px:{client_id}:{page}"))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data.startswith("coach:pe:"))
+async def coach_client_exercise_progress(callback: CallbackQuery, state: FSMContext):
+    """Прогресс одного упражнения клиента — ровно тот экран, что атлет видит
+    на «📈 Прогресс → упражнение» (history.progress_screen: график, золотая
+    книга, подходы по дням с заметками), по его формуле и в его единице, а
+    подписи — на языке тренера. Сначала связка, потом — что упражнение этого
+    атлета: id из кнопки мог быть подменён."""
+    args = await _int_args(callback, 4)
+    if args is None:
+        return
+    await _leave_input(state)
+    client_id, exercise_id, limit, page = args
+    link, client = await _linked(callback, client_id)
+    if link is None:
+        return
+    exercise = await coach_service.client_exercise(client, exercise_id)
+    if exercise is None:
+        await callback.answer(i18n.t("coach.exercises.gone"), show_alert=True)
+        return
+    limit = max(1, min(limit, 9999))
+    sessions = await progress_data.load_sessions(exercise_id, client["e1rm_formula"])
+    notes = await db.list_workout_notes_for_exercise(exercise_id)
+    name = sharing.shown_exercise_name(exercise["display_name"])
+    text, png = await history_screens.progress_screen(name, sessions, notes, client, limit)
+    kb = _exercise_progress_keyboard(client_id, exercise_id, limit, page)
+    if png:
+        await ui.safe_edit_photo(callback, png, "chart.png", text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
