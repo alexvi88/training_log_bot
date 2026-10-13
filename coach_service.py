@@ -591,9 +591,38 @@ async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str
     ]
     text = await _model_answer(coach_id, messages)
     await db.try_increment_ai_question_count(coach_id, config.AI_QUESTION_DAILY_LIMIT)
+    text = text or i18n.t("coach.ai.empty")
+    # Оплаченную сводку запоминаем: открыть её ещё раз — бесплатно
+    # (saved_summary). Не легла (связку разорвали, пока модель думала) —
+    # отдаём как есть, только без даты.
+    row = await db.save_coach_summary(coach_id, client_id, i18n.get_lang(), text, len(briefs), skipped)
     return {
-        "text": text or i18n.t("coach.ai.empty"),
+        "text": text,
         "clients": len(briefs),
         "skipped_no_consent": skipped,
+        "created_at": row["created_at"] if row is not None else None,
     }
+
+
+def summary_json(row: Any) -> dict[str, Any]:
+    """Сохранённая сводка в той же форме, что ответ POST /coach/ai-summary."""
+    return {
+        "text": row["text"],
+        "clients": row["clients"],
+        "skipped_no_consent": row["skipped_no_consent"],
+        "created_at": row["created_at"],
+    }
+
+
+async def saved_summary(coach_id: int, client_id: Optional[int] = None) -> Optional[dict[str, Any]]:
+    """Последняя сохранённая сводка тренера по атлету (или по всем) — или None.
+
+    Сводка, написанная на другом языке, чем текущий у тренера, не отдаётся
+    вовсе (как «Итог недели» у weekly_digests): показать её значило бы
+    заговорить с тренером на чужом языке, а перевести — снова платить модели.
+    Тренер видит «сводки нет» и кнопку собрать её заново."""
+    row = await db.get_coach_summary(coach_id, client_id)
+    if row is None or row["lang"] != i18n.get_lang():
+        return None
+    return summary_json(row)
 

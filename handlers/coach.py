@@ -1300,11 +1300,45 @@ async def coach_remove(callback: CallbackQuery, state: FSMContext):
 # ---------- 🤖 сводка от AI ----------
 
 
-async def _ai_summary(callback: CallbackQuery, state: FSMContext, client_id: Optional[int]) -> None:
-    """Сводка тренеру — по всем клиентам или по одному. Тот же путь, что у
-    REST: coach_service.ai_summary → paid_call (лимит вопроса тренеру и цена
-    в лог), та же бронь «один платный ход за раз», что у чата с тренером в
-    боте (handlers.ai_trainer._busy)."""
+def _summary_view(
+    link: Any, result: dict[str, Any], *, saved_on: Optional[str] = None, client_id: Optional[int] = None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Сводка сообщением: заголовок, текст, кто не вошёл. saved_on — дата
+    сохранённой сводки: тогда под текстом строка «Сводка от …» и кнопка
+    «Обновить сводку» (платный вызов — только по ней)."""
+    head = (
+        i18n.t("coach.ai_summary.header_one", name=escape(link["client_name"])) if link is not None
+        else i18n.t("coach.ai_summary.header_all")
+    )
+    parts = [head]
+    if result["text"]:
+        parts.append(formatting.ai_markdown_to_html(result["text"]))
+    else:
+        parts.append(i18n.t("coach.summary_none_one" if link is not None else "coach.summary_none"))
+    if result["text"] and result["skipped_no_consent"]:
+        parts.append(f"<i>{i18n.t('coach.summary_skipped', n=result['skipped_no_consent'])}</i>")
+    if saved_on is not None:
+        parts.append(f"<i>{i18n.t('coach.ai_summary.saved_on', date=escape(saved_on))}</i>")
+    back_cb = f"coach:cl:{client_id}" if client_id is not None else "coach:clients:0"
+    rows = []
+    if saved_on is not None:
+        refresh_cb = f"coach:ai_new:{client_id}" if client_id is not None else "coach:ai_new"
+        rows.append([InlineKeyboardButton(text=i18n.t("coach.btn.ai_summary_refresh"), callback_data=refresh_cb)])
+    rows.append(_back_row(back_cb))
+    text = ui.fit_to_limit("\n\n".join(parts), ui.TEXT_LIMIT, "HTML")
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _ai_summary(
+    callback: CallbackQuery, state: FSMContext, client_id: Optional[int], *, refresh: bool = False,
+) -> None:
+    """Сводка тренеру — по всем клиентам или по одному.
+
+    Есть сохранённая (coach_service.saved_summary: та же пара, тот же язык,
+    не старше срока) и тренер не жал «Обновить» — показываем её с датой,
+    бесплатно. Иначе — тот же путь, что у REST: coach_service.ai_summary →
+    paid_call (лимит вопроса тренеру и цена в лог), та же бронь «один платный
+    ход за раз», что у чата с тренером в боте (handlers.ai_trainer._busy)."""
     from handlers import ai_trainer as ai_chat
 
     coach_id = callback.from_user.id
@@ -1314,6 +1348,15 @@ async def _ai_summary(callback: CallbackQuery, state: FSMContext, client_id: Opt
     if client_id is not None:
         link, _client = await _linked(callback, client_id)
         if link is None:
+            return
+    if not refresh:
+        saved = await coach_service.saved_summary(coach_id, client_id)
+        if saved is not None:
+            coach = await db.get_user(coach_id)
+            saved_on = _local_day(saved["created_at"], coach) if coach is not None else saved["created_at"][:10]
+            text, kb = _summary_view(link, saved, saved_on=saved_on, client_id=client_id)
+            await callback.answer()
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
             return
     if not ai_trainer.is_configured():
         await callback.answer(i18n.t("ai.screen.not_configured"), show_alert=True)
@@ -1343,19 +1386,8 @@ async def _ai_summary(callback: CallbackQuery, state: FSMContext, client_id: Opt
     finally:
         ai_chat._busy.discard(coach_id)
 
-    head = (
-        i18n.t("coach.ai_summary.header_one", name=escape(link["client_name"])) if link is not None
-        else i18n.t("coach.ai_summary.header_all")
-    )
-    parts = [head]
-    if result["text"]:
-        parts.append(formatting.ai_markdown_to_html(result["text"]))
-    else:
-        parts.append(i18n.t("coach.summary_none_one" if link is not None else "coach.summary_none"))
-    if result["text"] and result["skipped_no_consent"]:
-        parts.append(f"<i>{i18n.t('coach.summary_skipped', n=result['skipped_no_consent'])}</i>")
-    text = ui.fit_to_limit("\n\n".join(parts), ui.TEXT_LIMIT, "HTML")
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=back_kb)
+    text, kb = _summary_view(link, result, client_id=client_id)
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(F.data == "coach:ai")
@@ -1368,6 +1400,18 @@ async def coach_ai_one(callback: CallbackQuery, state: FSMContext):
     args = await _int_args(callback, 1)
     if args is not None:
         await _ai_summary(callback, state, args[0])
+
+
+@router.callback_query(F.data == "coach:ai_new")
+async def coach_ai_all_refresh(callback: CallbackQuery, state: FSMContext):
+    await _ai_summary(callback, state, None, refresh=True)
+
+
+@router.callback_query(F.data.startswith("coach:ai_new:"))
+async def coach_ai_one_refresh(callback: CallbackQuery, state: FSMContext):
+    args = await _int_args(callback, 1)
+    if args is not None:
+        await _ai_summary(callback, state, args[0], refresh=True)
 
 
 # ---------- комментарии тренера под тренировкой атлета ----------

@@ -1172,6 +1172,28 @@ CREATE TABLE IF NOT EXISTS coach_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_coach_comments_workout ON coach_comments (workout_id, id);
 CREATE INDEX IF NOT EXISTS idx_coach_comments_client ON coach_comments (client_id);
+
+-- Последняя AI-сводка тренера (coach_service.ai_summary): по одному клиенту
+-- (client_id — id атлета) или по всем сразу (client_id = 0, COACH_SUMMARY_ALL).
+-- Хранится, чтобы открыть её ещё раз, не платя за второй вызов модели; новая
+-- сводка перезаписывает прежнюю. lang — язык, на котором текст написан:
+-- сменил язык — сводку не показываем (как weekly_digests). clients и
+-- skipped_no_consent — сколько атлетов в сводке и скольких пропустили без
+-- согласия на AI. Разрыв связки удаляет сводку по этому атлету и сводку «по
+-- всем» у этого тренера (в ней есть и его данные) — db.delete_coach_link; снос
+-- аккаунта любой стороны — то же самое (_WIPE_PAIR_TABLES +
+-- _WIPE_ORPHAN_DELETES). Чистится по COACH_SUMMARY_RETENTION_DAYS.
+CREATE TABLE IF NOT EXISTS coach_summaries (
+    coach_id INTEGER NOT NULL,
+    client_id INTEGER NOT NULL,
+    lang TEXT NOT NULL,
+    text TEXT NOT NULL,
+    clients INTEGER NOT NULL DEFAULT 0,
+    skipped_no_consent INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (coach_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_coach_summaries_client ON coach_summaries (client_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -3107,13 +3129,24 @@ _WIPE_PAIR_TABLES: tuple[tuple[str, str, str], ...] = (
     ("coach_comments", "coach_id", "client_id"),
     ("coach_assignments", "coach_id", "client_id"),
     ("coach_links", "coach_id", "client_id"),
+    ("coach_summaries", "coach_id", "client_id"),
 )
+
+# coach_summaries.client_id для сводки «по всем клиентам» тренера: настоящего
+# аккаунта с id 0 не бывает (у Telegram id положительные, у app-only —
+# отрицательные, см. create_app_only_user).
+COACH_SUMMARY_ALL = 0
 
 # Дети, у которых своей колонки с владельцем нет: они привязаны к тренировке или
 # к шаблону и вычищаются подзапросом — до того, как исчезнет родитель, иначе
 # «чей это подход» уже не спросить. Порядок внутри списка — сверху вниз, от
 # самого дальнего потомка к ближнему, как в discard_workout/delete_routine.
 _WIPE_ORPHAN_DELETES = (
+    # Сводка «по всем клиентам» у каждого тренера этого атлета: в её тексте
+    # есть и его тренировки. Строка принадлежит тренеру, а не атлету, поэтому
+    # пара колонок ниже её не видит; и снести её надо, пока связки ещё на месте.
+    "DELETE FROM coach_summaries WHERE client_id = 0 AND coach_id IN "
+    "(SELECT coach_id FROM coach_links WHERE client_id = ?)",
     # Первым: set_write_attempts держит FK на sets(id) без каскада (ключи
     # идемпотентности записи подхода из приложения), и DELETE FROM sets ниже
     # падал «FOREIGN KEY constraint failed» у любого, кто хоть раз записал
@@ -7975,6 +8008,7 @@ async def link_telegram_to_app_account(
                     )
                     await db.execute(f"DELETE FROM {table} WHERE {column} = ?", (app_user_id,))
             await db.execute("DELETE FROM coach_links WHERE coach_id = client_id")
+            await db.execute("DELETE FROM coach_summaries WHERE coach_id = client_id")
 
             if target_row is None:
                 # Самый частый случай: телеграм-аккаунта ещё нет вообще —
@@ -12904,13 +12938,71 @@ async def update_coach_link_visibility(
 
 async def delete_coach_link(coach_id: int, client_id: int) -> bool:
     """Разорвать связку. Комментарии и назначенные программы остаются у атлета
-    (это уже его дневник), но тренер без связки их больше не видит."""
+    (это уже его дневник), но тренер без связки их больше не видит.
+
+    AI-сводки уходят вместе со связкой: по этому атлету и «по всем клиентам»
+    у этого тренера — в общей сводке тоже его данные."""
     async with _write_lock:
-        cur = await conn().execute(
+        db = conn()
+        cur = await db.execute(
             "DELETE FROM coach_links WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
         )
-        await conn().commit()
+        await db.execute(
+            "DELETE FROM coach_summaries WHERE coach_id = ? AND client_id IN (?, ?)",
+            (coach_id, client_id, COACH_SUMMARY_ALL),
+        )
+        await db.commit()
         return cur.rowcount > 0
+
+
+async def save_coach_summary(
+    coach_id: int, client_id: Optional[int], lang: str, text: str,
+    clients: int, skipped_no_consent: int,
+) -> Optional[aiosqlite.Row]:
+    """Запомнить последнюю AI-сводку тренера (см. таблицу coach_summaries);
+    client_id None — сводка по всем клиентам. Новая перезаписывает прежнюю.
+
+    Сводку по одному атлету кладём, только пока связка жива: если её разорвали,
+    пока модель думала, сводке уже негде жить."""
+    key = COACH_SUMMARY_ALL if client_id is None else client_id
+    async with _write_lock:
+        db = conn()
+        if client_id is not None:
+            cur = await db.execute(
+                "SELECT 1 FROM coach_links WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
+            )
+            if await cur.fetchone() is None:
+                return None
+        await db.execute(
+            "INSERT INTO coach_summaries "
+            "(coach_id, client_id, lang, text, clients, skipped_no_consent, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(coach_id, client_id) DO UPDATE SET lang = excluded.lang, "
+            "text = excluded.text, clients = excluded.clients, "
+            "skipped_no_consent = excluded.skipped_no_consent, created_at = excluded.created_at",
+            (coach_id, key, lang, text, clients, skipped_no_consent, now_iso()),
+        )
+        await db.commit()
+    return await get_coach_summary(coach_id, client_id)
+
+
+async def get_coach_summary(coach_id: int, client_id: Optional[int]) -> Optional[aiosqlite.Row]:
+    """Последняя сводка тренера по атлету (или по всем — client_id None)."""
+    key = COACH_SUMMARY_ALL if client_id is None else client_id
+    cur = await conn().execute(
+        "SELECT * FROM coach_summaries WHERE coach_id = ? AND client_id = ?", (coach_id, key)
+    )
+    return await cur.fetchone()
+
+
+async def prune_old_coach_summaries(retention_days: int) -> int:
+    """Выкинуть сводки старше retention_days: сводка — про то, как клиенты
+    тренируются сейчас, полугодовалая только врёт о сегодняшнем дне."""
+    cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM coach_summaries WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
 
 
 async def list_coach_clients(coach_id: int) -> list[aiosqlite.Row]:

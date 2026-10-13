@@ -5,7 +5,8 @@
 - тренер: `/coach` (стать тренером, имя, код приглашения), `/coach/clients…`
   (список с сигналами, дневник атлета только на чтение, прогресс — недели,
   движения и рекорды, назначить программу,
-  комментарий к тренировке, убрать клиента), `/coach/ai-summary`;
+  комментарий к тренировке, убрать клиента), `/coach/ai-summary` (POST —
+  собрать сводку, GET — последняя сохранённая);
 - атлет: `/coach/invites/{code}` (кто зовёт и что увидит → «Разрешить»),
   `/coach-links…` (мои тренеры: что открыто, отозвать) и комментарии тренера
   под своей тренировкой (`/workouts/{id}/coach-comments`).
@@ -363,6 +364,25 @@ async def ai_summary(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+async def saved_ai_summary(request: Request) -> JSONResponse:
+    """Последняя сохранённая AI-сводка (`?client_id=` — по одному клиенту, без
+    него — по всем). Бесплатно: модель не зовётся. `summary` — null, если
+    сводки нет, она старше срока хранения, связку разрывали или сводка
+    написана на другом языке, чем сейчас у тренера (coach_service.saved_summary).
+    Форма `summary` — та же, что у ответа POST."""
+    user_id = await common.authed_user_id(request)
+    await _coach_profile(user_id)
+    raw = request.query_params.get("client_id")
+    client_id: Optional[int] = None
+    if raw not in (None, ""):
+        try:
+            client_id = int(raw)
+        except ValueError as exc:
+            raise ApiError(400, "bad_request", "client_id must be int") from exc
+        await _linked_client(user_id, client_id)
+    return JSONResponse({"summary": await coach_service.saved_summary(user_id, client_id)})
+
+
 # ---------- атлет: приглашение и мои тренеры ----------
 
 
@@ -484,6 +504,7 @@ routes = [
     ),
     Route("/coach/clients/{client_id:user_id}/programs", assign_program, methods=["POST"]),
     Route("/coach/clients/{client_id:user_id}/bodyweight", client_bodyweight, methods=["GET"]),
+    Route("/coach/ai-summary", saved_ai_summary, methods=["GET"]),
     Route("/coach/ai-summary", ai_summary, methods=["POST"]),
     Route("/coach/invites/{code}", invite_preview, methods=["GET"]),
     Route("/coach/invites/{code}/accept", accept_invite, methods=["POST"]),

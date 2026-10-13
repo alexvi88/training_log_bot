@@ -796,6 +796,62 @@ async def test_ai_summary_all_and_one_with_stubbed_model(fresh_db, fake_model):
     assert COACH not in ai_chat._busy
 
 
+async def test_saved_summary_opens_free_with_date_and_refresh_button(fresh_db, fake_model):
+    """Оплаченная сводка лежит в базе: второй тап по «🤖 Сводка от AI» —
+    бесплатно, с датой и кнопкой «Обновить сводку»; модель — только по ней."""
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    await _tap(COACH, "coach:ai")
+    first = await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert "Сводка от" not in _screen(first)
+    assert ("🤖 Обновить сводку", f"coach:ai_new:{ATHLETE}") not in _buttons(_kb(first))
+    assert len(fake_model.calls) == 2
+
+    again = await _tap(COACH, "coach:ai")
+    text = _screen(again)
+    assert "СВОДКА ПО КЛИЕНТАМ" in text and "<b>Маше</b> пора в зал." in text
+    assert "Сводка от " in text and "Обновить сводку" in text
+    assert ("🤖 Обновить сводку", "coach:ai_new") in _buttons(_kb(again))
+    one = await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert "СВОДКА — Маша" in _screen(one)
+    assert ("🤖 Обновить сводку", f"coach:ai_new:{ATHLETE}") in _buttons(_kb(one))
+    assert len(fake_model.calls) == 2
+    assert await fresh_db.get_ai_question_count_today(COACH) == 2
+
+    fake_model.text = "Маша молодец."
+    fresh = await _tap(COACH, f"coach:ai_new:{ATHLETE}")
+    assert "Маша молодец." in _screen(fresh) and "Сводка от" not in _screen(fresh)
+    assert len(fake_model.calls) == 3
+    saved = await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert "Маша молодец." in _screen(saved)
+    assert len(fake_model.calls) == 3
+
+    # Сменил язык — русскую сводку не показываю, собираю заново.
+    await fresh_db.set_user_lang(COACH, "en")
+    fake_model.text = "Masha should train."
+    with i18n.use_lang("en"):
+        english = await _tap(COACH, "coach:ai")
+    assert "CLIENT SUMMARY" in _screen(english) and "Masha should train." in _screen(english)
+    assert len(fake_model.calls) == 4
+    with i18n.use_lang("en"):
+        english = await _tap(COACH, "coach:ai")
+    assert "Summary from " in _screen(english) and len(fake_model.calls) == 4
+    assert ("🤖 Refresh summary", "coach:ai_new") in _buttons(_kb(english))
+
+
+async def test_removing_the_client_drops_his_summaries(fresh_db, fake_model):
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    await _tap(COACH, "coach:ai")
+    await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert await fresh_db.get_coach_summary(COACH, None) is not None
+    assert await fresh_db.get_coach_summary(COACH, ATHLETE) is not None
+    await _tap(COACH, f"coach:rmy:{ATHLETE}")
+    assert await fresh_db.get_coach_link(COACH, ATHLETE) is None
+    assert await fresh_db.get_coach_summary(COACH, None) is None
+    assert await fresh_db.get_coach_summary(COACH, ATHLETE) is None
+
+
 async def test_ai_summary_limit_shows_the_limit_text(fresh_db, fake_model, monkeypatch):
     await _linked(fresh_db)
     await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
