@@ -337,6 +337,37 @@ async def test_invite_screen_leads_with_https_page(fresh_db, monkeypatch):
         assert "trainingdiary://" not in shown
 
 
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_share_text_is_short_one_link_code_on_its_own_line(fresh_db, monkeypatch, lang):
+    """Приглашение — строка от тренера, одна ссылка и код отдельной строкой:
+    ссылка из App Store до приложения не доезжает, код вставляют руками."""
+    from urllib.parse import unquote
+
+    import config
+
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    await _user(fresh_db, COACH)
+    await fresh_db.set_user_lang(COACH, lang)
+    i18n.set_lang(lang)
+    state = _state(COACH)
+    await _tap(COACH, "coach:become")
+    named = _message(COACH, "ABishop")
+    await coach.coach_named(named, state)
+    code = (await fresh_db.get_coach_invite_for(COACH))["code"]
+    page = f"https://training-log.example.com/coach/{code}"
+    buttons = [b for row in named.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+    copied = next(b for b in buttons if b.copy_text).copy_text.text
+    lines = copied.split("\n")
+    assert len(lines) == 3 and lines[1] == page and lines[2].endswith(code)
+    assert copied.count("http") == 1 and "ABishop" in lines[0]
+    # Telegram сам ставит ссылку над текстом — в тексте её нет.
+    shared = unquote(next(b for b in buttons if b.url).url)
+    assert shared.count("http") == 2  # t.me/share и сама страница — один раз
+    # Строку с кодом, вставленную в приложение или бота, разбор понимает.
+    assert coach_service.normalize_invite_code(lines[2]) == code
+    assert coach_service.normalize_invite_code(copied) == code
+
+
 async def test_clients_list_signals_and_pagination(fresh_db):
     await _linked(fresh_db)
     # Маша тренировалась 9 дней назад — сигнал «пропал».

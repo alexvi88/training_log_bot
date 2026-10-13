@@ -92,15 +92,48 @@ def new_invite_code() -> str:
     return "".join(secrets.choice(INVITE_ALPHABET) for _ in range(INVITE_LENGTH))
 
 
-def normalize_invite_code(raw: str) -> str:
-    """Код из того, что вставил человек: сам код, «abcd-2345», ссылка
-    https://<сервер>/coach/ABCD2345 или старая trainingdiary://coach/ABCD2345.
-    Регистр, пробелы и дефисы не важны; хвост `?…`/`#…` у ссылки — тоже."""
-    text = (raw or "").strip()
+# Буквы кириллицы, которые выглядят как латинские из кода: код диктуют, и
+# человек с русской раскладкой набирает К, М, Р, Х кириллицей. Тот же словарь у
+# приложения (`CoachInviteCode.cyrillicLookalikes`).
+# Номерами символов, а не буквами: кириллица в строках модуля — сигнал
+# утечки текста (tests/test_i18n_no_leaks.py), а здесь не текст, а таблица
+# замены А→A, В→B, Е→E, К→K, М→M, Н→H, О→O, Р→P, С→C, Т→T, У→Y, Х→X.
+_CYRILLIC_LOOKALIKES = {
+    0x0410: "A", 0x0412: "B", 0x0415: "E", 0x041A: "K", 0x041C: "M", 0x041D: "H",
+    0x041E: "O", 0x0420: "P", 0x0421: "C", 0x0422: "T", 0x0423: "Y", 0x0425: "X",
+}
+
+
+def _clean_code_token(text: str) -> str:
     if "/" in text:
         text = text.split("#", 1)[0].split("?", 1)[0]
         text = text.rstrip("/").rsplit("/", 1)[-1]
-    return "".join(ch for ch in text.upper() if ch.isalnum())
+    text = text.upper().translate(_CYRILLIC_LOOKALIKES)
+    return "".join(ch for ch in text if ch.isascii() and ch.isalnum())
+
+
+def is_well_formed_code(code: str) -> bool:
+    """Ровно столько знаков и только из алфавита кода."""
+    return len(code) == INVITE_LENGTH and all(ch in INVITE_ALPHABET for ch in code)
+
+
+def normalize_invite_code(raw: str) -> str:
+    """Код из того, что вставил человек: сам код, «abcd-2345», ссылка
+    https://<сервер>/coach/ABCD2345 или старая trainingdiary://coach/ABCD2345.
+    Регистр, пробелы и дефисы не важны; хвост `?…`/`#…` у ссылки — тоже.
+
+    Вставили строку «Код для приложения: ABCD2345» или текст приглашения
+    целиком — берём последнее слово, похожее на код (строка с кодом в
+    приглашении последняя). Такого нет — прежний разбор всего текста: так
+    «abcd 2345» с пробелом остаётся кодом."""
+    text = (raw or "").strip()
+    words = text.split()
+    if len(words) > 1:
+        for word in reversed(words):
+            token = _clean_code_token(word)
+            if is_well_formed_code(token):
+                return token
+    return _clean_code_token(text)
 
 
 def clean_display_name(raw: Any) -> Optional[str]:
@@ -133,6 +166,18 @@ def invite_json(code: str) -> dict[str, Any]:
     # приглашения, а не схема trainingdiary://, которую мессенджеры не
     # открывают. Старые сборки получают рабочую ссылку без обновления.
     return {"code": code, "app_link": invite_link(code)}
+
+
+def invite_share_text(name: str, code: str, link: str) -> str:
+    """Текст «Поделиться» у тренера: одна строка от тренера, одна ссылка и
+    код отдельной строкой — ссылка из App Store до приложения не доезжает,
+    и код вставляют руками. Тот же текст у приложения
+    (`L10n.coachInviteShareText`)."""
+    return "\n".join([
+        i18n.t("coach.invite_share.lead", name=name),
+        link,
+        i18n.t("coach.invite_share.code", code=code),
+    ])
 
 
 def shown_exercise_names(names: list[str]) -> list[str]:
