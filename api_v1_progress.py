@@ -29,7 +29,7 @@ api_v1_achievements и api_v1_dashboard. Без обёртки языком от
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from starlette.requests import Request
 from starlette.routing import Route
@@ -145,27 +145,21 @@ def _comparison_json(
     return {"delta": round(delta, 1), "raw_delta": round(raw, 1), "trend": trend, "text": text}
 
 
-async def exercise_progress_sessions(request: Request) -> JSONResponse:
-    """График прогресса упражнения: ОДНА точка на тренировку, посчитанная сервером.
+async def series_payload(
+    exercise_id: int, owner: Any, limit: int, excluded: Iterable[int] = ()
+) -> dict[str, Any]:
+    """Ответ экрана прогресса упражнения — одна сборка на атлета
+    (`GET /exercises/{id}/progress/sessions`) и на его тренера
+    (`GET /coach/clients/{id}/exercises/{exercise_id}/progress`): тот же экран
+    приложения рисует оба, и разойтись им нечем.
 
-    `limit` — сколько последних тренировок показать (10, 20 или «все» — те же
-    значения, что у кнопок бота, keyboards.progress_chart_keyboard); по
-    умолчанию keyboards.DEFAULT_PROGRESS_LIMIT. Режется хвост, а не начало:
-    экран прогресса — про то, что происходит сейчас.
-
-    Всё, что клиенту остаётся, — нарисовать: значения точек уже посчитаны по
-    формуле этого атлета (users.e1rm_formula) и в его единицах (веса лежат в
-    базе уже в них, см. db.scale_user_set_weights), подписи — на его языке.
+    `owner` — хозяин упражнения: по ЕГО формуле e1RM, в ЕГО единице и по ЕГО
+    поясу (местный день точки). Подписи — на текущем языке (i18n.get_lang):
+    атлету обработчик ставит язык атлета, тренеру язык тренера ставит
+    `authed_user_id`. Своего `use_lang` здесь нет нарочно.
     """
-    user_id, user = await authed_user(request)
-    exercise_id = int(request.path_params["exercise_id"])
-    await _owned_exercise(exercise_id, user_id)
-
-    limit = query_int(
-        request, "limit", keyboards.DEFAULT_PROGRESS_LIMIT, minimum=1, maximum=MAX_LIMIT
-    )
-    excluded = query_excluded_workouts(request)
-    sessions = await progress_data.load_sessions(exercise_id, user["e1rm_formula"])
+    excluded = set(excluded)
+    sessions = await progress_data.load_sessions(exercise_id, owner["e1rm_formula"])
     # Тренировка, ждущая окна «Вернуть», выпадает до всех расчётов — из точек,
     # тренда, рекордов и сравнения разом (см. query_excluded_workouts).
     if excluded:
@@ -182,51 +176,81 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
     moments = series.points[-limit:]
     values = [_point_value(v, series.is_bodyweight) for _, v in moments]
 
+    return {
+        "metric": "reps" if series.is_bodyweight else "e1rm",
+        "metric_label": i18n.t("history.chart_metric_reps") if series.is_bodyweight else "e1RM",
+        # У повторов единицы нет — не «штуки», а ничего: подпись оси целиком
+        # в metric_label. null, а не пустая строка, по той же причине, что у
+        # подписи плитки в api_v1_dashboard: клиент решает по наличию.
+        "unit": None if series.is_bodyweight else formatting.unit_label(owner["unit"]),
+        "points": [
+            {
+                # Местный день атлета, а не UTC-дата строки: приложение
+                # читает поле календарным днём, и вечерняя тренировка у
+                # UTC-5 (или утренняя у UTC+10) вставала точкой на соседний.
+                "date": _local_date(s.started_at, owner),
+                "workout_id": s.workout_id,
+                "value": value,
+                "top_set": (
+                    formatting.format_set(s.top_set.weight, s.top_set.reps)
+                    if s.top_set
+                    else None
+                ),
+                "sets": len(s.sets),
+                # Все подходы тренировки строкой («110×8, 100×10 @9») — как
+                # бот печатает их в истории прогресса
+                # (formatting._progress_session_block). Список «подходы по
+                # дням» в приложении больше не ходит за ними отдельным
+                # запросом сырой истории — у тренера такой ручки и нет.
+                "sets_text": ", ".join(formatting.format_set(x.weight, x.reps, x.rpe) for x in s.sets),
+                # Ещё две величины той же тренировки — для переключателя
+                # «вес / e1RM / тоннаж» у графика в приложении. Добавлены
+                # рядом с `value`, а не вместо: `value` по-прежнему e1RM
+                # (или повторы), и уже установленные версии приложения
+                # читают только его. Считаются по тому же db.load_of, что
+                # и e1RM (см. progress_data.load_sessions), в единицах
+                # атлета; тоннаж — сумма вес×повторы, как у бота
+                # (analytics.SessionStats.tonnage).
+                "max_weight": round(max((x.weight for x in s.sets), default=0.0), 1),
+                "tonnage": round(s.tonnage, 1),
+                "note": notes.get(s.workout_id),
+            }
+            for s, value in zip(shown, values, strict=True)
+        ],
+        "trend": _trend_json(moments, values),
+        "records": _records_json(
+            analytics.gold_book(sessions, owner["e1rm_formula"]), series.is_bodyweight
+        ),
+        "comparison": _comparison_json(
+            values, series.is_bodyweight, len(shown) == len(series.points), owner["unit"]
+        ),
+        "has_rpe": has_rpe,
+    }
+
+
+async def exercise_progress_sessions(request: Request) -> JSONResponse:
+    """График прогресса упражнения: ОДНА точка на тренировку, посчитанная сервером.
+
+    `limit` — сколько последних тренировок показать (10, 20 или «все» — те же
+    значения, что у кнопок бота, keyboards.progress_chart_keyboard); по
+    умолчанию keyboards.DEFAULT_PROGRESS_LIMIT. Режется хвост, а не начало:
+    экран прогресса — про то, что происходит сейчас.
+
+    Всё, что клиенту остаётся, — нарисовать: значения точек уже посчитаны по
+    формуле этого атлета (users.e1rm_formula) и в его единицах (веса лежат в
+    базе уже в них, см. db.scale_user_set_weights), подписи — на его языке.
+    Сборка — series_payload (она же у тренера).
+    """
+    user_id, user = await authed_user(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+
+    limit = query_int(
+        request, "limit", keyboards.DEFAULT_PROGRESS_LIMIT, minimum=1, maximum=MAX_LIMIT
+    )
+    excluded = query_excluded_workouts(request)
     with i18n.use_lang(user["lang"]):
-        payload = {
-            "metric": "reps" if series.is_bodyweight else "e1rm",
-            "metric_label": i18n.t("history.chart_metric_reps") if series.is_bodyweight else "e1RM",
-            # У повторов единицы нет — не «штуки», а ничего: подпись оси целиком
-            # в metric_label. null, а не пустая строка, по той же причине, что у
-            # подписи плитки в api_v1_dashboard: клиент решает по наличию.
-            "unit": None if series.is_bodyweight else formatting.unit_label(user["unit"]),
-            "points": [
-                {
-                    # Местный день атлета, а не UTC-дата строки: приложение
-                    # читает поле календарным днём, и вечерняя тренировка у
-                    # UTC-5 (или утренняя у UTC+10) вставала точкой на соседний.
-                    "date": _local_date(s.started_at, user),
-                    "workout_id": s.workout_id,
-                    "value": value,
-                    "top_set": (
-                        formatting.format_set(s.top_set.weight, s.top_set.reps)
-                        if s.top_set
-                        else None
-                    ),
-                    "sets": len(s.sets),
-                    # Ещё две величины той же тренировки — для переключателя
-                    # «вес / e1RM / тоннаж» у графика в приложении. Добавлены
-                    # рядом с `value`, а не вместо: `value` по-прежнему e1RM
-                    # (или повторы), и уже установленные версии приложения
-                    # читают только его. Считаются по тому же db.load_of, что
-                    # и e1RM (см. progress_data.load_sessions), в единицах
-                    # атлета; тоннаж — сумма вес×повторы, как у бота
-                    # (analytics.SessionStats.tonnage).
-                    "max_weight": round(max((x.weight for x in s.sets), default=0.0), 1),
-                    "tonnage": round(s.tonnage, 1),
-                    "note": notes.get(s.workout_id),
-                }
-                for s, value in zip(shown, values, strict=True)
-            ],
-            "trend": _trend_json(moments, values),
-            "records": _records_json(
-                analytics.gold_book(sessions, user["e1rm_formula"]), series.is_bodyweight
-            ),
-            "comparison": _comparison_json(
-                values, series.is_bodyweight, len(shown) == len(series.points), user["unit"]
-            ),
-            "has_rpe": has_rpe,
-        }
+        payload = await series_payload(exercise_id, user, limit, excluded)
     if excluded:
         payload["excluded_workout_ids"] = list(excluded)
     return JSONResponse(payload)

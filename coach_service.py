@@ -446,6 +446,40 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
     }
 
 
+# ---------- прогресс любого упражнения клиента ----------
+
+
+async def client_exercises(client: Any) -> list[dict[str, Any]]:
+    """«Все упражнения» в «Прогрессе клиента»: каждое упражнение атлета, в
+    котором есть законченные подходы, — частые и свежие выше
+    (db.list_trained_exercises). Дальше тренер открывает прогресс одного из
+    них — тот же экран, что у атлета (api_v1_progress.series_payload, бот —
+    handlers/history.progress_screen).
+
+    Имя — для показа: каталожное на языке тренера, своё имя атлета как есть
+    (`shown_exercise_names`). Идентичность — `exercise_id`, по нему и
+    открывается прогресс."""
+    rows = await db.list_trained_exercises(client["telegram_id"], tz_offset=timeutil.offset_hours(client))
+    return [
+        {
+            "exercise_id": row["id"],
+            "exercise": sharing.shown_exercise_name(row["display_name"]),
+            "sessions": row["sessions"],
+            "last_workout_at": row["last_day"],
+        }
+        for row in rows
+    ]
+
+
+async def client_exercise(client: Any, exercise_id: int) -> Optional[Any]:
+    """Упражнение из URL или кнопки — только если оно этого атлета: id мог быть
+    угадан и принадлежать чужому дневнику. `None` — не его (или нет такого)."""
+    exercise = await db.get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != client["telegram_id"]:
+        return None
+    return exercise
+
+
 # ---------- назначение программы ----------
 
 

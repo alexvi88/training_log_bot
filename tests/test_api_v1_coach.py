@@ -673,3 +673,105 @@ async def test_client_progress_refused_to_stranger_and_former_coach(fresh_db):
     assert (await coach.get(f"/coach/clients/{CLIENT}/progress")).status_code == 404
     # Атлет не подглядывает «прогресс» тренера через свой id.
     assert (await athlete.get(f"/coach/clients/{COACH}/progress")).status_code == 404
+
+
+# ---------- прогресс любого упражнения клиента ----------
+
+
+async def test_client_exercises_lists_trained_ones_frequent_and_fresh_first(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    squat = await _exercise(athlete, "Присед")
+    curl = await _exercise(athlete, "Бицепс")
+    row = await _exercise(athlete, "Тяга")
+    untouched = await _exercise(athlete, "Не делал")
+    old = (dt.date.today() - dt.timedelta(days=10)).isoformat()
+    await _finished_workout(athlete, squat, 80, date=old)
+    await _finished_workout(athlete, squat, 85)
+    await _finished_workout(athlete, curl, 15, date=old)
+    await _finished_workout(athlete, row, 60)
+    # Идущая тренировка — не история: её упражнения в список не попадают.
+    wid = (await athlete.post("/workouts/active", json={})).json()["id"]
+    await athlete.post(f"/workouts/{wid}/sets", json={"exercise_id": untouched, "weight": 10, "reps": 5})
+
+    resp = await coach.get(f"/coach/clients/{CLIENT}/exercises")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["unit"] == "kg"
+    assert [e["exercise_id"] for e in data["exercises"]] == [squat, row, curl]
+    first = data["exercises"][0]
+    assert first == {
+        "exercise_id": squat, "exercise": "Присед", "sessions": 2,
+        "last_workout_at": timeutil.user_today(await fresh_db.get_user(CLIENT)).isoformat(),
+    }
+
+
+async def test_client_exercise_progress_is_the_athletes_own_screen(fresh_db):
+    """Тренер получает ровно тот ответ, что атлет на своём экране прогресса
+    упражнения: одна сборка, одни числа."""
+    coach, athlete, _ = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    await _finished_workout(athlete, ex, 60, date=(dt.date.today() - dt.timedelta(days=8)).isoformat())
+    await _finished_workout(athlete, ex, 70)
+
+    mine = (await athlete.get(f"/exercises/{ex}/progress/sessions")).json()
+    theirs = await coach.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress")
+    assert theirs.status_code == 200, theirs.text
+    assert theirs.json() == mine
+    assert [p["sets_text"] for p in mine["points"]] == ["60×5", "70×5"]
+    assert mine["records"]["best_set"] == "70×5"
+    short = (await coach.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress?limit=1")).json()
+    assert len(short["points"]) == 1 and short == (await athlete.get(f"/exercises/{ex}/progress/sessions?limit=1")).json()
+
+
+async def test_client_exercise_progress_in_the_athletes_unit_and_coachs_language(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    ex = await _exercise(athlete, "Жим штанги лёжа")
+    await _finished_workout(athlete, ex, 60, date=(dt.date.today() - dt.timedelta(days=8)).isoformat())
+    await _finished_workout(athlete, ex, 70)
+    assert (await athlete.patch("/settings", json={"unit": "lb"})).status_code == 200
+
+    names = (await coach.get(f"/coach/clients/{CLIENT}/exercises")).json()
+    assert names["unit"] == "lb"
+    assert names["exercises"][0]["exercise"] == "Barbell Bench Press"
+    data = (await coach.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress")).json()
+    assert data["unit"] == "lb"
+    assert "first" in data["comparison"]["text"] or "period" in data["comparison"]["text"]
+    assert not any("Ѐ" <= ch <= "ӿ" for ch in str(data))
+
+
+async def test_client_exercise_progress_refuses_foreign_exercise_and_unlinked(fresh_db):
+    coach, athlete, code = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    await _finished_workout(athlete, ex, 60)
+    own = await _exercise(coach, "Свой жим")
+    await _finished_workout(coach, own, 100)
+    stranger = await _client(fresh_db, STRANGER)
+    await stranger.post("/coach", json={"display_name": "Чужой"})
+    foreign = await _exercise(stranger, "Чужой жим")
+
+    # Упражнение не этого атлета (своё тренера, чужого человека, несуществующее).
+    for exercise_id in (own, foreign, 999_999):
+        resp = await coach.get(f"/coach/clients/{CLIENT}/exercises/{exercise_id}/progress")
+        assert resp.status_code == 404 and resp.json()["error"] == "not_found", exercise_id
+        assert "Свой жим" not in resp.text
+    # Чужой тренер — not_linked и без имён.
+    for path in (f"/coach/clients/{CLIENT}/exercises", f"/coach/clients/{CLIENT}/exercises/{ex}/progress"):
+        resp = await stranger.get(path)
+        assert resp.status_code == 404 and resp.json()["error"] == "not_linked"
+        assert "Жим" not in resp.text
+    # Атлет своим id — не клиент сам себе.
+    assert (await athlete.get(f"/coach/clients/{CLIENT}/exercises")).json()["error"] == "not_linked"
+    assert (await athlete.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress")).json()["error"] == "not_linked"
+    # Атлет не подглядывает упражнения тренера через его id.
+    assert (await athlete.get(f"/coach/clients/{COACH}/exercises/{own}/progress")).status_code == 404
+    # Бывший тренер: атлет закрыл доступ.
+    assert (await athlete.delete(f"/coach-links/{COACH}")).status_code == 200
+    for path in (f"/coach/clients/{CLIENT}/exercises", f"/coach/clients/{CLIENT}/exercises/{ex}/progress"):
+        resp = await coach.get(path)
+        assert resp.status_code == 404 and resp.json()["error"] == "not_linked"
+    # Снова связаны — снова видно; тренер убрал клиента сам — опять нет.
+    assert (await athlete.post(f"/coach/invites/{code}/accept", json={"name": "Маша"})).status_code == 201
+    assert (await coach.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress")).status_code == 200
+    assert (await coach.delete(f"/coach/clients/{CLIENT}")).status_code == 200
+    assert (await coach.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress")).status_code == 404

@@ -4,7 +4,8 @@
 
 - тренер: `/coach` (стать тренером, имя, код приглашения), `/coach/clients…`
   (список с сигналами, дневник атлета только на чтение, прогресс — недели,
-  движения и рекорды, назначить программу,
+  движения и рекорды, «Все упражнения» и прогресс любого из них тем же
+  ответом, что у атлета, назначить программу,
   комментарий к тренировке, убрать клиента), `/coach/ai-summary` (POST —
   собрать сводку, GET — последняя сохранённая);
 - атлет: `/coach/invites/{code}` (кто зовёт и что увидит → «Разрешить»),
@@ -30,11 +31,13 @@ from starlette.routing import Route
 import ai_trainer
 import api_v1_ai
 import api_v1_common as common
+import api_v1_progress
 import coach_notify
 import coach_service
 import config
 import db
 import i18n
+import keyboards
 from api_v1_common import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -212,6 +215,36 @@ async def client_progress(request: Request) -> JSONResponse:
         minimum=coach_service.PROGRESS_MIN_WEEKS, maximum=coach_service.PROGRESS_MAX_WEEKS,
     )
     return JSONResponse(await coach_service.client_progress(client, weeks))
+
+
+async def client_exercises(request: Request) -> JSONResponse:
+    """«Все упражнения» клиента для прогресса: всё, в чём у атлета есть
+    законченные подходы, частые и свежие выше (coach_service.client_exercises).
+    Чужой или бывший клиент, сам атлет со своим id — 404 `not_linked`."""
+    user_id = await common.authed_user_id(request)
+    _, client = await _linked_client(user_id, _client_id(request))
+    return JSONResponse({
+        "unit": client["unit"],
+        "exercises": await coach_service.client_exercises(client),
+    })
+
+
+async def client_exercise_progress(request: Request) -> JSONResponse:
+    """Прогресс одного упражнения клиента — ровно та же форма, что у атлета
+    на `GET /exercises/{id}/progress/sessions` (одна сборка,
+    api_v1_progress.series_payload): формула, единица и пояс — атлета,
+    подписи — на языке тренера. Сначала связка (404 `not_linked`), потом
+    упражнение этого атлета (404 `not_found` — и для чужого, и для
+    несуществующего). `limit` — те же 10 / 20 / «все»."""
+    user_id = await common.authed_user_id(request)
+    _, client = await _linked_client(user_id, _client_id(request))
+    exercise_id = int(request.path_params["exercise_id"])
+    if await coach_service.client_exercise(client, exercise_id) is None:
+        raise ApiError(404, "not_found", "exercise not found")
+    limit = common.query_int(
+        request, "limit", keyboards.DEFAULT_PROGRESS_LIMIT, minimum=1, maximum=api_v1_progress.MAX_LIMIT
+    )
+    return JSONResponse(await api_v1_progress.series_payload(exercise_id, client, limit))
 
 
 async def remove_client(request: Request) -> JSONResponse:
@@ -498,6 +531,11 @@ routes = [
     Route("/coach/clients/{client_id:user_id}/workouts", client_workouts, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}/progress", client_progress, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}/workouts/{workout_id:int}", client_workout, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}/exercises", client_exercises, methods=["GET"]),
+    Route(
+        "/coach/clients/{client_id:user_id}/exercises/{exercise_id:int}/progress",
+        client_exercise_progress, methods=["GET"],
+    ),
     Route(
         "/coach/clients/{client_id:user_id}/workouts/{workout_id:int}/comments",
         comment_workout, methods=["POST"],

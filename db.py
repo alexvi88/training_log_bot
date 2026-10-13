@@ -6171,6 +6171,36 @@ async def top_exercises_by_frequency(
     return await cur.fetchall()
 
 
+async def list_trained_exercises(
+    user_id: int, *, tz_offset: Optional[int] = None, limit: int = 500
+) -> list[aiosqlite.Row]:
+    """Все упражнения атлета, у которых есть хоть один подход в законченной
+    тренировке, — список «Все упражнения» в «Прогрессе клиента» тренера (бот
+    и `GET /coach/clients/{id}/exercises`).
+
+    Чаще делаемое — выше (по числу тренировок, как top_exercises_by_frequency),
+    при равенстве — то, что делал недавно, потом по имени: порядок не прыгает
+    между открытиями. Архивные не прячутся: у тренера они — часть истории,
+    график по ним есть. `last_day` — местный день последней тренировки с ним.
+    """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        "SELECT e.id, e.display_name, e.original_name, COUNT(DISTINCT w.id) AS sessions, "
+        "       COUNT(s.id) AS sets_count, MAX(w.started_at) AS last_at, "
+        f"      MAX({day}) AS last_day "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND e.user_id = ? AND w.status = 'finished' AND s.reps > 0 "
+        "GROUP BY e.id "
+        "ORDER BY sessions DESC, last_at DESC, e.display_name "
+        "LIMIT ?",
+        (user_id, user_id, limit),
+    )
+    return await cur.fetchall()
+
+
 async def exercise_e1rm_growth(
     user_id: int,
     exercise_id: int,

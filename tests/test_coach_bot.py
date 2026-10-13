@@ -1014,3 +1014,113 @@ async def test_english_progress_screen_has_no_cyrillic_beyond_user_data(fresh_db
             text = text.replace(data, "")
         assert not i18n_coverage.has_cyrillic(text), text
     assert "Last 12 weeks: 2 workouts" in texts[0]
+
+
+# ---------- 📈 любое упражнение клиента ----------
+
+
+async def _exercise_id(db, user_id: int, name: str) -> int:
+    cur = await db.conn().execute("SELECT id FROM exercises WHERE user_id = ? AND name = ?", (user_id, name))
+    return (await cur.fetchone())["id"]
+
+
+async def test_all_exercises_list_and_progress_is_the_athletes_own_screen(fresh_db):
+    await _linked(fresh_db)
+    await _finished_workout(fresh_db, ATHLETE, "Присед", 100.0, started_at=_days_ago(9))
+    await _finished_workout(fresh_db, ATHLETE, "Присед", 105.0, started_at=_days_ago(2))
+    await _finished_workout(fresh_db, ATHLETE, "Бицепс", 15.0)
+    squat = await _exercise_id(fresh_db, ATHLETE, "Присед")
+
+    progress = await _tap(COACH, f"coach:pg:{ATHLETE}")
+    assert ("📈 Все упражнения", f"coach:px:{ATHLETE}:0") in _buttons(_kb(progress))
+
+    listing = await _tap(COACH, f"coach:px:{ATHLETE}:0")
+    assert "ВСЕ УПРАЖНЕНИЯ — Маша" in _screen(listing)
+    buttons = _buttons(_kb(listing))
+    assert buttons[0] == ("Присед · 2 тренировки", f"coach:pe:{ATHLETE}:{squat}:20:0")
+    assert buttons[1][0] == "Бицепс · 1 тренировка"
+    assert buttons[-1] == ("⬅️ Назад", f"coach:pg:{ATHLETE}")
+
+    chart = await _tap_photo(COACH, f"coach:pe:{ATHLETE}:{squat}:20:0")
+    coach_view = chart.message.answer_photo.await_args
+    assert coach_view.args[0].data[:4] == b"\x89PNG"
+    # Тот же экран, что атлет открывает у себя: «📈 Прогресс → Присед».
+    own = _callback(ATHLETE, f"prog:ex:{squat}:all")
+    own.message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=5))
+    assert await history.router.callback_query.trigger(own, state=_state(ATHLETE)) is not UNHANDLED
+    assert coach_view.kwargs["caption"] == own.message.answer_photo.await_args.kwargs["caption"]
+    assert "105×5" in coach_view.kwargs["caption"]
+    # Только периоды и «Назад» — ни карточки упражнения, ни правки.
+    kb = _buttons(coach_view.kwargs["reply_markup"])
+    assert [cb for _t, cb in kb] == [
+        f"coach:pe:{ATHLETE}:{squat}:10:0", f"coach:pe:{ATHLETE}:{squat}:20:0",
+        f"coach:pe:{ATHLETE}:{squat}:9999:0", f"coach:px:{ATHLETE}:0",
+    ]
+    assert kb[1][0].startswith("• ")
+    period = await _tap_photo(COACH, f"coach:pe:{ATHLETE}:{squat}:9999:0")
+    assert _buttons(period.message.answer_photo.await_args.kwargs["reply_markup"])[2][0].startswith("• ")
+
+
+async def test_all_exercises_pages_and_single_session_without_chart(fresh_db):
+    await _linked(fresh_db)
+    for i in range(coach.EXERCISES_PAGE_SIZE + 2):
+        await _finished_workout(fresh_db, ATHLETE, f"Упражнение {i}", 20.0 + i)
+    first = _buttons(_kb(await _tap(COACH, f"coach:px:{ATHLETE}:0")))
+    assert (coach.keyboards.PAGE_NEXT_TEXT(), f"coach:px:{ATHLETE}:1") in first
+    second = _buttons(_kb(await _tap(COACH, f"coach:px:{ATHLETE}:1")))
+    assert len([cb for _t, cb in second if cb.startswith("coach:pe:")]) == 2
+    assert (coach.keyboards.PAGE_PREV_TEXT(), f"coach:px:{ATHLETE}:0") in second
+    # Одна тренировка — без картинки, текстом, как у атлета.
+    ex = await _exercise_id(fresh_db, ATHLETE, "Упражнение 0")
+    one = await _tap(COACH, f"coach:pe:{ATHLETE}:{ex}:20:1")
+    assert "Нарисую график после второй тренировки" in _screen(one)
+    assert _buttons(_kb(one))[-1] == ("⬅️ Назад", f"coach:px:{ATHLETE}:1")
+
+
+async def test_all_exercises_empty_and_refusals(fresh_db):
+    await _linked(fresh_db)
+    empty = await _tap(COACH, f"coach:px:{ATHLETE}:0")
+    assert "ни одного законченного подхода" in _screen(empty)
+
+    await _finished_workout(fresh_db, ATHLETE, "Жим", 60.0)
+    ex = await _exercise_id(fresh_db, ATHLETE, "Жим")
+    await _finished_workout(fresh_db, COACH, "Свой жим", 100.0)
+    own = await _exercise_id(fresh_db, COACH, "Свой жим")
+    # Упражнение не этого атлета — отказ, своё тренера не показываем.
+    gone = await _tap(COACH, f"coach:pe:{ATHLETE}:{own}:20:0")
+    assert "Не нашёл это упражнение" in _alert(gone)
+    gone.message.answer.assert_not_awaited()
+
+    await _user(fresh_db, STRANGER)
+    await fresh_db.upsert_coach_profile(STRANGER, "Чужой")
+    for user_id in (STRANGER, ATHLETE):
+        for data in (f"coach:px:{ATHLETE}:0", f"coach:pe:{ATHLETE}:{ex}:20:0"):
+            callback = await _tap(user_id, data)
+            assert "не открыл тебе дневник" in _alert(callback), (user_id, data)
+            callback.message.answer.assert_not_awaited()
+    await fresh_db.delete_coach_link(COACH, ATHLETE)
+    for data in (f"coach:px:{ATHLETE}:0", f"coach:pe:{ATHLETE}:{ex}:20:0"):
+        callback = await _tap(COACH, data)
+        assert "не открыл тебе дневник" in _alert(callback), data
+
+
+async def test_english_coach_sees_catalog_exercise_in_english(fresh_db):
+    await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    await _finished_workout(fresh_db, ATHLETE, "Жим штанги лёжа", 60.0, started_at=_days_ago(8))
+    await _finished_workout(fresh_db, ATHLETE, "Жим штанги лёжа", 70.0)
+    ex = await _exercise_id(fresh_db, ATHLETE, "Жим штанги лёжа")
+    with i18n.use_lang("en"):
+        progress = await _tap(COACH, f"coach:pg:{ATHLETE}")
+        listing = await _tap(COACH, f"coach:px:{ATHLETE}:0")
+        chart = await _tap_photo(COACH, f"coach:pe:{ATHLETE}:{ex}:20:0")
+    assert ("📈 All exercises", f"coach:px:{ATHLETE}:0") in _buttons(_kb(progress))
+    assert _buttons(_kb(listing))[0][0] == "Barbell Bench Press · 2 workouts"
+    kwargs = chart.message.answer_photo.await_args.kwargs
+    texts = [
+        _screen(listing).replace("Маша", "") + " ".join(t for t, _ in _buttons(_kb(listing))),
+        kwargs["caption"] + " ".join(t for t, _ in _buttons(kwargs["reply_markup"])),
+    ]
+    assert "Barbell Bench Press" in kwargs["caption"]
+    for text in texts:
+        assert not i18n_coverage.has_cyrillic(text), text

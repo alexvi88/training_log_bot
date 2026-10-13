@@ -813,6 +813,14 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await w.call("GET", "/coach/clients/999/workouts", expect=404)
     await w.call("GET", "/coach/clients/222/progress", expect=200)
     await w.call("GET", "/coach/clients/999/progress", expect=404)
+    await w.call("GET", "/coach/clients/222/exercises", expect=200)
+    await w.call("GET", "/coach/clients/999/exercises", expect=404)
+    await w.call("GET", f"/coach/clients/222/exercises/{ex}/progress", expect=200)
+    await w.call("GET", f"/coach/clients/222/exercises/{ex}/progress?limit=10", expect=200)
+    await w.call("GET", f"/coach/clients/999/exercises/{ex}/progress", expect=404)
+    # Своё упражнение тренера через id клиента — не упражнение этого атлета.
+    own = (await w.call("POST", "/exercises", json={"name": text["exercise"] + " 3"}, expect=201)).json()["id"]
+    await w.call("GET", f"/coach/clients/222/exercises/{own}/progress", expect=404)
     await w.call("POST", f"/coach/clients/222/workouts/{wid}/comments", json={"text": text["note"]}, expect=201)
     await w.call("POST", f"/coach/clients/222/workouts/{wid}/comments", json={"text": ""}, expect=400)
     await w.call("POST", "/coach/clients/222/programs", json={"program_id": program_id}, expect=201)
