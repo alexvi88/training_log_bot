@@ -20,7 +20,8 @@
 Сторона тренера:
 - «Я тренер»: имя, код и ссылка, «Новый код»;
 - «Мои клиенты» с сигналами → карточка клиента (программы и сделанные дни,
-  рекорды, тренировки, вес тела — только открытый атлетом) → тренировка на
+  рекорды, тренировки, «📈 Прогресс» — частота, тоннаж по неделям, рекорды и
+  графики основных движений, вес тела — только открытый атлетом) → тренировка на
   чтение с комментариями → «Написать комментарий»; «Назначить программу»,
   «Сводка от AI», «Убрать из клиентов»;
 - атлет нажал «Разрешить» — тренеру сообщение «Новый клиент» (coach_notify).
@@ -51,6 +52,7 @@ import acquisition
 import ai_limits
 import ai_trainer
 import busy_lock
+import charts
 import coach_notify
 import coach_service
 import config
@@ -60,6 +62,7 @@ import i18n
 import keyboards
 import timeutil
 import ui
+import weekly_summary
 from fsm import CoachFlow
 from handlers import sharing
 from state_scaffold import clear_state_keep_workout
@@ -550,13 +553,19 @@ async def _invite_view(bot, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     # «приложение, App Store или Telegram»). Без публичного адреса сервера —
     # прежняя ссылка в бота.
     link = coach_service.web_link(code) or _deep_link(await sharing.get_bot_username(bot), code)
-    share_text = i18n.t("coach.invite_share_text", name=profile["display_name"], code=code)
+    full_text = coach_service.invite_share_text(profile["display_name"], code, link)
+    # Telegram сам ставит ссылку первой строкой над `text` — в `text` её нет,
+    # иначе в сообщении было бы две одинаковые ссылки.
+    share_text = "\n".join([
+        i18n.t("coach.invite_share.lead", name=profile["display_name"]),
+        i18n.t("coach.invite_share.code", code=code),
+    ])
     share_url = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote(share_text, safe='')}"
     text = i18n.t("coach.invite_screen", link=escape(link), code=code)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n.t("coach.btn.share"), url=share_url)],
         [InlineKeyboardButton(
-            text=i18n.t("coach.btn.copy_link"), copy_text=CopyTextButton(text=f"{share_text}\n{link}")
+            text=i18n.t("coach.btn.copy_link"), copy_text=CopyTextButton(text=full_text)
         )],
         [
             InlineKeyboardButton(text=i18n.t("coach.btn.my_clients_short"), callback_data="coach:clients:0"),
@@ -744,7 +753,7 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
     if records:
         rows = [i18n.t("coach.client.records_header")]
         rows += [
-            i18n.t("coach.client.record_line", exercise=escape(r["exercise"]), best=escape(r["text"]))
+            i18n.t("coach.client.record_line", exercise=escape(r["exercise"]), best=escape(r["best_set"]))
             for r in records
         ]
         blocks.append("\n".join(rows))
@@ -757,6 +766,8 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         + (i18n.t("coach.client.workouts_hint") if workouts else i18n.t("coach.client.no_workouts"))
     )
     kb = InlineKeyboardBuilder()
+    # Прогресс — первой кнопкой: под пятью тренировками он терялся.
+    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.progress"), callback_data=f"coach:pg:{client_id}"))
     ids = [w["id"] for w in workouts]
     contents = await db.list_workout_contents(ids)
     comments = await db.count_coach_comments_by_workout(ids)
@@ -826,6 +837,160 @@ async def coach_client_workouts(callback: CallbackQuery, state: FSMContext):
     body = i18n.t("coach.client.workouts_hint") if workouts else i18n.t("coach.client.no_workouts")
     text = f"<b>{escape(link['client_name'])}</b>\n{i18n.t('coach.client.workouts_header')}\n\n{body}"
     await _show(callback, text, kb.as_markup())
+    await callback.answer()
+
+
+# ---------- 📈 прогресс клиента ----------
+
+# Недель текстом на экране прогресса — свежие сверху; остальные недели окна
+# (coach_service.PROGRESS_WEEKS) есть в частоте и на графиках.
+PROGRESS_TEXT_WEEKS = 8
+# Точек списком под графиком движения — свежие сверху.
+LIFT_CAPTION_POINTS = 6
+
+
+def _chartable(lift: dict[str, Any]) -> bool:
+    """График — от двух недель: одна точка — это точка, а не линия (тот же
+    порог, что у графика упражнения в истории)."""
+    return len(lift["points"]) >= 2
+
+
+def _best_text(record: dict[str, Any], unit: str) -> str:
+    if record["metric"] == "reps":
+        return i18n.t("coach.progress.reps", n=record["best_reps"])
+    e1rm = f"{formatting.format_weight(record['best_e1rm'])}{formatting.unit_label(unit)}"
+    return i18n.t("coach.progress.set_e1rm", set=record["best_set"], e1rm=e1rm)
+
+
+def _progress_view(link: Any, client: Any, data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
+    client_id = link["client_id"]
+    today = timeutil.user_today(client)
+    head = i18n.t("coach.progress.title", name=escape(link["client_name"]))
+    kb = InlineKeyboardBuilder()
+    if not data["total_workouts"]:
+        kb.row(*_back_row(f"coach:cl:{client_id}"))
+        return f"{head}\n\n{i18n.t('coach.progress.empty')}", kb.as_markup()
+
+    freq = data["frequency"]
+    blocks = [head + "\n" + i18n.t(
+        "coach.progress.frequency", weeks=data["weeks"], n=freq["workouts"],
+        avg=formatting.format_weight(freq["per_week"]), this_week=freq["this_week"],
+    )]
+    rows = [i18n.t("coach.progress.weeks_header")]
+    for week in list(reversed(data["weekly"]))[:PROGRESS_TEXT_WEEKS]:
+        date = escape(formatting.format_day_month_ru(dt.date.fromisoformat(week["week_start"]), today))
+        if week["workouts"]:
+            rows.append(i18n.t(
+                "coach.progress.week_line", date=date, n=week["workouts"],
+                tonnage=weekly_summary.tonnage_label(week["tonnage"], data["unit"]),
+            ))
+        else:
+            rows.append(i18n.t("coach.progress.week_empty", date=date))
+    blocks.append("\n".join(rows))
+
+    if data["recent_records"]:
+        rows = [i18n.t("coach.progress.recent_header", days=data["recent_record_days"])]
+        rows += [
+            i18n.t("coach.client.record_line", exercise=escape(r["exercise"]), best=escape(r["best_set"]))
+            for r in data["recent_records"]
+        ]
+        blocks.append("\n".join(rows))
+    if data["records"]:
+        rows = [i18n.t("coach.progress.best_header")]
+        rows += [
+            i18n.t(
+                "coach.client.record_line", exercise=escape(r["exercise"]),
+                best=escape(_best_text(r, data["unit"])),
+            )
+            for r in data["records"]
+        ]
+        blocks.append("\n".join(rows))
+
+    lifts = [lift for lift in data["lifts"] if _chartable(lift)]
+    blocks.append(i18n.t("coach.progress.charts_hint") if lifts else i18n.t("coach.progress.charts_few"))
+    for lift in lifts:
+        kb.row(InlineKeyboardButton(
+            text=keyboards._shorten_label(i18n.t("coach.btn.progress_lift", exercise=lift["exercise"]), WORKOUT_LABEL_LIMIT),
+            callback_data=f"coach:pgl:{client_id}:{lift['exercise_id']}",
+        ))
+    kb.row(*_back_row(f"coach:cl:{client_id}"))
+    return "\n\n".join(blocks), kb.as_markup()
+
+
+@router.callback_query(F.data.startswith("coach:pg:"))
+async def coach_client_progress(callback: CallbackQuery, state: FSMContext):
+    args = await _int_args(callback, 1)
+    if args is None:
+        return
+    await _leave_input(state)
+    link, client = await _linked(callback, args[0])
+    if link is None:
+        return
+    data = await coach_service.client_progress(client)
+    text, kb = _progress_view(link, client, data)
+    await _show(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("coach:pgl:"))
+async def coach_client_lift_chart(callback: CallbackQuery, state: FSMContext):
+    """График основного движения клиента по неделям — та же картинка, что у
+    атлета на экране прогресса упражнения (charts.render_metric_over_sessions),
+    только точка — лучшая тренировка недели. Упражнение берётся из расчёта
+    прогресса этого же клиента, а не по id из кнопки: чужое упражнение туда не
+    попадёт."""
+    args = await _int_args(callback, 2)
+    if args is None:
+        return
+    client_id, exercise_id = args
+    link, client = await _linked(callback, client_id)
+    if link is None:
+        return
+    data = await coach_service.client_progress(client)
+    lifts = [lift for lift in data["lifts"] if _chartable(lift)]
+    lift = next((x for x in lifts if x["exercise_id"] == exercise_id), None)
+    if lift is None:
+        await callback.answer(i18n.t("coach.progress.lift_gone"), show_alert=True)
+        return
+    today = timeutil.user_today(client)
+    unit = formatting.unit_label(data["unit"])
+    points = [
+        (dt.datetime.combine(dt.date.fromisoformat(p["week_start"]), dt.time()), float(p["value"]))
+        for p in lift["points"]
+    ]
+    png = await asyncio.to_thread(
+        charts.render_metric_over_sessions,
+        points,
+        f"{lift['exercise']} — {lift['metric_label']}",
+        # подпись оси — с единицами: «e1RM, кг»; у повторов единиц нет
+        lift["metric_label"] if lift["metric"] == "reps" else f"{lift['metric_label']}, {unit}",
+        show_weekly_rate=False,
+        mark_records=True,
+    )
+    lines = [i18n.t("coach.progress.lift_caption", exercise=escape(lift["exercise"]), metric=lift["metric_label"])]
+    for p in list(reversed(lift["points"]))[:LIFT_CAPTION_POINTS]:
+        date = escape(formatting.format_day_month_ru(dt.date.fromisoformat(p["week_start"]), today))
+        if lift["metric"] == "reps":
+            best = i18n.t("coach.progress.reps", n=p["value"])
+        else:
+            best = i18n.t(
+                "coach.progress.set_e1rm", set=p["top_set"] or "",
+                e1rm=f"{formatting.format_weight(p['value'])}{unit}",
+            )
+        lines.append(i18n.t("coach.progress.lift_point", date=date, best=escape(best)))
+    kb = InlineKeyboardBuilder()
+    for other in lifts:
+        if other["exercise_id"] != exercise_id:
+            kb.row(InlineKeyboardButton(
+                text=keyboards._shorten_label(
+                    i18n.t("coach.btn.progress_lift", exercise=other["exercise"]), WORKOUT_LABEL_LIMIT
+                ),
+                callback_data=f"coach:pgl:{client_id}:{other['exercise_id']}",
+            ))
+    kb.row(*_back_row(f"coach:pg:{client_id}"))
+    await ui.safe_edit_photo(
+        callback, png, "progress.png", "\n".join(lines), reply_markup=kb.as_markup(), parse_mode="HTML"
+    )
     await callback.answer()
 
 

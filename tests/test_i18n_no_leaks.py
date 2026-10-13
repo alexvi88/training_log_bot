@@ -993,6 +993,50 @@ async def _screen_coach_clients(db, user_id: int) -> str:
     return "\n".join(out)
 
 
+async def _screen_coach_client_progress(db, user_id: int) -> str:
+    """Тренер: «📈 Прогресс» клиента — частота, недели, рекорды, график
+    основного движения (подпись под картинкой и кнопки), пустое состояние и
+    отказ упражнению без графика."""
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from handlers import coach
+
+    athlete, wid = await _coach_pair(db, user_id)
+    earlier = await db.create_workout(athlete, started_at="2020-01-06T10:00:00")
+    cur = await db.conn().execute(
+        "SELECT exercise_id FROM sets s JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?", (wid,)
+    )
+    ex = (await cur.fetchone())["exercise_id"]
+    block = await db.create_block(earlier, "single")
+    await db.add_block_exercise(block, ex, 0)
+    await db.add_set(block, ex, 1, 0, 70.0, 5)
+    await db.finish_workout(earlier, finished_at="2020-01-06T11:00:00")
+    week_ago = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(days=8)).isoformat(
+        timespec="seconds"
+    )
+    recent = await db.create_workout(athlete, started_at=week_ago)
+    block = await db.create_block(recent, "single")
+    await db.add_block_exercise(block, ex, 0)
+    await db.add_set(block, ex, 1, 0, 75.0, 5)
+    await db.finish_workout(recent, finished_at=week_ago)
+
+    out = [await _coach_screen(user_id, f"coach:pg:{athlete}")]
+    callback = _make_fake_callback(user_id, f"coach:pgl:{athlete}:{ex}")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None, first_name="Sam")
+    callback.message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=5))
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await coach.router.callback_query.trigger(callback, state=state)
+    sent = callback.message.answer_photo.await_args
+    out += [sent.kwargs["caption"], _kb_texts(sent.kwargs["reply_markup"])]
+    out.append(await _coach_screen(user_id, f"coach:pgl:{athlete}:999999"))
+    for key in ("coach.progress.empty", "coach.progress.charts_few", "coach.progress.lift_gone"):
+        out.append(i18n.t(key))
+    out.append(i18n.t("coach.progress.reps", n=12))
+    return "\n".join(out)
+
+
 def _leaks(text: str) -> list[str]:
     return [word for word in _strip_autonyms(text).split() if i18n_coverage.has_cyrillic(word)]
 
@@ -1060,6 +1104,7 @@ SCREENS: list[tuple[str, object]] = [
     ("coach_hub_and_invite", _screen_coach_hub_and_invite),
     ("coach_athlete_side", _screen_coach_athlete_side),
     ("coach_clients_and_card", _screen_coach_clients),
+    ("coach_client_progress", _screen_coach_client_progress),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

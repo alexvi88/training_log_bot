@@ -811,6 +811,8 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await w.call("GET", f"/coach/clients/222/workouts/{wid}", expect=200)
     await w.call("GET", "/coach/clients/222/bodyweight", expect=200)
     await w.call("GET", "/coach/clients/999/workouts", expect=404)
+    await w.call("GET", "/coach/clients/222/progress", expect=200)
+    await w.call("GET", "/coach/clients/999/progress", expect=404)
     await w.call("POST", f"/coach/clients/222/workouts/{wid}/comments", json={"text": text["note"]}, expect=201)
     await w.call("POST", f"/coach/clients/222/workouts/{wid}/comments", json={"text": ""}, expect=400)
     await w.call("POST", "/coach/clients/222/programs", json={"program_id": program_id}, expect=201)

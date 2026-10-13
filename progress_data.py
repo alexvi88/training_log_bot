@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 import analytics
 import db
+import formatting
 
 
 async def load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:
@@ -88,3 +89,32 @@ def chart_series(sessions: list[analytics.SessionStats]) -> ChartSeries:
         for s in plotted
     ]
     return ChartSeries(is_bodyweight=is_bw, sessions=plotted, points=points)
+
+
+def best_set_json(book: "analytics.GoldBook | None", is_bodyweight: bool) -> "dict | None":
+    """Рекорды упражнения по ВСЕЙ истории (analytics.gold_book) — для экрана
+    прогресса атлета (api_v1_progress) и для «Прогресса клиента» у тренера
+    (coach_service.client_progress): одно правило, какой подход «лучший».
+
+    `best_set` — лучший подход в той метрике, которой подписан график: у
+    упражнения своим весом лучший e1RM всегда нулевой (вес снаряда ноль), и
+    «0×0» вместо «×11» было бы не рекордом, а мусором на экране. То же, когда
+    e1RM не посчитан ни разу: все подходы длиннее analytics.counts_for_e1rm
+    (15, 20…) — тогда лучший по повторам. `None` — подходов нет вовсе.
+    """
+    if book is None:
+        return None
+    by_reps = is_bodyweight or book.best_e1rm == 0
+    best_set = (
+        formatting.format_set(book.max_reps_weight, book.max_reps)
+        if by_reps
+        else formatting.format_set(book.best_e1rm_weight, book.best_e1rm_reps)
+    )
+    return {
+        "best_weight": round(book.max_weight, 1),
+        "best_set": best_set,
+        "best_e1rm": round(book.best_e1rm, 1),
+        # День лучшего подхода в той же метрике, что best_set (UTC-дата
+        # строки, как её пишет gold_book).
+        "best_date": book.max_reps_date if by_reps else book.best_e1rm_date,
+    }

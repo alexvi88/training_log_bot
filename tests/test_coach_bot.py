@@ -337,6 +337,37 @@ async def test_invite_screen_leads_with_https_page(fresh_db, monkeypatch):
         assert "trainingdiary://" not in shown
 
 
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_share_text_is_short_one_link_code_on_its_own_line(fresh_db, monkeypatch, lang):
+    """Приглашение — строка от тренера, одна ссылка и код отдельной строкой:
+    ссылка из App Store до приложения не доезжает, код вставляют руками."""
+    from urllib.parse import unquote
+
+    import config
+
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    await _user(fresh_db, COACH)
+    await fresh_db.set_user_lang(COACH, lang)
+    i18n.set_lang(lang)
+    state = _state(COACH)
+    await _tap(COACH, "coach:become")
+    named = _message(COACH, "ABishop")
+    await coach.coach_named(named, state)
+    code = (await fresh_db.get_coach_invite_for(COACH))["code"]
+    page = f"https://training-log.example.com/coach/{code}"
+    buttons = [b for row in named.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+    copied = next(b for b in buttons if b.copy_text).copy_text.text
+    lines = copied.split("\n")
+    assert len(lines) == 3 and lines[1] == page and lines[2].endswith(code)
+    assert copied.count("http") == 1 and "ABishop" in lines[0]
+    # Telegram сам ставит ссылку над текстом — в тексте её нет.
+    shared = unquote(next(b for b in buttons if b.url).url)
+    assert shared.count("http") == 2  # t.me/share и сама страница — один раз
+    # Строку с кодом, вставленную в приложение или бота, разбор понимает.
+    assert coach_service.normalize_invite_code(lines[2]) == code
+    assert coach_service.normalize_invite_code(copied) == code
+
+
 async def test_clients_list_signals_and_pagination(fresh_db):
     await _linked(fresh_db)
     # Маша тренировалась 9 дней назад — сигнал «пропал».
@@ -832,3 +863,98 @@ async def test_main_menu_kb_counts_coach_clients(fresh_db):
     await fresh_db.create_coach_link(COACH, ATHLETE, "Маша", show_bodyweight=False)
     kb = await workout._main_menu_kb(COACH, None)
     assert "coach:clients:0" in [b.callback_data for row in kb.inline_keyboard for b in row]
+
+
+# ---------- 📈 прогресс клиента ----------
+
+
+async def _tap_photo(user_id: int, data: str):
+    """Нажать кнопку, экран которой — картинка (график)."""
+    callback = _callback(user_id, data)
+    callback.message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=5))
+    result = await coach.router.callback_query.trigger(callback, state=_state(user_id))
+    assert result is not UNHANDLED, f"кнопку {data} не забрал никто"
+    return callback
+
+
+async def test_progress_button_screen_and_lift_chart(fresh_db):
+    await _linked(fresh_db)
+    # Первая — до окна свежих рекордов (28 дней): без прежнего максимума
+    # рекорда нет.
+    await _finished_workout(fresh_db, ATHLETE, weight=60.0, started_at=_days_ago(40))
+    await _finished_workout(fresh_db, ATHLETE, weight=62.5, started_at=_days_ago(8))
+    await _finished_workout(fresh_db, ATHLETE, weight=70.0)
+
+    card = await _tap(COACH, f"coach:cl:{ATHLETE}")
+    assert ("📈 Прогресс", f"coach:pg:{ATHLETE}") in _buttons(_kb(card))
+
+    screen = await _tap(COACH, f"coach:pg:{ATHLETE}")
+    text = _screen(screen)
+    assert "ПРОГРЕСС — Маша" in text
+    assert "За 12 недель — 3 тренировки" in text and "в среднем 0.2 в неделю" in text
+    assert "1 тренировка · 350кг" in text  # 70×5 на этой неделе
+    assert "Свежие рекорды" in text and "Жим лёжа — 70×5" in text
+    assert "Лучшие подходы за всё время" in text and "70×5 · e1RM 81.7кг" in text
+    lift_buttons = [cb for _t, cb in _buttons(_kb(screen)) if cb.startswith("coach:pgl:")]
+    assert len(lift_buttons) == 1
+
+    chart = await _tap_photo(COACH, lift_buttons[0])
+    kwargs = chart.message.answer_photo.await_args.kwargs
+    assert "Жим лёжа" in kwargs["caption"] and "70×5 · e1RM 81.7кг" in kwargs["caption"]
+    assert chart.message.answer_photo.await_args.args[0].data[:4] == b"\x89PNG"
+    assert ("⬅️ Назад", f"coach:pg:{ATHLETE}") in _buttons(kwargs["reply_markup"])
+
+
+async def test_progress_with_little_data_says_so(fresh_db):
+    await _linked(fresh_db)
+    empty = _screen(await _tap(COACH, f"coach:pg:{ATHLETE}"))
+    assert "Пока мало тренировок для графика" in empty and "Лучшие подходы" not in empty
+
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    one = await _tap(COACH, f"coach:pg:{ATHLETE}")
+    assert "Пока мало тренировок для графика" in _screen(one)
+    assert not [cb for _t, cb in _buttons(_kb(one)) if cb.startswith("coach:pgl:")]
+    # Кнопка с упражнением, которого на графике нет, — честный отказ.
+    cur = await fresh_db.conn().execute("SELECT exercise_id FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+                                        "WHERE b.workout_id = ?", (wid,))
+    ex = (await cur.fetchone())["exercise_id"]
+    gone = await _tap(COACH, f"coach:pgl:{ATHLETE}:{ex}")
+    assert "мало тренировок" in _alert(gone)
+
+
+async def test_progress_refused_to_stranger_and_former_coach(fresh_db):
+    await _linked(fresh_db)
+    await _finished_workout(fresh_db, ATHLETE, weight=60.0, started_at=_days_ago(8))
+    await _finished_workout(fresh_db, ATHLETE)
+    await _user(fresh_db, STRANGER)
+    await fresh_db.upsert_coach_profile(STRANGER, "Чужой")
+    for data in (f"coach:pg:{ATHLETE}", f"coach:pgl:{ATHLETE}:1"):
+        callback = await _tap(STRANGER, data)
+        assert "не открыл тебе дневник" in _alert(callback), data
+        callback.message.answer.assert_not_awaited()
+    # Бывший тренер: атлет закрыл доступ — прогресса больше нет.
+    await fresh_db.delete_coach_link(COACH, ATHLETE)
+    for data in (f"coach:pg:{ATHLETE}", f"coach:pgl:{ATHLETE}:1"):
+        callback = await _tap(COACH, data)
+        assert "не открыл тебе дневник" in _alert(callback), data
+        callback.message.answer.assert_not_awaited()
+
+
+async def test_english_progress_screen_has_no_cyrillic_beyond_user_data(fresh_db):
+    await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    await _finished_workout(fresh_db, ATHLETE, weight=60.0, started_at=_days_ago(8))
+    await _finished_workout(fresh_db, ATHLETE)
+    with i18n.use_lang("en"):
+        screen = await _tap(COACH, f"coach:pg:{ATHLETE}")
+        lift = [cb for _t, cb in _buttons(_kb(screen)) if cb.startswith("coach:pgl:")][0]
+        chart = await _tap_photo(COACH, lift)
+    texts = [
+        _screen(screen) + " " + " ".join(t for t, _ in _buttons(_kb(screen))),
+        chart.message.answer_photo.await_args.kwargs["caption"],
+    ]
+    for text in texts:
+        for data in ("Маша", "Жим лёжа"):
+            text = text.replace(data, "")
+        assert not i18n_coverage.has_cyrillic(text), text
+    assert "Last 12 weeks: 2 workouts" in texts[0]
