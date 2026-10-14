@@ -897,6 +897,27 @@
     }
    }
   },
+  "CoachClientActivity": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "weeks": {
+     "type": "Int",
+     "optional": false
+    },
+    "totalWorkouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "frequency": {
+     "type": "CoachClientProgress.Frequency",
+     "optional": false
+    },
+    "weekly": {
+     "type": "[CoachClientProgress.Week]",
+     "optional": false
+    }
+   }
+  },
   "CoachClientBodyweight": {
    "file": "TrainingLog/Models/CoachModels.swift",
    "fields": {
@@ -958,6 +979,10 @@
     "programs": {
      "type": "[CoachAssignedProgram]",
      "optional": false
+    },
+    "activity": {
+     "type": "CoachClientActivity",
+     "optional": true
     }
    }
   },
@@ -5027,5 +5052,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "12a381f9f7c40f9150e1b49652fba69615c3b394"
+ "_ios_commit": "6b46b52b409e5d75443174cdc372346cfe65a2e1"
 }
