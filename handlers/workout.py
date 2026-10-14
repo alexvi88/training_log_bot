@@ -945,6 +945,9 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # menu mid-workout must not throw away the plan the user is partway
     # through (see _clear_state_keep_workout below).
     "planned_blocks", "exercise_targets", "confirmed_weights", "plan_completes_on_close",
+    # Что взято из плана в тренировку и откуда, и порядок дня (см. _plan_take,
+    # _number_plan) — чтобы убранное из тренировки вернулось в остаток на своё место.
+    "plan_taken", "plan_order",
     # Первый ли это экран выбора в тренировке (программы/повтор/«собрать на
     # сегодня» над группами мышц) — от него зависит, каким экран вернётся по
     # «⬅️ Назад» из списка упражнений. Живёт ровно столько же, сколько сама
@@ -1462,7 +1465,7 @@ async def pick_repeat_use(callback: CallbackQuery, state: FSMContext):
     if not plan:
         await callback.answer(i18n.t("workout.no_exercises_in_workout"), show_alert=True)
         return
-    await state.update_data(planned_blocks=plan)
+    await state.update_data(planned_blocks=plan, plan_taken=None, plan_order=None)
     await _load_next_planned_block(callback, state)
     await callback.answer()
 
@@ -1686,10 +1689,12 @@ async def _enter_live(
             extra["planned_blocks"] = await _rebuild_planned_blocks_from_routine(
                 workout_id, workout["routine_id"]
             )
+            extra["plan_taken"] = extra["plan_order"] = None
         elif not same_workout:
             # No routine to rebuild from, but the leftover value (if any) was
             # some other workout's plan — don't let it leak into this one.
             extra["planned_blocks"] = None
+            extra["plan_taken"] = extra["plan_order"] = None
     if delete_message:
         await _delete_message(callback.message)
     sent = await callback.message.answer(i18n.t("workout.slot_placeholder"))
@@ -2346,19 +2351,24 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
     # Picked something the program still had queued up (e.g. found it free while
     # waiting for the machine before it) — count it as that step of the program,
     # target and all, instead of offering it again later.
+    taken = dict(data.get("plan_taken") or {})
     planned = list(data.get("planned_blocks") or [])
+    order = _number_plan(planned, data.get("plan_order") or {})
     exercise_targets = dict(data.get("exercise_targets") or {})
     for block in planned:
         if ex_id in (block.get("exercise_ids") or []):
             target = (block.get("targets") or {}).get(ex_id)
             if target:
                 exercise_targets[ex_id] = target
+            if str(ex_id) not in taken:
+                taken = _plan_take(taken, block, ex_id)
     remaining = _drop_planned_exercise(planned, ex_id)
 
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=ex_id, last_by_exercise=last_by, last_session_sets=last_session_sets,
         weight_steps=weight_steps, planned_blocks=remaining, exercise_targets=exercise_targets,
+        plan_taken=taken, plan_order=order,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)
@@ -2433,13 +2443,30 @@ async def _swap_active_exercise(callback: CallbackQuery, state: FSMContext, new_
     active = data.get("active_exercise_id")
     if active is not None and active != new_ex_id:
         block_id = (data.get("open_blocks") or {}).get(active)
+        plan_fields: dict = {}
         if block_id is not None and not await db.list_sets_for_block(block_id):
             await db.delete_block(block_id)
+            # Замена закрывает пункт плана вместо прежнего: замену потом убрали
+            # (закрыли пустой) — в остаток вернётся пункт плана, а не она. Но
+            # если замена сама стоит в плане, она закрывает свой пункт, а
+            # прежний возвращается сейчас же.
+            taken = dict(data.get("plan_taken") or {})
+            entry = taken.pop(str(active), None)
+            planned = data.get("planned_blocks")
+            if entry is not None and planned is not None:
+                if any(new_ex_id in (b.get("exercise_ids") or []) for b in planned) or str(new_ex_id) in taken:
+                    plan_fields = {
+                        "planned_blocks": _plan_restore(list(planned), entry, data.get("plan_order") or {}),
+                        "plan_completes_on_close": False,
+                    }
+                else:
+                    taken[str(new_ex_id)] = entry
+                plan_fields["plan_taken"] = taken
         open_blocks = dict(data.get("open_blocks") or {})
         open_blocks.pop(active, None)
         await state.update_data(
             open_exercises=[eid for eid in (data.get("open_exercises") or []) if eid != active],
-            open_blocks=open_blocks,
+            open_blocks=open_blocks, **plan_fields,
         )
     await _on_exercise_chosen(callback, state, new_ex_id)
 
@@ -3100,8 +3127,14 @@ async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
     data = await _discard_superseded_confirmation(callback.bot, state, data)
     active = data.get("active_exercise_id")
     active_block_id = (data.get("open_blocks") or {}).get(active)
+    given_back = None
     if active_block_id is not None and not await db.list_sets_for_block(active_block_id):
         await db.delete_block(active_block_id)
+        # Без единого подхода упражнение из тренировки ушло — а было из плана,
+        # значит, снова ждёт в остатке на своём месте, как будто его не брали.
+        given_back = _plan_give_back(data, active)
+        if given_back:
+            await state.update_data(**given_back)
     open_exercises = [eid for eid in (data.get("open_exercises") or []) if eid != active]
     open_blocks = dict(data.get("open_blocks") or {})
     open_blocks.pop(active, None)
@@ -3119,7 +3152,7 @@ async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
         # never hit "🎉 Программа пройдена" at all, because has_planned (and
         # with it the "▶️" button that used to surface the empty queue) had
         # already gone false the moment this exercise was opened.
-        plan_completes = bool(data.get("plan_completes_on_close"))
+        plan_completes = bool(data.get("plan_completes_on_close")) and not given_back
         await state.update_data(
             open_exercises=[], open_blocks={}, active_exercise_id=None, last_finished_exercise_id=active,
             plan_completes_on_close=False,
@@ -3176,6 +3209,79 @@ def _drop_planned_exercise(planned: list[dict], ex_id: int) -> list[dict]:
     return out
 
 
+def _number_plan(planned: list[dict], order: dict) -> dict:
+    """Место каждого упражнения плана в порядке дня — {str(id): номер}.
+
+    Очередь худеет по ходу тренировки (взятое из неё выпадает), и без номера
+    вернуть убранное «на своё место» не к чему привязать. Номера раздаются
+    лениво, при взятии: до первого взятия очередь и есть порядок дня. Пункты,
+    дописанные позже (правка программы посреди тренировки — в конец), получают
+    номера после всех уже выданных. Сами блоки плана не трогаются.
+    """
+    order = dict(order or {})
+    nxt = max(order.values(), default=-1) + 1
+    for block in planned:
+        for ex_id in block.get("exercise_ids") or []:
+            if str(ex_id) not in order:
+                order[str(ex_id)] = nxt
+                nxt += 1
+    return order
+
+
+def _plan_take(taken: dict, block: dict, ex_id: int) -> dict:
+    """Запомнить, что ex_id взят в тренировку из блока плана `block` (целиком —
+    суперсет возвращается в своём составе)."""
+    return {**taken, str(ex_id): {"ex_id": ex_id, "block": block}}
+
+
+def _plan_restore(planned: list[dict], entry: dict, order: dict) -> list[dict]:
+    """Вернуть взятое упражнение плана в остаток на его место в порядке дня —
+    как будто его и не брали. Партнёр по суперсету ещё в очереди — встаёт к нему
+    в блок в исходном порядке; нет — блок возвращается с одним этим упражнением."""
+    ex_id = entry["ex_id"]
+    if any(ex_id in (b.get("exercise_ids") or []) for b in planned):
+        return planned
+    orig = entry["block"]
+    orig_ids = list(orig.get("exercise_ids") or [])
+
+    def _targets(ids: list[int]) -> dict:
+        return {k: t for k, t in (orig.get("targets") or {}).items() if int(k) in ids}
+
+    partners = set(orig_ids) - {ex_id}
+    for i, block in enumerate(planned):
+        have = block.get("exercise_ids") or []
+        if partners & set(have):
+            ids = [x for x in orig_ids if x in have or x == ex_id] + [x for x in have if x not in orig_ids]
+            return planned[:i] + [{**block, "exercise_ids": ids, "targets": _targets(ids)}] + planned[i + 1:]
+    place = order.get(str(ex_id), len(order))
+    restored = {**orig, "exercise_ids": [ex_id], "targets": _targets([ex_id])}
+    pos = next(
+        (i for i, b in enumerate(planned)
+         if min((order.get(str(x), place + 1) for x in b.get("exercise_ids") or []), default=place + 1) > place),
+        len(planned),
+    )
+    return planned[:pos] + [restored] + planned[pos:]
+
+
+def _plan_give_back(data: dict, ex_id: int) -> dict | None:
+    """Упражнение убрали из тренировки (закрыто без единого подхода — его блок
+    стёрт): было взято из плана — вернуть пункт плана в остаток на своё место.
+    Возвращает поля для state.update_data или None, если возвращать нечего.
+
+    Раньше очередь худела в момент открытия и обратно не росла: открыл из плана,
+    передумал, закрыл пустым — и упражнение пропадало из «📋 Другое из плана»,
+    хотя сделано не было."""
+    taken = dict(data.get("plan_taken") or {})
+    entry = taken.pop(str(ex_id), None)
+    if entry is None or data.get("planned_blocks") is None:
+        return None
+    return {
+        "planned_blocks": _plan_restore(list(data["planned_blocks"]), entry, data.get("plan_order") or {}),
+        "plan_taken": taken,
+        "plan_completes_on_close": False,
+    }
+
+
 async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> bool:
     """Open a block from a routine's planned_blocks. Returns False if none left.
 
@@ -3187,7 +3293,11 @@ async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> 
     planned = list(data.get("planned_blocks") or [])
     if not planned or not 0 <= index < len(planned):
         return False
+    taken = dict(data.get("plan_taken") or {})
+    order = _number_plan(planned, data.get("plan_order") or {})
     block_plan = planned.pop(index)
+    for ex_id in block_plan.get("exercise_ids") or []:
+        taken = _plan_take(taken, block_plan, ex_id)
     # находка 20: the queue empties HERE, at open time, not when the block is
     # closed — by the time the last planned exercise is finished, has_planned
     # is already false and the "▶️" that used to surface an empty queue no
@@ -3195,7 +3305,9 @@ async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> 
     # so live_finish_exercise can show "🎉 Программа пройдена" the moment it's
     # actually closed, instead of the screen being reachable only through
     # 📋 "Убрать из плана".
-    await state.update_data(planned_blocks=planned, plan_completes_on_close=not planned)
+    await state.update_data(
+        planned_blocks=planned, plan_taken=taken, plan_order=order, plan_completes_on_close=not planned,
+    )
     workout_id = data["workout_id"]
 
     open_exercises: list[int] = []
