@@ -2569,5 +2569,8 @@
   "games.badge.runner_1km.title": "Километр",
   "games.badge.runner_1km.description": "Пробежал 1000 м за один забег",
   "games.badge.runner_1km.goal": "Пробеги 1000 м за один забег",
-  "api.error.unknown_game": "Не знаю такой игры. Обнови приложение и попробуй ещё раз"
+  "api.error.unknown_game": "Не знаю такой игры. Обнови приложение и попробуй ещё раз",
+  "push.ios.feedback_ask.title": "КАК ТЕБЕ ДНЕВНИК?",
+  "push.ios.feedback_ask.1": "ПРИВЕТ АТЛЕТ! Пиши как есть — что бесит, чего не хватает. Читаю сам.",
+  "push.ios.feedback_ask.2": "ПРИВЕТ АТЛЕТ! Что в дневнике мешает, чего не хватает? Пиши как есть — читаю сам."
 }

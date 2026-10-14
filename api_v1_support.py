@@ -38,6 +38,7 @@ Starlette `int` минуса не пускает — такая ветка от�
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 from typing import Any
@@ -53,6 +54,7 @@ import chat_attachments
 import config
 import db
 import i18n
+import product_metrics
 import push_ios
 from api_v1_common import JSONResponse
 
@@ -175,7 +177,34 @@ async def post_my_message(request: Request) -> JSONResponse:
     row = await api_v1_feedback.store_and_forward(
         user_id, text, photo, channel=api_v1_feedback.SUPPORT_CHANNEL
     )
+    await _track_feedback_push_reply(user_id)
     return JSONResponse({"message": message_json(row)}, status_code=201)
+
+
+async def _track_feedback_push_reply(user_id: int) -> None:
+    """Первая реплика атлета в поддержку за FEEDBACK_PUSH_REPLY_WINDOW_DAYS
+    после пуша «Как тебе дневник?» (engagement._send_feedback_push) — событие
+    `feedback_push_replied`: сколько спрошенных правда написали. Без текста
+    реплики — только факт и через сколько часов (корзиной). Не бросает:
+    реплика уже записана."""
+    try:
+        user = await db.get_user(user_id)
+        asked = user["feedback_push_at"] if user is not None else None
+        if not asked:
+            return
+        asked_at = dt.datetime.fromisoformat(str(asked).replace(" ", "T")[:19])
+        elapsed = db.utc_now_naive() - asked_at
+        if elapsed < dt.timedelta(0) or elapsed > dt.timedelta(days=config.FEEDBACK_PUSH_REPLY_WINDOW_DAYS):
+            return
+        if await db.count_support_messages_since(user_id, "user", asked) != 1:
+            return
+        hours = elapsed.total_seconds() / 3600
+        bucket = "under_1h" if hours < 1 else "under_24h" if hours < 24 else "later"
+        await product_metrics.track(
+            user_id, "feedback_push_replied", {"after": bucket}, platform=product_metrics.PLATFORM_IOS
+        )
+    except Exception:
+        logger.exception("support: feedback reply tracking failed for user %s", user_id)
 
 
 async def mark_my_read(request: Request) -> JSONResponse:
