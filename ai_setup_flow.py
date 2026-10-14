@@ -46,9 +46,11 @@ SETUP_GOAL_MARKERS = (
 # тренируется. Это единственная вводная, без которой программа собирается
 # наугад, поэтому она идёт первой и не зависит от того, вспомнит ли о ней
 # модель.
-def setup_goal_question() -> dict[str, Any]:
+def setup_goal_question(*, for_client: bool = False) -> dict[str, Any]:
+    """`for_client` — тренер собирает программу своему атлету
+    (coach_program_ai): тот же вопрос, только про атлета."""
     return {
-        "question": i18n.t("ai.screen.setup_goal.question"),
+        "question": i18n.t("coach.ai_chat.setup_goal" if for_client else "ai.screen.setup_goal.question"),
         "choices": [
             i18n.t("ai.screen.setup_goal.choice_mass"),
             i18n.t("ai.screen.setup_goal.choice_strength"),
@@ -59,7 +61,7 @@ def setup_goal_question() -> dict[str, Any]:
 
 
 async def questions_with_goal(
-    user_id: int, questions: list[dict[str, Any]], previous: dict[str, Any]
+    user_id: int, questions: list[dict[str, Any]], previous: dict[str, Any], *, for_client: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Поставить вопрос про цель первым — если её ещё никто не спросил.
 
@@ -82,15 +84,15 @@ async def questions_with_goal(
     )
     if asked_by_model:
         return questions, True
-    user = await db.get_user(user_id)
+    # Программа атлету: профиль тренера тут ни при чём, а профиля атлета
+    # тренер не видит — про цель атлета спрашиваем всегда.
+    user = None if for_client else await db.get_user(user_id)
     if user is not None and (user["goal"] or "").strip():
         # Цель уже записана с его слов — переспрашивать то, что бот показывает
         # на экране «Обо мне», значит признаваться, что он этого не помнит.
         return questions, True
-    goal_question = {
-        "question": setup_goal_question()["question"],
-        "choices": list(setup_goal_question()["choices"]),
-    }
+    goal = setup_goal_question(for_client=for_client)
+    goal_question = {"question": goal["question"], "choices": list(goal["choices"])}
     # Срезаем с хвоста: свой вопрос идёт первым, а лишним оказывается последний
     # вопрос модели — он же и наименее важный, вопросы она ставит по убыванию.
     return ([goal_question] + questions)[: ai_trainer.SETUP_MAX_QUESTIONS], True
@@ -147,24 +149,28 @@ _FRESH_QUESTIONS = (
 )
 
 
-def fresh_start_questions() -> list[dict[str, Any]]:
+def fresh_start_questions(*, for_client: bool = False) -> list[dict[str, Any]]:
     """Шесть вопросов чистого листа на языке текущего контекста: цель — первой
     (тот же `setup_goal_question`, что подставляется в обычном пути), дальше
     дни, время, место и инвентарь, опыт, травмы. Не больше
-    `ai_trainer.SETUP_MAX_QUESTIONS` — иначе потолок молча срезал бы последний."""
+    `ai_trainer.SETUP_MAX_QUESTIONS` — иначе потолок молча срезал бы последний.
+
+    `for_client` — тренер отвечает за своего атлета: те же вопросы и варианты,
+    только сами вопросы — про атлета, а не про того, кто отвечает."""
     import ai_trainer  # локально — цикл импортов, как в questions_with_goal
 
-    questions = [setup_goal_question()]
+    prefix = "coach.ai_chat.setup_fresh" if for_client else "ai.screen.setup_fresh"
+    questions = [setup_goal_question(for_client=for_client)]
     for slot, choices in _FRESH_QUESTIONS:
         questions.append({
-            "question": i18n.t(f"ai.screen.setup_fresh.{slot}.question"),
+            "question": i18n.t(f"{prefix}.{slot}.question"),
             "choices": [i18n.t(f"ai.screen.setup_fresh.{slot}.choice_{choice}") for choice in choices],
         })
     return questions[: ai_trainer.SETUP_MAX_QUESTIONS]
 
 
-def fresh_start_reply() -> str:
-    return i18n.t("ai.screen.setup_fresh.reply")
+def fresh_start_reply(*, for_client: bool = False) -> str:
+    return i18n.t("coach.ai_chat.fresh_reply" if for_client else "ai.screen.setup_fresh.reply")
 
 
 def is_build_program_seed(text: str) -> bool:

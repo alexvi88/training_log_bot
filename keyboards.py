@@ -232,8 +232,13 @@ def ai_trainer_keyboard(
     actions: Sequence[Any] = (),
     presets: Sequence[tuple[str, str]] = (),
     new_chat: bool = False,
+    client_exit: str | None = None,
 ) -> InlineKeyboardMarkup:
-    """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
+    """`client_exit` — подпись выхода из режима «программа атлету»
+    (ai:client:exit): стоит под каждым ответом этого режима, над навигацией, —
+    это и пометка, чей дневник сейчас читает тренер, и дорога обратно.
+
+    `exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
     exercise_mentions.MAX_MENTIONS_TOTAL штук. Своё ведёт прямо на карточку, а
     каталожное сначала добавляет его пользователю и потом открывает ту же
@@ -367,6 +372,10 @@ def ai_trainer_keyboard(
         [[InlineKeyboardButton(text=i18n.t("btn.ai_new_chat"), callback_data="ai:newchat")]]
         if new_chat else []
     )
+    if client_exit:
+        new_chat_rows = [[InlineKeyboardButton(
+            text=_shorten_label(client_exit, AI_MENTION_LABEL_LIMIT), callback_data="ai:client:exit",
+        )]]
 
     return InlineKeyboardMarkup(
         inline_keyboard=preset_rows + action_rows + item_rows + page_nav_rows + new_chat_rows + nav

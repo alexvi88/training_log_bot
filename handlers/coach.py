@@ -1478,9 +1478,13 @@ async def coach_assign_catalog_pick(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("coach:asai:"))
 async def coach_assign_ai(callback: CallbackQuery, state: FSMContext):
-    """«🤖 Составить с AI-тренером» с экрана назначения: сколько дней в неделю —
-    и программа по дневнику АТЛЕТА (coach_program_ai), а не чат AI-тренера:
-    там все инструменты читают историю того, кто спрашивает, то есть тренера."""
+    """«🤖 Составить с AI-тренером» с экрана назначения: обычный чат AI-тренера,
+    только про атлета (coach_program_ai) — те же вопросы, тот же
+    propose_program и та же кнопка «Забрать», что у атлета, который собирает
+    программу себе. Связка и согласие атлета на AI — до входа, чтобы не
+    открывать чат, который ни на один вопрос не ответит."""
+    from handlers import ai_trainer as ai_chat
+
     args = await _int_args(callback, 1)
     if args is None:
         return
@@ -1489,71 +1493,12 @@ async def coach_assign_ai(callback: CallbackQuery, state: FSMContext):
     link, _client = await _linked(callback, args[0])
     if link is None:
         return
-    buttons = [
-        InlineKeyboardButton(text=i18n.t("coach.program_ai.days_btn", n=n), callback_data=f"coach:asaid:{args[0]}:{n}")
-        for n in (2, 3, 4, 5)
-    ]
-    kb = InlineKeyboardMarkup(inline_keyboard=[buttons[:2], buttons[2:], _back_row(f"coach:asg:{args[0]}")])
-    await _show(callback, i18n.t("coach.program_ai.days_title", name=escape(link["client_name"])), kb)
-    await callback.answer()
-
-
-_PROGRAM_AI_ERROR_KEYS = {
-    "not_linked": "api.error.not_linked",
-    "client_no_ai_consent": "api.error.client_no_ai_consent",
-    "program_failed": "api.error.ai_program_failed",
-}
-
-
-@router.callback_query(F.data.startswith("coach:asaid:"))
-async def coach_assign_ai_build(callback: CallbackQuery, state: FSMContext):
-    """Собрать (платный вызов на лимит тренера) и вернуться к назначению с
-    готовой программой первой. Та же бронь «один платный ход за раз», что у
-    чата и AI-сводки."""
-    from handlers import ai_trainer as ai_chat
-
-    args = await _int_args(callback, 2)
-    if args is None:
-        return
-    client_id, days = args
-    coach_id = callback.from_user.id
-    if not await _require_coach(callback, state):
-        return
-    link, _client = await _linked(callback, client_id)
-    if link is None:
-        return
-    if not ai_trainer.is_configured():
-        await callback.answer(i18n.t("ai.screen.not_configured"), show_alert=True)
-        return
-    if not busy_lock.try_claim(ai_chat._busy, coach_id):
-        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
-        return
-    back_kb = InlineKeyboardMarkup(inline_keyboard=[_back_row(f"coach:asg:{client_id}")])
     try:
-        await callback.answer()
-        await _show(callback, i18n.t("coach.program_ai.thinking"), None)
-        try:
-            result = await asyncio.wait_for(
-                coach_program_ai.build_for_client(coach_id, client_id, days_per_week=days),
-                timeout=config.AI_TOTAL_ANSWER_SECONDS,
-            )
-        except ai_trainer.LimitBlocked as exc:
-            await ai_limits.reply(callback.message, exc.block, reply_markup=back_kb)
-            return
-        except coach_program_ai.BuildError as exc:
-            text = exc.message or i18n.t(_PROGRAM_AI_ERROR_KEYS.get(exc.code, "api.error.ai_program_failed"))
-            await _show(callback, text, back_kb)
-            return
-        except Exception:
-            logger.exception("coach: program ai failed for %s", coach_id)
-            await _show(callback, i18n.t("api.error.ai_program_failed"), back_kb)
-            return
-    finally:
-        ai_chat._busy.discard(coach_id)
-    await _show_assign(
-        callback, client_id, link, top_id=result["program_id"],
-        notice=i18n.t("coach.program_ai.done", name=escape(result["name"])),
-    )
+        subject = await coach_program_ai.open_chat(callback.from_user.id, args[0])
+    except coach_program_ai.ModeError as exc:
+        await callback.answer(i18n.t(f"api.error.{exc.code}"), show_alert=True)
+        return
+    await ai_chat.start_client_program(callback, state, subject.client_id, subject.name)
 
 
 _ASSIGN_ERROR_KEYS = {

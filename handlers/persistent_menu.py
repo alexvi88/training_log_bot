@@ -118,6 +118,16 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     await _clear_state_keep_workout(state)
     await state.set_state(AITrainerFlow.chatting)
     data = await state.get_data()
+    client = data.get("ai_client")
+    if client:
+        # Режим «программа атлету» — тот же экран возврата, что у menu:ai:
+        # пометка, чей дневник читаем, и выход в свой чат, без вопросов «о себе».
+        await message.answer(
+            f"{ai_trainer_handlers.RESUME_TEXT}\n\n{ai_trainer_handlers._client_banner(client)}",
+            reply_markup=await ai_keyboard(message.from_user.id, client=client),
+            parse_mode="HTML",
+        )
+        return
     fresh = not data.get("ai_history")
     text = ai_trainer_handlers.INTRO_TEXT if fresh else ai_trainer_handlers.RESUME_TEXT
     # Готовые вопросы — те же, что на инлайн-входе (menu:ai), и на любом

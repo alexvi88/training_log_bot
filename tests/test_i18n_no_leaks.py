@@ -991,8 +991,17 @@ async def _screen_coach_clients(db, user_id: int) -> str:
         i18n.t("coach.ai_summary.header_one", name="Sam"), i18n.t("coach.removed", name="Sam"),
         i18n.t("coach.program_assigned", name="Split"),
         i18n.t("coach.assign.catalog_have", name="Split"),
-        i18n.t("coach.program_ai.done", name="Split"), i18n.t("coach.program_ai.thinking"),
-        i18n.t("api.error.client_no_ai_consent"), i18n.t("api.error.ai_program_failed"),
+        # Программа атлету в чате AI-тренера (coach_program_ai): вступление,
+        # пометка под ответами, выход, «Назначить» под сохранённой, вопросы
+        # опросника про атлета и отказ фото/видео в этом режиме.
+        i18n.t("coach.ai_chat.intro", name="Sam"), i18n.t("coach.ai_chat.banner", name="Sam"),
+        i18n.t("coach.ai_chat.exit_btn"), i18n.t("coach.ai_chat.exited"),
+        i18n.t("coach.ai_chat.assign_btn", name="Sam"), i18n.t("coach.ai_chat.saved_assign", name="Sam"),
+        i18n.t("coach.ai_chat.shown_seed", name="Sam"), i18n.t("coach.ai_chat.fresh_reply"),
+        i18n.t("coach.ai_chat.setup_goal"),
+        *(i18n.t(f"coach.ai_chat.setup_fresh.{slot}.question")
+          for slot in ("days", "time", "place", "experience", "injuries")),
+        i18n.t("api.error.client_no_ai_consent"), i18n.t("api.error.coach_client_mode"),
     ]
     out.append(await _coach_screen(user_id, f"coach:rmy:{athlete}"))
     return "\n".join(out)

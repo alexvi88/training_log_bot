@@ -1194,6 +1194,27 @@ CREATE TABLE IF NOT EXISTS coach_summaries (
     PRIMARY KEY (coach_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS idx_coach_summaries_client ON coach_summaries (client_id);
+
+-- Разговор тренера с AI-тренером, в котором он собирает программу СВОЕМУ
+-- атлету (coach_program_ai.py, `/v1/ai/conversations/coach-client`): номер
+-- разговора тренера (ai_conversation_turns.conversation_id) → чей дневник в
+-- нём читают инструменты. Нет строки у текущего разговора — обычный чат
+-- тренера о себе. return_conversation_id — его собственный разговор, куда
+-- «Выйти» возвращает: вход в режим его не архивирует и wire не трогает,
+-- чтобы префикс кэша своего чата пережил заход за программой атлету.
+-- Два хозяина, как у coach_links: снос любой стороны чистит строку
+-- (_WIPE_PAIR_TABLES), а ходы этих разговоров — данные атлета в чате тренера —
+-- уходят и со сносом атлета (_WIPE_ORPHAN_DELETES), и с разрывом связки
+-- (delete_coach_link).
+CREATE TABLE IF NOT EXISTS ai_coach_client_chats (
+    coach_id INTEGER NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    client_id INTEGER NOT NULL,
+    return_conversation_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (coach_id, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_coach_client_chats_client ON ai_coach_client_chats (client_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -3130,6 +3151,7 @@ _WIPE_PAIR_TABLES: tuple[tuple[str, str, str], ...] = (
     ("coach_assignments", "coach_id", "client_id"),
     ("coach_links", "coach_id", "client_id"),
     ("coach_summaries", "coach_id", "client_id"),
+    ("ai_coach_client_chats", "coach_id", "client_id"),
 )
 
 # coach_summaries.client_id для сводки «по всем клиентам» тренера: настоящего
@@ -3147,6 +3169,13 @@ _WIPE_ORPHAN_DELETES = (
     # пара колонок ниже её не видит; и снести её надо, пока связки ещё на месте.
     "DELETE FROM coach_summaries WHERE client_id = 0 AND coach_id IN "
     "(SELECT coach_id FROM coach_links WHERE client_id = ?)",
+    # Разговоры тренеров, где AI-тренер собирал программу этому атлету: ходы
+    # лежат у тренера, но в них дневник атлета. До пары колонок ниже — она
+    # снесёт строки ai_coach_client_chats, по которым эти ходы и находятся.
+    "DELETE FROM ai_conversation_turns WHERE EXISTS ("
+    "SELECT 1 FROM ai_coach_client_chats c WHERE c.client_id = ? "
+    "AND c.coach_id = ai_conversation_turns.telegram_id "
+    "AND c.conversation_id = ai_conversation_turns.conversation_id)",
     # Первым: set_write_attempts держит FK на sets(id) без каскада (ключи
     # идемпотентности записи подхода из приложения), и DELETE FROM sets ниже
     # падал «FOREIGN KEY constraint failed» у любого, кто хоть раз записал
@@ -11528,7 +11557,15 @@ async def start_new_ai_conversation(telegram_id: int) -> int:
             (telegram_id,),
         )
         top = (await cur.fetchone())["top"] or 0
-        new_id = max(previous, int(top)) + 1
+        # И после номеров разговоров «программа атлету»: такой мог остаться
+        # без единого хода, и новый обычный разговор не должен унаследовать
+        # его режим.
+        cur = await conn().execute(
+            "SELECT MAX(conversation_id) AS top FROM ai_coach_client_chats WHERE coach_id = ?",
+            (telegram_id,),
+        )
+        top_chat = (await cur.fetchone())["top"] or 0
+        new_id = max(previous, int(top), int(top_chat)) + 1
         await conn().execute(
             "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?",
             (new_id, telegram_id),
@@ -11580,6 +11617,125 @@ async def activate_ai_conversation(telegram_id: int, conversation_id: int) -> bo
         )
         await conn().commit()
     return True
+
+
+async def get_coach_client_chat(
+    coach_id: int, conversation_id: Optional[int] = None
+) -> Optional[aiosqlite.Row]:
+    """Строка режима «программа атлету» у разговора тренера — по умолчанию у
+    ТЕКУЩЕГО. None — разговор обычный, о самом тренере."""
+    if conversation_id is None:
+        conversation_id = await current_ai_conversation_id(coach_id)
+    cur = await conn().execute(
+        "SELECT * FROM ai_coach_client_chats WHERE coach_id = ? AND conversation_id = ?",
+        (coach_id, conversation_id),
+    )
+    return await cur.fetchone()
+
+
+async def start_coach_client_conversation(coach_id: int, client_id: int) -> int:
+    """Новый разговор тренера, в котором AI-тренер собирает программу атлету
+    `client_id`. Возвращает его номер.
+
+    В отличие от start_new_ai_conversation, свой текущий разговор тренера
+    НЕ архивируется по-настоящему: его wire_json остаётся целым, а номер
+    запоминается в return_conversation_id — «Выйти»
+    (exit_coach_client_conversation) возвращает ровно его, с тем же префиксом,
+    что лежит в кэше. Разговор про атлета — отдельная история с первого
+    хода, своя переписка тренера им не переписывается.
+
+    Шёл уже разговор про другого атлета — он уезжает в архив обычным образом
+    (wire обнуляется), а возвращаться «Выйти» будет всё в тот же свой."""
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT ai_conversation_id FROM users WHERE telegram_id = ?", (coach_id,)
+        )
+        row = await cur.fetchone()
+        previous = int(row["ai_conversation_id"]) if row is not None else 1
+        cur = await db.execute(
+            "SELECT return_conversation_id FROM ai_coach_client_chats "
+            "WHERE coach_id = ? AND conversation_id = ?",
+            (coach_id, previous),
+        )
+        previous_chat = await cur.fetchone()
+        return_id = previous
+        if previous_chat is not None:
+            return_id = int(previous_chat["return_conversation_id"])
+            await db.execute(
+                "UPDATE ai_conversation_turns SET wire_json = '[]' "
+                "WHERE telegram_id = ? AND conversation_id = ?",
+                (coach_id, previous),
+            )
+        cur = await db.execute(
+            "SELECT MAX(conversation_id) AS top FROM ai_conversation_turns WHERE telegram_id = ?",
+            (coach_id,),
+        )
+        top = (await cur.fetchone())["top"] or 0
+        cur = await db.execute(
+            "SELECT MAX(conversation_id) AS top FROM ai_coach_client_chats WHERE coach_id = ?",
+            (coach_id,),
+        )
+        top_chat = (await cur.fetchone())["top"] or 0
+        new_id = max(previous, int(top), int(top_chat)) + 1
+        await db.execute(
+            "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?", (new_id, coach_id)
+        )
+        await db.execute(
+            "INSERT OR REPLACE INTO ai_coach_client_chats "
+            "(coach_id, conversation_id, client_id, return_conversation_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (coach_id, new_id, client_id, return_id, now_iso()),
+        )
+        await db.commit()
+    return new_id
+
+
+async def exit_coach_client_conversation(coach_id: int) -> Optional[int]:
+    """«Выйти» из режима программы атлету: текущим снова становится свой
+    разговор тренера (return_conversation_id), с нетронутым wire. Разговор
+    про атлета уезжает в архив (wire обнуляется, строка режима остаётся —
+    откроют из архива, режим вернётся). None — режима сейчас нет."""
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT ai_conversation_id FROM users WHERE telegram_id = ?", (coach_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        current = int(row["ai_conversation_id"])
+        cur = await db.execute(
+            "SELECT return_conversation_id FROM ai_coach_client_chats "
+            "WHERE coach_id = ? AND conversation_id = ?",
+            (coach_id, current),
+        )
+        chat = await cur.fetchone()
+        if chat is None:
+            return None
+        back = int(chat["return_conversation_id"])
+        await db.execute(
+            "UPDATE ai_conversation_turns SET wire_json = '[]' "
+            "WHERE telegram_id = ? AND conversation_id = ?",
+            (coach_id, current),
+        )
+        await db.execute(
+            "UPDATE users SET ai_conversation_id = ? WHERE telegram_id = ?", (back, coach_id)
+        )
+        await db.commit()
+    return back
+
+
+async def set_coach_client_chat_return(coach_id: int, conversation_id: int, return_id: int) -> None:
+    """Разговор про атлета открыли из архива — «Выйти» должно вернуть в тот
+    свой разговор, что был текущим в этот момент, а не в давний."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE ai_coach_client_chats SET return_conversation_id = ? "
+            "WHERE coach_id = ? AND conversation_id = ?",
+            (return_id, coach_id, conversation_id),
+        )
+        await conn().commit()
 
 
 async def list_ai_conversations(
@@ -11639,11 +11795,26 @@ async def prune_old_ai_conversations(retention_days: int) -> int:
         cur = await conn().execute(
             "SELECT t.id, t.image_path FROM ai_conversation_turns t "
             "JOIN users u ON u.telegram_id = t.telegram_id "
-            "WHERE date(t.created_at) < ? AND t.conversation_id <> u.ai_conversation_id",
+            "WHERE date(t.created_at) < ? AND t.conversation_id <> u.ai_conversation_id "
+            # Свой разговор тренера, пока он собирает программу атлету, — не
+            # архив: «Выйти» вернёт его на экран (ai_coach_client_chats).
+            "AND NOT EXISTS (SELECT 1 FROM ai_coach_client_chats c "
+            "WHERE c.coach_id = t.telegram_id AND c.conversation_id = u.ai_conversation_id "
+            "AND c.return_conversation_id = t.conversation_id)",
             (cutoff,),
         )
         rows = list(await cur.fetchall())
+        # Режим «программа атлету» у разговоров, от которых не осталось ни
+        # хода, — помнить незачем (текущий не трогаем: он может быть ещё пуст).
+        await conn().execute(
+            "DELETE FROM ai_coach_client_chats WHERE NOT EXISTS ("
+            "SELECT 1 FROM ai_conversation_turns t WHERE t.telegram_id = ai_coach_client_chats.coach_id "
+            "AND t.conversation_id = ai_coach_client_chats.conversation_id) "
+            "AND NOT EXISTS (SELECT 1 FROM users u WHERE u.telegram_id = ai_coach_client_chats.coach_id "
+            "AND u.ai_conversation_id = ai_coach_client_chats.conversation_id)"
+        )
         if not rows:
+            await conn().commit()
             return 0
         ids = [row["id"] for row in rows]
         attachments = [row["image_path"] for row in rows if row["image_path"]]
@@ -12980,6 +13151,18 @@ async def delete_coach_link(coach_id: int, client_id: int) -> bool:
         await db.execute(
             "DELETE FROM coach_summaries WHERE coach_id = ? AND client_id IN (?, ?)",
             (coach_id, client_id, COACH_SUMMARY_ALL),
+        )
+        # И разговоры, где AI-тренер собирал этому атлету программу: в них его
+        # дневник. Текущий такой разговор после этого — пустой и без режима,
+        # то есть обычный чат тренера.
+        await db.execute(
+            "DELETE FROM ai_conversation_turns WHERE telegram_id = ? AND conversation_id IN ("
+            "SELECT conversation_id FROM ai_coach_client_chats WHERE coach_id = ? AND client_id = ?)",
+            (coach_id, coach_id, client_id),
+        )
+        await db.execute(
+            "DELETE FROM ai_coach_client_chats WHERE coach_id = ? AND client_id = ?",
+            (coach_id, client_id),
         )
         await db.commit()
         return cur.rowcount > 0
