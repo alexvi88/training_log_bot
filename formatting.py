@@ -523,10 +523,9 @@ BlockView = ExerciseBlockView
 def format_date_short(d: dt.datetime) -> str:
     """Compact date for the inline e1RM-delta annotation — the year and weekday
     only add width there, since the comparison is always to the most recent prior
-    session. По-русски «25.09», по-английски «Sep 25»: dd.mm англоязычный
-    читатель легко принимает за mm.dd."""
-    if i18n.get_lang() == "ru":
-        return d.strftime("%d.%m")
+    session. «5 окт» / «Oct 5» — словами, как человек и говорит: «05.10» в строке
+    сравнения читалось как код, а dd.mm англоязычный читатель ещё и принимает
+    за mm.dd."""
     month = i18n.t("date.month_short", m=_MONTH_KEYS[d.month - 1])
     return i18n.t("date.day_month", day=d.day, month=month)
 
@@ -727,8 +726,10 @@ def _block_record_text(
 
 
 def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = True) -> str | None:
-    """Строка e1RM блока — «↳ e1RM {вес}{ед} ({Δ} vs {дата})», как в карточке
-    завершения. Молчит без доп. цифр (формула/порог зависят от настроек
+    """Строка e1RM блока — «↳ e1RM 32кг (+1.6кг к 5 окт)» / «(+1.6kg vs Oct 5)»,
+    а при той же цифре — «↳ e1RM 30.4кг · как 5 окт» / «· same as Oct 5»: «→0кг»
+    ничего не говорило, а английское «vs» стояло посреди русской строки. Как в
+    карточке завершения. Молчит без доп. цифр (формула/порог зависят от настроек
     аккаунта — считать их на клиенте нельзя) и для подходов в собственном весе
     тела, где e1RM не считается вовсе.
 
@@ -748,12 +749,22 @@ def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = Tr
         and abs((block.top_e1rm - block.prev_top_e1rm) - block.record_e1rm_delta) < 0.05
     )
     u = unit_label(unit)
-    vs_prev = ""
-    if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
-        when = format_date_short(block.prev_started_at)
-        delta = block.top_e1rm - block.prev_top_e1rm
-        vs_prev = f" ({format_delta(delta, unit)} vs {when})" if block.prev_top_e1rm > 0 else ""
-    return f"↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}"
+    e1rm = format_weight(block.top_e1rm)
+    if (
+        not block.prev_sets
+        or block.prev_started_at is None
+        or prev_holds_the_record
+        or block.prev_top_e1rm <= 0
+    ):
+        return i18n.t("card.e1rm", e1rm=e1rm, u=u)
+    when = format_date_short(block.prev_started_at)
+    # Сравниваем то, что напечатано: разница, которая округляется до 0.0, на
+    # экране — та же цифра, и писать про неё «+0кг» незачем.
+    delta = round(block.top_e1rm - block.prev_top_e1rm, 1)
+    if delta == 0:
+        return i18n.t("card.e1rm_same_as_prev", e1rm=e1rm, u=u, date=when)
+    signed = f"{'+' if delta > 0 else '−'}{format_weight(abs(delta))}"
+    return i18n.t("card.e1rm_vs_prev", e1rm=e1rm, u=u, delta=signed, date=when)
 
 
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
@@ -776,7 +787,7 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         lines.append(f"  {', '.join(formatted)}")
     else:
         lines.append(f"  <i>{i18n.t('card.no_sets')}</i>")
-    # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
+    # Прошлый рекорд стоял с прошлой же тренировки — тогда «+5.7кг к 3 авг» и
     # «на 5.7 выше прошлого» это одно и то же число дважды. Строка e1RM в этом
     # случае остаётся голой — сравнение уже сказано строкой рекорда.
     # Порядок строк: подходы → рекорд → e1RM → прошлая. Рекорд стоит сразу под
