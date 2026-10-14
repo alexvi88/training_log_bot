@@ -2708,6 +2708,102 @@
     }
    }
   },
+  "InboxItem": {
+   "file": "TrainingLog/Models/InboxModels.swift",
+   "fields": {
+    "id": {
+     "type": "Int",
+     "optional": false
+    },
+    "category": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "body": {
+     "type": "String",
+     "optional": false
+    },
+    "route": {
+     "type": "InboxRoute",
+     "optional": true
+    },
+    "createdAt": {
+     "type": "String",
+     "optional": false
+    },
+    "read": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "InboxReadResponse": {
+   "file": "TrainingLog/Models/InboxModels.swift",
+   "fields": {
+    "marked": {
+     "type": "Int",
+     "optional": false
+    },
+    "unread": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "InboxResponse": {
+   "file": "TrainingLog/Models/InboxModels.swift",
+   "fields": {
+    "items": {
+     "type": "[InboxItem]",
+     "optional": false
+    },
+    "unread": {
+     "type": "Int",
+     "optional": false
+    },
+    "nextBefore": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "InboxRoute": {
+   "file": "TrainingLog/Models/InboxModels.swift",
+   "fields": {
+    "screen": {
+     "type": "String",
+     "optional": false
+    },
+    "week": {
+     "type": "String",
+     "optional": true
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "exerciseName": {
+     "type": "String",
+     "optional": true
+    },
+    "userId": {
+     "type": "Int",
+     "optional": true
+    },
+    "workoutId": {
+     "type": "Int",
+     "optional": true
+    },
+    "programId": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
   "LenientCount": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "kind": "lenient",
@@ -2789,6 +2885,11 @@
     "supportUnread": {
      "type": "Int",
      "optional": true
+    },
+    "inboxUnread": {
+     "type": "Int",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4658,6 +4759,27 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.inbox",
+   "method": "GET",
+   "path": "/inbox",
+   "root": "InboxResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.markAllInboxRead",
+   "method": "POST",
+   "path": "/inbox/read",
+   "root": "InboxReadResponse",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.markInboxRead",
+   "method": "POST",
+   "path": "/inbox/read",
+   "root": "InboxReadResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.requestMcpLinkCode",
    "method": "POST",
    "path": "/mcp/link-code",
@@ -5120,5 +5242,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "4ceac68088352902c431fdc0beb194ca357ff80e"
+ "_ios_commit": "8ba5f7288e38937d57aae5a2d8c6709ec09eb2f7"
 }
