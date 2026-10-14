@@ -36,6 +36,7 @@ import pytest
 import ai_trainer
 import api_v1
 import api_v1_feedback
+import coach_program_ai
 import coach_service
 import config
 import i18n
@@ -302,6 +303,20 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         return model["answer"]
 
     monkeypatch.setattr(coach_service, "_model_answer", fake_coach_summary)
+
+    async def fake_coach_program(coach_id, messages):
+        captured["langs"].append(i18n.get_lang())
+        # Своё имя: «Забрать» той же программы в чате ниже по сценарию
+        # иначе упёрлось бы в занятое имя.
+        return [{
+            "name": model["program"] + " 2",
+            "days": [{"name": model["day"], "exercises": [
+                {"name": "Жим штанги лёжа", "sets": 3, "reps_min": 5, "reps_max": 8},
+            ]}],
+            "description": model["program_description"],
+        }]
+
+    monkeypatch.setattr(coach_program_ai, "_model_program_args", fake_coach_program)
 
     async def fake_extract_sets(user_id, text, today, lang=None):
         return text_import.ExtractResult(rows=[{
@@ -833,6 +848,9 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await w.call("GET", "/coach/ai-summary", expect=200)
     await w.call("GET", "/coach/ai-summary?client_id=222", expect=200)
     await w.call("GET", "/coach/ai-summary?client_id=999", expect=404)
+    await w.call("POST", "/coach/clients/222/programs/ai", json={"days_per_week": 3, "note": text["note"]}, expect=201)
+    await w.call("POST", "/coach/clients/222/programs/ai", json={"days_per_week": 9}, expect=400)
+    await w.call("POST", "/coach/clients/999/programs/ai", json={"days_per_week": 3}, expect=404)
     await a.call("GET", f"/workouts/{wid}/coach-comments", expect=200)
     await a.call("GET", "/programs", expect=200)
     await a.call("PATCH", "/coach-links/111", json={"show_bodyweight": False}, expect=200)

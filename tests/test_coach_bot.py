@@ -611,6 +611,182 @@ async def test_assign_program_and_coach_label_in_programs(fresh_db):
 
 
 
+
+async def test_assign_without_programs_offers_catalog_and_ai_not_a_dead_end(fresh_db):
+    """Пустой экран назначения раньше был тупиком — только текст «собери во
+    вкладке программ». Теперь под ним готовые программы и AI-тренер."""
+    await _linked(fresh_db)
+    pick = await _tap(COACH, f"coach:asg:{ATHLETE}")
+    cbs = [cb for _t, cb in _buttons(_kb(pick))]
+    assert cbs[:2] == [f"coach:asc:{ATHLETE}", f"coach:asai:{ATHLETE}"]
+    assert cbs[-1] == f"coach:cl:{ATHLETE}"
+    assert "заведи прямо отсюда" in _screen(pick)
+
+
+async def test_catalog_from_assign_adds_to_coach_and_returns_with_it_on_top(fresh_db):
+    await _linked(fresh_db)
+    await _coach_program(fresh_db, "Своя")
+    catalog = await _tap(COACH, f"coach:asc:{ATHLETE}")
+    assert "ГОТОВЫЕ ПРОГРАММЫ" in _screen(catalog)
+    cbs = [cb for _t, cb in _buttons(_kb(catalog))]
+    assert f"coach:ascp:{ATHLETE}:ppl" in cbs
+    assert cbs[-1] == f"coach:asg:{ATHLETE}"
+
+    added = await _tap(COACH, f"coach:ascp:{ATHLETE}:ppl")
+    mine = {p["name"]: p["id"] for p in await fresh_db.list_programs(COACH)}
+    assert len(mine) == 2
+    new_id = next(pid for name, pid in mine.items() if name != "Своя")
+    cbs = [cb for _t, cb in _buttons(_kb(added))]
+    # Только что взятая — первой, и экран снова назначение этому атлету.
+    assert cbs[0] == f"coach:asp:{ATHLETE}:{new_id}"
+    assert "Добавил «" in _screen(added)
+
+    # Второй тап по той же — без второй копии: та же программа первой.
+    again = await _tap(COACH, f"coach:ascp:{ATHLETE}:ppl")
+    assert len(await fresh_db.list_programs(COACH)) == 2
+    assert [cb for _t, cb in _buttons(_kb(again))][0] == f"coach:asp:{ATHLETE}:{new_id}"
+    assert "уже есть" in _screen(again)
+
+    # И назначается как любая своя.
+    done = await _tap(COACH, f"coach:asp:{ATHLETE}:{new_id}")
+    assert "Назначил «" in _screen(done)
+
+
+async def test_catalog_from_assign_refuses_strangers(fresh_db):
+    await _linked(fresh_db)
+    await _user(fresh_db, STRANGER)
+    await fresh_db.upsert_coach_profile(STRANGER, "Чужой")
+    tapped = await _tap(STRANGER, f"coach:ascp:{ATHLETE}:ppl")
+    assert _alert(tapped)
+    assert await fresh_db.list_programs(STRANGER) == []
+
+
+async def _program_ai_setup(db, monkeypatch, *, bw: bool = False):
+    """Тренер и атлет с РАЗНЫМИ упражнениями в дневниках, профиль атлета с
+    целью и травмой (тренер его не видит), подменённая модель, которая
+    запоминает, что ей дали."""
+    import coach_program_ai
+
+    await _linked(db, bw=bw)
+    await _finished_workout(db, COACH, exercise="Тренерский жим узким", weight=100)
+    await _finished_workout(db, ATHLETE, exercise="Атлетская тяга блока", weight=42.5)
+    await db.add_bodyweight_log(ATHLETE, 71.3)
+    await db.conn().execute(
+        "UPDATE users SET goal = ?, limitations = ? WHERE telegram_id = ?",
+        ("Секретная цель атлета", "Больное колено атлета", ATHLETE),
+    )
+    await db.conn().commit()
+    seen: dict = {}
+
+    async def fake_model(coach_id, messages):
+        seen["coach_id"] = coach_id
+        seen["messages"] = messages
+        return [{
+            "name": "Сплит для Маши",
+            "description": "Три дня на всё тело.",
+            "days": [{"name": "День А", "exercises": [
+                {"name": "Жим штанги лёжа", "sets": 3, "reps_min": 5, "reps_max": 8},
+            ]}],
+        }]
+
+    monkeypatch.setattr(coach_program_ai, "_model_program_args", fake_model)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    return coach_program_ai, seen
+
+
+async def test_ai_program_is_built_from_the_athletes_diary_not_the_coachs(fresh_db, monkeypatch):
+    coach_program_ai, seen = await _program_ai_setup(fresh_db, monkeypatch)
+    result = await coach_program_ai.build_for_client(COACH, ATHLETE, days_per_week=3, note="сила к лету")
+
+    assert seen["coach_id"] == COACH
+    data = seen["messages"][-1]["content"]
+    assert "Атлетская тяга блока" in data and "42.5" in data
+    assert "Тренерский жим узким" not in data
+    assert "Маша" in data and "сила к лету" in data and "Дней в неделю: 3" in data
+    # Профиль атлета и закрытый вес тела тренер не видит — модель от его имени тоже.
+    assert "Секретная цель" not in data and "Больное колено" not in data
+    assert "71.3" not in data
+
+    # Программа легла тренеру и назначается обычной кнопкой.
+    mine = {p["id"]: p["name"] for p in await fresh_db.list_programs(COACH)}
+    assert mine[result["program_id"]] == "Сплит для Маши"
+    assert await fresh_db.list_programs(ATHLETE) == []
+    done = await _tap(COACH, f"coach:asp:{ATHLETE}:{result['program_id']}")
+    assert "Назначил «Сплит для Маши»" in _screen(done)
+
+
+async def test_ai_program_sees_bodyweight_only_when_the_athlete_opened_it(fresh_db, monkeypatch):
+    coach_program_ai, seen = await _program_ai_setup(fresh_db, monkeypatch, bw=True)
+    await coach_program_ai.build_for_client(COACH, ATHLETE, days_per_week=2)
+    assert "71.3" in seen["messages"][-1]["content"]
+
+
+async def test_ai_program_refuses_a_stranger_and_an_athlete_without_ai_consent(fresh_db, monkeypatch):
+    import config
+
+    coach_program_ai, seen = await _program_ai_setup(fresh_db, monkeypatch)
+    await _user(fresh_db, STRANGER)
+    await fresh_db.upsert_coach_profile(STRANGER, "Чужой")
+    with pytest.raises(coach_program_ai.BuildError) as exc:
+        await coach_program_ai.build_for_client(STRANGER, ATHLETE, days_per_week=3)
+    assert exc.value.code == "not_linked"
+    tapped = await _tap(STRANGER, f"coach:asaid:{ATHLETE}:3")
+    assert _alert(tapped)
+    assert "messages" not in seen
+    assert await fresh_db.list_programs(STRANGER) == []
+
+    monkeypatch.setattr(config, "AI_CONSENT_REQUIRED", True)
+    with pytest.raises(coach_program_ai.BuildError) as exc:
+        await coach_program_ai.build_for_client(COACH, ATHLETE, days_per_week=3)
+    assert exc.value.code == "client_no_ai_consent"
+    assert "messages" not in seen
+
+
+async def test_ai_program_bills_the_coach(fresh_db, monkeypatch):
+    """Лимит и цена — тренера: ai_limits.check и cost-событие зовутся с его id."""
+    import coach_program_ai
+
+    await _linked(fresh_db)
+    checked, billed = [], []
+
+    async def fake_check(user_id, kind):
+        checked.append((user_id, kind))
+        return None
+
+    async def fake_cost(user_id, model, usage, *, source="bot"):
+        billed.append(user_id)
+
+    call = SimpleNamespace(function=SimpleNamespace(name="propose_program", arguments='{"name": "X"}'))
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=[call], content=None))], usage=None,
+    )
+    fake_api = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=response))))
+    monkeypatch.setattr(ai_limits, "check", fake_check)
+    monkeypatch.setattr(ai_trainer, "_log_llm_cost", fake_cost)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake_api)
+    args = await coach_program_ai._model_program_args(COACH, [{"role": "user", "content": "x"}])
+    assert args == [{"name": "X"}]
+    assert checked == [(COACH, ai_limits.KIND_QUESTION)] and billed == [COACH]
+    kwargs = fake_api.chat.completions.create.await_args.kwargs
+    assert [t["function"]["name"] for t in kwargs["tools"]] == ["propose_program"]
+    assert kwargs["tool_choice"]["function"]["name"] == "propose_program"
+
+
+async def test_ai_from_assign_bot_picks_days_then_returns_with_program_on_top(fresh_db, monkeypatch):
+    coach_program_ai, seen = await _program_ai_setup(fresh_db, monkeypatch)
+    days = await _tap(COACH, f"coach:asai:{ATHLETE}")
+    cbs = [cb for _t, cb in _buttons(_kb(days))]
+    assert f"coach:asaid:{ATHLETE}:3" in cbs and cbs[-1] == f"coach:asg:{ATHLETE}"
+    assert "по дневнику атлета" in _screen(days)
+
+    built = await _tap(COACH, f"coach:asaid:{ATHLETE}:3")
+    new_id = next(p["id"] for p in await fresh_db.list_programs(COACH) if p["name"] == "Сплит для Маши")
+    last = built.message.answer.await_args_list[-1]
+    assert "Собрал «Сплит для Маши»" in last.args[0]
+    first = last.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert first.callback_data == f"coach:asp:{ATHLETE}:{new_id}"
+    assert "Дней в неделю: 3" in seen["messages"][-1]["content"]
+
 # ---------- тренерские события: программа атлету, новый клиент тренеру ----------
 
 
