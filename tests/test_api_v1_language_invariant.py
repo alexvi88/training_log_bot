@@ -156,7 +156,7 @@ SKIPPED: dict[str, str] = {
 }
 
 # Ответы не-JSON, которые сценарий зовёт, но языком не проверяет.
-NON_JSON = {"GET /export/csv"}
+NON_JSON = {"GET /export/csv", "GET /export/archive"}
 
 
 class _Walker:
@@ -536,6 +536,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/exercises/{forked_id}/progress", expect=200)
     await w.call("GET", f"/exercises/{forked_id}/progress/sessions", expect=200)
     await w.call("GET", "/export/csv", expect=200)
+    # ZIP: README.txt внутри на языке атлета держит tests/test_full_export.py.
+    await w.call("GET", "/export/archive", expect=200)
     rid_from_workout = (await w.call("POST", f"/workouts/{wid}/routines", json={"name": text["routine"]},
                                      expect=201)).json()["id"]
     await w.call("POST", f"/workouts/{wid}/repeat", expect=(200, 201))
