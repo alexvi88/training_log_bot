@@ -142,13 +142,13 @@ def test_build_workout_summary_shows_e1rm_delta_and_previous_date():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "vs 19.06" in text
-    assert "↑" in text
+    assert "(+0кг" not in text
+    assert "к 19 июн)" in text
 
 
 def test_e1rm_comparison_date_follows_language():
-    """dd.mm англоязычный читатель принимает за mm.dd: «vs 05.09» по-английски
-    выглядит как 9 мая. По-английски — «Sep 5», по-русски — как было, «05.09»."""
+    """Дата сравнения — словами на обоих языках: «05.09» читалось как код, а
+    англоязычный читатель ещё и принимает dd.mm за mm.dd (9 мая)."""
     block = ExerciseBlockView(
         group_name="chest",
         exercise_name="Bench press",
@@ -159,7 +159,30 @@ def test_e1rm_comparison_date_follows_language():
     with i18n.use_lang("en"):
         assert "vs Sep 5)" in formatting.format_block_e1rm(block, "kg")
     with i18n.use_lang("ru"):
-        assert "vs 05.09)" in formatting.format_block_e1rm(block, "kg")
+        assert "к 5 сен)" in formatting.format_block_e1rm(block, "kg")
+
+
+def test_e1rm_line_speaks_the_delta_in_words():
+    """«↳ e1RM 30.4кг (→0кг vs 05.10)» — английское «vs» посреди русской строки
+    и «→0кг», которое ничего не говорит. Теперь: рост и спад — числом со
+    знаком «к дате», та же цифра — «как 5 окт»."""
+    def block(prev_weight):
+        return ExerciseBlockView(
+            group_name="chest", exercise_name="Bench press",
+            sets=[(100.0, 8)], prev_sets=[(prev_weight, 8)],
+            prev_started_at=dt.datetime(2026, 10, 5, 18, 0),
+        )
+    same, up, down = block(100.0), block(95.0), block(105.0)
+    with i18n.use_lang("ru"):
+        assert formatting.format_block_e1rm(same, "kg") == "↳ e1RM 126.7кг · как 5 окт"
+        assert formatting.format_block_e1rm(up, "kg") == "↳ e1RM 126.7кг (+6.3кг к 5 окт)"
+        assert formatting.format_block_e1rm(down, "kg") == "↳ e1RM 126.7кг (−6.3кг к 5 окт)"
+        for b in (same, up, down):
+            assert "vs" not in formatting.format_block_e1rm(b, "kg")
+    with i18n.use_lang("en"):
+        assert formatting.format_block_e1rm(same, "kg") == "↳ e1RM 126.7kg · same as Oct 5"
+        assert formatting.format_block_e1rm(up, "kg") == "↳ e1RM 126.7kg (+6.3kg vs Oct 5)"
+        assert formatting.format_block_e1rm(down, "lb") == "↳ e1RM 126.7lb (−6.3lb vs Oct 5)"
 
 
 def test_build_workout_summary_e1rm_line_uses_unit():
@@ -179,7 +202,7 @@ def test_build_workout_summary_bodyweight_exercise_shows_no_delta_line():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "vs 19.06" not in text
+    assert "19 июн" not in text
     assert "[прошлая: 0×15]" in text
 
 
@@ -578,7 +601,7 @@ def test_format_block_record_absent():
 
 
 def test_record_from_the_previous_session_prints_its_delta_once():
-    """Прошлый рекорд стоял с прошлой тренировки: «+9.1 vs 03.08» и «на 9.1
+    """Прошлый рекорд стоял с прошлой тренировки: «+9.1кг к 3 авг» и «на 9.1
     выше прошлого» — одно число, и печатается оно один раз."""
     block = formatting.ExerciseBlockView(
         group_name="спина",
@@ -589,7 +612,7 @@ def test_record_from_the_previous_session_prints_its_delta_once():
     )
     block.record_e1rm_delta = block.top_e1rm - block.prev_top_e1rm
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
-    assert "vs 03.08" not in text
+    assert "3 авг" not in text
     assert "к рекорду" in text
 
 
@@ -605,7 +628,7 @@ def test_record_older_than_the_previous_session_keeps_both_numbers():
         record_e1rm_delta=4.0,
     )
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
-    assert "vs 03.08" in text
+    assert "(+23.3кг к 3 авг)" in text
     assert "🔥 +4кг к рекорду" in text
 
 
@@ -627,7 +650,7 @@ def test_render_block_puts_record_right_under_its_sets():
     assert lines[-4:] == [
         "  100×5",
         "  🔥 +9.1кг к рекорду",
-        "  ↳ e1RM 116.7кг (↑11.7кг vs 03.08)",
+        "  ↳ e1RM 116.7кг (+11.7кг к 3 авг)",
         "<i>  [прошлая: 90×5]</i>",
     ]
 
