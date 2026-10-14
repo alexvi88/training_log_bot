@@ -1183,6 +1183,11 @@ CREATE INDEX IF NOT EXISTS idx_coach_comments_client ON coach_comments (client_i
 -- всем» у этого тренера (в ней есть и его данные) — db.delete_coach_link; снос
 -- аккаунта любой стороны — то же самое (_WIPE_PAIR_TABLES +
 -- _WIPE_ORPHAN_DELETES). Чистится по COACH_SUMMARY_RETENTION_DAYS.
+-- fingerprint — отпечаток данных, по которым сводку писали
+-- (coach_service.summary_fingerprint): состав клиентов, их видимость и
+-- согласие на AI, тренировки с подходами, рекорды, программы. Не совпал с
+-- сегодняшним — сводка устарела и как текущая не показывается. NULL у
+-- сводок, записанных до колонки: сверить не с чем — значит, устарела.
 CREATE TABLE IF NOT EXISTS coach_summaries (
     coach_id INTEGER NOT NULL,
     client_id INTEGER NOT NULL,
@@ -1191,6 +1196,7 @@ CREATE TABLE IF NOT EXISTS coach_summaries (
     clients INTEGER NOT NULL DEFAULT 0,
     skipped_no_consent INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
+    fingerprint TEXT,
     PRIMARY KEY (coach_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS idx_coach_summaries_client ON coach_summaries (client_id);
@@ -1918,6 +1924,11 @@ async def _migrate_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_game_results_user_game "
         "ON game_results (telegram_id, game)"
     )
+
+    if "fingerprint" not in await _column_names("coach_summaries"):
+        # Старым сводкам отпечатка взять неоткуда — остаются NULL и при
+        # следующем открытии считаются устаревшими (coach_service.saved_summary).
+        await _conn.execute("ALTER TABLE coach_summaries ADD COLUMN fingerprint TEXT")
 
     await _conn.commit()
 
@@ -5544,6 +5555,24 @@ async def list_workout_contents(workout_ids: list[int]) -> dict[int, tuple[list[
     counts = {r["workout_id"]: r["n"] for r in await cur.fetchall()}
 
     return {wid: (names.get(wid, []), counts.get(wid, 0)) for wid in workout_ids}
+
+
+async def list_sets_for_workouts(workout_ids: list[int]) -> list[aiosqlite.Row]:
+    """Подходы пачки тренировок одним запросом — для AI-сводки тренера
+    (coach_service._client_brief): workout_id, exercise_id, display_name, вес,
+    повторы, RPE; внутри тренировки — порядком блоков и подходов."""
+    if not workout_ids:
+        return []
+    placeholders = ",".join("?" * len(workout_ids))
+    cur = await conn().execute(
+        "SELECT wb.workout_id, s.id, s.exercise_id, e.display_name, s.weight, s.reps, s.rpe "
+        "FROM sets s JOIN workout_blocks wb ON wb.id = s.block_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        f"WHERE wb.workout_id IN ({placeholders}) "
+        "ORDER BY wb.workout_id, wb.order_index, s.round_index, s.order_in_round, s.id",
+        workout_ids,
+    )
+    return await cur.fetchall()
 
 
 async def search_workouts_by_exercise(
@@ -13170,7 +13199,7 @@ async def delete_coach_link(coach_id: int, client_id: int) -> bool:
 
 async def save_coach_summary(
     coach_id: int, client_id: Optional[int], lang: str, text: str,
-    clients: int, skipped_no_consent: int,
+    clients: int, skipped_no_consent: int, fingerprint: Optional[str] = None,
 ) -> Optional[aiosqlite.Row]:
     """Запомнить последнюю AI-сводку тренера (см. таблицу coach_summaries);
     client_id None — сводка по всем клиентам. Новая перезаписывает прежнюю.
@@ -13188,12 +13217,13 @@ async def save_coach_summary(
                 return None
         await db.execute(
             "INSERT INTO coach_summaries "
-            "(coach_id, client_id, lang, text, clients, skipped_no_consent, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "(coach_id, client_id, lang, text, clients, skipped_no_consent, created_at, fingerprint) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(coach_id, client_id) DO UPDATE SET lang = excluded.lang, "
             "text = excluded.text, clients = excluded.clients, "
-            "skipped_no_consent = excluded.skipped_no_consent, created_at = excluded.created_at",
-            (coach_id, key, lang, text, clients, skipped_no_consent, now_iso()),
+            "skipped_no_consent = excluded.skipped_no_consent, created_at = excluded.created_at, "
+            "fingerprint = excluded.fingerprint",
+            (coach_id, key, lang, text, clients, skipped_no_consent, now_iso(), fingerprint),
         )
         await db.commit()
     return await get_coach_summary(coach_id, client_id)
