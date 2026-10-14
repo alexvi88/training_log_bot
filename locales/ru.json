@@ -2467,8 +2467,6 @@
   "coach.signal.week": "{n, plural, one{🏋️ # тренировка на неделе} few{🏋️ # тренировки на неделе} many{🏋️ # тренировок на неделе} other{🏋️ # тренировки на неделе}}",
   "coach.signal.none": "На этой неделе тренировок нет",
   "coach.last_workout": "Последняя тренировка: {date}",
-  "coach.visibility.bodyweight": "Кроме тренировок, ты видишь вес тела.",
-  "coach.visibility.none": "Вес тела атлет держит закрытым.",
   "coach.client.programs_header": "🗂 <b>Программы от тебя</b>",
   "coach.client.program_line": "• «{name}» — сделано {done} из {total}",
   "coach.client.records_header": "🔥 <b>Рекорды за неделю</b>",

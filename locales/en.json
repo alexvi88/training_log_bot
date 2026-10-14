@@ -2466,8 +2466,6 @@
   "coach.signal.week": "{n, plural, one{🏋️ # workout this week} other{🏋️ # workouts this week}}",
   "coach.signal.none": "No workouts this week",
   "coach.last_workout": "Last workout: {date}",
-  "coach.visibility.bodyweight": "Also open to you: body weight.",
-  "coach.visibility.none": "Your athlete keeps body weight closed.",
   "coach.client.programs_header": "🗂 <b>Your programs for them</b>",
   "coach.client.program_line": "• \"{name}\" — {done} of {total} done",
   "coach.client.records_header": "🔥 <b>Records this week</b>",
