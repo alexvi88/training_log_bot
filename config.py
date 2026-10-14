@@ -231,6 +231,17 @@ DONATE_PRESETS_STARS: tuple[int, ...] = (50, 150, 500)
 # не разбудит: тихие часы в engagement стоят поверх этой настройки.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 
+# Пуш «Как тебе дневник?» (engagement.feedback_push_due) — только iOS, ведёт в
+# переписку с поддержкой. Первый — не раньше FEEDBACK_PUSH_DELAY_HOURS после
+# первой законченной тренировки: свежее впечатление, но не в ту же минуту, пока
+# человек ещё в раздевалке. Дальше — не чаще раза в FEEDBACK_PUSH_INTERVAL_DAYS
+# и только тем, кто за это время тренировался.
+FEEDBACK_PUSH_DELAY_HOURS = 3
+FEEDBACK_PUSH_INTERVAL_DAYS = 60
+# Реплика в поддержку в течение стольких дней после пуша считается ответом на
+# него (событие feedback_push_replied) — засчитывается только первая.
+FEEDBACK_PUSH_REPLY_WINDOW_DAYS = 7
+
 # Use an AI-generated personalized weekly digest (Sundays) in place of the static
 # rotation text, when the AI trainer is configured. Falls back to static copy on
 # any failure. Set =false to always use the static digest.
@@ -932,6 +943,12 @@ WEEKLY_DIGEST_RETENTION_DAYS = int(os.getenv("WEEKLY_DIGEST_RETENTION_DAYS", "90
 # тренируются сейчас: через три месяца она описывает уже другую жизнь. Срок
 # назван в политике конфиденциальности (legal/privacy.*.html).
 COACH_SUMMARY_RETENTION_DAYS = int(os.getenv("COACH_SUMMARY_RETENTION_DAYS", "90"))
+
+# Сколько живёт строка в «Уведомлениях» приложения (db.inbox, inbox.py) — копия
+# пуша, которую человек может перечитать, даже если пуши выключены. Пуш — про
+# «сейчас»: «третий день без зала» через три месяца уже неправда о дневнике.
+# Срок назван в политике конфиденциальности (legal/privacy.*.html).
+INBOX_RETENTION_DAYS = int(os.getenv("INBOX_RETENTION_DAYS", "90"))
 
 # Сколько дней импорт истории можно отменить целиком («↩️ Отменить импорт» в
 # боте, POST /v1/import/batches/{id}/undo) и сколько живёт строка пачки

@@ -470,7 +470,7 @@ async def test_app_only_recipient_gets_apns_not_telegram(fresh_db, monkeypatch):
     monkeypatch.setattr(apns, "is_configured", lambda: True)
     sent_alerts = []
 
-    async def fake_send_alert(user_id, device_token, title, body, *, category=None):
+    async def fake_send_alert(user_id, device_token, title, body, *, category=None, **_kw):
         sent_alerts.append((user_id, device_token, title, body, category))
         return True
 

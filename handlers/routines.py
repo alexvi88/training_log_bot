@@ -1253,7 +1253,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     sent = await callback.message.answer(i18n.t("routine.start.workout_by_program", name=routine["name"]))
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
-        last_by_exercise={}, planned_blocks=planned,
+        last_by_exercise={}, planned_blocks=planned, plan_taken=None, plan_order=None,
     )
     if planned:
         await start_planned_workout(callback, state)

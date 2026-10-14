@@ -14,7 +14,11 @@
 - сервер пишет сам: `action` — меняющий запрос приложения (`route` — шаблон
   маршрута, `api_v1_activity`), `tg_message`/`tg_callback` — сообщение и
   нажатие в боте (`activity_log`: вид сообщения или команда, экран по префиксу
-  callback_data);
+  callback_data); `feedback_push_sent` (`round` first|repeat) — ушёл iOS-пуш
+  «Как тебе дневник?» (engagement), `feedback_push_replied` (`after`
+  under_1h|under_24h|later) — первая реплика в поддержку за неделю после него
+  (api_v1_support); открытие этого пуша — обычный `push_open` с
+  `category=feedback_ask`;
 - приложение присылает `POST /v1/events` (`api_v1_events`): открытие и уход в
   фон с длиной сессии, просмотр экрана, тап по пушу — то, чего сервер не видит:
   GET'ы в ленту не пишутся, а тап по баннеру до сервера не доходит вовсе.
@@ -73,6 +77,11 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
     "coach_invite": frozenset({"action"}),
+    # «Уведомления» в «Профиле» (api_v1_inbox.py): открыл раздел и тапнул
+    # карточку — с категорией пуша (как у push_open), без текста. По паре
+    # видно, читают ли раздел те, кто выключил пуши, и что в нём открывают.
+    "inbox_open": frozenset(),
+    "inbox_item_open": frozenset({"category"}),
 }
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")

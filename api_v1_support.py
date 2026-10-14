@@ -38,6 +38,7 @@ Starlette `int` минуса не пускает — такая ветка от�
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 from typing import Any
@@ -48,11 +49,12 @@ from starlette.routing import Route
 
 import api_v1_common as common
 import api_v1_feedback
-import apns
 import chat_attachments
 import config
 import db
 import i18n
+import inbox
+import product_metrics
 import push_ios
 from api_v1_common import JSONResponse
 
@@ -66,6 +68,10 @@ MAX_REPLY_LENGTH = api_v1_feedback.MAX_FEEDBACK_LENGTH
 # Сколько символов ответа влезает в тело банера атлету после «Ответ
 # поддержки: » — с запасом под push_ios.BODY_LIMIT на обоих языках.
 _PUSH_TEXT_CLIP = 80
+
+# Категория ответа поддержки — у баннера (collapse-id, push_open) и у строки
+# во «Уведомлениях».
+SUPPORT_CATEGORY = "support"
 
 _PHOTO_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
@@ -98,28 +104,21 @@ async def unread_for(user_id: int) -> int:
 
 
 async def _push_user_reply(user_id: int, text: str) -> int:
-    """Банер атлету «Ответ поддержки: …» на его языке, на каждое устройство.
-    Возвращает, сколько устройств Apple принял (0 — APNs не настроен или
-    токенов нет). Не бросает: ответ уже записан в ветку."""
-    if not apns.is_configured():
-        return 0
+    """Банер атлету «Ответ поддержки: …» на его языке, на каждое устройство,
+    и строка в его «Уведомлениях» (inbox.deliver). Возвращает, сколько
+    устройств Apple принял (0 — APNs не настроен или токенов нет). Не
+    бросает: ответ уже записан в ветку."""
     try:
-        tokens = await db.get_push_tokens(user_id, "ios")
-        if not tokens:
-            return 0
         user = await db.get_user(user_id)
         lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
         title = i18n.t_in(lang, "support.push.reply_title")
         body = i18n.t_in(
             lang, "support.push.reply_body", text=push_ios._clip_param(text, _PUSH_TEXT_CLIP)
         )
-        accepted = 0
-        for token in tokens:
-            if await apns.send_alert(
-                user_id, token, title, body, category="support", route=push_ios.support_route()
-            ):
-                accepted += 1
-        return accepted
+        delivery = await inbox.deliver(
+            user_id, SUPPORT_CATEGORY, title, body, lang=lang, route=push_ios.support_route()
+        )
+        return delivery.accepted
     except Exception:
         logger.exception("support: reply push failed for user %s", user_id)
         return 0
@@ -175,12 +174,42 @@ async def post_my_message(request: Request) -> JSONResponse:
     row = await api_v1_feedback.store_and_forward(
         user_id, text, photo, channel=api_v1_feedback.SUPPORT_CHANNEL
     )
+    await _track_feedback_push_reply(user_id)
     return JSONResponse({"message": message_json(row)}, status_code=201)
+
+
+async def _track_feedback_push_reply(user_id: int) -> None:
+    """Первая реплика атлета в поддержку за FEEDBACK_PUSH_REPLY_WINDOW_DAYS
+    после пуша «Как тебе дневник?» (engagement._send_feedback_push) — событие
+    `feedback_push_replied`: сколько спрошенных правда написали. Без текста
+    реплики — только факт и через сколько часов (корзиной). Не бросает:
+    реплика уже записана."""
+    try:
+        user = await db.get_user(user_id)
+        asked = user["feedback_push_at"] if user is not None else None
+        if not asked:
+            return
+        asked_at = dt.datetime.fromisoformat(str(asked).replace(" ", "T")[:19])
+        elapsed = db.utc_now_naive() - asked_at
+        if elapsed < dt.timedelta(0) or elapsed > dt.timedelta(days=config.FEEDBACK_PUSH_REPLY_WINDOW_DAYS):
+            return
+        if await db.count_support_messages_since(user_id, "user", asked) != 1:
+            return
+        hours = elapsed.total_seconds() / 3600
+        bucket = "under_1h" if hours < 1 else "under_24h" if hours < 24 else "later"
+        await product_metrics.track(
+            user_id, "feedback_push_replied", {"after": bucket}, platform=product_metrics.PLATFORM_IOS
+        )
+    except Exception:
+        logger.exception("support: feedback reply tracking failed for user %s", user_id)
 
 
 async def mark_my_read(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
     marked = await db.mark_support_read(user_id, "user")
+    # Переписку открыли — ответы поддержки во «Уведомлениях» тоже прочитаны:
+    # иначе один ответ висел бы непрочитанным в двух местах.
+    await db.mark_inbox_read(user_id, category=SUPPORT_CATEGORY)
     return JSONResponse({"marked": marked, "unread": 0})
 
 

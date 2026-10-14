@@ -40,12 +40,12 @@ from typing import Any, Awaitable, Callable, Optional
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-import apns
 import chat_bottom
 import config
 import db
 import formatting
 import i18n
+import inbox
 import push_ios
 import timeutil
 
@@ -78,23 +78,16 @@ def _name_or_unnamed(name: Optional[str], lang: str) -> str:
 async def _push_ios(
     recipient: Any, title_key: str, body_key: str, *, category: str, route: dict, **params: str
 ) -> int:
-    """Банер получателю на его языке, на каждое iOS-устройство. Возвращает,
+    """Банер получателю на его языке, на каждое iOS-устройство, и строка в
+    его «Уведомлениях» (inbox.deliver) — даже когда банер не дошёл. Возвращает,
     сколько устройств приняли банер. Не бросает."""
-    if not apns.is_configured():
-        return 0
     user_id = recipient["telegram_id"]
     try:
-        tokens = await db.get_push_tokens(user_id, "ios")
-        if not tokens:
-            return 0
         lang = _lang_of(recipient)
         title = i18n.t_in(lang, title_key)
         body = i18n.t_in(lang, body_key, **params)
-        accepted = 0
-        for token in tokens:
-            if await apns.send_alert(user_id, token, title, body, category=category, route=route):
-                accepted += 1
-        return accepted
+        delivery = await inbox.deliver(user_id, category, title, body, lang=lang, route=route)
+        return delivery.accepted
     except Exception:
         logger.exception("coach: %s push failed for user %s", category, user_id)
         return 0

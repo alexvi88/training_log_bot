@@ -405,7 +405,11 @@ async def saved_ai_summary(request: Request) -> JSONResponse:
     него — по всем). Бесплатно: модель не зовётся. `summary` — null, если
     сводки нет, она старше срока хранения, связку разрывали или сводка
     написана на другом языке, чем сейчас у тренера (coach_service.saved_summary).
-    Форма `summary` — та же, что у ответа POST."""
+    Форма `summary` — та же, что у ответа POST. `summary.stale` — данные
+    клиентов с тех пор поменялись (новый клиент, тренировка, рекорд,
+    видимость): как текущую её не показывать. Приложение тогда само зовёт
+    POST за свежей, а упёрлось в лимит — показывает эту с пометкой «устарела».
+    GET модель не зовёт никогда — он бесплатный."""
     user_id = await common.authed_user_id(request)
     await _coach_profile(user_id)
     raw = request.query_params.get("client_id")

@@ -962,6 +962,137 @@ async def test_ai_summary_limit_shows_the_limit_text(fresh_db, fake_model, monke
     assert fake_model.calls == []
 
 
+async def test_saved_summary_regenerates_when_clients_or_workouts_change(fresh_db, fake_model):
+    """Сохранённая сводка — текущая, только пока данные те же (отпечаток в
+    coach_summaries.fingerprint). Ничего не поменялось — бесплатно и с датой;
+    новый клиент, новая тренировка, свежий рекорд — сводка собирается заново
+    сама, без кнопки, а старая как текущая не показывается."""
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    await _finished_workout(fresh_db, ATHLETE, started_at=_days_ago(20))
+    await _tap(COACH, "coach:ai")
+    assert len(fake_model.calls) == 1
+
+    # Ничего не поменялось — сохранённая, модель не зовётся.
+    same = await _tap(COACH, "coach:ai")
+    assert "Сводка от " in _screen(same) and "устарела" not in _screen(same)
+    assert len(fake_model.calls) == 1
+
+    # Новый клиент (Вика, без единой тренировки) — сводка про одну Машу уже
+    # неправда: собираю заново, и Вика в данных есть.
+    await _user(fresh_db, STRANGER)
+    assert await fresh_db.create_coach_link(COACH, STRANGER, "Вика", show_bodyweight=False)
+    fake_model.text = "Маша в зале, Вика ещё не начала."
+    fresh = await _tap(COACH, "coach:ai")
+    assert "Вика ещё не начала" in _screen(fresh)
+    assert "Сводка от" not in _screen(fresh) and "устарела" not in _screen(fresh)
+    assert len(fake_model.calls) == 2
+    assert "Вика" in fake_model.calls[-1]["messages"][1]["content"]
+    await _tap(COACH, "coach:ai")
+    assert len(fake_model.calls) == 2
+
+    # Новая тренировка — тоже.
+    await _finished_workout(fresh_db, ATHLETE, started_at=_days_ago(1))
+    await _tap(COACH, "coach:ai")
+    assert len(fake_model.calls) == 3
+
+    # Сводка по одному клиенту: свежий рекорд (подход правят вверх) — заново.
+    await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert len(fake_model.calls) == 4
+    await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert len(fake_model.calls) == 4
+    cur = await fresh_db.conn().execute(
+        "SELECT s.id FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id WHERE w.user_id = ? ORDER BY w.started_at DESC LIMIT 1",
+        (ATHLETE,),
+    )
+    await fresh_db.update_set((await cur.fetchone())["id"], 100.0, 5)
+    assert (await coach_service.recent_records(await fresh_db.get_user(ATHLETE)))[0]["best_set"] == "100×5"
+    await _tap(COACH, f"coach:ai:{ATHLETE}")
+    assert len(fake_model.calls) == 5
+    assert "100×5" in fake_model.calls[-1]["messages"][1]["content"]
+
+
+async def test_stale_summary_with_spent_limit_shows_old_one_marked_stale(fresh_db, fake_model, monkeypatch):
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    await _tap(COACH, "coach:ai")
+    await _finished_workout(fresh_db, ATHLETE)
+
+    async def blocked(user_id, kind):
+        return ai_limits.Block(kind=kind, log="test", user_text="На сегодня вопросы кончились.")
+
+    monkeypatch.setattr(ai_limits, "check", blocked)
+    callback = await _tap(COACH, "coach:ai")
+    assert callback.message.reply.await_args.args[0] == "На сегодня вопросы кончились."
+    text = _screen(callback)
+    assert "<b>Маше</b> пора в зал." in text
+    assert "устарела: данные с тех пор поменялись" in text and "Нужна свежая" not in text
+    assert ("🤖 Обновить сводку", "coach:ai_new") in _buttons(_kb(callback))
+    assert len(fake_model.calls) == 1
+
+
+async def test_summary_from_before_fingerprints_counts_as_stale(fresh_db, fake_model):
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    await _tap(COACH, "coach:ai")
+    await fresh_db.conn().execute("UPDATE coach_summaries SET fingerprint = NULL")
+    await fresh_db.conn().commit()
+    with i18n.use_lang("ru"):
+        assert (await coach_service.saved_summary(COACH))["stale"] is True
+    await _tap(COACH, "coach:ai")
+    assert len(fake_model.calls) == 2
+
+
+async def test_fingerprint_follows_visibility_consent_and_set_edits(fresh_db):
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    with i18n.use_lang("ru"):
+        base = await coach_service.summary_fingerprint(COACH)
+        assert await coach_service.summary_fingerprint(COACH) == base
+        await fresh_db.conn().execute("UPDATE coach_links SET show_bodyweight = 1")
+        await fresh_db.conn().commit()
+        visible = await coach_service.summary_fingerprint(COACH)
+        assert visible != base
+        sets = await fresh_db.list_sets_for_workout(wid)
+        await fresh_db.update_set(sets[0]["id"], 82.5, 5)
+        edited = await coach_service.summary_fingerprint(COACH)
+        assert edited != visible
+        # Атлет приложения без согласия на AI выпадает из сводки — тоже другой отпечаток.
+        await fresh_db.update_user(ATHLETE, ai_consent_at=None)
+        await fresh_db.register_push_token(ATHLETE, "ios", "a" * 64)
+        assert await coach_service.summary_fingerprint(COACH) != edited
+
+
+async def test_summary_data_carries_set_weights_in_set_format(fresh_db, fake_model):
+    """Модель видит сами подходы — «62.5×9», а не только «Жим лёжа — подходов:
+    3»: без весов ей нечего сравнивать, и сводка честно писала «весов нет».
+    Рекорд — тем же видом; голос — «я», никаких «мы»."""
+    await _linked(fresh_db)
+    await fresh_db.update_user(ATHLETE, ai_consent_at=fresh_db.now_iso())
+    await _finished_workout(fresh_db, ATHLETE, weight=60.0, started_at=_days_ago(20))
+    wid = await _finished_workout(fresh_db, ATHLETE, weight=62.5, started_at=_days_ago(1))
+    sets = await fresh_db.list_sets_for_workout(wid)
+    await fresh_db.update_set(sets[0]["id"], 62.5, 9)
+    block = sets[0]["block_id"]
+    await fresh_db.add_set(block, sets[0]["exercise_id"], 2, 0, 60.0, 8)
+    await _tap(COACH, "coach:ai")
+    system, data = (m["content"] for m in fake_model.calls[-1]["messages"])
+    assert "Жим лёжа 62.5×9, 60×8" in data
+    assert "(подходов: 2)" in data and "Жим лёжа 60×5" in data
+    assert "Рекорд за неделю: Жим лёжа — 62.5×9" in data
+    assert "вес в кг" in data
+    assert "никаких «мы»" in system and "62.5×9" in system
+
+    await fresh_db.set_user_lang(COACH, "en")
+    with i18n.use_lang("en"):
+        await _tap(COACH, f"coach:ai:{ATHLETE}")
+    system, data = (m["content"] for m in fake_model.calls[-1]["messages"])
+    assert "62.5×9, 60×8" in data and "(sets: 2)" in data and "weight in kg" in data
+    assert 'never "we"' in system
+
+
 # ---------- язык ----------
 
 
