@@ -6186,8 +6186,16 @@ async def ask(
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
     on_wire: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
     on_limit: Optional[Callable[[Any], Awaitable[None]]] = None,
+    subject: Any = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
+
+    subject — чей дневник читают инструменты, если не того, кто спрашивает:
+    тренер собирает программу своему атлету (coach_program_ai.ClientChat).
+    Он приносит свой набор инструментов (`tools`), свою заметку вторым
+    системным сообщением (`system_note()`), своё исполнение вызовов
+    (`execute`) и свой слот кэша (`cache_scope`). Лимит, цена и черновик —
+    по-прежнему `user_id`, то есть тренера. None — обычный чат о себе.
 
     history — то, что реально уехало модели в прошлый раз, включая её обращения к
     инструментам и их результаты. Раньше сюда шли только видимые реплики, а
@@ -6336,6 +6344,7 @@ async def ask(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
         on_action, on_chunk, video_context, with_tools=with_tools,
         on_reasoning=on_reasoning, on_questions=on_questions, on_wire=on_wire,
+        subject=subject,
     )
 
 
@@ -6367,6 +6376,8 @@ async def _completion_round(
     user_id: Optional[int],
     on_chunk: ChunkCallback = None,
     include_tools: bool = True,
+    tools: Optional[list[dict[str, Any]]] = None,
+    cache_scope: str = "trainer",
 ) -> tuple[str, list[Any]]:
     """One chat-completion turn. Returns (content, tool_calls).
 
@@ -6381,13 +6392,13 @@ async def _completion_round(
     инструментами исчерпаны (см. MAX_TOOL_ROUNDS и A12) — без tools в самом
     запросе модели физически нечего вызвать, и она обязана ответить текстом.
     """
-    tools_kwarg = {"tools": TOOLS} if include_tools else {}
+    tools_kwarg = {"tools": TOOLS if tools is None else tools} if include_tools else {}
     if on_chunk is None:
         async with _bill_if_aborted(user_id, config.GROK_MODEL, messages=messages):
             response = await client.chat.completions.create(
                 model=config.GROK_MODEL, max_tokens=2048, messages=messages,
                 extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
-                extra_headers=_cache_headers(user_id),
+                extra_headers=_cache_headers(user_id, scope=cache_scope),
                 **tools_kwarg,
             )
         await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
@@ -6397,7 +6408,7 @@ async def _completion_round(
     stream = await client.chat.completions.create(
         model=config.GROK_MODEL, max_tokens=2048, messages=messages,
         extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
-        extra_headers=_cache_headers(user_id),
+        extra_headers=_cache_headers(user_id, scope=cache_scope),
         stream=True, stream_options={"include_usage": True},
         **tools_kwarg,
     )
@@ -6560,12 +6571,20 @@ async def _ask_plain(
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
     on_questions: QuestionsCallback = None,
     on_wire: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
+    subject: Any = None,
 ) -> str:
     client = _get_client()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt()},
-        *history,
-    ]
+    # Шапка запроса: общий системный промпт и — в режиме «программа атлету» —
+    # заметка режима вторым системным сообщением. В историю (on_wire) шапка не
+    # входит: она собирается заново на каждом ходе и байт-в-байт одинакова
+    # внутри разговора, так что префикс кэша не рвёт.
+    head: list[dict[str, Any]] = [{"role": "system", "content": _system_prompt()}]
+    if subject is not None:
+        head.append({"role": "system", "content": subject.system_note()})
+    round_kwargs: dict[str, Any] = {}
+    if subject is not None:
+        round_kwargs = {"tools": subject.tools, "cache_scope": subject.cache_scope}
+    messages: list[dict[str, Any]] = [*head, *history]
     if video_context:
         messages.append({"role": "system", "content": video_context})
     if search_context:
@@ -6586,7 +6605,7 @@ async def _ask_plain(
         {"role": "user", "content": _plain_user_content(question_with_date, image_data_url)}
     )
 
-    if with_tools:
+    if with_tools and subject is None:
         prefetched = await _prefetch_preset_tools(user_id, question)
         if prefetched:
             if on_status:
@@ -6610,7 +6629,7 @@ async def _ask_plain(
         # не уезжают вовсе: это около 6900 токенов из каждого раунда. Раунд тут
         # заведомо один — вызвать модели нечего, она отвечает текстом.
         content, tool_calls, reasoning = await _completion_round(
-            client, messages, user_id, on_chunk, include_tools=with_tools
+            client, messages, user_id, on_chunk, include_tools=with_tools, **round_kwargs
         )
         if not tool_calls:
             # Размышления ФИНАЛЬНОГО раунда — то, что должно уехать назад вместе
@@ -6648,10 +6667,15 @@ async def _ask_plain(
         for tc in tool_calls:
             try:
                 args = json.loads(tc.function.arguments or "{}")
-                tool_content = await execute_tool(
-                    user_id, tc.function.name, args,
-                    on_program=on_program, on_action=on_action, on_questions=on_questions,
-                )
+                if subject is not None:
+                    tool_content = await subject.execute(
+                        tc.function.name, args, on_program=on_program, on_questions=on_questions,
+                    )
+                else:
+                    tool_content = await execute_tool(
+                        user_id, tc.function.name, args,
+                        on_program=on_program, on_action=on_action, on_questions=on_questions,
+                    )
             except Exception:
                 logger.exception("AI trainer tool %s failed", tc.function.name)
                 tool_content = json.dumps(
@@ -6669,7 +6693,7 @@ async def _ask_plain(
         # текста.
         last_round_tools = False
         content, _, reasoning = await _completion_round(
-            client, messages, user_id, on_chunk, include_tools=False
+            client, messages, user_id, on_chunk, include_tools=False, **round_kwargs
         )
         # Это тоже финальный ответ — значит и его размышления должны уехать в
         # историю, иначе следующий вопрос промахнётся мимо кэша.
@@ -6681,6 +6705,7 @@ async def _ask_plain(
         text, reasoning = await _explained_final_program(
             client, messages, user_id, text, reasoning, stale_fragments,
             on_chunk=on_chunk, on_reasoning=on_reasoning, include_tools=last_round_tools,
+            round_kwargs=round_kwargs,
         )
 
     if on_wire:
@@ -6691,7 +6716,7 @@ async def _ask_plain(
         final: dict[str, Any] = {"role": "assistant", "content": text}
         if reasoning:
             final["reasoning_content"] = reasoning
-        wire = messages[1:] + [final]  # без системного промпта: он собирается заново на каждый ход
+        wire = messages[len(head):] + [final]  # без шапки: она собирается заново на каждый ход
         # Фото в историю не кладём: это база64 на мегабайты в FSM-файле и повторная
         # плата за image-токены на каждом следующем вопросе. Подменяем на текст
         # вопроса — префикс рвётся с этого сообщения, но всё, что до него (шапка на
@@ -6751,6 +6776,7 @@ async def _explained_final_program(
     on_chunk: ChunkCallback,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]],
     include_tools: bool,
+    round_kwargs: Optional[dict[str, Any]] = None,
 ) -> tuple[str, str]:
     """Финальный ответ хода, в котором тренер собрал программу.
 
@@ -6780,7 +6806,7 @@ async def _explained_final_program(
     messages.append({"role": "system", "content": _EXPLAIN_FINAL_PROGRAM})
     try:
         content, _, new_reasoning = await _completion_round(
-            client, messages, user_id, on_chunk, include_tools=include_tools
+            client, messages, user_id, on_chunk, include_tools=include_tools, **(round_kwargs or {})
         )
     except Exception:
         logger.exception("AI trainer: explaining the final program failed for user %s", user_id)

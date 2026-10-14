@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional, Sequence
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, ReactionTypeEmoji
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import activity_log
@@ -22,6 +22,7 @@ import ai_program_actions
 import ai_setup_flow
 import ai_trainer
 import busy_lock
+import coach_program_ai
 import config
 import db
 import exercise_mentions
@@ -504,8 +505,13 @@ async def ai_keyboard(
     actions: Sequence[dict] = (),
     presets: Sequence[tuple[str, str]] = (),
     new_chat: bool = False,
+    client: Optional[dict] = None,
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
+
+    `client` — режим «программа атлету» (ai_client в FSM): упоминаний нет
+    (своих упражнений и программ тренера в ответе про атлета не ищем), а
+    вместо «Нового разговора» — выход в свой чат.
 
     `answer` — текст ответа тренера, если он есть: упомянутые в нём упражнения
     пользователя становятся кнопками-ссылками на свои карточки.
@@ -521,6 +527,8 @@ async def ai_keyboard(
     ai_trainer.ActionCallback): каждое становится кнопкой над списком.
     """
     active = await db.get_active_workout(user_id)
+    if client:
+        answer = None
     mentioned = await exercise_mentions.find_in_text(
         user_id, answer, limit=exercise_mentions.MAX_MENTIONS_TOTAL
     )
@@ -557,7 +565,8 @@ async def ai_keyboard(
         draft_id=draft_id,
         actions=actions,
         presets=presets,
-        new_chat=new_chat,
+        new_chat=new_chat and not client,
+        client_exit=i18n.t("coach.ai_chat.exit_btn") if client else None,
     )
 
 
@@ -575,6 +584,16 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # memory of what was just discussed.
     data = await state.get_data()
     fresh = not data.get("ai_history")
+    client = data.get("ai_client")
+    if client:
+        # Режим «программа атлету» пережил выход в меню: возвращаемся в него
+        # же, с пометкой, чей дневник читаем, и выходом в свой чат. Готовых
+        # вопросов «о себе» тут нет — они спросили бы про атлета.
+        text = f"{_resume_text()}\n\n{_client_banner(client)}"
+        keyboard = await ai_keyboard(callback.from_user.id, client=client)
+        await ui.safe_edit(callback, text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+        return
     text = _intro_text() if fresh else _resume_text()
     # И на интро, и на возврате в разговор. Только на свежем нельзя: ai_history
     # переживает и выход в меню, и перезапуск бота, так что свежее интро человек
@@ -612,6 +631,74 @@ _CONVERSATION_STATE_KEYS = AI_STATE_KEYS + (
 
 def _new_chat_text() -> str:
     return i18n.t("ai.screen.new_chat")
+
+
+# Режим «программа атлету» (coach_program_ai): ai_client — кому собираем,
+# ai_own_stash — свой разговор тренера, отложенный на время режима байт-в-байт
+# (переписка для модели, черновик, опросник, кнопки). Вход и выход меняют
+# местами только эти ключи: своя история не переписывается, её префикс в кэше
+# модели доживает до возвращения.
+_CLIENT_MODE_KEYS = ("ai_client", "ai_own_stash")
+_OWN_CONVERSATION_KEYS = tuple(k for k in _CONVERSATION_STATE_KEYS if k not in _CLIENT_MODE_KEYS)
+
+
+def _client_banner(client: dict) -> str:
+    """Пометка под каждым ответом режима: для кого собираем программу."""
+    return i18n.t("coach.ai_chat.banner", name=escape(client["name"]))
+
+
+async def start_client_program(callback: CallbackQuery, state: FSMContext, client_id: int, name: str) -> None:
+    """«🤖 Составить с AI-тренером» в «Назначить программу» у тренера: тот же
+    сценарий, что «Составить программу» у атлета, только про его атлета.
+    Связку и согласие атлета вызывающий уже проверил (coach_program_ai.open_chat);
+    _handle_question проверит их ещё раз на каждом ходе.
+
+    Свой разговор тренера уезжает в ai_own_stash только после всех проверок
+    _start_ai_scenario (лимит, бронь): отказ не должен оставлять его в режиме.
+    Уже шла программа другому атлету — её разговор просто выбрасываем, заначка
+    своего остаётся прежней."""
+
+    async def enter() -> None:
+        data = await state.get_data()
+        if data.get("ai_client"):
+            stash = data.get("ai_own_stash") or {}
+        else:
+            stash = {key: data.get(key) for key in _OWN_CONVERSATION_KEYS}
+        await state.update_data(
+            **{key: None for key in _OWN_CONVERSATION_KEYS},
+            ai_own_stash=stash,
+            ai_client={"client_id": client_id, "name": name},
+        )
+
+    await _start_ai_scenario(
+        callback, state, i18n.t("coach.ai_chat.intro", name=escape(name)),
+        coach_program_ai.seed(name), scenario="program", on_claimed=enter,
+    )
+
+
+@router.callback_query(F.data == "ai:client:exit")
+async def ai_client_exit(callback: CallbackQuery, state: FSMContext):
+    """«↩️ Выйти в свой чат»: свой разговор тренера возвращается из заначки как
+    был, разговор про атлета выбрасывается. Новым сообщением, а не правкой:
+    кнопка стоит под ответом про программу, и стирать его незачем."""
+    user_id = callback.from_user.id
+    if user_id in _busy:
+        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
+        return
+    data = await state.get_data()
+    await state.set_state(AITrainerFlow.chatting)
+    if data.get("ai_client"):
+        stash = data.get("ai_own_stash") or {}
+        await state.update_data(
+            **{key: stash.get(key) for key in _OWN_CONVERSATION_KEYS},
+            ai_client=None, ai_own_stash=None,
+        )
+        data = await state.get_data()
+    keyboard = await ai_keyboard(
+        user_id, presets=await intro_presets(user_id), new_chat=bool(data.get("ai_history")),
+    )
+    await callback.message.answer(i18n.t("coach.ai_chat.exited"), reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data == "ai:newchat")
@@ -706,8 +793,12 @@ async def _start_ai_scenario(
     seed: str,
     keep_message: bool = False,
     scenario: Optional[str] = None,
+    on_claimed: Optional[Callable[[], Any]] = None,
 ) -> None:
     """Кнопка, которая сама начинает разговор с тренером за пользователя.
+
+    `on_claimed` — шаг, который делается только когда все проверки прошли и
+    бронь взята (вход в режим «программа атлету», см. start_client_program).
 
     Общая половина «Составить программу» и «Тренировка на сегодня»: обе не
     просто открывают чат, а сразу задают тренеру нужный вопрос — иначе, чтобы
@@ -765,6 +856,8 @@ async def _start_ai_scenario(
         with suppress(TelegramBadRequest):
             await callback.answer()
         await state.set_state(AITrainerFlow.chatting)
+        if on_claimed is not None:
+            await on_claimed()
         # Новая просьба — новый опросник: недоотвеченные вопросы прошлого
         # захода и его счётчик кругов (см. SETUP_MAX_ROUNDS) к ней отношения не
         # имеют, а доживший счётчик упёр бы её в потолок с первого вопроса.
@@ -772,8 +865,9 @@ async def _start_ai_scenario(
         # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
         # экран на месте меню — а ответа может и не быть вовсе (сбой провайдера),
         # и без кнопок выход остался бы только через нижнее меню.
+        client = (await state.get_data()).get("ai_client")
         screen = await ui.safe_edit(
-            callback, intro, reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
+            callback, intro, reply_markup=await ai_keyboard(user_id, client=client), parse_mode="HTML",
             delete=not keep_message,
         )
         await _handle_question(
@@ -785,7 +879,17 @@ async def _start_ai_scenario(
 
 @router.callback_query(F.data == "ai:buildprog")
 async def ai_build_program(callback: CallbackQuery, state: FSMContext):
-    """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее."""
+    """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее.
+
+    Кнопка из старого интро посреди режима «программа атлету» — просьба про
+    атлета: в этом режиме инструменты читают его дневник."""
+    client = (await state.get_data()).get("ai_client")
+    if client:
+        await _start_ai_scenario(
+            callback, state, i18n.t("coach.ai_chat.intro", name=escape(client["name"])),
+            coach_program_ai.seed(client["name"]), scenario="program",
+        )
+        return
     await _start_ai_scenario(callback, state, _build_program_intro(), _build_program_seed(), scenario="program")
 
 
@@ -1449,7 +1553,8 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
             draft_id=draft_id,
             # Один день — это тренировка, а не программа: по ней логично пойти
             # прямо сейчас, ничего себе не заводя (см. ai_program_train).
-            can_train_now=len(draft["days"]) == 1,
+            # Кроме программы атлету: тренировка встала бы в дневник тренера.
+            can_train_now=len(draft["days"]) == 1 and not draft.get("for_client"),
         ),
     )
     await callback.answer()
@@ -1490,6 +1595,9 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
     draft_id = _draft_id_from(callback.data)
     draft = await _program_draft(callback, state, draft_id)
     if draft is None:
+        return
+    if draft.get("for_client"):
+        await callback.answer(i18n.t("api.error.coach_client_mode"), show_alert=True)
         return
     day = draft["days"][0]
 
@@ -1552,11 +1660,16 @@ def _name_conflict_keyboard(draft_id: str, program_name: str) -> InlineKeyboardM
 
 
 async def _announce_saved(
-    callback: CallbackQuery, name: str, day_count: int, replacing: bool, program_id: int
+    callback: CallbackQuery, name: str, day_count: int, replacing: bool, program_id: int,
+    for_client: Optional[dict] = None,
 ) -> None:
     """`program_id` — только что сохранённая программа: кнопка «Открыть
     программу» ведёт прямо в неё (rt:prg: без StateFilter, так что работает и
-    из состояния чата с тренером)."""
+    из состояния чата с тренером).
+
+    `for_client` — программа атлету ({"client_id", "name"}): первой встаёт
+    «Назначить» (coach:asp — тот же обработчик, что на экране назначения), а
+    «Начать тренировку» нет — тренировка встала бы в дневник тренера."""
     if replacing:
         text = i18n.t("ai.screen.saved.updated", name=escape(name), days=day_count)
     elif day_count == 1:
@@ -1572,16 +1685,21 @@ async def _announce_saved(
     # День, с которого начинать: у свежей программы это первый, у правки
     # существующей — тот, до которого дошла очередь (db.next_program_day).
     next_day = await db.next_program_day(program_id)
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=keyboards.ai_program_saved_keyboard(
-                program_id,
-                start_routine_id=next_day["id"] if next_day is not None else None,
-                start_day_name=next_day["name"] if next_day is not None and day_count > 1 else None,
-            ),
+    if for_client:
+        text = f"{text}\n\n{i18n.t('coach.ai_chat.saved_assign', name=escape(for_client['name']))}"
+        markup = keyboards.ai_program_saved_keyboard(program_id)
+        markup.inline_keyboard.insert(0, [InlineKeyboardButton(
+            text=i18n.t("coach.ai_chat.assign_btn", name=for_client["name"]),
+            callback_data=f"coach:asp:{for_client['client_id']}:{program_id}",
+        )])
+    else:
+        markup = keyboards.ai_program_saved_keyboard(
+            program_id,
+            start_routine_id=next_day["id"] if next_day is not None else None,
+            start_day_name=next_day["name"] if next_day is not None and day_count > 1 else None,
         )
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
     await callback.answer(i18n.t("ai.screen.saved.done"))
 
 
@@ -1612,6 +1730,7 @@ async def _handle_save_result(callback: CallbackQuery, state: FSMContext, draft:
     await _announce_saved(
         callback, result["name"], result["day_count"],
         replacing=result["replacing"], program_id=result["program_id"],
+        for_client=draft.get("for_client"),
     )
 
 
@@ -1679,6 +1798,17 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
     # вместо повторного сохранения (см. A3).
     await state.update_data(ai_program_draft=None)
     user_id = callback.from_user.id
+    if draft.get("for_client"):
+        # Программа атлету ложится тренеру всегда новой и под свободным именем
+        # — без экрана конфликта и без правки его программ (как api_v1_ai).
+        renamed = dict(draft)
+        renamed["replaces"] = None
+        renamed["name"] = await db.unique_program_name(user_id, draft["name"])
+        await _run_program_save(
+            callback, state, user_id, draft, False,
+            lambda: ai_program_actions.save_as_new_program(user_id, renamed),
+        )
+        return
     replacing = await ai_program_actions.resolve_replace_target(user_id, draft) is not None
 
     await _run_program_save(
@@ -2021,6 +2151,19 @@ async def _handle_question(
                 reaction=[ReactionTypeEmoji(emoji="👀")],
             )
     user_id = user_id if user_id is not None else message.from_user.id
+    # Режим «программа атлету»: связку и согласие атлета — заново на каждом
+    # ходе и до любого чтения его дневника (атлет мог закрыть доступ посреди
+    # разговора). Нельзя — честный отказ с выходом в свой чат, модель не зовём.
+    client = (await state.get_data()).get("ai_client")
+    subject = None
+    if client:
+        try:
+            subject = await coach_program_ai.open_chat(user_id, client["client_id"])
+        except coach_program_ai.ModeError as exc:
+            await message.answer(
+                i18n.t(f"api.error.{exc.code}"), reply_markup=await ai_keyboard(user_id, client=client),
+            )
+            return
     asked_today = await db.get_ai_question_count_today(user_id)
     # Дневная квота вопросов и суточный стоп по деньгам — одной проверкой (см.
     # ai_limits.check). С той же клавиатурой, что у обычных ответов чата:
@@ -2029,7 +2172,7 @@ async def _handle_question(
     block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
     if block is not None:
         logger.info("AI question blocked for user %s: %s", user_id, block.log)
-        await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
+        await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id, client=client))
         # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: вопрос
         # всё равно уходит, предупреждение не отменяет действие, которое его
         # вызвало (см. ai_limits.py и такую же развилку в других вызовах check).
@@ -2141,6 +2284,7 @@ async def _handle_question(
                 on_chunk=streamer.push,
                 video_context=video_context, on_reasoning=collect_reasoning,
                 on_wire=collect_wire, on_limit=warn_about_limit,
+                **({"subject": subject} if subject is not None else {}),
             )
         )
         running_task = asyncio.create_task(
@@ -2166,7 +2310,7 @@ async def _handle_question(
         with suppress(Exception):
             await activity_log.record_ai_failure(user_id, exc)
         error_text = i18n.t("ai.screen.answer_failed")
-        error_kb = await ai_keyboard(user_id)
+        error_kb = await ai_keyboard(user_id, client=client)
         try:
             await placeholder.edit_text(error_text, reply_markup=error_kb)
         except TelegramBadRequest:
@@ -2205,9 +2349,14 @@ async def _handle_question(
     # хвост потеряется вместе с упавшим чанком, но дважды не покажется. Сюда
     # доходят только состоявшиеся ответы — сбой провайдера выше вернул return,
     # и подсказка дождётся первого настоящего.
-    if await db.claim_ai_actions_hint(user_id):
+    if not client and await db.claim_ai_actions_hint(user_id):
         quota_html += f"\n\n<i>{_actions_hint_text()}</i>"
         quota_md += f"\n\n_{_actions_hint_text()}_"
+    # Пометка режима «программа атлету» — хвостом под каждым ответом, тем же
+    # курсивом: тренер всегда видит, чей дневник сейчас читается.
+    if client:
+        quota_html += f"\n\n<i>{_client_banner(client)}</i>"
+        quota_md += f"\n\n_{i18n.t('coach.ai_chat.banner', name=client['name'])}_"
 
     # reasoning_content едет в истории рядом с ответом — иначе следующий вопрос
     # отдаёт Гроку не тот префикс, что был закэширован, и платим по полной за все
@@ -2244,10 +2393,12 @@ async def _handle_question(
     if program_draft:
         # Повторная правка превью правки сохранённой программы: модель часто не
         # передаёт replaces_program второй раз — переносим из прошлого черновика.
+        # Программа атлету правок сохранённого не знает вовсе.
         previous_draft = (await state.get_data()).get("ai_program_draft")
-        program_draft.update(
-            await ai_trainer.carry_over_replaces(user_id, previous_draft, dict(program_draft))
-        )
+        if not program_draft.get("for_client"):
+            program_draft.update(
+                await ai_trainer.carry_over_replaces(user_id, previous_draft, dict(program_draft))
+            )
         # 5.2: id в callback_data — то, чем кнопка под ЭТИМ ответом отличается
         # от кнопки под более старым. Случайный токен, а не счётчик в FSM:
         # счётчик не входил в _WORKOUT_SCAFFOLD_KEYS и гиб при каждом походе в
@@ -2275,8 +2426,11 @@ async def _handle_question(
     # Full, permanent log — separate from the live window above, which is capped
     # (and lost on a restart, unlike this). Lets the model pull it back via the
     # get_full_chat_history tool if a later question references it.
-    await db.add_ai_chat_message(user_id, "user", history_question)
-    await db.add_ai_chat_message(user_id, "assistant", answer)
+    # Разговор про атлета — не переписка тренера о себе: в вечный лог, который
+    # тренер-модель потом поднимает о НЁМ, он не пишется.
+    if not client:
+        await db.add_ai_chat_message(user_id, "user", history_question)
+        await db.add_ai_chat_message(user_id, "assistant", answer)
     # И в ленту действий (/activity): вопрос там был всегда, ответ — нет, и
     # цепочка «спросил → нажал» читалась без середины.
     with suppress(Exception):
@@ -2295,6 +2449,7 @@ async def _handle_question(
         program_name=program_draft.get("name") if program_draft else None,
         draft_id=program_draft.get("id") if program_draft else None,
         actions=actions,
+        client=client,
     )
     chunks = formatting.split_for_telegram(answer, TG_CHUNK)
     # Rich — только ради таблицы, и только когда таблица в ответе есть.
@@ -2526,7 +2681,9 @@ async def _deliver_setup(
         await _close_setup_question(
             message.bot, message.chat.id, previous, i18n.t("ai.screen.setup_cancelled")
         )
-    questions, goal_asked = await _questions_with_goal(user_id, questions, previous)
+    # Программа атлету — вопрос про цель атлета, и профиль тренера тут ни при чём.
+    goal_kwargs = {"for_client": True} if data.get("ai_client") else {}
+    questions, goal_asked = await _questions_with_goal(user_id, questions, previous, **goal_kwargs)
     await state.update_data(
         ai_setup={
             "questions": questions,
@@ -2776,6 +2933,13 @@ async def ai_photo_question(message: Message, state: FSMContext):
         await message.reply(i18n.t("ai.screen.busy"))
         return
     try:
+        # Фото и видео — в своём чате тренера, не в программе атлету.
+        client = (await state.get_data()).get("ai_client")
+        if client:
+            await message.reply(
+                i18n.t("api.error.coach_client_mode"), reply_markup=await ai_keyboard(user_id, client=client),
+            )
+            return
         caption = (message.caption or "").strip()
         question = caption or _default_photo_question()
 
@@ -2955,6 +3119,13 @@ async def ai_video_question(message: Message, state: FSMContext):
         await message.reply(i18n.t("ai.screen.busy"))
         return
     try:
+        # Фото и видео — в своём чате тренера, не в программе атлету.
+        client = (await state.get_data()).get("ai_client")
+        if client:
+            await message.reply(
+                i18n.t("api.error.coach_client_mode"), reply_markup=await ai_keyboard(user_id, client=client),
+            )
+            return
         if not config.video_analysis_available():
             await message.reply(i18n.t("ai.screen.video_not_available_text"))
             return

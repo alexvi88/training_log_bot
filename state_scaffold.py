@@ -32,7 +32,9 @@ from aiogram.fsm.context import FSMContext
 # вопрос уже позади». Кортеж лежит здесь (а не в handlers/workout.py), чтобы и
 # `_WORKOUT_SCAFFOLD_KEYS`, и `clear_state_keep_ai` читали один и тот же
 # список: новый AI-ключ добавляется ровно в одном месте.
-AI_STATE_KEYS = ("ai_history", "ai_program_draft", "ai_setup")
+# ai_client/ai_own_stash — режим «программа атлету» (coach_program_ai): чей
+# дневник читает чат и свой разговор тренера, отложенный на время режима.
+AI_STATE_KEYS = ("ai_history", "ai_program_draft", "ai_setup", "ai_client", "ai_own_stash")
 
 
 async def clear_state_keep_workout(state: FSMContext) -> None:

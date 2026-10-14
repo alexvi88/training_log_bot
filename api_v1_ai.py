@@ -70,6 +70,12 @@
   `POST /ai/ask` всегда пишет в текущий. Архив
   живёт config.AI_CONVERSATION_RETENTION_DAYS (чистит ночной джоб
   admin_tasks._run_retention_cleanup), текущий разговор чистка не трогает.
+- `POST /ai/conversations/coach-client` и `…/coach-client/exit` — тренер
+  собирает программу своему атлету тем же чатом (coach_program_ai): отдельный
+  разговор, в котором инструменты читают дневник атлета только на чтение,
+  черновик несёт `for_client`, а `GET /ai/history` — `subject`. Свой разговор
+  тренера на это время не архивируется и не переписывается — «Выйти»
+  возвращает его с тем же префиксом в кэше модели.
 - `GET /ai/pending` — незавершённое состояние разговора: черновик программы
   (`program`, тем же JSON, что и в ответе `/ai/ask` — с `draft_id`, чтобы
   «Забрать себе» было чем вызвать), текущий неотвеченный вопрос опросника
@@ -176,6 +182,7 @@ import api_v1_common as common
 import api_v1_voice
 import busy_lock
 import chat_attachments
+import coach_program_ai
 import config
 import db
 import exercise_mentions
@@ -348,6 +355,47 @@ async def get_limits(request: Request) -> JSONResponse:
     return JSONResponse(await _limits_json(user_id))
 
 
+# ---------- режим «программа атлету» (coach_program_ai) ----------
+
+
+async def _chat_subject(user_id: int) -> Optional[coach_program_ai.ClientChat]:
+    """Чей дневник читает текущий разговор: None — свой, иначе атлет, которому
+    тренер собирает программу. Связка и согласие атлета проверяются на каждом
+    ходе заново, до любого чтения: атлет мог закрыть доступ посреди разговора."""
+    row = await db.get_coach_client_chat(user_id)
+    if row is None:
+        return None
+    try:
+        return await coach_program_ai.open_chat(user_id, row["client_id"])
+    except coach_program_ai.ModeError as exc:
+        raise _mode_error(exc) from exc
+
+
+def _mode_error(exc: coach_program_ai.ModeError) -> ApiError:
+    if exc.code == "not_linked":
+        return ApiError(404, "not_linked", "no such client for this coach")
+    return ApiError(409, "client_no_ai_consent", "client has not allowed ai")
+
+
+def _client_mode_refusal() -> ApiError:
+    """Фото, видео и «Начать тренировку» по черновику — не про программу атлету:
+    фото и кадры легли бы в чат тренера, а тренировка — в его же дневник."""
+    return ApiError(409, "coach_client_mode", "not available while building a program for a client")
+
+
+async def _subject_json(user_id: int) -> Optional[dict[str, Any]]:
+    """`subject` в `GET /ai/history`: кому сейчас собирается программа, или
+    null. По нему приложение рисует плашку «Составляем программу для …» с
+    выходом в свой чат."""
+    row = await db.get_coach_client_chat(user_id)
+    if row is None:
+        return None
+    link = await db.get_coach_link(user_id, row["client_id"])
+    if link is None:
+        return None
+    return {"client_id": row["client_id"], "name": link["client_name"]}
+
+
 # ---------- один ход к модели: /ai/ask и финал /ai/questions/answer ----------
 
 
@@ -361,6 +409,7 @@ async def _run_turn(
     saved_image_path: Optional[str] = None,
     shown_question: Optional[str] = None,
     on_chunk: Optional[Any] = None,
+    subject: Optional[coach_program_ai.ClientChat] = None,
 ) -> dict[str, Any]:
     """Один вызов ai_trainer.ask() с полным набором колбэков — общее ядро для
     /ai/ask, /ai/video и для «опросник закончился, идём собирать программу»
@@ -424,6 +473,9 @@ async def _run_turn(
     # наружу по мере генерации, как боту (`_completion_round` с on_chunk).
     if on_chunk is not None:
         ask_kwargs["on_chunk"] = on_chunk
+    # Программа атлету — инструменты читают его дневник (coach_program_ai).
+    if subject is not None:
+        ask_kwargs["subject"] = subject
 
     # Язык хода — из users.lang, а не из ContextVar по умолчанию: у HTTP-запроса
     # нет middleware бота, и без use_lang ai_trainer._with_language_tail дописал
@@ -539,7 +591,11 @@ def _program_json(
         "replacing": bool(draft.get("replaces")),
         # Один день — тренировка, а не программа: по ней можно пойти прямо
         # сейчас, ничего себе не заводя (см. keyboards.ai_program_preview_keyboard).
-        "can_train_now": len(draft["days"]) == 1,
+        # Кроме программы атлету: тренировка встала бы в дневник тренера.
+        "can_train_now": len(draft["days"]) == 1 and not draft.get("for_client"),
+        # Кому тренер собирал программу ({"client_id", "name"}) — после
+        # «Забрать» карточка предлагает сразу назначить её этому атлету.
+        "for_client": draft.get("for_client"),
         "days": [
             {
                 "name": day["name"],
@@ -612,7 +668,8 @@ async def _mentions_json(
 
 
 async def _next_setup_step(
-    user_id: int, questions: list[dict[str, Any]], goal: str, previous: dict[str, Any]
+    user_id: int, questions: list[dict[str, Any]], goal: str, previous: dict[str, Any],
+    *, for_client: bool = False,
 ) -> tuple[str, Any]:
     """Что делать со свежесобранным опросником — то же решение, что
     handlers/ai_trainer._deliver_setup принимает для бота, вынесенное в
@@ -635,7 +692,9 @@ async def _next_setup_step(
             "goal_asked": bool(previous.get("goal_asked")), "questions": [], "answers": [], "idx": 0,
         }
         return "force", (ai_setup_flow.setup_enough_text(previous.get("goal")), state)
-    resolved_questions, goal_asked = await ai_setup_flow.questions_with_goal(user_id, questions, previous)
+    resolved_questions, goal_asked = await ai_setup_flow.questions_with_goal(
+        user_id, questions, previous, for_client=for_client,
+    )
     state = {
         "questions": resolved_questions, "answers": [], "idx": 0, "goal_asked": goal_asked,
         "goal": previous.get("goal") or goal, "rounds": rounds + 1,
@@ -643,10 +702,15 @@ async def _next_setup_step(
     return "ask", state
 
 
-async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[str, Any]:
+async def _turn_response(
+    user_id: int, turn: dict[str, Any], goal: str,
+    subject: Optional[coach_program_ai.ClientChat] = None,
+) -> dict[str, Any]:
     """Форма ответа /ai/ask и финала /ai/questions/answer: текст плюс всё, чем
     в боте под ним становится клавиатура. `goal` — исходная просьба
-    пользователя (для опросника, см. ai_setup_flow.questions_with_goal)."""
+    пользователя (для опросника, см. ai_setup_flow.questions_with_goal).
+    `subject` — программа атлету: опросник про атлета, без упоминаний (свои
+    упражнения и программы тренера в ответе про атлета — не те ссылки)."""
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else "ru"
 
@@ -661,9 +725,11 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
             await db.clear_ai_setup_state(user_id)
             draft_id = secrets.token_hex(4)
             # Повторная правка превью — replaces переезжает из прошлого черновика.
-            turn["draft"] = await ai_trainer.carry_over_replaces(
-                user_id, await db.get_ai_program_draft(user_id), turn["draft"]
-            )
+            # У программы атлету правки сохранённых нет вовсе.
+            if not turn["draft"].get("for_client"):
+                turn["draft"] = await ai_trainer.carry_over_replaces(
+                    user_id, await db.get_ai_program_draft(user_id), turn["draft"]
+                )
             turn["draft"]["created_at"] = db.now_iso()
             await db.set_ai_program_draft(user_id, draft_id, turn["draft"])
             program_json = _program_json(
@@ -672,14 +738,18 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
             )
         elif turn["questions"]:
             previous = await db.get_ai_setup_state(user_id) or {}
-            kind, payload = await _next_setup_step(user_id, turn["questions"], goal, previous)
+            kind, payload = await _next_setup_step(
+                user_id, turn["questions"], goal, previous, for_client=subject is not None,
+            )
             if kind == "drop":
                 await db.clear_ai_setup_state(user_id)
             elif kind == "force":
                 text, state = payload
                 await db.set_ai_setup_state(user_id, state)
-                forced_turn = await _run_turn(user_id, text, await db.get_ai_conversation_wire_history(user_id))
-                return await _turn_response(user_id, forced_turn, goal=state.get("goal") or goal)
+                forced_turn = await _run_turn(
+                    user_id, text, await db.get_ai_conversation_wire_history(user_id), subject=subject,
+                )
+                return await _turn_response(user_id, forced_turn, goal=state.get("goal") or goal, subject=subject)
             else:
                 state = payload
                 await db.set_ai_setup_state(user_id, state)
@@ -687,10 +757,13 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
         else:
             await db.clear_ai_setup_state(user_id)
 
-        mentions = await _mentions_json(
-            user_id, turn["answer"],
-            exclude_program_name=program_json["name"] if program_json else None,
-        )
+        if subject is not None:
+            mentions = {"exercises": [], "programs": []}
+        else:
+            mentions = await _mentions_json(
+                user_id, turn["answer"],
+                exclude_program_name=program_json["name"] if program_json else None,
+            )
 
     return {
         "answer": turn["answer"],
@@ -745,6 +818,7 @@ def _claim_turn_or_429(user_id: int, lang: str) -> None:
 
 async def _fresh_start_response(
     user_id: int, lang: str, seed: str, history: list, *, shown_question: Optional[str],
+    for_client: bool = False,
 ) -> dict[str, Any]:
     """«Составь мне программу» у человека с чистым листом — без вызова модели.
 
@@ -761,9 +835,9 @@ async def _fresh_start_response(
     ровно эту пару (поверх прежней истории), чтобы финальный ход модели видел
     цельный разговор."""
     with i18n.use_lang(lang):
-        reply = ai_setup_flow.fresh_start_reply()
+        reply = ai_setup_flow.fresh_start_reply(for_client=for_client)
         state = {
-            "questions": ai_setup_flow.fresh_start_questions(), "answers": [], "idx": 0,
+            "questions": ai_setup_flow.fresh_start_questions(for_client=for_client), "answers": [], "idx": 0,
             "goal_asked": True, "goal": seed, "rounds": 1,
         }
         questions_json = _question_json(state)
@@ -850,6 +924,18 @@ async def ask_question(request: Request) -> JSONResponse:
             key="api.error.text_too_long", max=MAX_QUESTION_LENGTH,
         )
 
+    # Программа атлету (coach_program_ai): связка и согласие — до брони и до
+    # фото на диске; «Составь мне программу» становится просьбой про атлета, а
+    # своей репликой в ленте — «Составь программу для …».
+    subject = await _chat_subject(user_id)
+    if subject is not None:
+        if image_data_url is not None:
+            raise _client_mode_refusal()
+        if coach_program_ai.is_seed(question):
+            with i18n.use_lang(lang):
+                question = coach_program_ai.seed(subject.name)
+                shown_question = coach_program_ai.shown_seed(subject.name)
+
     # «stream»: true — тот же ход, но текст ответа уезжает по мере генерации
     # (Server-Sent Events, см. `_stream_turn`). Ошибки до вызова модели (тело,
     # согласие, лимит, бронь) — обычным JSON со своим статусом, как и без него.
@@ -867,11 +953,7 @@ async def ask_question(request: Request) -> JSONResponse:
         # Бронь снимаем при ЛЮБОМ исходе до старта стрима: упавшая проверка
         # иначе держала бы `_busy` до перезапуска процесса.
         try:
-            fresh_start = (
-                image_data_url is None
-                and ai_setup_flow.is_build_program_seed(question)
-                and await ai_setup_flow.is_fresh_start(user_id)
-            )
+            fresh_start = await _is_fresh_start(user_id, question, image_data_url, subject)
             block = None if fresh_start else await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
         except BaseException:
             _busy.discard(user_id)
@@ -883,11 +965,12 @@ async def ask_question(request: Request) -> JSONResponse:
             user_id, lang,
             lambda on_chunk: _ask_turn(
                 user_id, lang, question, image_data_url, raw_image, shown_question, on_chunk=on_chunk,
+                subject=subject,
             ),
         )
     try:
         return JSONResponse(await _ask_turn(
-            user_id, lang, question, image_data_url, raw_image, shown_question,
+            user_id, lang, question, image_data_url, raw_image, shown_question, subject=subject,
         ))
     finally:
         _busy.discard(user_id)
@@ -988,6 +1071,7 @@ async def _ask_turn(
     shown_question: Optional[str],
     *,
     on_chunk: Optional[Any] = None,
+    subject: Optional[coach_program_ai.ClientChat] = None,
 ) -> dict[str, Any]:
     """Ход /ai/ask после всех проверок тела и брони — общий у обычного ответа и
     у стрима. Бронь `_busy` снимает вызывающий: у стрима ход живёт дольше
@@ -1004,20 +1088,17 @@ async def _ask_turn(
         # (см. db.ai_conversation_turns и докстринг модуля). Пусто у нового
         # разговора или сразу после DELETE /ai/history.
         history = await db.get_ai_conversation_wire_history(user_id)
-        if (
-            image_data_url is None
-            and ai_setup_flow.is_build_program_seed(question)
-            and await ai_setup_flow.is_fresh_start(user_id)
-        ):
+        if await _is_fresh_start(user_id, question, image_data_url, subject):
             return await _fresh_start_response(
                 user_id, lang, question, history, shown_question=shown_question,
+                for_client=subject is not None,
             )
         turn = await _run_turn(
             user_id, question, history,
             image_data_url=image_data_url, saved_image_path=saved_image_path,
-            shown_question=shown_question, on_chunk=on_chunk,
+            shown_question=shown_question, on_chunk=on_chunk, subject=subject,
         )
-        return await _turn_response(user_id, turn, goal=question)
+        return await _turn_response(user_id, turn, goal=question, subject=subject)
     except BaseException:
         # Ход не состоялся (лимит, таймаут, сбой модели, обрыв стрима) — до
         # db.add_ai_conversation_turn дело не дошло, и файл на диске никто
@@ -1026,6 +1107,19 @@ async def _ask_turn(
         if saved_image_path is not None:
             chat_attachments.delete(saved_image_path)
         raise
+
+
+async def _is_fresh_start(
+    user_id: int, question: str, image_data_url: Optional[str],
+    subject: Optional[coach_program_ai.ClientChat],
+) -> bool:
+    """«Составь программу» с чистого листа — путь без модели (см.
+    `_fresh_start_response`). У программы атлету чистый лист — его дневник."""
+    if image_data_url is not None:
+        return False
+    if subject is not None:
+        return coach_program_ai.is_seed(question) and await coach_program_ai.is_fresh(subject.client_id)
+    return ai_setup_flow.is_build_program_seed(question) and await ai_setup_flow.is_fresh_start(user_id)
 
 
 async def answer_setup_question(request: Request) -> JSONResponse:
@@ -1077,15 +1171,18 @@ async def answer_setup_question(request: Request) -> JSONResponse:
     # 409 setup_stale, и человеку оставалось проходить опросник заново. Пока
     # хода нет, в базе лежит состояние ДО этого ответа (его мы не записывали),
     # так что повтор с тем же question_index честно проходит проверку выше.
+    subject = await _chat_subject(user_id)
     _claim_turn_or_429(user_id, lang)
     try:
         history = await db.get_ai_conversation_wire_history(user_id)
-        turn = await _run_turn(user_id, text, history)
+        turn = await _run_turn(user_id, text, history, subject=subject)
         # До _turn_response, а не после: он сам решает, заводить ли новый
         # опросник, и смотрит на «предыдущий» (_next_setup_step) — законченный
         # там лежать не должен, как и прежде.
         await db.clear_ai_setup_state(user_id)
-        return JSONResponse(await _turn_response(user_id, turn, goal=state.get("goal") or text))
+        return JSONResponse(await _turn_response(
+            user_id, turn, goal=state.get("goal") or text, subject=subject,
+        ))
     finally:
         _busy.discard(user_id)
 
@@ -1150,7 +1247,9 @@ async def save_program(request: Request) -> JSONResponse:
     # найдёт черновика и получит честный 404 вместо повторного сохранения.
     await db.clear_ai_program_draft(user_id)
     try:
-        if on_conflict is not None:
+        if draft.get("for_client"):
+            result = await _save_client_program(user_id, draft)
+        elif on_conflict is not None:
             result = await _resolve_conflict(user_id, draft, on_conflict)
         else:
             result = await ai_program_actions.finalize_program_save(user_id, draft)
@@ -1172,7 +1271,19 @@ async def save_program(request: Request) -> JSONResponse:
         "program_id": result["program_id"],
         "day_count": result["day_count"],
         "replacing": result["replacing"],
+        # Программа атлету — кому её сразу назначить (`POST
+        # /coach/clients/{client_id}/programs`). null у своей.
+        "for_client": draft.get("for_client"),
     })
+
+
+async def _save_client_program(user_id: int, draft: dict[str, Any]) -> dict[str, Any]:
+    """Программа атлету ложится тренеру всегда НОВОЙ (как у #815): под
+    свободным именем, без экрана конфликта и без правки его программ."""
+    renamed = dict(draft)
+    renamed["replaces"] = None
+    renamed["name"] = await db.unique_program_name(user_id, draft["name"])
+    return await ai_program_actions.save_as_new_program(user_id, renamed)
 
 
 async def train_from_draft(request: Request) -> JSONResponse:
@@ -1198,6 +1309,8 @@ async def train_from_draft(request: Request) -> JSONResponse:
     draft = await db.get_ai_program_draft(user_id)
     if draft is None or draft.get("id") != draft_id:
         raise ApiError(404, "draft_not_found", "program draft is gone or belongs to a stale answer")
+    if draft.get("for_client"):
+        raise _client_mode_refusal()
     if len(draft["days"]) != 1:
         raise ApiError(400, "bad_request", "draft must have exactly one day to train from it directly")
 
@@ -1351,6 +1464,9 @@ async def ask_video(request: Request) -> JSONResponse:
     """
     user_id = await common.authed_user_id(request)
     await _require_ai_consent(request, user_id)
+    # Разбор техники по видео — в своём чате тренера, не в программе атлету.
+    if await db.get_coach_client_chat(user_id) is not None:
+        raise _client_mode_refusal()
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else "ru"
 
@@ -1554,7 +1670,9 @@ async def get_history(request: Request) -> JSONResponse:
         minimum=1, maximum=db.MAX_AI_CONVERSATION_TURNS,
     )
     turns = await db.get_ai_conversation_history(user_id, limit=limit)
-    return JSONResponse({"messages": _history_messages(turns)})
+    # `subject` — кому тренер сейчас собирает программу (режим «программа
+    # атлету», см. POST /ai/conversations/coach-client) или null.
+    return JSONResponse({"messages": _history_messages(turns), "subject": await _subject_json(user_id)})
 
 
 # Сколько символов первого вопроса уходит в заголовок разговора (см.
@@ -1750,14 +1868,78 @@ async def activate_conversation(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
     conversation_id = int(request.path_params["conversation_id"])
     current = await db.current_ai_conversation_id(user_id)
+    leaving = await db.get_coach_client_chat(user_id, current)
     if not await db.activate_ai_conversation(user_id, conversation_id):
         raise ApiError(404, "not_found", "conversation not found")
+    if current != conversation_id and await db.get_coach_client_chat(user_id, conversation_id) is not None:
+        # Разговор про атлета вернули из архива — «Выйти» должно вести в тот
+        # свой разговор, что был открыт сейчас (или в который вёл прежний
+        # разговор про атлета), а не в давний.
+        back = int(leaving["return_conversation_id"]) if leaving is not None else current
+        await db.set_coach_client_chat_return(user_id, conversation_id, back)
     if current != conversation_id:
         await db.clear_ai_program_draft(user_id)
         await db.clear_ai_setup_state(user_id)
         await db.clear_ai_undo_actions(user_id)
     turns = await db.get_ai_conversation_history(user_id)
-    return JSONResponse({"messages": _history_messages(turns)})
+    return JSONResponse({"messages": _history_messages(turns), "subject": await _subject_json(user_id)})
+
+
+async def start_coach_client(request: Request) -> JSONResponse:
+    """«Составить с AI-тренером» в «Назначить программу» у тренера: тот же чат
+    AI-тренера, но про атлета (coach_program_ai). Тело `{"client_id": N}`.
+
+    Заводит отдельный разговор: свой текущий разговор тренера не
+    архивируется и не переписывается (`db.start_coach_client_conversation`),
+    «Выйти» (`POST /ai/conversations/coach-client/exit`) вернёт его как был —
+    с тем же префиксом в кэше модели. Черновик программы, опросник и откаты
+    своего разговора разговору про атлета не переживают — как при любой смене
+    разговора. Модель тут не зовётся: ни квоты, ни денег.
+
+    Ответ 201 — `{"conversation_id", "subject": {"client_id", "name"}}`; ленту
+    приложение перечитывает обычным GET /ai/history (там тот же `subject`).
+
+    * не тренер — 403 `not_a_coach`;
+    * чужой или несуществующий атлет — 404 `not_linked`;
+    * атлет не разрешил AI — 409 `client_no_ai_consent`: собирать по его
+      дневнику нельзя, и чат даже не открываем;
+    * идёт ход тренера — 429 `busy`.
+    """
+    user_id = await common.authed_user_id(request)
+    body = await common.json_body(request)
+    client_id = common.require(body, "client_id", int)
+    if await db.get_coach_profile(user_id) is None:
+        raise ApiError(403, "not_a_coach", "coach profile is required")
+    try:
+        subject = await coach_program_ai.open_chat(user_id, client_id)
+    except coach_program_ai.ModeError as exc:
+        raise _mode_error(exc) from exc
+    if user_id in _busy:
+        raise ApiError(429, "busy", "another request is in flight")
+    conversation_id = await db.start_coach_client_conversation(user_id, client_id)
+    await db.clear_ai_program_draft(user_id)
+    await db.clear_ai_setup_state(user_id)
+    await db.clear_ai_undo_actions(user_id)
+    return JSONResponse(
+        {"conversation_id": conversation_id, "subject": subject.as_json()}, status_code=201,
+    )
+
+
+async def exit_coach_client(request: Request) -> JSONResponse:
+    """«Выйти» из программы атлету — в свой разговор тренера, тот самый, что
+    был открыт до входа, с нетронутой историей. Разговор про атлета уезжает в
+    архив (открыть его оттуда — и режим вернётся). Режима нет — 200 без
+    изменений. Ответ — `{"conversation_id"}` текущего разговора; ленту
+    приложение перечитывает GET /ai/history."""
+    user_id = await common.authed_user_id(request)
+    if user_id in _busy:
+        raise ApiError(429, "busy", "another request is in flight")
+    back = await db.exit_coach_client_conversation(user_id)
+    if back is not None:
+        await db.clear_ai_program_draft(user_id)
+        await db.clear_ai_setup_state(user_id)
+        await db.clear_ai_undo_actions(user_id)
+    return JSONResponse({"conversation_id": await db.current_ai_conversation_id(user_id)})
 
 
 async def get_thinking(request: Request) -> JSONResponse:
@@ -1808,6 +1990,8 @@ routes = [
     Route("/ai/pending", get_pending_state, methods=["GET"]),
     Route("/ai/conversations", list_conversations, methods=["GET"]),
     Route("/ai/conversations/workout", discuss_workout, methods=["POST"]),
+    Route("/ai/conversations/coach-client", start_coach_client, methods=["POST"]),
+    Route("/ai/conversations/coach-client/exit", exit_coach_client, methods=["POST"]),
     Route("/ai/conversations/{conversation_id:int}", get_conversation, methods=["GET"]),
     Route("/ai/conversations/{conversation_id:int}/activate", activate_conversation, methods=["POST"]),
     Route("/ai/history", get_history, methods=["GET"]),

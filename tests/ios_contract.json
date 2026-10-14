@@ -34,6 +34,41 @@
     }
    }
   },
+  "AIChatSubject": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "clientId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "AIClientChatStart": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "conversationId": {
+     "type": "Int",
+     "optional": false
+    },
+    "subject": {
+     "type": "AIChatSubject",
+     "optional": false
+    }
+   }
+  },
+  "AIConversationCurrent": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "conversationId": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
   "AIConversationSummary": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -99,6 +134,11 @@
     "messages": {
      "type": "[AIHistoryMessage]",
      "optional": false
+    },
+    "subject": {
+     "type": "AIChatSubject",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -247,6 +287,11 @@
      "type": "Int",
      "optional": true,
      "default": true
+    },
+    "forClient": {
+     "type": "AIChatSubject",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -293,6 +338,11 @@
     "replacing": {
      "type": "Bool",
      "optional": false
+    },
+    "forClient": {
+     "type": "AIChatSubject",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -801,23 +851,6 @@
     },
     "days": {
      "type": "[CatalogDay]",
-     "optional": false
-    }
-   }
-  },
-  "CoachAIProgramResult": {
-   "file": "TrainingLog/Models/CoachModels.swift",
-   "fields": {
-    "programId": {
-     "type": "Int",
-     "optional": false
-    },
-    "name": {
-     "type": "String",
-     "optional": false
-    },
-    "dayCount": {
-     "type": "Int",
      "optional": false
     }
    }
@@ -4124,6 +4157,20 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.startClientProgramChat",
+   "method": "POST",
+   "path": "/ai/conversations/coach-client",
+   "root": "AIClientChatStart",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.exitClientProgramChat",
+   "method": "POST",
+   "path": "/ai/conversations/coach-client/exit",
+   "root": "AIConversationCurrent",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.aiConversation",
    "method": "GET",
    "path": "/ai/conversations/{}",
@@ -4131,7 +4178,7 @@
    "nullable": false
   },
   {
-   "swift": "APIClient.aiHistory",
+   "swift": "APIClient.aiHistoryWithSubject",
    "method": "GET",
    "path": "/ai/history",
    "root": "AIHistoryResponse",
@@ -4331,13 +4378,6 @@
    "method": "POST",
    "path": "/coach/clients/{}/programs",
    "root": "CoachAssignResult",
-   "nullable": false
-  },
-  {
-   "swift": "APIClient.buildClientProgram",
-   "method": "POST",
-   "path": "/coach/clients/{}/programs/ai",
-   "root": "CoachAIProgramResult",
    "nullable": false
   },
   {
@@ -5076,5 +5116,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "9ec2099484b27f464ee5df17c692f31b0fdb590c"
+ "_ios_commit": "4691df32b600b1c6293ffcc8abc3c31bdc9ae1ff"
 }

@@ -177,7 +177,7 @@ async def test_daily_question_limit_blocks_before_download(monkeypatch, wired):
     )
     monkeypatch.setattr(handler, "ai_keyboard", AsyncMock(return_value=None))
     message = _message()
-    await handler.ai_video_question(message, MagicMock())
+    await handler.ai_video_question(message, _state())
 
     message.bot.download.assert_not_awaited()
     wired.analyze.assert_not_awaited()
