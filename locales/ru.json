@@ -2158,6 +2158,7 @@
   "share.app_store_line": "📱 С iPhone — приложение: {url}",
   "support.push.reply_title": "Поддержка",
   "support.push.reply_body": "Ответ поддержки: {text}",
+  "inbox.error.read_target": "Не понял, что отметить прочитанным. Обнови раздел и попробуй ещё раз.",
   "weekly.greeting": "ПРИВЕТ АТЛЕТ!",
   "weekly.verdict.first.title": "Первая неделя закрыта.",
   "weekly.verdict.first.body.1": "{this, plural, one{# тренировка} few{# тренировки} many{# тренировок} other{# тренировки}} и {tonnage} в дневнике. Рекорды начну считать со следующей недели — пока сравнивать не с чем.",

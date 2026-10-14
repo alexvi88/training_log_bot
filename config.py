@@ -933,6 +933,12 @@ WEEKLY_DIGEST_RETENTION_DAYS = int(os.getenv("WEEKLY_DIGEST_RETENTION_DAYS", "90
 # назван в политике конфиденциальности (legal/privacy.*.html).
 COACH_SUMMARY_RETENTION_DAYS = int(os.getenv("COACH_SUMMARY_RETENTION_DAYS", "90"))
 
+# Сколько живёт строка в «Уведомлениях» приложения (db.inbox, inbox.py) — копия
+# пуша, которую человек может перечитать, даже если пуши выключены. Пуш — про
+# «сейчас»: «третий день без зала» через три месяца уже неправда о дневнике.
+# Срок назван в политике конфиденциальности (legal/privacy.*.html).
+INBOX_RETENTION_DAYS = int(os.getenv("INBOX_RETENTION_DAYS", "90"))
+
 # Сколько дней импорт истории можно отменить целиком («↩️ Отменить импорт» в
 # боте, POST /v1/import/batches/{id}/undo) и сколько живёт строка пачки
 # (db.import_batches) — это один срок: дольше держать пачку незачем, отменить

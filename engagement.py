@@ -31,6 +31,12 @@ the two channels are independent sends, each with its own try/except, and
 the iOS send never bypasses the quiet-hours/opt-in/one-per-day gates that
 already decided whether we get to `_deliver` at all.
 
+Whoever has ever used the app also gets the signal into the in-app inbox
+(«Уведомления», `inbox.py`) — through the same `inbox.deliver` call that sends
+the banner, so Telegram + APNs of one push is one inbox entry. App users who
+turned pushes off are walked by a second pass (`inbox_only`): no Telegram, no
+banner, just the inbox entry, and no paid AI digest for them.
+
 A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
 up but never finished a single workout. Since these users have no last-workout
 date, none of the five signals above apply to them (they all key off workout
@@ -52,11 +58,11 @@ import acquisition
 import ai_limits
 import ai_trainer
 import analytics
-import apns
 import config
 import db
 import formatting
 import i18n
+import inbox
 import keyboards
 import push_ios
 import push_texts
@@ -360,7 +366,13 @@ async def _find_plateau_exercise(telegram_id: int) -> Optional[tuple[int, str]]:
     return None
 
 
-async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDecision]:
+async def build_daily_push(
+    telegram_id: int, today: dt.date, *, allow_ai: bool = True
+) -> Optional[PushDecision]:
+    """Сигнал дня или None. `allow_ai=False` — воскресный разбор без вызова
+    модели, статичным текстом ротации: так он строится тем, кто выключил пуши
+    и получит его только во «Уведомлениях» — платить за текст, который
+    человек сам попросил ему не присылать, незачем."""
     if await db.has_push_today(
         telegram_id, today.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES
     ):
@@ -438,7 +450,7 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             # «Итог недели» именно за неё, даже если пуш открыли в понедельник.
             week_start = (today - dt.timedelta(days=today.weekday())).isoformat()
             digest_route = {"week": week_start}
-            ai_text = await _ai_weekly_digest_text(telegram_id)
+            ai_text = await _ai_weekly_digest_text(telegram_id) if allow_ai else None
             if ai_text:
                 # Тот же текст — экрану «Итог недели» в приложении (GET
                 # /v1/weekly-summary): за него уже заплачено, второй вызов модели
@@ -560,40 +572,32 @@ def _should_show_tz_hint(user) -> bool:
     return not user["tz_set_by_user"] and not user["tz_push_hint_shown"]
 
 
-async def _ios_device_tokens(telegram_id: int) -> list[str]:
-    """Все iOS device token'ы пользователя (db.register_push_token) — по
-    одному на устройство: iPhone и iPad получают один и тот же пуш."""
-    return await db.get_push_tokens(telegram_id, "ios")
-
-
-async def _send_apns_push(telegram_id: int, decision: PushDecision) -> None:
+async def _send_apns_push(telegram_id: int, decision: PushDecision, *, push: bool = True) -> None:
     """Тот же сигнал, что уже ушёл (или вот-вот уйдёт) в Telegram — короткой
-    iOS-версией через push_ios, только тем, у кого есть привязанный iOS-токен.
+    iOS-версией через push_ios, во «Уведомления» и баннером (inbox.deliver).
 
-    Ничего не делает молча, если: APNs не настроен (apns.is_configured()),
-    устройство не привязано, или короткого текста для этой категории нет
-    (тогда push_ios сам бросает исключение при импорте, а не здесь — см. его
-    докстринг; до прода это дойти не должно).
+    Ничего не делает, если приложения у человека не было (db.is_app_user):
+    тогда ни «Уведомлений», ни устройства. `push=False` — человек выключил
+    пуши: строка во «Уведомлениях» есть, баннера нет. Без APNs или без
+    токена inbox.deliver баннер сам молча пропускает.
     """
-    if not apns.is_configured():
-        return
-    device_tokens = await _ios_device_tokens(telegram_id)
-    if not device_tokens:
+    if not await db.is_app_user(telegram_id):
         return
     # Текст выбирается один раз на человека (push_ios крутит ротацию текстов
-    # в push_rotation) — на все его устройства уходит один и тот же пуш.
+    # в push_rotation) — на все его устройства и во «Уведомления» уходит один
+    # и тот же.
+    lang = i18n.get_lang()
     title, body = await push_ios.ios_alert(
-        telegram_id, decision.category, i18n.get_lang(), **decision.ios_params
+        telegram_id, decision.category, lang, **decision.ios_params
     )
     route = push_ios.ios_route(decision.category, **decision.ios_route_params)
-    for device_token in device_tokens:
-        await apns.send_alert(
-            telegram_id, device_token, title, body, category=decision.category, route=route
-        )
+    await inbox.deliver(
+        telegram_id, decision.category, title, body, lang=lang, route=route, push=push
+    )
 
 
 async def _deliver(
-    bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date
+    bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date, *, inbox_only: bool = False
 ) -> None:
     """Send the push and log it against the recipient's own date — that date is
     what `has_push_today` dedupes on.
@@ -609,8 +613,19 @@ async def _deliver(
     handed to `keyboards.push_cta_keyboard` below (which does the actual
     `i18n.t()`) resolves in the push's own language without a second user
     fetch just for that.
+
+    `inbox_only` — человек с приложением выключил пуши: сигнал ложится только
+    в «Уведомления» (inbox.py), без баннера и без Telegram. Отметка в `pushes`
+    пишется так же — иначе следующий тик того же дня положил бы его снова.
     """
     global _push_image_file_id
+    if inbox_only:
+        try:
+            await _send_apns_push(telegram_id, decision, push=False)
+        except Exception:
+            logger.exception("Failed to put the push into the inbox for user %s", telegram_id)
+        await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+        return
     user = await db.get_user(telegram_id)
     show_tz_hint = _should_show_tz_hint(user)
     cta_key = PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA) if decision.with_cta else None
@@ -821,35 +836,45 @@ async def _send_daily_pushes(bot: Bot) -> None:
     # loop crawled meant everyone near the end fell out of their own send hour
     # and got skipped; by the next tick their hour had passed, so the push was
     # lost for the day rather than merely late.
+    # Второй проход — люди с приложением, выключившие пуши: тот же сигнал
+    # ложится им только во «Уведомления» (inbox_only, см. _deliver).
     due = [
-        (telegram_id, _local_now(tz_offset).date())
-        for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids()
+        (telegram_id, _local_now(tz_offset).date(), inbox_only)
+        for inbox_only in (False, True)
+        for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids(inbox_only=inbox_only)
         if should_send_now(tz_offset, hour)
     ]
     due_newbies = [
-        (telegram_id, created_at, tz_offset, _local_now(tz_offset).date())
-        for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids()
+        (telegram_id, created_at, tz_offset, _local_now(tz_offset).date(), inbox_only)
+        for inbox_only in (False, True)
+        for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids(inbox_only=inbox_only)
         if should_send_now(tz_offset, hour)
     ]
 
-    for telegram_id, local_date in due:
+    for telegram_id, local_date, inbox_only in due:
         user = await db.get_user(telegram_id)
         with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
             try:
-                decision = await build_daily_push(telegram_id, local_date)
+                # Флаги — только второму проходу: подменённые в тестах build/
+                # _deliver знают прежнюю сигнатуру.
+                extra = {"allow_ai": False} if inbox_only else {}
+                decision = await build_daily_push(telegram_id, local_date, **extra)
             except Exception:
                 logger.exception("Failed to build push for user %s", telegram_id)
                 continue
             if decision is not None:
                 try:
-                    await _deliver(bot, telegram_id, decision, local_date)
-                    await asyncio.sleep(SEND_DELAY)
+                    if inbox_only:
+                        await _deliver(bot, telegram_id, decision, local_date, inbox_only=True)
+                    else:
+                        await _deliver(bot, telegram_id, decision, local_date)
+                        await asyncio.sleep(SEND_DELAY)
                 except Exception:
                     # Один сбой доставки (база, Telegram, битая клавиатура) не должен
                     # обрывать рассылку остальным: раньше исключение улетало из цикла.
                     logger.exception("Failed to deliver push for user %s", telegram_id)
 
-    for telegram_id, created_at, tz_offset, local_date in due_newbies:
+    for telegram_id, created_at, tz_offset, local_date, inbox_only in due_newbies:
         user = await db.get_user(telegram_id)
         with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
             try:
@@ -859,8 +884,11 @@ async def _send_daily_pushes(bot: Bot) -> None:
                 continue
             if decision is not None:
                 try:
-                    await _deliver(bot, telegram_id, decision, local_date)
-                    await asyncio.sleep(SEND_DELAY)
+                    if inbox_only:
+                        await _deliver(bot, telegram_id, decision, local_date, inbox_only=True)
+                    else:
+                        await _deliver(bot, telegram_id, decision, local_date)
+                        await asyncio.sleep(SEND_DELAY)
                 except Exception:
                     logger.exception("Failed to deliver newbie push for user %s", telegram_id)
 

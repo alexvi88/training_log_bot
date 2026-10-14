@@ -96,6 +96,9 @@ MACHINE_KEYS = {
     "app_link",
     # Идентификатор мини-игры (catch/weigh/sort/runner) — название рисует приложение.
     "game",
+    # Маршрут пуша и строки «Уведомлений» (push_ios.ios_route): экран и неделя
+    # — машинные значения, имя упражнения в нём — показываемое и проверяется.
+    "screen", "week",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -724,6 +727,31 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", "/support/threads/111/messages", expect=403)
     await w.call("POST", "/support/threads/111/messages", json={"text": text["feedback"]}, expect=403)
     await w.call("POST", "/support/threads/111/read", expect=403)
+    # «Уведомления» (api_v1_inbox): строки кладут настоящие отправители —
+    # ответ поддержки, ежедневный пуш, анонс — на языке атлета; список,
+    # страница по курсору, отметка одной и всех, и ошибка тела на его языке.
+    import api_v1_support
+    import inbox as inbox_module
+    import push_ios
+    import push_texts
+
+    await api_v1_support.send_admin_reply(111, text["feedback"])
+    title, body = await push_ios.ios_alert(111, push_texts.SKIP_CATEGORY_BY_DAY[7], lang)
+    await inbox_module.deliver(
+        111, push_texts.SKIP_CATEGORY_BY_DAY[7], title, body, lang=lang,
+        route=push_ios.ios_route(push_texts.SKIP_CATEGORY_BY_DAY[7]),
+    )
+    title, body = await push_ios.ios_alert(111, push_ios.ANNOUNCEMENT, lang)
+    await inbox_module.deliver(111, push_ios.ANNOUNCEMENT, title, body, lang=lang)
+    listed = (await w.call("GET", "/inbox", expect=200)).json()
+    # Тренер и клиент выше тоже уже положили сюда свои пуши.
+    assert len(listed["items"]) >= 3 and listed["unread"] >= 3
+    page = (await w.call("GET", "/inbox?limit=1", expect=200)).json()
+    await w.call("GET", f"/inbox?limit=1&before={page['next_before']}", expect=200)
+    await w.call("GET", "/inbox?before=nope", expect=400)
+    await w.call("POST", "/inbox/read", json={"id": listed["items"][0]["id"]}, expect=200)
+    await w.call("POST", "/inbox/read", json={"id": "nope"}, expect=400)
+    await w.call("POST", "/inbox/read", json={"all": True}, expect=200)
     await w.call("POST", "/factcheck", json={"text": text["post"]}, expect=200)
     await w.call("POST", "/diagnostics", json={
         "kind": "crash", "payload": {"diagnosticMetaData": {"appVersion": "1.0", "signal": 11}},

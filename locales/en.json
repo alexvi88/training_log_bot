@@ -2157,6 +2157,7 @@
   "share.app_store_line": "📱 On iPhone — get the app: {url}",
   "support.push.reply_title": "Support",
   "support.push.reply_body": "Reply from support: {text}",
+  "inbox.error.read_target": "Didn't get what to mark as read. Refresh the list and try again.",
   "weekly.greeting": "HEY ATHLETE!",
   "weekly.verdict.first.title": "First week done.",
   "weekly.verdict.first.body.1": "{this, plural, one{# workout} other{# workouts}} and {tonnage} in the diary. I'll start counting PRs next week — nothing to compare against yet.",

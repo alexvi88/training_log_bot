@@ -145,7 +145,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- PATCH /v1/settings (`lock_screen_used: true`), назад не снимается.
     -- Приложение по нему не показывает карточку «Записывай с экрана
     -- блокировки» после переустановки и на новом телефоне.
-    lock_screen_used INTEGER NOT NULL DEFAULT 0
+    lock_screen_used INTEGER NOT NULL DEFAULT 0,
+    -- Когда человек впервые вошёл в iOS-приложение (выдача токена /v1,
+    -- issue_api_token). Ставится один раз и не снимается выходом: «Уведомления»
+    -- в приложении (таблица inbox) копятся только у тех, у кого приложение
+    -- было хоть раз, — тот, кто живёт только в Telegram, и так видит каждый
+    -- пуш в чате с ботом (см. inbox.py).
+    app_since TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -335,6 +341,32 @@ CREATE TABLE IF NOT EXISTS pushes (
 );
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
+
+-- «Уведомления» в приложении («Профиль» → «Уведомления», api_v1_inbox.py):
+-- каждый пуш человеку с приложением ложится сюда строкой — и когда пуши
+-- выключены, и когда APNs-токена нет, и когда доставка сорвалась. Пишет одно
+-- место — inbox.deliver; Telegram и APNs одного события — одна строка.
+--
+-- Текст хранится готовым, на языке, на котором ушёл пуш (`lang`), а не ключом
+-- каталога: у половины пушей параметры уже локализованы или свободны (звание,
+-- «6 недель», имя упражнения, реплика тренера, ответ поддержки, AI-разбор
+-- недели), и перерисовать их на другом языке нечем. Сменил язык — строки
+-- прежнего языка `/v1/inbox` не отдаёт (тот же приём, что у weekly_digests):
+-- в ответе /v1 не бывает чужого языка. `route` — JSON того же маршрута, что
+-- `route` в APNs payload (push_ios). Срок — config.INBOX_RETENTION_DAYS.
+CREATE TABLE IF NOT EXISTS inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    route TEXT,
+    lang TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_user ON inbox (user_id, id);
+CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox (created_at);
 
 -- Разовые релизные рассылки: где сейчас каждая (см. announcements.py).
 -- status: preview — анонс показан админу и ждёт добра; approved — добро есть,
@@ -1781,6 +1813,19 @@ async def _migrate_schema() -> None:
         # app-only аккаунтов до этой миграции не существовало.
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN telegram_linked INTEGER NOT NULL DEFAULT 1"
+        )
+    if "app_since" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN app_since TEXT")
+        # Кто уже входил в приложение до этой колонки: живой или прошлый токен
+        # /v1, привязанное устройство, вход через Apple, app-only аккаунт.
+        # Самая ранняя из отметок — «с тех пор приложение у него есть».
+        await _conn.execute(
+            "UPDATE users SET app_since = COALESCE("
+            "(SELECT MIN(created_at) FROM api_tokens a WHERE a.user_id = users.telegram_id), "
+            "(SELECT MIN(created_at) FROM push_tokens p WHERE p.user_id = users.telegram_id), "
+            "(SELECT MIN(created_at) FROM auth_identities i WHERE i.user_id = users.telegram_id), "
+            "CASE WHEN telegram_linked = 0 THEN created_at END) "
+            "WHERE app_since IS NULL"
         )
 
     set_cols = await _column_names("sets")
@@ -7697,6 +7742,12 @@ async def issue_api_token(user_id: int) -> str:
                 "INSERT INTO api_tokens (token, user_id, created_at) VALUES (?, ?, ?)",
                 (token, user_id, now_iso()),
             )
+            # Первый вход в приложение — с этого момента пуши копятся и в
+            # «Уведомлениях» (inbox.py). Повторный вход отметку не двигает.
+            await conn().execute(
+                "UPDATE users SET app_since = ? WHERE telegram_id = ? AND app_since IS NULL",
+                (now_iso(), user_id),
+            )
             await conn().execute(
                 "DELETE FROM api_tokens WHERE user_id = ? AND token NOT IN ("
                 "SELECT token FROM api_tokens WHERE user_id = ? "
@@ -7951,6 +8002,8 @@ _MERGE_USER_COLUMN_SQL = {
     "manual_sets_typed": "MAX(manual_sets_typed, ?)",
     "rank_level_seen": "MAX(rank_level_seen, ?)",
     "created_at": "MIN(created_at, ?)",
+    # Приложение было хоть у одной стороны — оно есть у слитого аккаунта.
+    "app_since": "COALESCE(app_since, ?)",
 }
 # Колонки, которые остаются у телеграм-строки без сравнения.
 _MERGE_USER_KEEP_TARGET_COLUMNS = frozenset({
@@ -8096,9 +8149,10 @@ async def link_telegram_to_app_account(
                 # а PRIMARY KEY второй не даст завести.
                 await db.execute("DELETE FROM users WHERE telegram_id = ?", (app_user_id,))
                 await db.execute(
-                    "UPDATE users SET telegram_linked = 1, username = COALESCE(?, username) "
+                    "UPDATE users SET telegram_linked = 1, username = COALESCE(?, username), "
+                    "app_since = COALESCE(app_since, ?) "
                     "WHERE telegram_id = ?",
-                    (username, telegram_id),
+                    (username, app_row["app_since"] or app_row["created_at"], telegram_id),
                 )
             await db.commit()
             return "ok"
@@ -10958,9 +11012,27 @@ async def tonnage_since(
     return total
 
 
-async def list_engagement_eligible_user_ids() -> list[tuple[int, int]]:
+# Человек с приложением: входил в него (app_since), живёт только в нём
+# (app-only) или держит привязанное устройство. Для «Уведомлений» (inbox.py).
+_APP_USER_SQL = (
+    "(u.app_since IS NOT NULL OR u.telegram_linked = 0 "
+    "OR EXISTS (SELECT 1 FROM push_tokens p WHERE p.user_id = u.telegram_id))"
+)
+
+
+def _push_pool_filter(inbox_only: bool) -> str:
+    """Пул ежедневного пуша: включившие пуши — или, при `inbox_only`,
+    выключившие их люди с приложением: им тот же сигнал ложится только в
+    «Уведомления», без Telegram и без баннера (engagement._deliver)."""
+    if inbox_only:
+        return f"u.pushes_enabled = 0 AND {_APP_USER_SQL}"
+    return "u.pushes_enabled = 1"
+
+
+async def list_engagement_eligible_user_ids(*, inbox_only: bool = False) -> list[tuple[int, int]]:
     """(telegram_id, tz_offset) for users with a finished workout who haven't
-    turned pushes off — the daily job's walk pool.
+    turned pushes off — the daily job's walk pool. `inbox_only` — the other
+    pool: app users who turned pushes off (see _push_pool_filter).
 
     The offset comes along because the job now runs hourly and sends to each user
     when it's ENGAGEMENT_HOUR *for them*; without it everyone got their "evening"
@@ -10969,7 +11041,7 @@ async def list_engagement_eligible_user_ids() -> list[tuple[int, int]]:
     cur = await conn().execute(
         "SELECT DISTINCT w.user_id, u.tz_offset FROM workouts w "
         "JOIN users u ON u.telegram_id = w.user_id "
-        "WHERE w.status = 'finished' AND u.pushes_enabled = 1"
+        f"WHERE w.status = 'finished' AND {_push_pool_filter(inbox_only)}"
     )
     return [(r["user_id"], r["tz_offset"]) for r in await cur.fetchall()]
 
@@ -10979,7 +11051,7 @@ async def list_engagement_eligible_user_ids() -> list[tuple[int, int]]:
 NEWBIE_ACTIVE_WORKOUT_HOURS = 12
 
 
-async def list_newbie_user_ids() -> list[tuple[int, str]]:
+async def list_newbie_user_ids(*, inbox_only: bool = False) -> list[tuple[int, str]]:
     """Users who never finished a workout — the separate walk pool for the newbie nudge.
 
     Disjoint from `list_engagement_eligible_user_ids` by construction (that one requires
@@ -10999,7 +11071,7 @@ async def list_newbie_user_ids() -> list[tuple[int, str]]:
     fresh_since = (_utc_now() - dt.timedelta(hours=NEWBIE_ACTIVE_WORKOUT_HOURS)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT u.telegram_id, u.created_at, u.tz_offset FROM users u "
-        "WHERE u.pushes_enabled = 1 AND NOT EXISTS ("
+        f"WHERE {_push_pool_filter(inbox_only)} AND NOT EXISTS ("
         "SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id "
         "AND (w.status = 'finished' OR (w.status = 'active' "
         "AND datetime(w.started_at) >= datetime(?))))",
@@ -12485,6 +12557,99 @@ async def record_push(telegram_id: int, category: str, text: str, sent_on: str) 
             (telegram_id, category, text, now_iso(), sent_on),
         )
         await conn().commit()
+
+
+# ---------- «Уведомления» в приложении (таблица inbox, см. inbox.py) ----------
+
+
+async def is_app_user(user_id: int) -> bool:
+    """Было ли у человека iOS-приложение (см. _APP_USER_SQL)."""
+    cur = await conn().execute(
+        f"SELECT 1 FROM users u WHERE u.telegram_id = ? AND {_APP_USER_SQL}", (user_id,)
+    )
+    return await cur.fetchone() is not None
+
+
+async def add_inbox_item(
+    user_id: int, category: str, title: str, body: str, route: Optional[dict], lang: str
+) -> int:
+    """Положить уведомление в «Уведомления». Возвращает id строки — его
+    приложение получает в пуше (`inbox_id`) и по нему отмечает прочитанным."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO inbox (user_id, category, title, body, route, lang, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id, category, title, body,
+                json.dumps(route, ensure_ascii=False) if route else None,
+                lang, now_iso(),
+            ),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_inbox(
+    user_id: int, lang: str, *, before_id: Optional[int] = None, limit: int = 30
+) -> list[aiosqlite.Row]:
+    """Свежие сверху; `before_id` — курсор следующей страницы. Строки другого
+    языка не отдаются (см. схему inbox)."""
+    params: list = [user_id, lang]
+    where = "user_id = ? AND lang = ?"
+    if before_id is not None:
+        where += " AND id < ?"
+        params.append(before_id)
+    cur = await conn().execute(
+        f"SELECT * FROM inbox WHERE {where} ORDER BY id DESC LIMIT ?", (*params, limit)
+    )
+    return await cur.fetchall()
+
+
+async def count_inbox_unread(user_id: int, lang: str) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM inbox WHERE user_id = ? AND lang = ? AND read_at IS NULL",
+        (user_id, lang),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def get_inbox_item(user_id: int, item_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM inbox WHERE id = ? AND user_id = ?", (item_id, user_id)
+    )
+    return await cur.fetchone()
+
+
+async def mark_inbox_read(
+    user_id: int, *, item_id: Optional[int] = None, category: Optional[str] = None
+) -> int:
+    """Отметить прочитанным: одну строку (`item_id`), все строки категории
+    (`category` — например, ответы поддержки, когда открыли переписку) или все
+    непрочитанные человека. Чужая или уже прочитанная строка — 0, не ошибка."""
+    where = "user_id = ? AND read_at IS NULL"
+    params: list = [user_id]
+    if item_id is not None:
+        where += " AND id = ?"
+        params.append(item_id)
+    if category is not None:
+        where += " AND category = ?"
+        params.append(category)
+    async with _write_lock:
+        cur = await conn().execute(
+            f"UPDATE inbox SET read_at = ? WHERE {where}", (now_iso(), *params)
+        )
+        await conn().commit()
+    return cur.rowcount
+
+
+async def prune_old_inbox(retention_days: int) -> int:
+    """Выкинуть уведомления старше retention_days (config.INBOX_RETENTION_DAYS)."""
+    cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM inbox WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
 
 
 async def get_announcement_text_hash(key: str) -> str | None:

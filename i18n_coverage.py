@@ -240,6 +240,11 @@ LOCALIZED: list[str] = [
     # подсказка и подписи — weekly.* через i18n.t внутри use_lang(users.lang).
     "weekly_summary.py",
     "api_v1_weekly.py",
+    # «Уведомления» (inbox.py, REST /v1/inbox): текст строки приходит уже
+    # готовым на языке пуша от отправителя, ошибка — inbox.error.* через
+    # ключ каталога; своих литералов нет.
+    "inbox.py",
+    "api_v1_inbox.py",
     # Сервис для тренеров (iOS, REST /v1/coach*): правила и AI-сводка —
     # coach_service, HTTP — api_v1_coach. Тексты ошибок, пуш и промпт сводки —
     # api.error.* и coach.* через i18n.t; своих литералов нет.
