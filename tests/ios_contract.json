@@ -805,6 +805,23 @@
     }
    }
   },
+  "CoachAIProgramResult": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "programId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "dayCount": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
   "CoachAISummary": {
    "file": "TrainingLog/Models/CoachModels.swift",
    "fields": {
@@ -4317,6 +4334,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.buildClientProgram",
+   "method": "POST",
+   "path": "/coach/clients/{}/programs/ai",
+   "root": "CoachAIProgramResult",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.coachClientProgress",
    "method": "GET",
    "path": "/coach/clients/{}/progress",
@@ -5052,5 +5076,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "6b46b52b409e5d75443174cdc372346cfe65a2e1"
+ "_ios_commit": "9ec2099484b27f464ee5df17c692f31b0fdb590c"
 }
