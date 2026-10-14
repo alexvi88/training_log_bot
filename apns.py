@@ -158,6 +158,8 @@ async def send_alert(
     *,
     category: Optional[str] = None,
     route: Optional[dict] = None,
+    inbox_id: Optional[int] = None,
+    badge: Optional[int] = None,
 ) -> bool:
     """Отправить один alert-пуш. Никогда не бросает исключение — падение
     APNs не должно ронять вызывающий код (тот же контракт, что у
@@ -180,6 +182,12 @@ async def send_alert(
     как есть. None — ключа нет вовсе, и приложение по тапу ведёт себя как
     до маршрутов (просто открывается), так что старые сборки его не
     замечают.
+
+    `inbox_id` — строка этого же пуша в «Уведомлениях» (db.inbox, inbox.py):
+    приложение по тапу отмечает её прочитанной. `badge` — число на иконке
+    приложения (`aps.badge`): сколько непрочитанных в «Уведомлениях» с этим
+    пушем. None — ключа нет, и число на иконке пуш не трогает. Оба ставит
+    inbox.deliver, а не вызывающий.
     """
     if not is_configured():
         return False
@@ -200,6 +208,10 @@ async def send_alert(
         headers["apns-collapse-id"] = category[:64]
 
     payload: dict = {"aps": {"alert": {"title": title, "body": body}}}
+    if badge is not None:
+        payload["aps"]["badge"] = max(0, int(badge))
+    if inbox_id is not None:
+        payload["inbox_id"] = int(inbox_id)
     if route:
         payload["route"] = route
     if category:

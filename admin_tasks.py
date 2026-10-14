@@ -696,7 +696,7 @@ def _mark_retention_ok() -> None:
 async def _run_retention_cleanup() -> bool:
     """Стереть то, что дольше положенного лежит в базе — стоимость AI-вызовов,
     сырой лог действий, продуктовые события, отчёты о сбоях iOS, отметки о показанных предупреждениях лимита, архив
-    прошлых разговоров с тренером, воскресные разборы недели, AI-сводки тренеров, партии мини-игр, отданные ссылки на общие тренировки.
+    прошлых разговоров с тренером, воскресные разборы недели, AI-сводки тренеров, «Уведомления» приложения, партии мини-игр, отданные ссылки на общие тренировки.
 
     Каждая чистка — в своём try/except: раньше первое же исключение (например,
     на одной таблице) обрывало всю цепочку, и остальные таблицы не чистились вовсе,
@@ -718,6 +718,8 @@ async def _run_retention_cleanup() -> bool:
         ("weekly_digests", lambda: db.prune_old_weekly_digests(config.WEEKLY_DIGEST_RETENTION_DAYS)),
         # Последние AI-сводки тренеров (см. config.COACH_SUMMARY_RETENTION_DAYS).
         ("coach_summaries", lambda: db.prune_old_coach_summaries(config.COACH_SUMMARY_RETENTION_DAYS)),
+        # «Уведомления» в приложении (см. config.INBOX_RETENTION_DAYS).
+        ("inbox", lambda: db.prune_old_inbox(config.INBOX_RETENTION_DAYS)),
         # Пачки импорта и журнал объединений — ровно столько, сколько их можно
         # отменить (см. config.IMPORT_BATCH_RETENTION_DAYS).
         ("import_batches", lambda: db.prune_old_import_batches(config.IMPORT_BATCH_RETENTION_DAYS)),

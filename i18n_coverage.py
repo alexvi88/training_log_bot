@@ -228,6 +228,9 @@ LOCALIZED: list[str] = [
     # держит вовсе (см. NEVER_LOCALIZED у api_v1_import.py — тот же случай
     # с другой стороны, импорт вместо экспорта).
     "csv_export.py",
+    # Полная выгрузка ZIP для бота и /v1: колонки машинные, README.txt —
+    # export.readme.* через i18n.t_in(users.lang); своей кириллицы не держит.
+    "full_export.py",
     # Импорт из произвольного текста (/v1/import/text/convert): промпт модели
     # по-английски, наружу — только строки CSV с именами, как их написал сам
     # атлет; человеческий текст ошибок — в api_v1_import через ключи каталога.
@@ -240,6 +243,11 @@ LOCALIZED: list[str] = [
     # подсказка и подписи — weekly.* через i18n.t внутри use_lang(users.lang).
     "weekly_summary.py",
     "api_v1_weekly.py",
+    # «Уведомления» (inbox.py, REST /v1/inbox): текст строки приходит уже
+    # готовым на языке пуша от отправителя, ошибка — inbox.error.* через
+    # ключ каталога; своих литералов нет.
+    "inbox.py",
+    "api_v1_inbox.py",
     # Сервис для тренеров (iOS, REST /v1/coach*): правила и AI-сводка —
     # coach_service, HTTP — api_v1_coach. Тексты ошибок, пуш и промпт сводки —
     # api.error.* и coach.* через i18n.t; своих литералов нет.

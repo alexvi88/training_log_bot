@@ -11,6 +11,7 @@ import datetime as dt
 import pytest
 
 import apns
+import db
 import engagement
 import push_ios
 import push_texts
@@ -108,16 +109,21 @@ def test_every_ios_category_is_decided():
 async def _capture_send(monkeypatch) -> list[dict]:
     sent: list[dict] = []
 
-    async def fake_send_alert(user_id, device_token, title, body, *, category=None, route=None):
+    async def fake_send_alert(user_id, device_token, title, body, *, category=None, route=None, **_kw):
         sent.append({"category": category, "route": route})
         return True
 
     monkeypatch.setattr(apns, "send_alert", fake_send_alert)
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
 
-    async def tokens(_telegram_id):
+    async def tokens(_telegram_id, _platform="ios"):
         return ["devtoken"]
 
-    monkeypatch.setattr(engagement, "_ios_device_tokens", tokens)
+    async def app_user(_telegram_id):
+        return True
+
+    monkeypatch.setattr(db, "get_push_tokens", tokens)
+    monkeypatch.setattr(db, "is_app_user", app_user)
     return sent
 
 

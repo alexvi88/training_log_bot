@@ -96,6 +96,11 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
     "coach_invite": frozenset({"action"}),
+    # «Уведомления» в «Профиле» (api_v1_inbox.py): открыл раздел и тапнул
+    # карточку — с категорией пуша (как у push_open), без текста. По паре
+    # видно, читают ли раздел те, кто выключил пуши, и что в нём открывают.
+    "inbox_open": frozenset(),
+    "inbox_item_open": frozenset({"category"}),
 }
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")

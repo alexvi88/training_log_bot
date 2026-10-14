@@ -56,6 +56,7 @@ import api_v1_games
 import api_v1_hall_of_fame
 import api_v1_history
 import api_v1_import
+import api_v1_inbox
 import api_v1_media
 import api_v1_programs
 import api_v1_progress
@@ -413,6 +414,10 @@ async def me(request: Request) -> JSONResponse:
             # ответы поддержки. Оба поля новые, старые сборки их не читают.
             "is_support_admin": api_v1_support.is_support_admin(user_id),
             "support_unread": await api_v1_support.unread_for(user_id),
+            # Непрочитанные в «Уведомлениях» (api_v1_inbox.py) — бейдж на
+            # «Профиле» и число на иконке, обновляется на каждом заходе в
+            # приложение. Новое поле, старые сборки его не читают.
+            "inbox_unread": await api_v1_inbox.unread_for(user_id),
         }
     )
 
@@ -2332,6 +2337,7 @@ routes += (
     + api_v1_media.routes
     + api_v1_feedback.routes
     + api_v1_support.routes
+    + api_v1_inbox.routes
     + api_v1_funnel.routes
     + api_v1_dashboard.routes
     + api_v1_weekly.routes

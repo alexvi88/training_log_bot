@@ -55,7 +55,7 @@ def _setup(monkeypatch):
 def sent(monkeypatch):
     calls: list[dict] = []
 
-    async def fake_send_alert(user_id, device_token, title, body, *, category=None, route=None):
+    async def fake_send_alert(user_id, device_token, title, body, *, category=None, route=None, **_kw):
         calls.append({
             "user_id": user_id, "token": device_token, "title": title, "body": body,
             "category": category, "route": route,
@@ -309,7 +309,10 @@ async def test_english_athlete_gets_english_copy(fresh_db, monkeypatch, sent):
     assert not re.search("[А-Яа-яЁё]", sent[0]["title"] + sent[0]["body"])
 
 
-async def test_rejected_by_apple_is_not_counted_as_asked(fresh_db, monkeypatch):
+async def test_rejected_by_apple_still_lands_in_inbox_once(fresh_db, monkeypatch):
+    """Apple баннер не принял — вопрос всё равно лёг во «Уведомления»
+    приложения (inbox.deliver): человек его увидит, поэтому считается
+    заданным, и следующий тик окна второй строки не кладёт."""
     db = fresh_db
     uid = await _athlete(db)
     await _workout(db, uid, _utc("2026-10-14T10:00"))
@@ -319,9 +322,12 @@ async def test_rejected_by_apple_is_not_counted_as_asked(fresh_db, monkeypatch):
 
     monkeypatch.setattr(apns, "send_alert", reject)
     await _run(monkeypatch, _utc("2026-10-14T19:00"))
+    await _run(monkeypatch, _utc("2026-10-14T20:00"))
 
-    assert (await db.get_user(uid))["feedback_push_at"] is None
-    assert not await db.has_push_today(uid, "2026-10-14")
+    assert (await db.get_user(uid))["feedback_push_at"] is not None
+    assert await db.has_push_today(uid, "2026-10-14")
+    rows = await db.list_inbox(uid, "ru")
+    assert [r["category"] for r in rows] == [push_texts.FEEDBACK_ASK]
 
 
 async def test_daily_tick_runs_the_feedback_track_after_signal_pushes(fresh_db, monkeypatch, sent):
