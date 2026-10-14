@@ -1007,7 +1007,11 @@ async def _send_feedback_push(telegram_id: int, local_date: dt.date, *, first: b
             accepted += 1
     if not accepted:
         return False
-    await db.record_push(telegram_id, category, f"{title}\n{body}", local_date.isoformat())
+    # Только iOS-баннер: в счёт пушей Telegram в сводке не идёт (доставку
+    # считает push_sent из apns.send_alert).
+    await db.record_push(
+        telegram_id, category, f"{title}\n{body}", local_date.isoformat(), channel=None
+    )
     await db.mark_feedback_push_sent(telegram_id, _utc_now().isoformat(timespec="seconds"))
     await product_metrics.track(
         telegram_id, "feedback_push_sent", {"round": "first" if first else "repeat"},
