@@ -41,6 +41,7 @@ import jwt
 import config
 import db
 import ops_alerts
+import product_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,19 @@ async def _get_client() -> Optional[httpx.AsyncClient]:
     return _client
 
 
+async def _track_sent(user_id: int, category: Optional[str], ok: bool) -> None:
+    """Событие push_sent для суточной сводки (product_metrics): одна попытка
+    на одно устройство — категория и принял ли Apple (HTTP 200). Без текста
+    пуша и без device token. Пишется только когда запрос к Apple реально
+    ушёл: «APNs не настроен» — не попытка доставки."""
+    await product_metrics.track(
+        user_id,
+        product_metrics.PUSH_SENT_EVENT,
+        {"category": product_metrics.push_category(category), "ok": ok},
+        platform=product_metrics.PLATFORM_IOS,
+    )
+
+
 def _reason(response: httpx.Response) -> str:
     try:
         return str(response.json().get("reason", ""))
@@ -200,8 +214,10 @@ async def send_alert(
     except httpx.HTTPError:
         logger.exception("APNs: сетевая ошибка при отправке пуша пользователю %s", user_id)
         ops_alerts.record_apns_result(False)
+        await _track_sent(user_id, category, False)
         return False
 
+    await _track_sent(user_id, category, response.status_code == 200)
     if response.status_code == 200:
         ops_alerts.record_apns_result(True)
         return True

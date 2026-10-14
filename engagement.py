@@ -648,7 +648,9 @@ async def _deliver(
     # при телеграмной отправке: без неё has_push_today не сработает и баннер
     # уедет повторно на следующем тике того же дня.
     if user is not None and not user["telegram_linked"]:
-        await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+        await db.record_push(
+            telegram_id, decision.category, decision.text, local_date.isoformat(), channel=None
+        )
         return
 
     try:

@@ -485,7 +485,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
         if await _not_for(ann, telegram_id, user):
             # Не отправка, а отметка «этому не нужно» — иначе следующий прогон
             # снова увидит его неотправленным. В счёт доставленных не идёт.
-            await db.record_push(telegram_id, ann.key, ann.text, today)
+            await db.record_push(telegram_id, ann.key, ann.text, today, channel=None)
             continue
         if user is not None and not user["telegram_linked"]:
             # App-only атлет — чата с ботом нет, Telegram-попытка тут ничего
@@ -498,7 +498,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
             except Exception:
                 logger.exception("Announcement %s: APNs banner failed for user %s", ann.key, telegram_id)
             sent += 1
-            await db.record_push(telegram_id, ann.key, ann.text, today)
+            await db.record_push(telegram_id, ann.key, ann.text, today, channel=None)
             continue
         try:
             await _send_one(bot, telegram_id, ann)

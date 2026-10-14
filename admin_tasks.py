@@ -22,6 +22,7 @@ import config
 import db
 import formatting
 import ops_alerts
+import product_metrics
 import timeutil
 
 logger = logging.getLogger(__name__)
@@ -414,6 +415,53 @@ async def _repair_stale_backup(bot: Bot, age: float) -> None:
         await bot.send_message(chat_id=config.ADMIN_ID, text=text)
 
 
+PUSH_TOP_CATEGORIES = 3
+
+
+def _pct(part: float, whole: float) -> str:
+    return f"{part / whole:.0%}"
+
+
+async def _build_push_report(day: dt.date) -> str:
+    """Блок «Пуши» за сутки — тем же расчётом, что строки сводки
+    (product_metrics.push_stats), без своих аккаунтов. «Потренировались за
+    24 ч» — за позавчера: окно вчерашних пушей ещё не закрылось."""
+    own = config.limit_preview_ids()
+    stats = await product_metrics.push_stats(day, own)
+    sent = stats["sent_tg"] + stats["sent_ios"]
+    lines = ["", "📣 Пуши"]
+    if not (sent or stats["failed_ios"]):
+        lines.append("Не уходили")
+    else:
+        lines.append(f"Отправлено: {sent} (Telegram {stats['sent_tg']} · iOS {stats['sent_ios']})")
+        if stats["users"]:
+            lines.append(
+                f"Получили: {stats['users']} чел., {sent / stats['users']:.1f} на человека"
+            )
+        if stats["sent_ios"]:
+            lines.append(
+                f"CTR iOS: {_pct(stats['opens'], stats['sent_ios'])} "
+                f"({stats['opens']} из {stats['sent_ios']})"
+            )
+        if stats["failed_ios"]:
+            lines.append(f"Не доставлено на iOS: {stats['failed_ios']}")
+    before = day - dt.timedelta(days=1)
+    converted, pushed = await product_metrics.push_to_workout(before, own)
+    if pushed:
+        lines.append(
+            f"Потренировались за 24 ч после пуша ({before.strftime('%d.%m')}): "
+            f"{_pct(converted, pushed)} ({converted} из {pushed})"
+        )
+    top = sorted(
+        ((cat, c) for cat, c in stats["categories"].items() if c["sent"]),
+        key=lambda item: (-item[1]["sent"], item[0]),
+    )[:PUSH_TOP_CATEGORIES]
+    for category, counts in top:
+        ctr = f", CTR {_pct(counts['opens'], counts['ios'])}" if counts["ios"] else ""
+        lines.append(f"  └ {category}: {counts['sent']}{ctr}")
+    return "\n".join(lines)
+
+
 def _format_trained_users(rows) -> str:
     """Список тех, кто закрыл тренировку — под цифрой в суточном отчёте:
     сколько человек тренировалось само по себе не говорит, кто именно."""
@@ -434,6 +482,7 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
     trained = await db.daily_trained_users(yesterday_str)
     cost_report = await _build_cost_report(yesterday_str)
     who_report = _format_trained_users(trained)
+    push_report = await _build_push_report(yesterday)
     await bot.send_message(
         chat_id=config.ADMIN_ID,
         text=(
@@ -441,6 +490,7 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
             f"Потренировалось пользователей: {stats['users']}\n"
             f"Завершено тренировок: {stats['workouts']}"
             f"{who_report}"
+            f"{push_report}"
             f"{cost_report}"
         ),
     )

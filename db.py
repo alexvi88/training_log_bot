@@ -331,7 +331,12 @@ CREATE TABLE IF NOT EXISTS pushes (
     category TEXT NOT NULL,
     text TEXT NOT NULL,
     sent_at TEXT NOT NULL,
-    sent_on TEXT
+    sent_on TEXT,
+    -- 'tg' — сообщение в Telegram реально ушло; NULL — запись-отметка без
+    -- телеграмной отправки (app-only атлет, которому ушёл только APNs-баннер,
+    -- или «этот анонс ему не нужен»). iOS-доставки сюда не пишутся — они
+    -- событием push_sent (apns.send_alert, product_metrics).
+    channel TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
@@ -1853,6 +1858,15 @@ async def _migrate_schema() -> None:
         # Best available approximation for rows sent before the column existed:
         # the server date they were written on.
         await _conn.execute("UPDATE pushes SET sent_on = date(sent_at) WHERE sent_on IS NULL")
+    if "channel" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN channel TEXT")
+        # Лучшее приближение для старых строк: у кого есть чат с ботом, тому
+        # ушло сообщение в Telegram. Отметки «анонс не нужен» так попадут в
+        # tg — старые сутки в сводке и так не пересчитываются.
+        await _conn.execute(
+            "UPDATE pushes SET channel = 'tg' WHERE channel IS NULL AND telegram_id IN "
+            "(SELECT telegram_id FROM users WHERE telegram_linked = 1)"
+        )
     # has_announcement_push/count_announcement_recipients/list_announcement_recipients
     # all filter `pushes` by category alone (no telegram_id, no date), and the
     # table only grows — every announcement/report checks its own recipient
@@ -10616,7 +10630,10 @@ async def active_users_by_platform(day: str) -> dict[int, set[str]]:
     start, end = _day_bounds(day)
     out: dict[int, set[str]] = {}
     queries = (
-        "SELECT user_id, platform FROM analytics_events WHERE created_at >= ? AND created_at < ?",
+        # push_sent пишет сервер, когда шлёт баннер: получить пуш — не значит
+        # быть активным.
+        "SELECT user_id, platform FROM analytics_events WHERE created_at >= ? AND created_at < ? "
+        "AND event != 'push_sent'",
         "SELECT telegram_id, source FROM user_events WHERE created_at >= ? AND created_at < ?",
         "SELECT w.user_id, 'sets' FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id WHERE s.created_at >= ? AND s.created_at < ?",
@@ -10694,6 +10711,65 @@ async def day_activity_counts(day: str, exclude: set[int]) -> dict[str, float]:
     )
     for step, n in await cur.fetchall():
         out[f"funnel_{step}"] = float(n)
+    return out
+
+
+async def push_deliveries(day: str, exclude: set[int]) -> list[tuple]:
+    """Доставленные и недоставленные пуши суток без своих аккаунтов:
+    (user_id, channel 'tg'|'ios', category, sent_at, ok). Telegram — строки
+    pushes с channel='tg' (недоставленные туда не пишутся вовсе); iOS —
+    серверные события push_sent из apns.send_alert, по одному на устройство."""
+    start, end = _day_bounds(day)
+    skip = sorted(exclude) or [-1]
+    marks = ",".join("?" * len(skip))
+    out: list[tuple] = []
+    cur = await conn().execute(
+        "SELECT telegram_id, category, sent_at FROM pushes WHERE channel = 'tg' "
+        f"AND sent_at >= ? AND sent_at < ? AND telegram_id NOT IN ({marks})",
+        (start, end, *skip),
+    )
+    for uid, category, sent_at in await cur.fetchall():
+        out.append((uid, "tg", category, sent_at, True))
+    cur = await conn().execute(
+        "SELECT user_id, json_extract(props, '$.category'), created_at, "
+        "COALESCE(json_extract(props, '$.ok'), 0) FROM analytics_events "
+        f"WHERE event = 'push_sent' AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})",
+        (start, end, *skip),
+    )
+    for uid, category, created_at, ok in await cur.fetchall():
+        out.append((uid, "ios", category, created_at, bool(ok)))
+    return out
+
+
+async def push_open_categories(day: str, exclude: set[int]) -> list[Optional[str]]:
+    """Категория каждого тапа по пушу за сутки (событие push_open из приложения)."""
+    start, end = _day_bounds(day)
+    skip = sorted(exclude) or [-1]
+    marks = ",".join("?" * len(skip))
+    cur = await conn().execute(
+        "SELECT json_extract(props, '$.category') FROM analytics_events WHERE event = 'push_open' "
+        f"AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})",
+        (start, end, *skip),
+    )
+    return [row[0] for row in await cur.fetchall()]
+
+
+async def workout_moments(user_ids: set[int], since: str, until: str) -> list[tuple[int, str]]:
+    """Начала и концы тренировок этих людей в окне [since, until) —
+    (user_id, момент). Импорт из чужих приложений не в счёт: его время —
+    история, а не ответ на пуш."""
+    if not user_ids:
+        return []
+    ids = sorted(user_ids)
+    marks = ",".join("?" * len(ids))
+    out: list[tuple[int, str]] = []
+    for column in ("started_at", "finished_at"):
+        cur = await conn().execute(
+            f"SELECT user_id, {column} FROM workouts WHERE source != 'import' "
+            f"AND {column} >= ? AND {column} < ? AND user_id IN ({marks})",
+            (since, until, *ids),
+        )
+        out.extend((row[0], row[1]) for row in await cur.fetchall())
     return out
 
 
@@ -12476,13 +12552,27 @@ async def scale_ai_undo_actions(telegram_id: int, factor: float) -> int:
     return changed
 
 
-async def record_push(telegram_id: int, category: str, text: str, sent_on: str) -> None:
+PUSH_CHANNEL_TG = "tg"
+
+
+async def record_push(
+    telegram_id: int,
+    category: str,
+    text: str,
+    sent_on: str,
+    *,
+    channel: Optional[str] = PUSH_CHANNEL_TG,
+) -> None:
     """Log a delivered push. `sent_on` is the recipient's own calendar date
-    (YYYY-MM-DD) — see has_push_today."""
+    (YYYY-MM-DD) — see has_push_today. `channel` — 'tg', если сообщение в
+    Telegram реально ушло; None — отметка без телеграмной отправки (app-only
+    атлет, «анонс не нужен»): дедупу она нужна, а в счёт пушей Telegram в
+    сводке (product_metrics) не идёт."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
-            (telegram_id, category, text, now_iso(), sent_on),
+            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on, channel) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (telegram_id, category, text, now_iso(), sent_on, channel),
         )
         await conn().commit()
 
