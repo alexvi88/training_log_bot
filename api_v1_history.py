@@ -21,12 +21,13 @@ import datetime as dt
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
 import api_v1_common as common
 import csv_export
 import db
+import full_export
 import timeutil
 import workout_card
 from api_v1_common import JSONResponse
@@ -144,9 +145,24 @@ async def export_csv(request: Request) -> Response:
     )
 
 
+async def export_archive(request: Request) -> Response:
+    """«📤 Экспорт» и «📦 Сначала выгрузить» в приложении — весь дневник ZIP-
+    архивом (full_export.build_archive), тот же файл, что шлёт бот. Отдаётся
+    потоком из временного файла: у многолетнего дневника архив не держится в
+    памяти целиком. `/export/csv` выше остаётся для старых сборок."""
+    user_id = await _authed_user_id(request)
+    f, filename = await full_export.build_archive(user_id)
+    return StreamingResponse(
+        full_export.iter_file(f),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 routes = [
     Route("/workouts/{workout_id:int}/card", get_workout_card, methods=["GET"]),
     Route("/workouts/calendar", get_history_calendar, methods=["GET"]),
     Route("/workouts/visits", get_visits, methods=["GET"]),
     Route("/export/csv", export_csv, methods=["GET"]),
+    Route("/export/archive", export_archive, methods=["GET"]),
 ]

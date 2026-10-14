@@ -705,6 +705,18 @@ def yes_no_keyboard(
     return b.as_markup()
 
 
+def delete_account_keyboard() -> InlineKeyboardMarkup:
+    """Экран «Удалить аккаунт»: сверху — «📦 Сначала выгрузить» (архив всего
+    дневника, full_export.py), под ней — сам выбор. Выгрузка стоит отдельной
+    строкой и первой: это совет экрана, его нажимают до решения."""
+    b = InlineKeyboardBuilder()
+    b.button(text=i18n.t("btn.delete_export_first"), callback_data="settings:delete:export")
+    b.button(text=i18n.t("settings.delete.yes"), callback_data="settings:deleteyes")
+    b.button(text=i18n.t("btn.cancel"), callback_data="settings:menu")
+    b.adjust(1, 2)
+    return b.as_markup()
+
+
 def weight_confirm_keyboard() -> InlineKeyboardMarkup:
     """"That weight looks like a typo — record it?" before a suspicious set is
     written (see handlers.workout._weight_confirm_prompt). "Нет" throws the

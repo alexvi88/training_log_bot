@@ -10171,6 +10171,136 @@ async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+# ---------- полная выгрузка (full_export.py) ----------
+#
+# Всё, что атлет завёл сам, по разделам архива. Каждый запрос — строго по
+# своему user_id/telegram_id: в архив не попадает ничего чужого. Строки отдаются
+# порциями (`_iter_rows`), а не fetchall: у многолетнего дневника десятки
+# тысяч подходов, и держать их все в памяти ради записи в файл незачем.
+
+_EXPORT_CHUNK = 500
+
+
+async def _iter_rows(sql: str, params: tuple):
+    cur = await conn().execute(sql, params)
+    try:
+        while True:
+            rows = await cur.fetchmany(_EXPORT_CHUNK)
+            if not rows:
+                return
+            for row in rows:
+                yield row
+    finally:
+        await cur.close()
+
+
+def iter_export_workout_rows(user_id: int):
+    """Подходы всех тренировок — законченных и идущей, — с заметкой к
+    тренировке и к упражнению. Тренировка без подходов, но с заметкой, и
+    заметка к упражнению без единого подхода приходят своей строкой с пустыми
+    полями подхода: иначе текст, который атлет написал, пропал бы из архива."""
+    sql = (
+        "SELECT * FROM ("
+        " SELECT w.id AS workout_id, w.started_at, w.finished_at, w.status, w.title,"
+        "  w.note AS workout_note, e.display_name AS exercise, en.note AS exercise_note,"
+        "  s.round_index, s.weight, s.reps, s.rpe, s.id AS sort_id"
+        " FROM sets s"
+        " JOIN workout_blocks b ON b.id = s.block_id"
+        " JOIN workouts w ON w.id = b.workout_id"
+        " JOIN exercises e ON e.id = s.exercise_id"
+        " LEFT JOIN exercise_notes en ON en.workout_id = w.id AND en.exercise_id = s.exercise_id"
+        " WHERE w.user_id = ?"
+        " UNION ALL"
+        " SELECT w.id, w.started_at, w.finished_at, w.status, w.title, w.note,"
+        "  e.display_name, en.note, NULL, NULL, NULL, NULL, NULL"
+        " FROM exercise_notes en"
+        " JOIN workouts w ON w.id = en.workout_id"
+        " JOIN exercises e ON e.id = en.exercise_id"
+        " WHERE w.user_id = ? AND NOT EXISTS ("
+        "  SELECT 1 FROM sets s2 JOIN workout_blocks b2 ON b2.id = s2.block_id"
+        "  WHERE b2.workout_id = w.id AND s2.exercise_id = en.exercise_id)"
+        " UNION ALL"
+        " SELECT w.id, w.started_at, w.finished_at, w.status, w.title, w.note,"
+        "  NULL, NULL, NULL, NULL, NULL, NULL, NULL"
+        " FROM workouts w"
+        " WHERE w.user_id = ? AND COALESCE(TRIM(w.note), '') != ''"
+        " AND NOT EXISTS (SELECT 1 FROM sets s3 JOIN workout_blocks b3 ON b3.id = s3.block_id"
+        "  WHERE b3.workout_id = w.id)"
+        " AND NOT EXISTS (SELECT 1 FROM exercise_notes en3 WHERE en3.workout_id = w.id)"
+        ") ORDER BY started_at, workout_id, sort_id IS NULL, sort_id"
+    )
+    return _iter_rows(sql, (user_id, user_id, user_id))
+
+
+def iter_export_bodyweight_rows(user_id: int):
+    return _iter_rows(
+        "SELECT logged_at, weight FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at, id",
+        (user_id,),
+    )
+
+
+def iter_export_program_rows(user_id: int):
+    """Программы → дни → упражнения → схема, по строке на упражнение дня.
+    Программа без дней и день без упражнений — строкой с пустым хвостом.
+    `source_ref` (у программы из визитки там чужой @username) не выгружаем."""
+    return _iter_rows(
+        "SELECT p.id AS program_id, p.name AS program, p.description AS program_description,"
+        " p.source AS program_source, p.deload_every_weeks, p.created_at,"
+        " r.id AS day_id, r.name AS day, r.day_order,"
+        " re.order_index AS exercise_order, e.display_name AS exercise,"
+        " re.target, re.progression"
+        " FROM programs p"
+        " LEFT JOIN routines r ON r.program_id = p.id AND r.user_id = p.user_id"
+        " LEFT JOIN routine_exercises re ON re.routine_id = r.id"
+        " LEFT JOIN exercises e ON e.id = re.exercise_id"
+        " WHERE p.user_id = ?"
+        " ORDER BY p.created_at, p.id, r.day_order, r.id, re.order_index, re.id",
+        (user_id,),
+    )
+
+
+def iter_export_exercise_rows(user_id: int):
+    return _iter_rows(
+        "SELECT e.id, e.display_name, e.original_name, g.name AS group_name, e.equipment,"
+        " e.unilateral, e.bodyweight_load, e.notes, e.description, e.is_archived, e.created_at"
+        " FROM exercises e LEFT JOIN muscle_groups g ON g.id = e.primary_group_id"
+        " WHERE e.user_id = ? AND e.is_template = 0 ORDER BY e.id",
+        (user_id,),
+    )
+
+
+async def export_exercise_aliases(user_id: int) -> dict[int, list[str]]:
+    cur = await conn().execute(
+        "SELECT exercise_id, folded_name FROM exercise_aliases WHERE user_id = ? "
+        "ORDER BY exercise_id, folded_name",
+        (user_id,),
+    )
+    out: dict[int, list[str]] = {}
+    for row in await cur.fetchall():
+        out.setdefault(row["exercise_id"], []).append(row["folded_name"])
+    return out
+
+
+def iter_export_food_rows(user_id: int):
+    return _iter_rows(
+        "SELECT eaten_on, description, details, calories, protein, fat, carbs, source, created_at"
+        " FROM food_entries WHERE telegram_id = ? ORDER BY eaten_on, id",
+        (user_id,),
+    )
+
+
+def iter_export_coach_comment_rows(user_id: int):
+    """Комментарии тренера к СВОИМ тренировкам атлета — тот же текст, что он
+    видит под тренировкой (GET /v1/workouts/{id}/coach-comments). Кто тренер,
+    в выгрузку не идёт: это уже данные другого человека."""
+    return _iter_rows(
+        "SELECT w.started_at AS workout_started_at, c.created_at, c.text"
+        " FROM coach_comments c JOIN workouts w ON w.id = c.workout_id"
+        " WHERE c.client_id = ? AND w.user_id = ? ORDER BY w.started_at, c.id",
+        (user_id, user_id),
+    )
+
+
 # ---------- admin: daily stats & backup ----------
 
 async def daily_workout_stats(date_str: str) -> dict[str, int]:
