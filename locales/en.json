@@ -2568,5 +2568,8 @@
   "games.badge.runner_1km.title": "One Kilometer",
   "games.badge.runner_1km.description": "Ran 1000 m in one run",
   "games.badge.runner_1km.goal": "Run 1000 m in one run",
-  "api.error.unknown_game": "I don't know that game. Update the app and try again"
+  "api.error.unknown_game": "I don't know that game. Update the app and try again",
+  "push.ios.feedback_ask.title": "HOW'S THE DIARY?",
+  "push.ios.feedback_ask.1": "HEY ATHLETE! Tell me straight — what bugs you, what's missing. I read every word.",
+  "push.ios.feedback_ask.2": "HEY ATHLETE! What's getting in your way in the diary? Say it straight — I read it myself."
 }

@@ -58,6 +58,7 @@ import db
 import formatting
 import i18n
 import keyboards
+import product_metrics
 import push_ios
 import push_texts
 import timeutil
@@ -864,10 +865,153 @@ async def _send_daily_pushes(bot: Bot) -> None:
                 except Exception:
                     logger.exception("Failed to deliver newbie push for user %s", telegram_id)
 
+    # После обоих пулов выше и в том же тике: у пуша с запросом отзыва
+    # приоритет ниже любого сигнала дневника, и раз сигнальный пуш уже ушёл
+    # сегодня, has_push_today отложит отзыв на другой день.
+    try:
+        await _send_feedback_pushes(hour)
+    except Exception:
+        logger.exception("Failed to send feedback pushes")
+
     try:
         await _maybe_send_admin_funnel_digest(bot)
     except Exception:
         logger.exception("Failed to build/send the weekly admin funnel digest")
+
+
+# ---------- «Как тебе дневник?»: запрос отзыва, только iOS ----------
+#
+# Пуш ведёт в переписку с поддержкой (api_v1_support.py) — туда, где владелец
+# отвечает. Поэтому только тем, у кого есть приложение и живой iOS-токен: в
+# Telegram его не дублируем, ответить там было бы некуда (тот же довод, что у
+# ответа поддержки, см. докстринг api_v1_support).
+#
+# Когда (решает feedback_push_due, чистая функция):
+# - первый — не раньше FEEDBACK_PUSH_DELAY_HOURS после первой законченной
+#   тренировки: человек уже видел дневник в деле, а впечатление ещё свежее;
+#   и только если последняя тренировка не старше интервала — давно ушедшего
+#   (в том числе того, кто был в базе до этого пуша) не дёргаем;
+# - дальше — не чаще раза в FEEDBACK_PUSH_INTERVAL_DAYS и только если с
+#   прошлого запроса была хотя бы одна законченная тренировка.
+#
+# Во сколько (should_send_feedback_now): с часа обычных пушей (ENGAGEMENT_HOUR
+# по местному) до начала тихих часов, у неизвестного пояса — тот же
+# UNKNOWN_TZ_SEND_HOUR_UTC. Наступил срок ночью или утром — пуш ждёт ближайшего
+# такого окна. Окно не раньше часа сигнальных пушей нарочно: в тот же тик сначала
+# решается сигнальный пуш дня, и отзыв никогда не съедает слот «серия на кону».
+#
+# Не уходит: выключившему пуши, в день, когда уже был любой пуш
+# (has_push_today), владельцу поддержки (config.ADMIN_ID — писать в поддержку
+# ему некому, его «поддержка» — входящие) и демо-аккаунтам App Review
+# (db.list_feedback_push_candidates, плюс REVIEW_ACCOUNT_IDS здесь).
+
+# Демо-аккаунт App Review: его не трогаем ни при каких условиях, даже если
+# связь с auth_identities потеряется (пул и так отсекает провайдера review_demo).
+REVIEW_ACCOUNT_IDS = frozenset({-1000000000})
+
+
+def _parse_utc(value: Optional[str]) -> Optional[dt.datetime]:
+    """Метка из базы (naive UTC, `T` или пробел, хвост пояса/долей секунды) →
+    naive datetime; мусор — None, а не исключение посреди рассылки."""
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(str(value).replace(" ", "T")[:19])
+    except ValueError:
+        return None
+
+
+def feedback_push_due(
+    now: dt.datetime,
+    first_finished_at: Optional[dt.datetime],
+    last_finished_at: Optional[dt.datetime],
+    last_asked_at: Optional[dt.datetime],
+) -> bool:
+    """Пора ли спросить отзыв (без учёта часа и дневного лимита — это отдельно).
+    Все метки — naive UTC."""
+    if first_finished_at is None or last_finished_at is None:
+        return False
+    interval = dt.timedelta(days=config.FEEDBACK_PUSH_INTERVAL_DAYS)
+    if last_asked_at is None:
+        if now - first_finished_at < dt.timedelta(hours=config.FEEDBACK_PUSH_DELAY_HOURS):
+            return False
+        return now - last_finished_at <= interval
+    if now - last_asked_at < interval:
+        return False
+    return last_finished_at > last_asked_at
+
+
+def should_send_feedback_now(tz_offset: int, hour: int) -> bool:
+    """Окно пуша с запросом отзыва: от часа обычных пушей до тихих часов по
+    местному; без пояса — тот же безопасный час UTC, что у остальных пушей."""
+    if not tz_is_known(tz_offset):
+        return _utc_now().hour == UNKNOWN_TZ_SEND_HOUR_UTC
+    local_hour = _local_now(tz_offset).hour
+    if is_quiet_hour(local_hour):
+        return False
+    return local_hour >= hour
+
+
+def _is_feedback_excluded(telegram_id: int) -> bool:
+    return telegram_id in REVIEW_ACCOUNT_IDS or (
+        config.ADMIN_ID is not None and telegram_id == config.ADMIN_ID
+    )
+
+
+async def _send_feedback_pushes(hour: int) -> None:
+    """Один проход по пулу: кому пора и у кого сейчас окно — короткий баннер
+    на каждое iOS-устройство, маршрут — переписка с поддержкой."""
+    if not apns.is_configured():
+        return
+    now = _utc_now()
+    for row in await db.list_feedback_push_candidates():
+        telegram_id = row["telegram_id"]
+        if _is_feedback_excluded(telegram_id):
+            continue
+        tz_offset = row["tz_offset"]
+        if not should_send_feedback_now(tz_offset, hour):
+            continue
+        last_asked_at = _parse_utc(row["feedback_push_at"])
+        if not feedback_push_due(
+            now, _parse_utc(row["first_finished_at"]), _parse_utc(row["last_finished_at"]), last_asked_at,
+        ):
+            continue
+        local_date = _local_now(tz_offset).date()
+        user = await db.get_user(telegram_id)
+        with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
+            try:
+                await _send_feedback_push(telegram_id, local_date, first=last_asked_at is None)
+                await asyncio.sleep(SEND_DELAY)
+            except Exception:
+                logger.exception("Failed to send the feedback push to user %s", telegram_id)
+
+
+async def _send_feedback_push(telegram_id: int, local_date: dt.date, *, first: bool) -> bool:
+    """Отправить и записать. True — Apple принял хотя бы на одно устройство.
+
+    Не принял ни одно (сеть, мёртвые токены) — ничего не пишем: в следующий
+    тик окна попробуем снова, а не будем считать человека спрошенным."""
+    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES):
+        return False
+    tokens = await _ios_device_tokens(telegram_id)
+    if not tokens:
+        return False
+    category = push_texts.FEEDBACK_ASK
+    title, body = await push_ios.ios_alert(telegram_id, category, i18n.get_lang())
+    route = push_ios.ios_route(category)
+    accepted = 0
+    for device_token in tokens:
+        if await apns.send_alert(telegram_id, device_token, title, body, category=category, route=route):
+            accepted += 1
+    if not accepted:
+        return False
+    await db.record_push(telegram_id, category, f"{title}\n{body}", local_date.isoformat())
+    await db.mark_feedback_push_sent(telegram_id, _utc_now().isoformat(timespec="seconds"))
+    await product_metrics.track(
+        telegram_id, "feedback_push_sent", {"round": "first" if first else "repeat"},
+        platform=product_metrics.PLATFORM_IOS,
+    )
+    return True
 
 
 # ---------- еженедельная сводка воронки, владельцу ----------
