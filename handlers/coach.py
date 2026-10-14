@@ -81,7 +81,11 @@ CLIENTS_PAGE_SIZE = 8
 EXERCISES_PAGE_SIZE = 8
 WORKOUTS_PAGE_SIZE = 8
 # Тренировок прямо в карточке клиента — дальше «📚 Все тренировки».
-CARD_WORKOUTS = 5
+CARD_WORKOUTS = 3
+# Столбики недель в карточке клиента: высота — доля самой плотной недели
+# окна, пустая неделя — точка, а не самый низкий столбик (ноль ≠ одна).
+WEEK_BARS = "▁▂▃▄▅▆▇█"
+WEEK_EMPTY = "·"
 # Подпись кнопки тренировки: дата и упражнения, длиннее — обрезка.
 WORKOUT_LABEL_LIMIT = 48
 # Сколько символов комментариев встаёт под карточкой тренировки: карточка
@@ -733,7 +737,49 @@ def _workout_button(w: Any, names: list[str], client: Any, commented: bool, clie
     )
 
 
+def week_bars(weekly: list[dict[str, Any]]) -> str:
+    """Тренировки по неделям одной строкой: «·▂▅▂█» — от старых к новым,
+    последняя — текущая неделя."""
+    peak = max((w["workouts"] for w in weekly), default=0)
+    if peak <= 0:
+        return WEEK_EMPTY * len(weekly)
+    top = len(WEEK_BARS) - 1
+    return "".join(
+        WEEK_BARS[max(0, round(w["workouts"] / peak * top))] if w["workouts"] else WEEK_EMPTY
+        for w in weekly
+    )
+
+
+def _activity_block(activity: dict[str, Any], client: Any) -> Optional[str]:
+    """Неделя за неделей — сразу под шапкой, как в приложении: частота и
+    столбики по неделям. Дневник пуст — блока нет (плашка «без тренировок»
+    уже сказала это); одна тренировка за окно — только частота: столбик
+    среди пустых недель не показывает динамику."""
+    if not activity["total_workouts"]:
+        return None
+    freq = activity["frequency"]
+    rows = [
+        i18n.t("coach.client.weeks_header"),
+        i18n.t(
+            "coach.progress.frequency", weeks=activity["weeks"], n=freq["workouts"],
+            avg=formatting.format_weight(freq["per_week"]), this_week=freq["this_week"],
+        ),
+    ]
+    if freq["workouts"] >= 2:
+        first = dt.date.fromisoformat(activity["weekly"][0]["week_start"])
+        rows.append(f"<code>{week_bars(activity['weekly'])}</code>")
+        rows.append(i18n.t(
+            "coach.client.weeks_scale",
+            date=escape(formatting.format_day_month_ru(first, timeutil.user_today(client))),
+        ))
+    return "\n".join(rows)
+
+
 async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, InlineKeyboardMarkup]:
+    """Карточка клиента в порядке приложения (вариант «тёмная шапка + список
+    разделов»): кто и как у него неделя → тренировки по неделям → программы
+    и рекорды. Кнопки: два действия тренера, разделы, три свежие тренировки
+    и «Убрать из клиентов» — последней строкой, красной, отдельно от всего."""
     client_id = link["client_id"]
     signals = await coach_service.client_signals(client, link, coach_id)
     lines = [f"<b>{escape(link['client_name'])}</b>", " · ".join(signal_texts(signals) or [i18n.t("coach.signal.none")])]
@@ -744,6 +790,10 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         lines.append(i18n.t("coach.last_workout", date=when))
     lines.append(f"<i>{visibility_line(link)}</i>")
     blocks = ["\n".join(lines)]
+
+    activity = _activity_block(await coach_service.client_activity(client), client)
+    if activity:
+        blocks.append(activity)
 
     programs = await coach_service.assigned_programs(coach_id, client_id)
     if programs:
@@ -771,8 +821,13 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         + (i18n.t("coach.client.workouts_hint") if workouts else i18n.t("coach.client.no_workouts"))
     )
     kb = InlineKeyboardBuilder()
-    # Прогресс — первой кнопкой: под пятью тренировками он терялся.
+    # Действия тренера — сверху, как главная и вторая кнопки в шапке
+    # приложения; дальше разделы, потом свежие тренировки.
+    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.assign"), callback_data=f"coach:asg:{client_id}"))
+    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.ai_summary"), callback_data=f"coach:ai:{client_id}"))
     kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.progress"), callback_data=f"coach:pg:{client_id}"))
+    if link["show_bodyweight"]:
+        kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.bodyweight"), callback_data=f"coach:bw:{client_id}"))
     ids = [w["id"] for w in workouts]
     contents = await db.list_workout_contents(ids)
     comments = await db.count_coach_comments_by_workout(ids)
@@ -782,12 +837,10 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     if more:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.all_workouts"), callback_data=f"coach:ws:{client_id}:0"))
-    if link["show_bodyweight"]:
-        kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.bodyweight"), callback_data=f"coach:bw:{client_id}"))
-    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.assign"), callback_data=f"coach:asg:{client_id}"))
-    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.ai_summary"), callback_data=f"coach:ai:{client_id}"))
-    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.remove"), callback_data=f"coach:rm:{client_id}"))
     kb.row(*_back_row("coach:clients:0"))
+    # Опасное — последним и красным (Telegram красит кнопку со style=danger;
+    # клиент без поддержки покажет обычную — она всё равно ниже «Назад»).
+    kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.remove"), callback_data=f"coach:rm:{client_id}", style="danger"))
     return "\n\n".join(blocks), kb.as_markup()
 
 
@@ -1374,7 +1427,7 @@ async def coach_remove_ask(callback: CallbackQuery, state: FSMContext):
     if link is None:
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n.t("coach.btn.remove"), callback_data=f"coach:rmy:{args[0]}")],
+        [InlineKeyboardButton(text=i18n.t("coach.btn.remove"), callback_data=f"coach:rmy:{args[0]}", style="danger")],
         [InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data=f"coach:cl:{args[0]}")],
     ])
     await ui.safe_edit(
