@@ -345,20 +345,11 @@ def _lift_points(
     return points
 
 
-async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str, Any]:
-    """«Прогресс клиента» глазами тренера: частота и тоннаж по неделям,
-    лучшая тренировка недели в основных движениях, рекорды за всё время и
-    свежие рекорды. Один расчёт на бота (handlers/coach.py) и REST
-    (`GET /coach/clients/{id}/progress`).
-
-    Только числа и имена: каталожное упражнение — на языке тренера
-    (`shown_exercise_names`), своё имя атлета — как есть. Веса — в единице
-    атлета (`unit` рядом). Недели — местные для атлета, с понедельника, от
-    старых к новым, последняя — текущая (неполная). Данных мало — списки
-    пустые, а не заполненные догадкой: что из этого рисовать, решает экран.
-    """
+async def _activity(client: Any, weeks: int) -> tuple[list[dt.date], dict[str, Any]]:
+    """Частота и тоннаж по неделям — местные для атлета, с понедельника, от
+    старых к новым, последняя — текущая (неполная). Вместе с местными днями
+    всех законченных тренировок: по ним прогресс ищет лучшие подходы."""
     client_id = client["telegram_id"]
-    formula = client["e1rm_formula"]
     tz = timeutil.offset_hours(client)
     today = timeutil.user_today(client)
     this_week = _week_start(today)
@@ -379,6 +370,48 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
         if week in tonnage:
             tonnage[week] += total or 0.0
     in_window = sum(counts.values())
+    return dates, {
+        "weeks": weeks,
+        "total_workouts": len(dates),
+        "frequency": {
+            "workouts": in_window,
+            "per_week": round(in_window / weeks, 1),
+            "this_week": counts[this_week],
+        },
+        "weekly": [
+            {"week_start": w.isoformat(), "workouts": counts[w], "tonnage": round(tonnage[w], 1)}
+            for w in week_starts
+        ],
+    }
+
+
+async def client_activity(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str, Any]:
+    """Шапка карточки клиента: сколько тренировок по неделям и в среднем —
+    та же частота, что у «Прогресса клиента», но без движений и рекордов
+    (они дорогие, а карточку открывают чаще). Один расчёт на бота и REST
+    (`activity` в `GET /coach/clients/{id}`)."""
+    _, activity = await _activity(client, weeks)
+    return activity
+
+
+async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str, Any]:
+    """«Прогресс клиента» глазами тренера: частота и тоннаж по неделям,
+    лучшая тренировка недели в основных движениях, рекорды за всё время и
+    свежие рекорды. Один расчёт на бота (handlers/coach.py) и REST
+    (`GET /coach/clients/{id}/progress`).
+
+    Только числа и имена: каталожное упражнение — на языке тренера
+    (`shown_exercise_names`), своё имя атлета — как есть. Веса — в единице
+    атлета (`unit` рядом). Недели — местные для атлета, с понедельника, от
+    старых к новым, последняя — текущая (неполная). Данных мало — списки
+    пустые, а не заполненные догадкой: что из этого рисовать, решает экран.
+    """
+    client_id = client["telegram_id"]
+    formula = client["e1rm_formula"]
+    tz = timeutil.offset_hours(client)
+    today = timeutil.user_today(client)
+    first_week = _week_start(today) - dt.timedelta(weeks=weeks - 1)
+    dates, activity = await _activity(client, weeks)
 
     sessions_cache: dict[int, list[Any]] = {}
 
@@ -428,17 +461,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
 
     return {
         "unit": client["unit"],
-        "weeks": weeks,
-        "total_workouts": len(dates),
-        "frequency": {
-            "workouts": in_window,
-            "per_week": round(in_window / weeks, 1),
-            "this_week": counts[this_week],
-        },
-        "weekly": [
-            {"week_start": w.isoformat(), "workouts": counts[w], "tonnage": round(tonnage[w], 1)}
-            for w in week_starts
-        ],
+        **activity,
         "lifts": lifts,
         "records": records,
         "recent_records": await recent_records(client, PROGRESS_RECORD_DAYS, running=True),

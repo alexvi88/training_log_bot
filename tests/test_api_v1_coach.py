@@ -243,6 +243,14 @@ async def test_workouts_signals_and_records(fresh_db):
     # Тот же вид, что у рекордов «Итога недели» и подходов в приложении.
     assert overview["records"][0]["text"] == "80кг × 5"
 
+    # Шапка карточки: тренировки по неделям — то же, что частота
+    # «Прогресса», только без движений и рекордов.
+    activity = overview["activity"]
+    progress = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    assert activity == {k: progress[k] for k in ("weeks", "total_workouts", "frequency", "weekly")}
+    assert activity["total_workouts"] == 2 and activity["frequency"]["this_week"] == 1
+    assert len(activity["weekly"]) == activity["weeks"] and activity["weekly"][-1]["workouts"] == 1
+
     # Идущая тренировка тренеру не видна.
     active = (await athlete.post("/workouts/active", json={})).json()["id"]
     assert (await coach.get(f"/coach/clients/{CLIENT}/workouts/{active}")).status_code == 404

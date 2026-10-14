@@ -2472,6 +2472,8 @@
   "coach.client.program_line": "• \"{name}\" — {done} of {total} done",
   "coach.client.records_header": "🔥 <b>Records this week</b>",
   "coach.client.record_line": "• {exercise} — {best}",
+  "coach.client.weeks_header": "🏋️ <b>Workouts by week</b>",
+  "coach.client.weeks_scale": "from {date} to this week",
   "coach.client.workouts_header": "📚 <b>Workouts</b>",
   "coach.client.workouts_hint": "Open a workout with the buttons below — sets and your comments are there.",
   "coach.client.no_workouts": "No finished workouts yet.",

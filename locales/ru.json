@@ -2473,6 +2473,8 @@
   "coach.client.program_line": "• «{name}» — сделано {done} из {total}",
   "coach.client.records_header": "🔥 <b>Рекорды за неделю</b>",
   "coach.client.record_line": "• {exercise} — {best}",
+  "coach.client.weeks_header": "🏋️ <b>Тренировки по неделям</b>",
+  "coach.client.weeks_scale": "с {date} по эту неделю",
   "coach.client.workouts_header": "📚 <b>Тренировки</b>",
   "coach.client.workouts_hint": "Открой тренировку кнопкой ниже — там подходы и твои комментарии.",
   "coach.client.no_workouts": "Законченных тренировок пока нет.",

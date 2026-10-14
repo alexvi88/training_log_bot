@@ -201,6 +201,9 @@ async def get_client(request: Request) -> JSONResponse:
         "client": await _client_json(user_id, link, client),
         "records": await coach_service.recent_records(client),
         "programs": await coach_service.assigned_programs(user_id, link["client_id"]),
+        # Шапка карточки: тренировки по неделям и в среднем — без движений и
+        # рекордов «Прогресса», которые дороже и нужны только там.
+        "activity": await coach_service.client_activity(client),
     })
 
 

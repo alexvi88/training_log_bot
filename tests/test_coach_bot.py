@@ -399,6 +399,14 @@ async def test_client_card_and_read_only_workout_never_show_ai(fresh_db):
     assert "Маша" in text and "Рекорды за неделю" in text and "Жим лёжа" in text
     cbs = [cb for _t, cb in _buttons(_kb(card))]
     assert f"coach:w:{ATHLETE}:{wid}" in cbs
+    # Сначала сводка и тренировки по неделям, потом программы и рекорды.
+    assert text.index("Тренировки по неделям") < text.index("Рекорды за неделю")
+    assert "За 12 недель — 2 тренировки" in text and "по эту неделю" in text
+    # Действия тренера — первыми, разделы — за ними, «Убрать из клиентов» —
+    # последней строкой и красной.
+    assert cbs[:3] == [f"coach:asg:{ATHLETE}", f"coach:ai:{ATHLETE}", f"coach:pg:{ATHLETE}"]
+    last = _kb(card).inline_keyboard[-1]
+    assert len(last) == 1 and last[0].callback_data == f"coach:rm:{ATHLETE}" and last[0].style == "danger"
     # Вес тела закрыт — его кнопки нет вовсе.
     assert f"coach:bw:{ATHLETE}" not in cbs
 
@@ -408,6 +416,24 @@ async def test_client_card_and_read_only_workout_never_show_ai(fresh_db):
 
     hidden = await _tap(COACH, f"coach:bw:{ATHLETE}")
     assert "закрытым" in _alert(hidden)
+
+
+async def test_client_card_week_bars_only_when_data_shows_a_trend(fresh_db):
+    await _linked(fresh_db)
+    # Пустой дневник — блока нет: плашка уже сказала, что тренировок нет.
+    assert "Тренировки по неделям" not in _screen(await _tap(COACH, f"coach:cl:{ATHLETE}"))
+    # Одна тренировка — частота без столбиков.
+    await _finished_workout(fresh_db, ATHLETE)
+    one = _screen(await _tap(COACH, f"coach:cl:{ATHLETE}"))
+    assert "Тренировки по неделям" in one and "<code>" not in one
+    await _finished_workout(fresh_db, ATHLETE, weight=60.0, started_at=_days_ago(20))
+    assert "<code>" in _screen(await _tap(COACH, f"coach:cl:{ATHLETE}"))
+
+
+async def test_week_bars_scale_to_the_busiest_week_and_dot_for_empty():
+    weeks = [{"workouts": n} for n in (0, 1, 2, 4)]
+    assert coach.week_bars(weeks) == "·▃▅█"
+    assert coach.week_bars([{"workouts": 0}] * 3) == "···"
 
 
 async def test_bodyweight_only_when_the_athlete_opened_it(fresh_db):
