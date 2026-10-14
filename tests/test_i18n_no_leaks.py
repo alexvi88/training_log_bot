@@ -980,7 +980,6 @@ async def _screen_coach_clients(db, user_id: int) -> str:
     out += coach.signal_texts(signals)
     out += coach.signal_texts({**signals, "days_since_last_workout": None})
     for key in (
-        "coach.visibility.bodyweight", "coach.visibility.none",
         "coach.comment.draft_gone", "coach.assign.retry", "coach.summary_none", "coach.summary_none_one",
         "coach.ai_summary.thinking", "coach.ai_summary.header_all", "coach.clients.empty",
         "coach.bodyweight.empty", "coach.assign.empty", "coach.signal.none",

@@ -409,6 +409,8 @@ async def test_client_card_and_read_only_workout_never_show_ai(fresh_db):
     assert len(last) == 1 and last[0].callback_data == f"coach:rm:{ATHLETE}" and last[0].style == "danger"
     # Вес тела закрыт — его кнопки нет вовсе.
     assert f"coach:bw:{ATHLETE}" not in cbs
+    # И строки про вес в шапке тоже нет: подпись повторяла раздел.
+    assert "Вес тела" not in text and "вес тела" not in text
 
     workout = await _tap(COACH, f"coach:w:{ATHLETE}:{wid}")
     assert "Жим лёжа" in _screen(workout)
@@ -444,6 +446,8 @@ async def test_bodyweight_only_when_the_athlete_opened_it(fresh_db):
     cbs = [cb for _t, cb in _buttons(_kb(card))]
     assert f"coach:bw:{ATHLETE}" in cbs
     assert not any(cb.startswith("coach:fd:") for cb in cbs)
+    # Открытый вес — это кнопка «⚖️ Вес тела», без строки-дубля в шапке.
+    assert "видишь вес тела" not in _screen(card)
     assert "Гречка" not in _screen(card) and "ккал" not in _screen(card)
     assert "70.5кг" in _screen(await _tap(COACH, f"coach:bw:{ATHLETE}"))
     # Кнопка первой версии карточки в уже отправленном сообщении открывает

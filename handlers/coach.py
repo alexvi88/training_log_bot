@@ -721,12 +721,6 @@ async def _linked(callback: CallbackQuery, client_id: int):
     return link, client
 
 
-def visibility_line(link: Any) -> str:
-    if link["show_bodyweight"]:
-        return i18n.t("coach.visibility.bodyweight")
-    return i18n.t("coach.visibility.none")
-
-
 def _workout_button(w: Any, names: list[str], client: Any, commented: bool, client_id: int) -> InlineKeyboardButton:
     label = _local_day(w["started_at"], client)
     if names:
@@ -778,10 +772,12 @@ def _activity_block(activity: dict[str, Any], client: Any) -> Optional[str]:
 
 
 async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, InlineKeyboardMarkup]:
-    """Карточка клиента в порядке приложения (вариант «тёмная шапка + список
-    разделов»): кто и как у него неделя → тренировки по неделям → программы
+    """Карточка клиента в порядке приложения (шапка + список разделов): кто
+    и как у него неделя → тренировки по неделям → программы
     и рекорды. Кнопки: два действия тренера, разделы, три свежие тренировки
-    и «Убрать из клиентов» — последней строкой, красной, отдельно от всего."""
+    и «Убрать из клиентов» — последней строкой, красной, отдельно от всего.
+    Строки про вес тела в шапке нет: открытый вес — это кнопка «⚖️ Вес тела»,
+    как строка раздела в приложении."""
     client_id = link["client_id"]
     signals = await coach_service.client_signals(client, link, coach_id)
     lines = [f"<b>{escape(link['client_name'])}</b>", " · ".join(signal_texts(signals) or [i18n.t("coach.signal.none")])]
@@ -790,7 +786,6 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
             dt.date.fromisoformat(signals["last_workout_at"]), timeutil.user_today(client)
         )
         lines.append(i18n.t("coach.last_workout", date=when))
-    lines.append(f"<i>{visibility_line(link)}</i>")
     blocks = ["\n".join(lines)]
 
     activity = _activity_block(await coach_service.client_activity(client), client)
