@@ -1573,10 +1573,13 @@ async def coach_remove(callback: CallbackQuery, state: FSMContext):
 
 def _summary_view(
     link: Any, result: dict[str, Any], *, saved_on: Optional[str] = None, client_id: Optional[int] = None,
+    stale: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Сводка сообщением: заголовок, текст, кто не вошёл. saved_on — дата
     сохранённой сводки: тогда под текстом строка «Сводка от …» и кнопка
-    «Обновить сводку» (платный вызов — только по ней)."""
+    «Обновить сводку» (платный вызов — только по ней). stale — данные с тех
+    пор поменялись, а свежую собрать не вышло (лимит, сбой): вместо «Сводка
+    от …» — «Сводка от … устарела» с той же кнопкой."""
     head = (
         i18n.t("coach.ai_summary.header_one", name=escape(link["client_name"])) if link is not None
         else i18n.t("coach.ai_summary.header_all")
@@ -1589,7 +1592,8 @@ def _summary_view(
     if result["text"] and result["skipped_no_consent"]:
         parts.append(f"<i>{i18n.t('coach.summary_skipped', n=result['skipped_no_consent'])}</i>")
     if saved_on is not None:
-        parts.append(f"<i>{i18n.t('coach.ai_summary.saved_on', date=escape(saved_on))}</i>")
+        key = "coach.ai_summary.stale" if stale else "coach.ai_summary.saved_on"
+        parts.append(f"<i>{i18n.t(key, date=escape(saved_on))}</i>")
     back_cb = f"coach:cl:{client_id}" if client_id is not None else "coach:clients:0"
     rows = []
     if saved_on is not None:
@@ -1606,10 +1610,16 @@ async def _ai_summary(
     """Сводка тренеру — по всем клиентам или по одному.
 
     Есть сохранённая (coach_service.saved_summary: та же пара, тот же язык,
-    не старше срока) и тренер не жал «Обновить» — показываем её с датой,
-    бесплатно. Иначе — тот же путь, что у REST: coach_service.ai_summary →
-    paid_call (лимит вопроса тренеру и цена в лог), та же бронь «один платный
-    ход за раз», что у чата с тренером в боте (handlers.ai_trainer._busy)."""
+    не старше срока), данные с тех пор не поменялись и тренер не жал
+    «Обновить» — показываем её с датой, бесплатно. Иначе — тот же путь, что у
+    REST: coach_service.ai_summary → paid_call (лимит вопроса тренеру и цена в
+    лог), та же бронь «один платный ход за раз», что у чата с тренером в боте
+    (handlers.ai_trainer._busy).
+
+    Данные поменялись (новый клиент, тренировка, рекорд — отпечаток не
+    совпал) — собираем свежую сами, без кнопки: старая уже неправда о
+    клиентах. Свежую собрать не вышло (лимит, сбой, таймаут) — показываем
+    старую, но с пометкой «устарела», а не как текущую."""
     from handlers import ai_trainer as ai_chat
 
     coach_id = callback.from_user.id
@@ -1620,16 +1630,30 @@ async def _ai_summary(
         link, _client = await _linked(callback, client_id)
         if link is None:
             return
+    stale = None
     if not refresh:
         saved = await coach_service.saved_summary(coach_id, client_id)
         if saved is not None:
             coach = await db.get_user(coach_id)
             saved_on = _local_day(saved["created_at"], coach) if coach is not None else saved["created_at"][:10]
-            text, kb = _summary_view(link, saved, saved_on=saved_on, client_id=client_id)
-            await callback.answer()
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
-            return
+            text, kb = _summary_view(link, saved, saved_on=saved_on, client_id=client_id, stale=saved["stale"])
+            if not saved["stale"]:
+                await callback.answer()
+                await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+                return
+            stale = (text, kb)
+
+    async def show_stale() -> bool:
+        if stale is None:
+            return False
+        await callback.message.answer(stale[0], parse_mode="HTML", reply_markup=stale[1])
+        return True
+
     if not ai_trainer.is_configured():
+        if stale is not None:
+            await callback.answer()
+            await show_stale()
+            return
         await callback.answer(i18n.t("ai.screen.not_configured"), show_alert=True)
         return
     if not busy_lock.try_claim(ai_chat._busy, coach_id):
@@ -1645,11 +1669,17 @@ async def _ai_summary(
                 coach_service.ai_summary(coach_id, client_id), timeout=config.AI_TOTAL_ANSWER_SECONDS
             )
         except ai_trainer.LimitBlocked as exc:
-            await ai_limits.reply(callback.message, exc.block, reply_markup=back_kb)
+            # Почему свежей нет — словами лимита (у своих аккаунтов — с
+            # «Понятно»); под ним старая сводка с пометкой «устарела».
+            await ai_limits.reply(
+                callback.message, exc.block, reply_markup=None if stale is not None else back_kb
+            )
+            await show_stale()
             return
         except Exception:
             logger.exception("coach: ai summary failed for %s", coach_id)
-            await callback.message.answer(i18n.t("ai.screen.answer_failed"), reply_markup=back_kb)
+            if not await show_stale():
+                await callback.message.answer(i18n.t("ai.screen.answer_failed"), reply_markup=back_kb)
             return
         finally:
             with suppress(Exception):

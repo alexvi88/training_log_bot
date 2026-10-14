@@ -873,6 +873,10 @@
     "createdAt": {
      "type": "String",
      "optional": true
+    },
+    "stale": {
+     "type": "Bool",
+     "optional": true
     }
    }
   },
@@ -5116,5 +5120,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "4691df32b600b1c6293ffcc8abc3c31bdc9ae1ff"
+ "_ios_commit": "4ceac68088352902c431fdc0beb194ca357ff80e"
 }
