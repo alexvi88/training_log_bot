@@ -10850,10 +10850,10 @@ async def active_users_by_platform(day: str) -> dict[int, set[str]]:
     start, end = _day_bounds(day)
     out: dict[int, set[str]] = {}
     queries = (
-        # push_sent пишет сервер, когда шлёт баннер: получить пуш — не значит
-        # быть активным.
+        # push_sent и feedback_push_sent пишет сервер, когда шлёт пуш: получить
+        # пуш — не значит быть активным.
         "SELECT user_id, platform FROM analytics_events WHERE created_at >= ? AND created_at < ? "
-        "AND event != 'push_sent'",
+        "AND event NOT IN ('push_sent', 'feedback_push_sent')",
         "SELECT telegram_id, source FROM user_events WHERE created_at >= ? AND created_at < ?",
         "SELECT w.user_id, 'sets' FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id WHERE s.created_at >= ? AND s.created_at < ?",

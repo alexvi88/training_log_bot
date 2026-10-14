@@ -626,7 +626,10 @@ async def _deliver(
             await _send_apns_push(telegram_id, decision, push=False)
         except Exception:
             logger.exception("Failed to put the push into the inbox for user %s", telegram_id)
-        await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+        # Ни баннера, ни Telegram — в счёт доставленных пушей сводки не идёт.
+        await db.record_push(
+            telegram_id, decision.category, decision.text, local_date.isoformat(), channel=None
+        )
         return
     user = await db.get_user(telegram_id)
     show_tz_hint = _should_show_tz_hint(user)
