@@ -244,6 +244,7 @@ LOCALIZED: list[str] = [
     # coach_service, HTTP — api_v1_coach. Тексты ошибок, пуш и промпт сводки —
     # api.error.* и coach.* через i18n.t; своих литералов нет.
     "coach_service.py",
+    "coach_program_ai.py",
     "api_v1_coach.py",
     # Те же сервисы в боте: экраны тренера и атлета (handlers/coach.py) и
     # доставка комментария тренера в APNs и Telegram (coach_notify.py) —

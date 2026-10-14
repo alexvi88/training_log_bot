@@ -33,6 +33,7 @@ import api_v1_ai
 import api_v1_common as common
 import api_v1_progress
 import coach_notify
+import coach_program_ai
 import coach_service
 import config
 import db
@@ -348,6 +349,56 @@ async def assign_program(request: Request) -> JSONResponse:
     return JSONResponse({"program_id": new_id, "name": name}, status_code=201)
 
 
+async def ai_program(request: Request) -> JSONResponse:
+    """Программа атлету от AI-тренера (`coach_program_ai`): по дневнику АТЛЕТА,
+    на лимит и деньги ТРЕНЕРА, ложится тренеру новой программой — назначают
+    её дальше обычным `POST …/programs`. Тело: `days_per_week` (1–6), `note`
+    (цель, ограничения — то, чего в дневнике нет; до 500 знаков). Сначала
+    связка (404 `not_linked`), согласие на AI у тренера и у атлета (409
+    `client_no_ai_consent`), бронь «один ход за раз»."""
+    user_id = await common.authed_user_id(request)
+    await _coach_profile(user_id)
+    link, _client = await _linked_client(user_id, _client_id(request))
+    body = await common.json_body(request)
+    days = common.require(body, "days_per_week", int)
+    if not coach_program_ai.DAYS_MIN <= days <= coach_program_ai.DAYS_MAX:
+        raise ApiError(400, "bad_days_per_week", "days_per_week must be 1..6")
+    note = coach_program_ai.clean_note(body.get("note"))
+    await api_v1_ai._require_ai_consent(request, user_id)
+    if not ai_trainer.is_configured():
+        raise ApiError(503, "not_configured", "ai trainer is not configured")
+    lang = common.request_lang(request)
+    api_v1_ai._claim_turn_or_429(user_id, lang)
+    try:
+        with i18n.use_lang(lang):
+            result = await asyncio.wait_for(
+                coach_program_ai.build_for_client(user_id, link["client_id"], days_per_week=days, note=note),
+                timeout=config.AI_TOTAL_ANSWER_SECONDS,
+            )
+    except ai_trainer.LimitBlocked as exc:
+        raise ApiError(
+            429, "question_limit_exceeded", "daily question limit reached", human=exc.block.user_text
+        ) from exc
+    except coach_program_ai.BuildError as exc:
+        if exc.code == "not_linked":
+            raise ApiError(404, "not_linked", "no such client for this coach") from exc
+        if exc.code == "client_no_ai_consent":
+            raise ApiError(409, "client_no_ai_consent", "client has not allowed ai") from exc
+        if exc.code == "budget":
+            raise ApiError(403, "routine_limit_reached", "program limit", human=exc.message) from exc
+        raise ApiError(502, "ai_program_failed", "model returned no usable program") from exc
+    except asyncio.TimeoutError as exc:
+        raise ApiError(504, "timeout", "program build did not finish in time") from exc
+    except ApiError:
+        raise
+    except Exception as exc:
+        logger.exception("coach: ai program failed for %s", user_id)
+        raise ApiError(502, "ai_program_failed", "program build failed") from exc
+    finally:
+        api_v1_ai._busy.discard(user_id)
+    return JSONResponse(result, status_code=201)
+
+
 async def client_bodyweight(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
     link, client = await _linked_client(user_id, _client_id(request))
@@ -541,6 +592,7 @@ routes = [
         comment_workout, methods=["POST"],
     ),
     Route("/coach/clients/{client_id:user_id}/programs", assign_program, methods=["POST"]),
+    Route("/coach/clients/{client_id:user_id}/programs/ai", ai_program, methods=["POST"]),
     Route("/coach/clients/{client_id:user_id}/bodyweight", client_bodyweight, methods=["GET"]),
     Route("/coach/ai-summary", saved_ai_summary, methods=["GET"]),
     Route("/coach/ai-summary", ai_summary, methods=["POST"]),

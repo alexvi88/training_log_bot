@@ -55,6 +55,7 @@ import ai_trainer
 import busy_lock
 import charts
 import coach_notify
+import coach_program_ai
 import coach_service
 import config
 import db
@@ -62,6 +63,7 @@ import formatting
 import i18n
 import keyboards
 import progress_data
+import seed_data
 import timeutil
 import ui
 import weekly_summary
@@ -1317,18 +1319,193 @@ async def coach_assign_pick(callback: CallbackQuery, state: FSMContext):
     link, _client = await _linked(callback, args[0])
     if link is None:
         return
-    programs = await db.list_programs(callback.from_user.id)
+    await _show_assign(callback, args[0], link)
+    await callback.answer()
+
+
+async def _show_assign(
+    callback: CallbackQuery, client_id: int, link: Any, *, notice: Optional[str] = None, top_id: Optional[int] = None,
+) -> None:
+    """Экран «Назначить программу»: свои программы кнопками, под ними — два
+    способа завести новую прямо отсюда. Раньше без единой программы тут стоял
+    только текст «собери во вкладке программ и возвращайся» — тупик без кнопки.
+
+    `top_id` — программа, которую только что взяли из каталога: она первой, а
+    над списком `notice` — что добавил и что нажать дальше."""
+    programs = list(await db.list_programs(callback.from_user.id))
+    if top_id is not None:
+        programs.sort(key=lambda p: p["id"] != top_id)
     kb = InlineKeyboardBuilder()
     for p in programs:
         kb.row(InlineKeyboardButton(
             text=f"🗂 {p['name']} · {i18n.t('btn.program_days', n=p['day_count'])}",
-            callback_data=f"coach:asp:{args[0]}:{p['id']}",
+            callback_data=f"coach:asp:{client_id}:{p['id']}",
         ))
-    kb.row(*_back_row(f"coach:cl:{args[0]}"))
+    # Готовая — первой: мгновенно и бесплатно, как и на экране программ
+    # (keyboards.routines_manage_keyboard). Обе возвращают сюда же: каталог —
+    # сразу этим экраном, тренер — через «Забрать» под его программой.
+    kb.row(InlineKeyboardButton(text=i18n.t("btn.ready_programs"), callback_data=f"coach:asc:{client_id}"))
+    kb.row(InlineKeyboardButton(text=i18n.t("btn.build_with_coach"), callback_data=f"coach:asai:{client_id}"))
+    kb.row(*_back_row(f"coach:cl:{client_id}"))
     body = i18n.t("coach.assign.intro") if programs else i18n.t("coach.assign.empty")
-    text = f"{i18n.t('coach.assign.title', name=escape(link['client_name']))}\n\n{body}"
+    parts = [i18n.t("coach.assign.title", name=escape(link["client_name"]))]
+    if notice:
+        parts.append(notice)
+    parts.append(body)
+    await _show(callback, "\n\n".join(parts), kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("coach:asc:"))
+async def coach_assign_catalog(callback: CallbackQuery, state: FSMContext):
+    """«✨ Готовые программы» с экрана назначения: тот же каталог, что в
+    «🗂 Программы» (handlers.routines.rt_programs), только выбор сразу кладёт
+    программу тренеру и возвращает к назначению этому атлету."""
+    args = await _int_args(callback, 1)
+    if args is None:
+        return
+    if not await _require_coach(callback, state):
+        return
+    if (await _linked(callback, args[0]))[0] is None:
+        return
+    lang = i18n.get_lang()
+    catalog = "\n".join(
+        "<b>{}</b> — {}".format(
+            escape(seed_data.localized_program_name(p["key"], lang)),
+            escape(seed_data.localized_program_meta(p["key"], lang)),
+        )
+        for p in seed_data.WORKOUT_PROGRAMS
+    )
+    kb = InlineKeyboardBuilder()
+    for p in seed_data.WORKOUT_PROGRAMS:
+        kb.row(InlineKeyboardButton(
+            text=seed_data.localized_program_name(p["key"], lang),
+            callback_data=f"coach:ascp:{args[0]}:{p['key']}",
+        ))
+    kb.row(*_back_row(f"coach:asg:{args[0]}"))
+    text = f"{i18n.t('coach.assign.catalog_intro')}\n\n{catalog}"
     await _show(callback, text, kb.as_markup())
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("coach:ascp:"))
+async def coach_assign_catalog_pick(callback: CallbackQuery, state: FSMContext):
+    """Каталожная программа → тренеру (та же seed_data.instantiate_program, что
+    у «➕ Добавить себе») → назад к назначению, она первой. Уже есть с тем же
+    именем — вторую копию не плодим: показываем ту, что есть."""
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].lstrip("-").isdigit():
+        await callback.answer()
+        return
+    client_id, key = int(parts[2]), parts[3]
+    if not await _require_coach(callback, state):
+        return
+    link, _client = await _linked(callback, client_id)
+    if link is None:
+        return
+    program = seed_data.PROGRAM_BY_KEY.get(key)
+    if program is None:
+        await callback.answer(i18n.t("routine.alert.catalog_program_not_found"), show_alert=True)
+        return
+    coach_id = callback.from_user.id
+    name = seed_data.localized_program_name(key, i18n.get_lang())
+    existing = await db.find_program_by_name(coach_id, name)
+    if existing is not None:
+        await _show_assign(
+            callback, client_id, link, top_id=existing["id"],
+            notice=i18n.t("coach.assign.catalog_have", name=escape(existing["name"])),
+        )
+        await callback.answer()
+        return
+    over_budget = await db.routine_budget(coach_id, len(program["days"]))
+    if over_budget:
+        await callback.answer(over_budget, show_alert=True)
+        return
+    program_id = await seed_data.instantiate_program(coach_id, key, name)
+    await _show_assign(
+        callback, client_id, link, top_id=program_id,
+        notice=i18n.t("coach.assign.catalog_added", name=escape(name)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("coach:asai:"))
+async def coach_assign_ai(callback: CallbackQuery, state: FSMContext):
+    """«🤖 Составить с AI-тренером» с экрана назначения: сколько дней в неделю —
+    и программа по дневнику АТЛЕТА (coach_program_ai), а не чат AI-тренера:
+    там все инструменты читают историю того, кто спрашивает, то есть тренера."""
+    args = await _int_args(callback, 1)
+    if args is None:
+        return
+    if not await _require_coach(callback, state):
+        return
+    link, _client = await _linked(callback, args[0])
+    if link is None:
+        return
+    buttons = [
+        InlineKeyboardButton(text=i18n.t("coach.program_ai.days_btn", n=n), callback_data=f"coach:asaid:{args[0]}:{n}")
+        for n in (2, 3, 4, 5)
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=[buttons[:2], buttons[2:], _back_row(f"coach:asg:{args[0]}")])
+    await _show(callback, i18n.t("coach.program_ai.days_title", name=escape(link["client_name"])), kb)
+    await callback.answer()
+
+
+_PROGRAM_AI_ERROR_KEYS = {
+    "not_linked": "api.error.not_linked",
+    "client_no_ai_consent": "api.error.client_no_ai_consent",
+    "program_failed": "api.error.ai_program_failed",
+}
+
+
+@router.callback_query(F.data.startswith("coach:asaid:"))
+async def coach_assign_ai_build(callback: CallbackQuery, state: FSMContext):
+    """Собрать (платный вызов на лимит тренера) и вернуться к назначению с
+    готовой программой первой. Та же бронь «один платный ход за раз», что у
+    чата и AI-сводки."""
+    from handlers import ai_trainer as ai_chat
+
+    args = await _int_args(callback, 2)
+    if args is None:
+        return
+    client_id, days = args
+    coach_id = callback.from_user.id
+    if not await _require_coach(callback, state):
+        return
+    link, _client = await _linked(callback, client_id)
+    if link is None:
+        return
+    if not ai_trainer.is_configured():
+        await callback.answer(i18n.t("ai.screen.not_configured"), show_alert=True)
+        return
+    if not busy_lock.try_claim(ai_chat._busy, coach_id):
+        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
+        return
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[_back_row(f"coach:asg:{client_id}")])
+    try:
+        await callback.answer()
+        await _show(callback, i18n.t("coach.program_ai.thinking"), None)
+        try:
+            result = await asyncio.wait_for(
+                coach_program_ai.build_for_client(coach_id, client_id, days_per_week=days),
+                timeout=config.AI_TOTAL_ANSWER_SECONDS,
+            )
+        except ai_trainer.LimitBlocked as exc:
+            await ai_limits.reply(callback.message, exc.block, reply_markup=back_kb)
+            return
+        except coach_program_ai.BuildError as exc:
+            text = exc.message or i18n.t(_PROGRAM_AI_ERROR_KEYS.get(exc.code, "api.error.ai_program_failed"))
+            await _show(callback, text, back_kb)
+            return
+        except Exception:
+            logger.exception("coach: program ai failed for %s", coach_id)
+            await _show(callback, i18n.t("api.error.ai_program_failed"), back_kb)
+            return
+    finally:
+        ai_chat._busy.discard(coach_id)
+    await _show_assign(
+        callback, client_id, link, top_id=result["program_id"],
+        notice=i18n.t("coach.program_ai.done", name=escape(result["name"])),
+    )
 
 
 _ASSIGN_ERROR_KEYS = {

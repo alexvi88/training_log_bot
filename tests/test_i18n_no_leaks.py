@@ -968,6 +968,9 @@ async def _screen_coach_clients(db, user_id: int) -> str:
         await _coach_screen(user_id, f"coach:cm:{athlete}:{wid}"),
         await _coach_screen(user_id, f"coach:bw:{athlete}"),
         await _coach_screen(user_id, f"coach:asg:{athlete}"),
+        await _coach_screen(user_id, f"coach:asc:{athlete}"),
+        await _coach_screen(user_id, f"coach:ascp:{athlete}:ppl"),
+        await _coach_screen(user_id, f"coach:asai:{athlete}"),
         await _coach_screen(user_id, f"coach:rm:{athlete}"),
         await _coach_screen(athlete, f"coach:cl:{user_id}"),
         await _coach_screen(athlete, "coach:clients:0"),
@@ -988,6 +991,9 @@ async def _screen_coach_clients(db, user_id: int) -> str:
         i18n.t("coach.comment.too_long", n=1200, max=1000), i18n.t("coach.summary_skipped", n=2),
         i18n.t("coach.ai_summary.header_one", name="Sam"), i18n.t("coach.removed", name="Sam"),
         i18n.t("coach.program_assigned", name="Split"),
+        i18n.t("coach.assign.catalog_have", name="Split"),
+        i18n.t("coach.program_ai.done", name="Split"), i18n.t("coach.program_ai.thinking"),
+        i18n.t("api.error.client_no_ai_consent"), i18n.t("api.error.ai_program_failed"),
     ]
     out.append(await _coach_screen(user_id, f"coach:rmy:{athlete}"))
     return "\n".join(out)
