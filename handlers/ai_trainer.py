@@ -1633,7 +1633,7 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
     )
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
-        last_by_exercise={}, planned_blocks=planned,
+        last_by_exercise={}, planned_blocks=planned, plan_taken=None, plan_order=None,
     )
     await start_planned_workout(callback, state)
     await callback.answer(i18n.t("ai.screen.program_train.go"))
