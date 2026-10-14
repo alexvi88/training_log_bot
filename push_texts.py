@@ -52,6 +52,10 @@ WEEKLY_DIGEST = "weekly_digest"
 # model; this key only tags the push for dedup/logging).
 AI_WEEKLY = "ai_weekly"
 NEWBIE_NUDGE = "newbie_nudge"
+# «Как тебе дневник?» — только iOS, вне цепочки приоритетов и без телеграмного
+# пула (engagement._send_feedback_pushes, короткий текст — push.ios.feedback_ask.*).
+# Ключ — метка для pushes/дедупа и для push_open в аналитике.
+FEEDBACK_ASK = "feedback_ask"
 
 SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
 SKIP_CATEGORY_BY_DAY: dict[int, str] = {
@@ -126,6 +130,7 @@ CATEGORY_LABELS: dict[str, str] = {
     WEEKLY_DIGEST: "Аналитика",
     AI_WEEKLY: "AI-дайджест",
     NEWBIE_NUDGE: "Новичок без тренировок",
+    FEEDBACK_ASK: "Запрос отзыва (iOS)",
 }
 
 
