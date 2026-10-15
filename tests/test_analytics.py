@@ -666,7 +666,7 @@ def test_prod_case_is_progressing_not_a_stall_or_regression():
     facts = analytics.stall_facts(_PROD_CURLS, _FACTS_TODAY, "kg")
     assert facts["stalled"] is False
     # Оба факта честно: e1RM с 73×12 до 77×7 упал, а на 77 повторы растут.
-    assert "best e1RM 102.2 (73×12, 2026-09-18) → latest 95 (77×7, 2026-10-08)" in facts["why"]
+    assert "peak e1RM 102.2 (73×12, 2026-09-18) → latest 95 (77×7, 2026-10-08)" in facts["why"]
     assert "weight raised 73→77 kg on 2026-09-18" in facts["why"]
     assert "reps at 77 kg: 6→7" in facts["why"]
     assert "12→7" not in facts["why"]
@@ -764,3 +764,33 @@ def test_two_light_sessions_in_a_row_are_a_real_deload_and_stay():
 
     assert analytics.light_sessions(sessions) == []
     assert analytics.classify_stall(sessions, _FACTS_TODAY).kind == "regressing"
+
+
+# ---------- главный факт — сводка окна, а не повторы на одном весе ----------
+
+
+def test_window_summary_leads_the_why():
+    """Прод после #828: тренер назвал ростом «10→11 повторов на 68.3» за четыре
+    дня и пропустил главное — e1RM 76.7→93.3 (+22%) за семь недель и рабочий
+    вес 59→68.3."""
+    sessions = _dated([
+        ("2026-08-24", [(59, 9), (59, 9)]),
+        ("2026-09-01", [(59, 12), (59, 10)]),
+        ("2026-09-05", [(61.3, 11), (61.3, 9)]),
+        ("2026-09-19", [(63.6, 10), (63.6, 10)]),
+        ("2026-09-28", [(66, 10), (66, 8)]),
+        ("2026-10-06", [(68.3, 10), (68.3, 8)]),
+        ("2026-10-10", [(68.3, 11), (68.3, 9)]),
+    ])
+    facts = analytics.progress_facts(sessions, _FACTS_TODAY, "kg", recent=10)
+
+    assert facts["stall"]["verdict"] == "growing"
+    assert facts["stall"]["stalled"] is False
+    first = facts["stall"]["why"].split("; ")[0]
+    assert first == (
+        "2026-08-24→2026-10-10: best e1RM 76.7→93.3 kg (+22%), top weight 59→68.3 kg"
+    )
+    # Повторы на одном весе — деталь в конце, а не главный факт.
+    why = facts["stall"]["why"]
+    assert why.index("reps at 68.3 kg: 10→11") > why.index("best e1RM 76.7→93.3")
+    assert list(facts)[0] == "stall"

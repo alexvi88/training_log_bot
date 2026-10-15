@@ -5741,13 +5741,15 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
             "exercise": name,
             "muscle_group": group,
             "verdict": verdict.kind,
+            # Первым — сводка окна (e1RM и рабочий вес от → до), повторы на
+            # одном весе — деталь в конце.
+            "why": analytics.stall_why(verdict, user["unit"]),
             "sessions_in_window": verdict.sessions_in_window,
             "e1rm_slope_per_week": verdict.e1rm_slope_per_week,
             "top_weight": verdict.top_weight,
             "weeks_weight_flat": verdict.weeks_weight_flat,
             "top_weight_since": verdict.weight_since,
             "weight_raised_from": verdict.weight_raised_from,
-            "why": analytics.stall_why(verdict, user["unit"]),
             "sessions_at_top_weight": verdict.sessions_at_top_weight,
             # Повторы только подходов НА рабочем весе (analytics.best_reps_at).
             "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",
