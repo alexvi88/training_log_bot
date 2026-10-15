@@ -14,7 +14,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import account_deletion
@@ -387,6 +387,237 @@ async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
         is_last = i == len(chunks) - 1
         markup = keyboards.admin_ai_dialogs_back_keyboard(page) if is_last else None
         await callback.message.answer(chunk, reply_markup=markup)
+    await callback.answer()
+
+
+# ---------- /aichats: журнал ходов тренера для проверки качества ----------
+#
+# Читает db.ai_turn_log (см. ai_chat_log.py) — бот и приложение вместе, с
+# моделью, инструментами и ценой каждого хода. /ai_dialogs выше — старый
+# вечный лог бота без этих полей; этот экран — для оценки ответов.
+
+AICHATS_USERS_PAGE_SIZE = 8
+AICHATS_TURNS_PAGE_SIZE = 4
+AICHATS_RECENT_DAYS = 7
+AICHATS_EXPORT_TURNS = 200
+# Запас до 4096 у Telegram: подписи и навигация не должны упираться в лимит.
+AICHATS_TEXT_LIMIT = 3900
+AICHATS_QUESTION_LIMIT = 600
+_AICHATS_SOURCE = {"bot": "бот", "app": "приложение"}
+
+
+def _aichats_since() -> str:
+    """Начало окна «за неделю» в той же ISO-форме, что created_at в базе (UTC)."""
+    now = dt.datetime.fromisoformat(db.now_iso())
+    return (now - dt.timedelta(days=AICHATS_RECENT_DAYS)).isoformat(timespec="seconds")
+
+
+def _trim(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _turn_tools(row) -> list[str]:
+    try:
+        tools = json.loads(row["tools"] or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [str(name) for name in tools] if isinstance(tools, list) else []
+
+
+def _turn_meta(row) -> str:
+    parts = [
+        admin_time(row["created_at"]).strftime("%d.%m %H:%M"),
+        _AICHATS_SOURCE.get(row["source"], row["source"]),
+        row["model"] or "модель неизвестна",
+    ]
+    tools = _turn_tools(row)
+    parts.append("🛠 " + ", ".join(tools) if tools else "без инструментов")
+    if row["cost_usd"] is not None:
+        parts.append(f"${row['cost_usd']:.4f}")
+    return " · ".join(parts)
+
+
+def _aichats_label(row) -> str:
+    return keyboards.admin_user_label(
+        row["username"], keyboards.row_value(row, "email"), row["telegram_id"]
+    )
+
+
+def format_aichats_users(rows, page: int, total: int) -> str:
+    if not rows:
+        return "🤖 Журнал тренера пуст: ни одного хода за последние полгода."
+    pages = max(1, -(-total // AICHATS_USERS_PAGE_SIZE))
+    lines = [f"🤖 Разговоры с тренером — стр. {page + 1}/{pages} (всего атлетов: {total})", ""]
+    for row in rows:
+        sources = "+".join(
+            _AICHATS_SOURCE.get(s, s) for s in sorted(set((row["sources"] or "").split(","))) if s
+        )
+        lines.append(
+            f"{_aichats_label(row)} — {row['turns_recent']} за {AICHATS_RECENT_DAYS} дн. "
+            f"(всего {row['turns_total']}), последний {admin_time(row['last_at']).strftime('%d.%m %H:%M')}, "
+            f"{sources}, {row['model'] or 'модель неизвестна'}"
+        )
+    return "\n".join(lines)
+
+
+def format_aichats_turns(label: str, rows, total: int, page: int) -> str:
+    """Страница ходов: rows из базы новыми первыми, на экране — по порядку
+    разговора. Каждому ходу — равная доля лимита сообщения; вопрос короче
+    ответа, ответ режется хвостом с «…» (целиком — в выгрузке)."""
+    pages = max(1, -(-total // AICHATS_TURNS_PAGE_SIZE))
+    header = f"🤖 {label} — ходы тренера, стр. {page + 1}/{pages} (всего {total}, новые — на стр. 1)"
+    if not rows:
+        return header + "\n\nХодов нет."
+    budget = (AICHATS_TEXT_LIMIT - len(header)) // len(rows)
+    blocks = [header]
+    for row in reversed(rows):
+        meta = _turn_meta(row)
+        room = max(200, budget - len(meta) - 12)
+        question = _trim(row["question"], min(AICHATS_QUESTION_LIMIT, room // 3))
+        answer = _trim(row["answer"], max(100, room - len(question)))
+        blocks.append(f"— {meta}\n👤 {question}\n🤖 {answer}")
+    return _trim("\n\n".join(blocks), AICHATS_TEXT_LIMIT)
+
+
+def format_aichats_export(label: str, telegram_id: int, rows) -> str:
+    """Выгрузка для чтения целиком: Markdown, по порядку разговора, без обрезки."""
+    lines = [
+        f"# Разговоры с AI-тренером: {label} (id {telegram_id})",
+        "",
+        f"Ходов: {len(rows)} (последние, не больше {AICHATS_EXPORT_TURNS}). "
+        f"Время — по часам админа (UTC{config.ADMIN_TZ_OFFSET:+d}).",
+    ]
+    for row in reversed(rows):
+        lines += [
+            "",
+            f"## {_turn_meta(row)}",
+            "",
+            "**Вопрос:**",
+            "",
+            (row["question"] or "").strip(),
+            "",
+            "**Ответ:**",
+            "",
+            (row["answer"] or "").strip(),
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def _aichats_users_keyboard(rows, page: int, has_next: bool):
+    b = InlineKeyboardBuilder()
+    for row in rows:
+        b.button(
+            text=f"{_aichats_label(row)} ({row['turns_recent']}/{AICHATS_RECENT_DAYS}д)",
+            callback_data=f"admin:aic:u:{row['telegram_id']}:0:{page}",
+        )
+    b.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin:aic:p:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="Дальше ▶️", callback_data=f"admin:aic:p:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    return b.as_markup()
+
+
+def _aichats_turns_keyboard(telegram_id: int, page: int, has_older: bool, back: int):
+    b = InlineKeyboardBuilder()
+    nav = []
+    if has_older:
+        nav.append(InlineKeyboardButton(
+            text="◀️ Старше", callback_data=f"admin:aic:u:{telegram_id}:{page + 1}:{back}"
+        ))
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            text="Новее ▶️", callback_data=f"admin:aic:u:{telegram_id}:{page - 1}:{back}"
+        ))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(
+        text=f"📄 Выгрузить {AICHATS_EXPORT_TURNS}", callback_data=f"admin:aic:x:{telegram_id}"
+    ))
+    b.row(InlineKeyboardButton(text="↩️ К списку", callback_data=f"admin:aic:p:{back}"))
+    return b.as_markup()
+
+
+async def _show_aichats_users(target: Message | CallbackQuery, page: int, *, edit: bool) -> None:
+    total = await db.count_ai_turn_log_users()
+    rows = await db.list_ai_turn_log_users(
+        _aichats_since(), limit=AICHATS_USERS_PAGE_SIZE, offset=page * AICHATS_USERS_PAGE_SIZE
+    )
+    has_next = (page + 1) * AICHATS_USERS_PAGE_SIZE < total
+    text = format_aichats_users(rows, page, total)
+    kb = _aichats_users_keyboard(rows, page, has_next)
+    if edit:
+        await ui.safe_edit(target, text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+@router.message(Command("aichats"))
+async def cmd_aichats(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await _show_aichats_users(message, page=0, edit=False)
+
+
+@router.callback_query(F.data.startswith("admin:aic:p:"))
+async def admin_aichats_page(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    page = max(0, int(callback.data.split(":")[3]))
+    await _show_aichats_users(callback, page, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:aic:u:"))
+async def admin_aichats_user(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, _, _, raw_id, raw_page, raw_back = callback.data.split(":")
+    telegram_id, page, back = int(raw_id), max(0, int(raw_page)), max(0, int(raw_back))
+    total = await db.count_ai_turn_log(telegram_id)
+    rows = await db.get_ai_turn_log(
+        telegram_id, limit=AICHATS_TURNS_PAGE_SIZE, offset=page * AICHATS_TURNS_PAGE_SIZE
+    )
+    user = await db.get_user(telegram_id)
+    label = keyboards.admin_user_label(
+        user["username"] if user else None, await db.get_user_email(telegram_id), telegram_id
+    )
+    has_older = (page + 1) * AICHATS_TURNS_PAGE_SIZE < total
+    await ui.safe_edit(
+        callback,
+        format_aichats_turns(label, rows, total, page),
+        reply_markup=_aichats_turns_keyboard(telegram_id, page, has_older, back),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:aic:x:"))
+async def admin_aichats_export(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    telegram_id = int(callback.data.split(":")[3])
+    rows = await db.get_ai_turn_log(telegram_id, limit=AICHATS_EXPORT_TURNS)
+    if not rows:
+        await callback.answer("Ходов нет.", show_alert=True)
+        return
+    user = await db.get_user(telegram_id)
+    label = keyboards.admin_user_label(
+        user["username"] if user else None, await db.get_user_email(telegram_id), telegram_id
+    )
+    body = format_aichats_export(label, telegram_id, rows).encode("utf-8")
+    stamp = admin_time(db.now_iso()).strftime("%Y%m%d")
+    await callback.message.answer_document(
+        BufferedInputFile(body, filename=f"aichats_{telegram_id}_{stamp}.md")
+    )
     await callback.answer()
 
 

@@ -173,6 +173,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, StreamingResponse
 from starlette.routing import Route
 
+import ai_chat_log
 import ai_limits
 import ai_program_actions
 import ai_setup_flow
@@ -512,6 +513,9 @@ async def _run_turn(
     # копирует контекст в момент создания — язык доезжает до всех инструментов.
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
+    # Начало хода для журнала /aichats (ai_chat_log): модель и цена — из
+    # cost_events с этой метки.
+    turn_started_at = db.now_iso()
     try:
         with i18n.use_lang(lang):
             answer = await asyncio.wait_for(
@@ -551,6 +555,15 @@ async def _run_turn(
         ]
         turn_id = await db.add_ai_conversation_turn(
             user_id, visible_question, answer, fallback_wire, image_path=saved_image_path
+        )
+
+    # Читаемый журнал ходов для проверки качества (/aichats) — тот же, куда
+    # пишет бот. «Программа атлету» — про чужой дневник, туда не пишется (см.
+    # ai_chat_log).
+    if subject is None:
+        await ai_chat_log.record_turn(
+            user_id, source=ai_chat_log.SOURCE_APP, question=visible_question,
+            answer=answer, wire=wire_messages, started_at=turn_started_at,
         )
 
     return {

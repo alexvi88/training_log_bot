@@ -743,6 +743,8 @@ async def _run_retention_cleanup() -> bool:
         # Архив прошлых разговоров с тренером: текущий не трогается никогда, см.
         # db.prune_old_ai_conversations.
         ("ai_conversations", lambda: db.prune_old_ai_conversations(config.AI_CONVERSATION_RETENTION_DAYS)),
+        # Журнал ходов для /aichats (ai_chat_log) — тот же срок, что у архива.
+        ("ai_turn_log", lambda: db.prune_old_ai_turn_log(config.AI_CONVERSATION_RETENTION_DAYS)),
         ("pushes", lambda: db.prune_old_pushes(
             PUSH_RETENTION_DAYS,
             keep_categories=tuple(ann.key for ann in announcements.ANNOUNCEMENTS),

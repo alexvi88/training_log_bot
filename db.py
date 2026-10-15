@@ -521,6 +521,30 @@ CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_user ON ai_conversation_tur
 -- таблицы — no-op, колонки в ней ещё нет, а executescript идёт ДО миграций и
 -- падает на индексе целиком (sqlite3.OperationalError: no such column).
 
+-- Журнал ходов тренера для проверки качества ответов (админская /aichats,
+-- см. ai_chat_log.py). Одна строка = один состоявшийся ход: что спросили, что
+-- тренер ответил, какой моделью, какие инструменты звал и сколько это стоило.
+-- Не wire-формат и не окно контекста: модель отсюда не читает ничего, и ни
+-- бот (FSM ai_history), ни приложение (ai_conversation_turns) своей логики
+-- разговора на эту таблицу не опирают — поэтому «новый разговор» и подрезка
+-- окна до MAX_AI_CONVERSATION_TURNS её не трогают. source — 'bot' или 'app'.
+-- tools — JSON-список имён инструментов (без аргументов и результатов).
+-- Живёт config.AI_CONVERSATION_RETENTION_DAYS (prune_old_ai_turn_log в ночной
+-- чистке), сносится вместе с аккаунтом (колонка telegram_id).
+CREATE TABLE IF NOT EXISTS ai_turn_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    model TEXT,
+    tools TEXT NOT NULL DEFAULT '[]',
+    cost_usd REAL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_turn_log_user ON ai_turn_log (telegram_id, id);
+CREATE INDEX IF NOT EXISTS idx_ai_turn_log_created ON ai_turn_log (created_at);
+
 -- Черновик программы, предложенный тренером через /ai/ask (см. api_v1_ai.py),
 -- и активный опросник перед его сборкой — HTTP-аналог того, что бот держит в
 -- aiogram FSM (ai_program_draft/ai_setup). Один ряд на пользователя (PRIMARY
@@ -12264,6 +12288,124 @@ async def prune_old_ai_conversations(retention_days: int) -> int:
     for name in attachments:
         chat_attachments.delete(name)
     return len(ids)
+
+
+# ---------- AI trainer: журнал ходов для проверки качества (/aichats) ----------
+#
+# См. ai_turn_log в SCHEMA и ai_chat_log.py. Пишется ПОСЛЕ состоявшегося хода и
+# только для чтения глазами — ни бот, ни приложение отсюда разговор не строят.
+
+
+async def add_ai_turn_log(
+    telegram_id: int,
+    source: str,
+    question: str,
+    answer: str,
+    *,
+    model: Optional[str] = None,
+    tools: Optional[list[str]] = None,
+    cost_usd: Optional[float] = None,
+) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO ai_turn_log "
+            "(telegram_id, source, question, answer, model, tools, cost_usd, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                telegram_id, source, question, answer, model,
+                json.dumps(list(tools or []), ensure_ascii=False), cost_usd, now_iso(),
+            ),
+        )
+        await conn().commit()
+    return int(cur.lastrowid)
+
+
+async def ai_turn_costs_since(telegram_id: int, since_iso: str) -> dict[str, Any]:
+    """Модели, серверные инструменты и цена платных вызовов человека с момента
+    since_iso — то, что потратил один ход (cost_events пишет каждый вызов, см.
+    log_cost_event). Цена — той же формулой, что у лога и дневного отчёта.
+    models — по убыванию числа вызовов: первой идёт модель главного цикла."""
+    cur = await conn().execute(
+        "SELECT event_type, model, prompt_tokens, completion_tokens, cached_tokens, "
+        "reasoning_tokens FROM cost_events WHERE user_id = ? AND created_at >= ? ORDER BY id",
+        (telegram_id, since_iso),
+    )
+    counts: dict[str, int] = {}
+    server_tools: list[str] = []
+    total = 0.0
+    for row in await cur.fetchall():
+        kind = row["event_type"]
+        model = row["model"] or ""
+        if kind == "server_tool":
+            total += config.server_tool_price_usd(model)
+            if model and model not in server_tools:
+                server_tools.append(model)
+        elif kind == "transcription":
+            total += config.transcription_price_usd(row["prompt_tokens"])
+        else:
+            total += config.call_price_usd(
+                model, row["prompt_tokens"], row["completion_tokens"],
+                row["cached_tokens"], row["reasoning_tokens"],
+            )
+            if model:
+                counts[model] = counts.get(model, 0) + 1
+    models = sorted(counts, key=lambda name: -counts[name])
+    return {"models": models, "server_tools": server_tools, "cost_usd": total}
+
+
+async def count_ai_turn_log_users() -> int:
+    cur = await conn().execute("SELECT COUNT(DISTINCT telegram_id) AS n FROM ai_turn_log")
+    return int((await cur.fetchone())["n"])
+
+
+async def list_ai_turn_log_users(
+    since_iso: str, limit: int = 10, offset: int = 0
+) -> list[aiosqlite.Row]:
+    """Кто говорил с тренером — для /aichats: свежие сверху. turns_recent —
+    ходы с since_iso (неделя на экране), sources — через запятую, model —
+    модель последнего хода."""
+    cur = await conn().execute(
+        "SELECT l.telegram_id, u.username, "
+        "(SELECT i.email FROM auth_identities i WHERE i.user_id = l.telegram_id "
+        "AND i.email IS NOT NULL ORDER BY i.created_at LIMIT 1) AS email, "
+        "SUM(CASE WHEN l.created_at >= ? THEN 1 ELSE 0 END) AS turns_recent, "
+        "COUNT(*) AS turns_total, MAX(l.created_at) AS last_at, "
+        "GROUP_CONCAT(DISTINCT l.source) AS sources, "
+        "(SELECT m.model FROM ai_turn_log m WHERE m.telegram_id = l.telegram_id "
+        "ORDER BY m.id DESC LIMIT 1) AS model "
+        "FROM ai_turn_log l LEFT JOIN users u ON u.telegram_id = l.telegram_id "
+        "GROUP BY l.telegram_id ORDER BY last_at DESC, l.telegram_id "
+        "LIMIT ? OFFSET ?",
+        (since_iso, limit, offset),
+    )
+    return list(await cur.fetchall())
+
+
+async def count_ai_turn_log(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) AS n FROM ai_turn_log WHERE telegram_id = ?", (telegram_id,)
+    )
+    return int((await cur.fetchone())["n"])
+
+
+async def get_ai_turn_log(telegram_id: int, limit: int = 5, offset: int = 0) -> list[aiosqlite.Row]:
+    """Ходы человека, новые первыми (offset 0 — самые свежие)."""
+    cur = await conn().execute(
+        "SELECT id, source, question, answer, model, tools, cost_usd, created_at "
+        "FROM ai_turn_log WHERE telegram_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (telegram_id, limit, offset),
+    )
+    return list(await cur.fetchall())
+
+
+async def prune_old_ai_turn_log(retention_days: int) -> int:
+    """Снести ходы журнала старше retention_days (config.AI_CONVERSATION_RETENTION_DAYS —
+    тот же срок, что у архива разговоров приложения)."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM ai_turn_log WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount or 0
 
 
 # ---------- AI trainer: HTTP-аналог ai_program_draft/ai_setup из FSM ----------

@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import activity_log
+import ai_chat_log
 import ai_limits
 import ai_program_actions
 import ai_setup_flow
@@ -2285,6 +2286,9 @@ async def _handle_question(
     # Определена заранее — на случай, если создание задачи ниже упадёт ДО
     # присвоения (не должно, но тогда finally не свалился бы с NameError).
     running_task: Optional[asyncio.Task] = None
+    # С этого момента платные вызовы хода пишутся в cost_events — по ним журнал
+    # для /aichats (ai_chat_log) возьмёт модель и цену.
+    turn_started_at = db.now_iso()
     try:
         ask_task = asyncio.create_task(
             ai_trainer.ask(
@@ -2441,6 +2445,12 @@ async def _handle_question(
     if not client:
         await db.add_ai_chat_message(user_id, "user", history_question)
         await db.add_ai_chat_message(user_id, "assistant", answer)
+        # Читаемый журнал ходов для проверки качества (/aichats) — тот же, куда
+        # пишет приложение. Разговор с моделью от него не зависит.
+        await ai_chat_log.record_turn(
+            user_id, source=ai_chat_log.SOURCE_BOT, question=history_question,
+            answer=answer, wire=wire_cell.get("messages"), started_at=turn_started_at,
+        )
     # И в ленту действий (/activity): вопрос там был всегда, ответ — нет, и
     # цепочка «спросил → нажал» читалась без середины.
     with suppress(Exception):
