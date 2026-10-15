@@ -156,7 +156,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- naive UTC. NULL — ни разу. Колонкой, а не только строкой в `pushes`:
     -- те чистятся через admin_tasks.PUSH_RETENTION_DAYS, а интервал в два месяца должен
     -- пережить и чистку, и перезапуск.
-    feedback_push_at TEXT
+    feedback_push_at TEXT,
+    -- Имя из профиля Telegram (`from_user.first_name`), как его прислал
+    -- последний апдейт; NULL — Telegram у аккаунта нет или он ещё не писал
+    -- боту после появления колонки. Пишет только SetUserLanguageMiddleware
+    -- (main.py). Нужно одному: заранее вписать имя на приглашении тренера
+    -- (api_v1_coach.suggested_client_name), чтобы атлет не набирал его сам.
+    first_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1851,6 +1857,8 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN telegram_linked INTEGER NOT NULL DEFAULT 1"
         )
+    if "first_name" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
     if "app_since" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN app_since TEXT")
         # Кто уже входил в приложение до этой колонки: живой или прошлый токен
@@ -2779,6 +2787,20 @@ async def get_or_create_user(
 async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     return await cur.fetchone()
+
+
+async def set_user_first_name(telegram_id: int, first_name: Optional[str]) -> None:
+    """Имя из профиля Telegram (см. колонку users.first_name). Пустое — NULL.
+    Пишет только если изменилось: зовётся на апдейтах, а запись под общим
+    замком не бесплатна."""
+    value = (first_name or "").strip()[:64] or None
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE users SET first_name = ? WHERE telegram_id = ? AND first_name IS NOT ?",
+            (value, telegram_id, value),
+        )
+        if cur.rowcount:
+            await conn().commit()
 
 
 # ---------- аккаунты без Telegram (Sign in with Apple прямо в приложении) ----------
@@ -8074,6 +8096,8 @@ _MERGE_USER_COLUMN_SQL = {
     "created_at": "MIN(created_at, ?)",
     # Приложение было хоть у одной стороны — оно есть у слитого аккаунта.
     "app_since": "COALESCE(app_since, ?)",
+    # Имя из Telegram — у телеграм-строки; у app-строки его обычно нет.
+    "first_name": "COALESCE(first_name, ?)",
 }
 # Колонки, которые остаются у телеграм-строки без сравнения.
 _MERGE_USER_KEEP_TARGET_COLUMNS = frozenset({
@@ -8220,9 +8244,12 @@ async def link_telegram_to_app_account(
                 await db.execute("DELETE FROM users WHERE telegram_id = ?", (app_user_id,))
                 await db.execute(
                     "UPDATE users SET telegram_linked = 1, username = COALESCE(?, username), "
-                    "app_since = COALESCE(app_since, ?) "
+                    "app_since = COALESCE(app_since, ?), first_name = COALESCE(first_name, ?) "
                     "WHERE telegram_id = ?",
-                    (username, app_row["app_since"] or app_row["created_at"], telegram_id),
+                    (
+                        username, app_row["app_since"] or app_row["created_at"],
+                        app_row["first_name"], telegram_id,
+                    ),
                 )
             await db.commit()
             return "ok"
@@ -13832,6 +13859,25 @@ async def list_coach_clients(coach_id: int) -> list[aiosqlite.Row]:
         "SELECT * FROM coach_links WHERE coach_id = ? ORDER BY created_at, client_id", (coach_id,)
     )
     return await cur.fetchall()
+
+
+async def coach_client_name_candidates(user_id: int) -> list[Optional[str]]:
+    """Чем атлет уже называл себя, свежее первым: имя последней связки с
+    тренером, своё имя тренера, имя из Telegram. Отбор годного — у вызывающего
+    (api_v1_coach.suggested_client_name)."""
+    cur = await conn().execute(
+        "SELECT client_name FROM coach_links WHERE client_id = ? "
+        "ORDER BY created_at DESC, coach_id DESC LIMIT 1",
+        (user_id,),
+    )
+    link = await cur.fetchone()
+    profile = await get_coach_profile(user_id)
+    user = await get_user(user_id)
+    return [
+        link["client_name"] if link is not None else None,
+        profile["display_name"] if profile is not None else None,
+        user["first_name"] if user is not None else None,
+    ]
 
 
 async def list_client_coaches(client_id: int) -> list[aiosqlite.Row]:

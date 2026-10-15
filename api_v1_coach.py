@@ -456,7 +456,23 @@ async def invite_preview(request: Request) -> JSONResponse:
         "is_own": invite["owner_id"] == user_id,
         "already_linked": link is not None,
         "visibility": coach_service.visibility_json(link),
+        # Чем вписать поле «Как тебя назвать тренеру» заранее; null — нечем,
+        # атлет набирает сам. Только подсказка: принимается то имя, что
+        # пришло в «Разрешить».
+        "suggested_name": await suggested_client_name(user_id),
     })
+
+
+async def suggested_client_name(user_id: int) -> Optional[str]:
+    """Имя для приглашения тренера: как атлет уже назвался другому тренеру,
+    иначе его имя тренера, иначе имя из Telegram. Берётся первое, что прошло
+    бы проверку «Разрешить» (`_display_name`), — подсказка, которую сервер
+    сам потом отклонит, хуже пустого поля."""
+    for raw in await db.coach_client_name_candidates(user_id):
+        name = coach_service.clean_display_name(raw)
+        if name is not None and len(name) <= coach_service.MAX_DISPLAY_NAME_LENGTH:
+            return name
+    return None
 
 
 async def accept_invite(request: Request) -> JSONResponse:
