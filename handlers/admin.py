@@ -462,7 +462,7 @@ def _activity_line_all(row) -> str:
     лента иначе нечитаема — и в HTML, чтобы автора можно было выделить жирным."""
     at = admin_time(row["created_at"])
     who = keyboards.admin_user_label(
-        row["username"], row["email"] if "email" in row.keys() else None, row["telegram_id"]
+        row["username"], keyboards.row_value(row, "email"), row["telegram_id"]
     )
     return (
         f"{at.strftime('%d.%m %H:%M')} {_activity_source(row)} {_activity_marker(row['kind'])} "
