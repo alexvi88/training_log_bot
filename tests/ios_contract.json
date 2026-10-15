@@ -1577,6 +1577,44 @@
      "type": "CoachGreeting",
      "optional": true,
      "default": true
+    },
+    "bodyVolume": {
+     "type": "Dashboard.BodyVolume",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "Dashboard.BodyVolume": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "chest": {
+     "type": "Double",
+     "optional": true
+    },
+    "back": {
+     "type": "Double",
+     "optional": true
+    },
+    "legs": {
+     "type": "Double",
+     "optional": true
+    },
+    "shoulders": {
+     "type": "Double",
+     "optional": true
+    },
+    "biceps": {
+     "type": "Double",
+     "optional": true
+    },
+    "triceps": {
+     "type": "Double",
+     "optional": true
+    },
+    "abs": {
+     "type": "Double",
+     "optional": true
     }
    }
   },
@@ -3463,6 +3501,11 @@
     "repRangeMax": {
      "type": "Int",
      "optional": true
+    },
+    "gender": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5319,5 +5362,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "ec703f20da98fdc793c1d1893a21d270fa6947bc"
+ "_ios_commit": "848874a0bf8e0fec6f41ff978a11fe4c0b33f3eb"
 }
