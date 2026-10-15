@@ -68,8 +68,8 @@ async def test_tool_names_are_only_from_the_last_turn_and_unique():
 async def test_record_turn_takes_model_and_cost_from_this_turn_only(fresh_db, user_id):
     await db.log_cost_event(user_id, "llm_call", model="old-model", prompt_tokens=10)
     started = db.now_iso()
-    await db.log_cost_event(user_id, "llm_call", model=config.GROK_MODEL, prompt_tokens=1000, completion_tokens=200)
-    await db.log_cost_event(user_id, "llm_call", model=config.GROK_MODEL, prompt_tokens=1200, completion_tokens=50)
+    await db.log_cost_event(user_id, "llm_call", model=config.OPENAI_CHAT_MODEL, prompt_tokens=1000, completion_tokens=200)
+    await db.log_cost_event(user_id, "llm_call", model=config.OPENAI_CHAT_MODEL, prompt_tokens=1200, completion_tokens=50)
     await db.log_cost_event(user_id, "server_tool", model="web_search")
     # Ход другого человека в ту же секунду — не наш.
     await db.log_cost_event(222, "llm_call", model="someone-else", prompt_tokens=10)
@@ -87,11 +87,11 @@ async def test_record_turn_takes_model_and_cost_from_this_turn_only(fresh_db, us
     assert row["source"] == "bot"
     assert row["question"] == "как мой жим?"
     assert row["answer"] == "Жим растёт."
-    assert row["model"] == config.GROK_MODEL
+    assert row["model"] == config.OPENAI_CHAT_MODEL
     assert json.loads(row["tools"]) == ["get_workouts", "get_records", "web_search"]
     expected = (
-        config.call_price_usd(config.GROK_MODEL, 1000, 200)
-        + config.call_price_usd(config.GROK_MODEL, 1200, 50)
+        config.call_price_usd(config.OPENAI_CHAT_MODEL, 1000, 200)
+        + config.call_price_usd(config.OPENAI_CHAT_MODEL, 1200, 50)
         + config.server_tool_price_usd("web_search")
     )
     assert row["cost_usd"] == pytest.approx(expected, rel=1e-4)
@@ -134,7 +134,7 @@ async def test_bot_turn_lands_in_the_log_and_history_still_feeds_the_model(fresh
 
     async def fake_ask(uid, question, history, **kwargs):
         seen_histories.append(list(history))
-        await db.log_cost_event(uid, "llm_call", model=config.GROK_MODEL, prompt_tokens=500, completion_tokens=100)
+        await db.log_cost_event(uid, "llm_call", model=config.OPENAI_CHAT_MODEL, prompt_tokens=500, completion_tokens=100)
         wire = [*history, {"role": "user", "content": question}]
         if question == "как мой жим?":
             wire += _WIRE[5:]
@@ -151,9 +151,9 @@ async def test_bot_turn_lands_in_the_log_and_history_still_feeds_the_model(fresh
 
     newest, first = await db.get_ai_turn_log(user_id)
     assert (first["source"], first["question"], first["answer"]) == ("bot", "как мой жим?", "Жим растёт.")
-    assert first["model"] == config.GROK_MODEL
+    assert first["model"] == config.OPENAI_CHAT_MODEL
     assert json.loads(first["tools"]) == ["get_workouts", "get_records"]
-    assert first["cost_usd"] == pytest.approx(config.call_price_usd(config.GROK_MODEL, 500, 100), rel=1e-4)
+    assert first["cost_usd"] == pytest.approx(config.call_price_usd(config.OPENAI_CHAT_MODEL, 500, 100), rel=1e-4)
     assert (newest["question"], newest["answer"], json.loads(newest["tools"])) == ("а тяга?", "Тяга тоже.", [])
     # Модель по-прежнему получает историю из FSM — wire прошлого хода целиком.
     assert seen_histories[0] == []
@@ -175,7 +175,7 @@ async def test_app_turn_lands_in_the_same_log(fresh_db, monkeypatch):
     code = await fresh_db.issue_oauth_link_code(ATHLETE, ttl_seconds=600, digits=8)
 
     async def fake_ask(uid, question, history, on_wire=None, **kwargs):
-        await db.log_cost_event(uid, "llm_call", model=config.GROK_MODEL, prompt_tokens=300)
+        await db.log_cost_event(uid, "llm_call", model=config.OPENAI_CHAT_MODEL, prompt_tokens=300)
         await on_wire([{"role": "user", "content": question}, *_WIRE[5:]])
         return "Жим растёт."
 
@@ -190,7 +190,7 @@ async def test_app_turn_lands_in_the_same_log(fresh_db, monkeypatch):
 
     (row,) = await db.get_ai_turn_log(ATHLETE)
     assert (row["source"], row["question"], row["answer"]) == ("app", "как мой жим?", "Жим растёт.")
-    assert row["model"] == config.GROK_MODEL
+    assert row["model"] == config.OPENAI_CHAT_MODEL
     assert json.loads(row["tools"]) == ["get_workouts", "get_records"]
     # Разговор приложения живёт в своей таблице, как и раньше.
     assert [t["question"] for t in await db.get_ai_conversation_history(ATHLETE)] == ["как мой жим?"]
@@ -268,7 +268,7 @@ async def _seed_turns(user_id: int, count: int, source: str = "bot") -> None:
     for i in range(count):
         await db.add_ai_turn_log(
             user_id, source, f"вопрос {i}", f"ответ {i}",
-            model=config.GROK_MODEL, tools=["get_workouts"], cost_usd=0.0012,
+            model=config.OPENAI_CHAT_MODEL, tools=["get_workouts"], cost_usd=0.0012,
         )
 
 
@@ -304,7 +304,7 @@ async def test_list_shows_users_with_counts_source_and_model(fresh_db, as_admin)
 
     text = message.answer.await_args.args[0]
     assert "@athlete — 3 за 7 дн. (всего 4)" in text
-    assert "приложение+бот" in text and config.GROK_MODEL in text
+    assert "приложение+бот" in text and config.OPENAI_CHAT_MODEL in text
     assert "222 — 1 за 7 дн." in text
     buttons = _buttons(message.answer.await_args.kwargs["reply_markup"])
     assert ("@athlete (3/7д)", f"admin:aic:u:{ATHLETE}:0:0") in buttons
@@ -337,7 +337,7 @@ async def test_user_turns_page_newest_first_with_older_newer(fresh_db, user_id, 
     assert f"👤 вопрос {newest}" in text and "👤 вопрос 0\n" not in text
     # По порядку разговора: раньше заданный — выше.
     assert text.index(f"вопрос {newest - 1}") < text.index(f"вопрос {newest}")
-    assert "бот" in text and "🛠 get_workouts" in text and "$0.0012" in text and config.GROK_MODEL in text
+    assert "бот" in text and "🛠 get_workouts" in text and "$0.0012" in text and config.OPENAI_CHAT_MODEL in text
     assert ("◀️ Старше", f"admin:aic:u:{user_id}:1:3") in buttons
     assert ("↩️ К списку", "admin:aic:p:3") in buttons
     assert not any(label == "Новее ▶️" for label, _ in buttons)

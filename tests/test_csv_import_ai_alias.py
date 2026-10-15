@@ -15,6 +15,7 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
+from luna_fakes import as_luna
 
 import ai_trainer
 import handlers.csv_import as csv_import
@@ -42,7 +43,7 @@ async def test_matches_confident_pairs_and_ignores_the_rest(fresh_db, monkeypatc
             {"import_name": "Running", "catalog_name": "Не знаю что"},  # не в каталоге
         ]
     }))
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     result = await ai_trainer.match_exercise_names_to_catalog(
         1, ["Bench Press (Barbell)", "Running"]
@@ -58,7 +59,7 @@ async def test_hallucinated_import_name_is_dropped(fresh_db, monkeypatch):
     client = _fake_client(json.dumps({
         "matches": [{"import_name": "Something Else", "catalog_name": "Жим штанги лёжа"}]
     }))
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     result = await ai_trainer.match_exercise_names_to_catalog(1, ["Bench Press (Barbell)"])
 
@@ -80,7 +81,7 @@ async def test_returns_empty_on_provider_error(fresh_db, monkeypatch):
         raise RuntimeError("provider down")
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=boom)))
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     result = await ai_trainer.match_exercise_names_to_catalog(1, ["Bench Press (Barbell)"])
 
@@ -90,7 +91,7 @@ async def test_returns_empty_on_provider_error(fresh_db, monkeypatch):
 async def test_returns_empty_for_unparsable_response(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     client = _fake_client("не json вовсе")
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     result = await ai_trainer.match_exercise_names_to_catalog(1, ["Bench Press (Barbell)"])
 

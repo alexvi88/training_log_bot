@@ -13,7 +13,9 @@ reasoning_effort (400), поэтому раунды с инструментам�
   прежние chunk / status / done;
 - цена — по usage Responses, размышления не удваиваются; обрыв стрима —
   оценкой, как у chat-пути;
-- после Luna-хода grok получает историю без чужих полей.
+- старая история (ходы прежней модели с reasoning_content) собирается в
+  input Responses без чужих полей, а короткие chat-вызовы получают историю
+  без сырых элементов Responses.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -66,19 +67,12 @@ def _today() -> str:
 
 @pytest.fixture
 def own_luna(monkeypatch):
-    monkeypatch.setattr(config, "ADMIN_ID", 1)
-    monkeypatch.setattr(config, "TEST_USER_ID", OWN)
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
-
-    def no_grok():
-        raise AssertionError("Luna-ход не должен трогать xAI-клиент")
-
-    monkeypatch.setattr(ai_trainer, "_get_client", no_grok)
 
 
 async def _luna_user(fresh_db):
+    # Модель одна на всех — никакого выбора на аккаунте не нужно.
     await fresh_db.get_or_create_user(telegram_id=OWN, username="own")
-    assert await db.set_user_ai_model(OWN, "luna")
 
 
 class _FakeOpenAI:
@@ -124,7 +118,7 @@ async def test_luna_loop_goes_to_responses_with_reasoning(fresh_db, own_luna, mo
         _round_body([REASONING_1, CALL_1], USAGE_1),
         _round_body([REASONING_2, MESSAGE_2], USAGE_2),
     ])
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
     monkeypatch.setattr(ai_trainer, "execute_tool", _overview)
     wire: dict = {}
 
@@ -178,7 +172,7 @@ async def test_luna_loop_goes_to_responses_with_reasoning(fresh_db, own_luna, mo
         (12_000 + 2_000) / 1000 * 0.0001 + 11_000 / 1000 * 0.0001 * 0.1 + 1_200 / 1000 * 0.0005
     )
 
-    # История хода: chat-форма для всех (grok её поймёт) + сырые элементы Luna.
+    # История хода: chat-форма (её читают короткие вызовы и архив) + сырые элементы Luna.
     saved = wire["messages"]
     tool_round = next(m for m in saved if m.get("tool_calls"))
     assert tool_round[ai_trainer.OPENAI_OUTPUT_KEY] == [REASONING_1, CALL_1]
@@ -216,7 +210,7 @@ async def test_luna_stream_maps_to_chunks_and_statuses(fresh_db, own_luna, monke
              "response": _round_body([REASONING_2, MESSAGE_2], USAGE_2)},
         ],
     ])
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
     monkeypatch.setattr(ai_trainer, "execute_tool", _overview)
     monkeypatch.setattr(ai_trainer, "STREAM_FLUSH_SECONDS", 0)
     chunks: list[str] = []
@@ -232,7 +226,7 @@ async def test_luna_stream_maps_to_chunks_and_statuses(fresh_db, own_luna, monke
     assert answer == ANSWER
     assert all(body["stream"] is True for body in fake.requests)
     assert fake.requests[1]["input"][-3:-1] == [REASONING_1, CALL_1]
-    # Статус инструмента — из того же места, что у grok; текст — нарастающий.
+    # Статус инструмента — из того же места, что у chat-пути; текст — нарастающий.
     assert len(statuses) == 1 and statuses[0] in ai_trainer._tool_status_variants("get_training_overview")
     assert chunks and chunks[-1] == ANSWER
     assert all(ANSWER.startswith(c) for c in chunks)
@@ -245,7 +239,7 @@ async def test_luna_stream_abort_is_billed_by_estimate(fresh_db, own_luna, monke
         {"type": "response.output_text.delta", "delta": "Начал отвечать и "},
         asyncio.TimeoutError(),
     ]])
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
 
     async def on_chunk(text):
         pass
@@ -265,7 +259,7 @@ async def test_luna_stream_failed_event_raises_and_bills(fresh_db, own_luna, mon
             "usage": {"input_tokens": 9_000, "output_tokens": 0},
         }},
     ]])
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
 
     async def on_chunk(text):
         pass
@@ -275,20 +269,10 @@ async def test_luna_stream_failed_event_raises_and_bills(fresh_db, own_luna, mon
     assert (await db.get_llm_cost_breakdown(_today()))["gpt-6-luna"]["prompt_tokens"] == 9_000
 
 
-async def test_grok_after_luna_gets_history_without_openai_items(fresh_db, own_luna, monkeypatch):
-    """Атлет переключился обратно на grok: история Luna-хода едет chat-формой,
-    без сырых элементов OpenAI."""
-    await fresh_db.get_or_create_user(telegram_id=OWN, username="own")
-    calls: list = []
-
-    class _Completions:
-        async def create(self, **kwargs):
-            calls.append(kwargs)
-            message = SimpleNamespace(content="Ответ", tool_calls=None, model_extra={})
-            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
-
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: SimpleNamespace(
-        chat=SimpleNamespace(completions=_Completions())))
+def test_chat_calls_get_history_without_openai_items():
+    """Короткие вызовы на chat/completions (гейт и т.п.) получают историю
+    Luna-хода chat-формой, без сырых элементов OpenAI и без reasoning_content
+    прежнего провайдера."""
     history = [
         {"role": "user", "content": "q"},
         {"role": "assistant", "content": "", "tool_calls": [
@@ -297,17 +281,18 @@ async def test_grok_after_luna_gets_history_without_openai_items(fresh_db, own_l
          ai_trainer.OPENAI_OUTPUT_KEY: [REASONING_1, CALL_1]},
         {"role": "tool", "tool_call_id": "call_abc", "content": "{}"},
         {"role": "assistant", "content": ANSWER, ai_trainer.OPENAI_OUTPUT_KEY: [REASONING_2, MESSAGE_2]},
+        {"role": "assistant", "content": "старое", "reasoning_content": "думы прежней модели"},
     ]
-    await ai_trainer.ask(OWN, "А присед?", history)
-    (kwargs,) = calls
-    assert not any(ai_trainer.OPENAI_OUTPUT_KEY in m for m in kwargs["messages"])
-    assert kwargs["messages"][2]["tool_calls"][0]["id"] == "call_abc"
-    assert kwargs["messages"][4] == {"role": "assistant", "content": ANSWER}
+    sent = ai_trainer._wire_messages(history)
+    assert not any(ai_trainer.OPENAI_OUTPUT_KEY in m or "reasoning_content" in m for m in sent)
+    assert sent[1]["tool_calls"][0]["id"] == "call_abc"
+    assert sent[3] == {"role": "assistant", "content": ANSWER}
 
 
-def test_grok_era_history_converts_to_responses_items():
-    """Ход grok'а (или предзагрузка пресета) без сырых элементов — собирается
-    из chat-формы; reasoning_content xAI в OpenAI не уезжает."""
+def test_old_history_converts_to_responses_items():
+    """Ход прежней модели (или предзагрузка пресета) без сырых элементов —
+    собирается из chat-формы; reasoning_content прежнего провайдера в OpenAI
+    не уезжает."""
     items = ai_trainer._responses_input([
         {"role": "system", "content": "шапка"},
         {"role": "user", "content": [
@@ -364,7 +349,7 @@ async def test_api_stream_on_luna_keeps_chunk_status_done(fresh_db, own_luna, mo
             {"type": "response.completed", "response": _round_body([REASONING_2, MESSAGE_2], USAGE_2)},
         ],
     ])
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
     monkeypatch.setattr(ai_trainer, "execute_tool", _overview)
 
     code = await fresh_db.issue_oauth_link_code(OWN, ttl_seconds=600, digits=8)
@@ -391,12 +376,12 @@ PHOTO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAD
 async def test_luna_photo_turn_sends_input_image_and_keeps_history_light(
     fresh_db, own_luna, monkeypatch,
 ):
-    """Фото к вопросу у атлета на Luna идёт в Luna (не в xAI — own_luna роняет
-    любое касание grok-клиента), картинкой input_image в последнем user-элементе;
+    """Фото к вопросу идёт в Luna (vision_backend, по умолчанию та же модель),
+    картинкой input_image в последнем user-элементе;
     в историю хода — текст вопроса без база64; цена — обычным cost-событием."""
     await _luna_user(fresh_db)
     fake = _FakeOpenAI([_round_body([REASONING_2, MESSAGE_2], USAGE_2)])
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
     wire: dict = {}
 
     async def on_wire(messages):

@@ -699,8 +699,7 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str
 async def _model_answer(coach_id: int, messages: list[dict[str, Any]]) -> str:
     """Один нестримящий платный вызов — через ai_trainer.paid_call (лимит
     вопроса тренера → вызов → цена в лог). LimitBlocked летит наружу."""
-    # Модель — по выбору тренера (своим аккаунтам можно Luna, см.
-    # ai_trainer.chat_backend); обычному — grok теми же параметрами, что всегда.
+    # Модель — та же, что у всех текстовых вызовов тренера (ai_trainer.chat_backend).
     backend = await ai_trainer.chat_backend(coach_id)
     response = await ai_trainer.paid_call(
         coach_id, ai_limits.KIND_QUESTION,

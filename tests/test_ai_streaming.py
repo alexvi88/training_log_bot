@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from luna_fakes import as_luna
 
 from handlers import ai_trainer as handler
 
@@ -272,7 +273,7 @@ async def test_streamed_round_returns_the_whole_text(monkeypatch):
     seen: list[str] = []
 
     content, tool_calls, _reasoning = await ai_trainer._completion_round(
-        client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector(seen),
+        as_luna(client), [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector(seen),
     )
 
     assert content == "Жим встал."
@@ -298,7 +299,7 @@ async def test_first_flush_waits_for_enough_text_even_if_flush_interval_has_pass
     seen: list[str] = []
 
     await ai_trainer._completion_round(
-        client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector(seen),
+        as_luna(client), [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector(seen),
     )
 
     # Один символ никогда не должен был уйти наружу отдельным флашем.
@@ -325,7 +326,7 @@ async def test_streamed_tool_calls_are_reassembled_from_deltas(monkeypatch):
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
 
     _content, tool_calls, _reasoning = await ai_trainer._completion_round(
-        client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector([]),
+        as_luna(client), [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector([]),
     )
 
     assert len(tool_calls) == 1
@@ -335,7 +336,7 @@ async def test_streamed_tool_calls_are_reassembled_from_deltas(monkeypatch):
 
 
 async def test_aborted_stream_still_logs_a_cost_event(monkeypatch):
-    """xAI sends `usage` only on the final chunk — a timeout/cancellation/drop
+    """The provider sends `usage` only at the end of the stream — a timeout/cancellation/drop
     partway through used to skip `_log_llm_cost` entirely, losing a call the
     provider had already billed. On abort we log a best-effort estimate from
     whatever prompt/text we actually had, instead of nothing."""
@@ -360,7 +361,7 @@ async def test_aborted_stream_still_logs_a_cost_event(monkeypatch):
 
     with pytest.raises(RuntimeError):
         await ai_trainer._completion_round(
-            client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector([]),
+            as_luna(client), [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector([]),
         )
 
     log_cost.assert_awaited_once()
@@ -382,7 +383,7 @@ async def test_without_a_chunk_callback_the_call_is_not_streamed(monkeypatch):
     )
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
 
-    content, _, _reasoning = await ai_trainer._completion_round(client, [], user_id=1)
+    content, _, _reasoning = await ai_trainer._completion_round(as_luna(client), [], user_id=1)
 
     assert content == "ответ"
     assert "stream" not in client.chat.completions.create.await_args.kwargs

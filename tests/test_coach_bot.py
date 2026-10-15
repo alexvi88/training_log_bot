@@ -18,6 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
+from luna_fakes import as_luna
 
 import acquisition
 import ai_limits
@@ -881,7 +882,7 @@ def fake_model(monkeypatch):
     completions = _FakeCompletions("**Маше** пора в зал.")
     fake = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
     return completions
 
 

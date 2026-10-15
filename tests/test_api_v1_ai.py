@@ -1402,7 +1402,7 @@ async def test_ask_video_full_scenario_with_own_exercise(fresh_db, client_factor
 @pytest.mark.asyncio
 async def test_ask_video_passes_pose_summary_to_both_models(fresh_db, client_factory, monkeypatch):
     """Замеры позы с телефона (iOS, Apple Vision) уходят и глазам (Qwen), и
-    голосу (Grok): иначе тренер пересказывал бы разбор, не зная цифр."""
+    голосу (тренеру): иначе тренер пересказывал бы разбор, не зная цифр."""
     monkeypatch.setattr(config, "video_analysis_available", lambda: True)
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     summary = "reps: 5; knee angle min per rep (deg): 78, 80, 85, 92, 96"
@@ -1676,7 +1676,7 @@ async def test_ask_video_releases_busy_after_analysis_fails(fresh_db, client_fac
 async def test_concurrent_video_asks_pay_for_analysis_only_once(fresh_db, client_factory, monkeypatch):
     """Тот же двойной-тап-сценарий, что у /ai/ask, но для /ai/video: без замка
     оба параллельных запроса дошли бы до Qwen3-VL (video_analysis.analyze) и
-    до Grok (ai_trainer.ask) — двойной платёж за оба платных шага сразу."""
+    до тренера (ai_trainer.ask) — двойной платёж за оба платных шага сразу."""
     import asyncio
 
     import api_v1_ai

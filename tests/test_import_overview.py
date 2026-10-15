@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from luna_fakes import as_luna
 
 import ai_trainer
 
@@ -85,7 +86,7 @@ async def test_below_the_minimum_workout_count_gets_a_deterministic_reply(
     await _log(db, user_id, bench, "2026-08-03")
 
     create = AsyncMock()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _client(create))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_client(create)))
 
     result = await ai_trainer.import_history_overview(user_id)
 
@@ -102,7 +103,7 @@ async def test_zero_workouts_stay_silent(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
     create = AsyncMock()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _client(create))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_client(create)))
 
     result = await ai_trainer.import_history_overview(user_id)
 

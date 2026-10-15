@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from luna_fakes import as_luna
 
 import ai_trainer
 import analytics
@@ -301,7 +302,7 @@ def _system_content(client) -> str:
 async def test_comment_on_first_workout_says_it_is_the_first(fresh_db, user_id, monkeypatch, lang):
     await fresh_db.set_user_lang(user_id, lang)
     client = _fake_client("ok")
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     first = await _finished(fresh_db, user_id, MON)
 
     await ai_trainer.comment_on_workout(user_id, first)
@@ -317,9 +318,9 @@ async def test_comment_on_first_workout_says_it_is_the_first(fresh_db, user_id, 
 @pytest.mark.parametrize("lang", ["ru", "en"])
 async def test_weekly_digest_of_the_first_week_says_so(fresh_db, user_id, monkeypatch, lang):
     await fresh_db.set_user_lang(user_id, lang)
-    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     client = _fake_client("ok")
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     sunday = _day(1, 6)
     monkeypatch.setattr(timeutil, "user_today", lambda user: sunday)
     await _finished(fresh_db, user_id, _day(1, 1))

@@ -163,10 +163,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- (main.py). Нужно одному: заранее вписать имя на приглашении тренера
     -- (api_v1_coach.suggested_client_name), чтобы атлет не набирал его сам.
     first_name TEXT,
-    -- Какой моделью отвечает тренер: 'grok' | 'luna' (OpenAI GPT-6 Luna).
-    -- NULL — по умолчанию, grok. Проба второй модели ТОЛЬКО на своих
-    -- аккаунтах (config.ai_model_switch_ids): пишет set_user_ai_model, и
-    -- только им; читает ai_trainer.chat_backend, у чужих — всегда grok.
+    -- Бывший выбор модели тренера ('luna' или NULL = grok) у своих аккаунтов.
+    -- Выбора больше нет (модель одна — Luna), колонку никто не читает и не
+    -- пишет; не удалена, потому что миграции только добавляют.
     ai_model TEXT
 );
 
@@ -759,9 +758,9 @@ CREATE TABLE IF NOT EXISTS cost_events (
     model TEXT,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
-    -- Часть prompt_tokens, приехавшая из кэша (у xAI она в 6-7 раз дешевле
-    -- обычного входа), и токены размышлений, которые тарифицируются как выход и
-    -- в completion_tokens не входят. Без этих двух колонок дневной отчёт считал
+    -- Часть prompt_tokens, приехавшая из кэша (у OpenAI она в 10 раз дешевле
+    -- обычного входа), и токены размышлений (у OpenAI уже внутри
+    -- completion_tokens, у прежнего провайдера — отдельно, как выход). Без этих двух колонок дневной отчёт считал
     -- бы иначе, чем строка в логе, — то есть на один вопрос было бы два ответа.
     cached_tokens INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,
@@ -1893,7 +1892,7 @@ async def _migrate_schema() -> None:
     if "first_name" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
     if "ai_model" not in user_cols:
-        # NULL всем: модель по умолчанию (grok), переключатель — только своим.
+        # Бывший выбор модели тренера; выбора больше нет, колонку никто не читает.
         await _conn.execute("ALTER TABLE users ADD COLUMN ai_model TEXT")
     if "app_since" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN app_since TEXT")
@@ -2838,14 +2837,6 @@ async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def get_user_ai_model(telegram_id: int) -> Optional[str]:
-    """Сырой выбор модели тренера (users.ai_model) или None. Кому он вообще
-    положен, решает вызывающий (ai_trainer.ai_model_for)."""
-    cur = await conn().execute("SELECT ai_model FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = await cur.fetchone()
-    return row[0] if row is not None else None
-
-
 async def is_walk_demo(telegram_id: int) -> bool:
     """Аккаунт прогона скриншотов (WALK_DEMO_USERNAME, вход по паролю). Демо
     App Review (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
@@ -2857,41 +2848,6 @@ async def is_walk_demo(telegram_id: int) -> bool:
         (telegram_id, config.WALK_DEMO_USERNAME),
     )
     return await cur.fetchone() is not None
-
-
-async def ai_model_switch_allowed(telegram_id: Optional[int]) -> bool:
-    """Кому доступен переключатель модели тренера: свои аккаунты
-    (config.ai_model_switch_ids) и аккаунт прогона скриншотов — с него
-    снимаются экраны и прогоняется тренер на тестовой модели."""
-    if telegram_id is None:
-        return False
-    if telegram_id in config.ai_model_switch_ids():
-        return True
-    try:
-        return await is_walk_demo(telegram_id)
-    except Exception:
-        return False
-
-
-async def set_user_ai_model(telegram_id: int, ai_model: Optional[str]) -> bool:
-    """Записать выбор модели тренера — только своим аккаунтам.
-
-    Проверка круга здесь, в единственной точке записи, а не у ручек: чужому
-    атлету значение не пишется ни через какой вход. 'grok' хранится как NULL —
-    «по умолчанию», чтобы смена дефолта когда-нибудь не застряла у тех, кто
-    просто вернул grok. Неизвестный токен — ValueError. Возвращает, записал ли.
-    """
-    if not await ai_model_switch_allowed(telegram_id):
-        return False
-    if ai_model is not None and ai_model not in config.AI_MODEL_CHOICES:
-        raise ValueError(f"unknown ai_model {ai_model!r}")
-    value = None if ai_model in (None, config.AI_MODEL_GROK) else ai_model
-    async with _write_lock:
-        cur = await conn().execute(
-            "UPDATE users SET ai_model = ? WHERE telegram_id = ?", (value, telegram_id)
-        )
-        await conn().commit()
-    return cur.rowcount > 0
 
 
 async def set_user_first_name(telegram_id: int, first_name: Optional[str]) -> None:
@@ -10656,7 +10612,7 @@ async def log_cost_event(
     """Строка в cost_events + строка в лог с ценой этого вызова.
 
     Лог живёт здесь, а не у вызывающих, потому что здесь сходятся все платные
-    вызовы — Grok, Qwen на Novita, расшифровка голосовых. Пока каждый логировал
+    вызовы — тренер (OpenAI), Qwen на Novita, расшифровка голосовых. Пока каждый логировал
     сам, формат разъезжался: у видео не было имени модели и фраза была своя, и
     поиск по логам единым запросом его не находил. Новая модель, добавленная
     когда-нибудь ещё, попадёт в лог сама, без напоминания.
@@ -10665,8 +10621,9 @@ async def log_cost_event(
     сниженной ставке модели (config.cached_input_multiplier). Пока множитель равен
     единице, цена — честный потолок, и в строке про это сказано прямо.
 
-    reasoning_tokens — внутренние размышления модели, отдельный billable тип у
-    xAI: в completion_tokens они не входят и тарифицируются как выход.
+    reasoning_tokens — внутренние размышления модели. У OpenAI они уже внутри
+    completion_tokens (config.REASONING_INCLUDED_IN_COMPLETION); у исторических
+    записей xAI — отдельный billable тип по ставке выхода.
 
     audio_seconds — только для расшифровок: длительность записи, по ней и
     считается цена (поминутный тариф). Хранится в `prompt_tokens` (у аудио токенов
@@ -10765,11 +10722,11 @@ async def get_transcription_count(date_str: str) -> int:
 
 
 async def get_server_tool_count(date_str: str) -> dict[str, int]:
-    """Вызовы серверных инструментов xAI за день, по инструментам.
+    """Вызовы серверных инструментов (web_search) за день, по инструментам.
 
-    Считаются строками (см. ai_trainer._log_server_tool_calls): у xAI это $5 за
-    1000 вызовов СВЕРХ токенов, и в usage по токенам их нет вовсе — без этой
-    выборки дневной отчёт занижал расход на всю эту статью.
+    Считаются строками (см. ai_trainer._openai_web_search_findings): это плата
+    СВЕРХ токенов, и в usage по токенам её нет вовсе — без этой выборки дневной
+    отчёт занижал расход на всю эту статью.
     """
     start, end = _day_bounds(date_str)
     cur = await conn().execute(
@@ -12184,8 +12141,8 @@ async def activate_ai_conversation(telegram_id: int, conversation_id: int) -> bo
     start_new_ai_conversation (номер меняется, wire_json обнуляется). Ходы
     возвращаемого разговора НЕ переписываются: его wire_json остался пустым с
     архивации, и контекст для модели собирает get_ai_conversation_wire_history
-    из видимых реплик на лету. Запись в базу изменила бы префикс, который xAI
-    держит в кэше, а первый же следующий ход и так сохранит полный wire."""
+    из видимых реплик на лету. Запись в базу изменила бы префикс, который
+    провайдер держит в кэше, а первый же следующий ход и так сохранит полный wire."""
     async with _write_lock:
         cur = await conn().execute(
             "SELECT 1 FROM ai_conversation_turns WHERE telegram_id = ? AND conversation_id = ? LIMIT 1",

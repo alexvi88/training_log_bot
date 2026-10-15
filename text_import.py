@@ -240,15 +240,17 @@ def _clean_skipped(raw: Any) -> list[dict]:
 async def _extract_chunk(
     user_id: int, piece: str, today: dt.date, date_order: str
 ) -> tuple[list[dict], int, list[dict]]:
-    client = ai_trainer._get_client()
+    backend = ai_trainer.luna_backend()
     payload = {"today": today.isoformat(), "numeric_date_order": date_order, "notes": piece}
     response = await ai_trainer.paid_call(
         user_id,
         None,
-        lambda: client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+        lambda: backend.client.chat.completions.create(
+            # Строгая схема — structured outputs OpenAI (strict: true, все поля
+            # required, additionalProperties: false — см. _SCHEMA).
+            **ai_trainer._model_kwargs(
+                backend, user_id, max_tokens=_MAX_OUTPUT_TOKENS, quick=True, scope="text_import"
+            ),
             response_format=_SCHEMA,
             messages=[
                 # Промпт первым и неизменным: он одинаковый у всех кусков и

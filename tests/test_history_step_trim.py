@@ -7,7 +7,7 @@
 
 Здесь держим то, что делает кэш возможным:
 - до верхнего порога окно не трогается, следующий запрос начинается байт в
-  байт с предыдущего (и у grok, и у Luna);
+  байт с предыдущего;
 - переступив порог, окно режется сразу до нижнего и дальше снова только
   дописывается;
 - срез идёт по границе целого хода — без осиротевших tool-результатов и без
@@ -22,6 +22,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from luna_fakes import as_luna
 
 import ai_limits
 import ai_trainer
@@ -64,7 +65,7 @@ def _size(msgs) -> int:
     return sum(ai_trainer._message_wire_chars(None, m) for m in msgs)
 
 
-# ---------- фейковый grok: главный вызов и вызов сводки ----------
+# ---------- chat-фейк (главный ход — через luna_fakes.as_luna) и вызов сводки ----------
 
 
 def _is_summary_call(kwargs) -> bool:
@@ -72,7 +73,7 @@ def _is_summary_call(kwargs) -> bool:
     return first.startswith(ai_trainer.HISTORY_SUMMARY_SYSTEM_PROMPT[:40])
 
 
-class _Grok:
+class _ChatFake:
     def __init__(self, summary="- колено болит, приседаем до параллели", fail_summary=False):
         self.main: list[dict] = []
         self.summaries: list[dict] = []
@@ -111,26 +112,26 @@ async def test_under_threshold_window_is_the_same_object_and_no_summary(monkeypa
     called = []
     monkeypatch.setattr(ai_trainer, "_summarize_dropped", lambda *a: called.append(a))
 
-    window = await ai_trainer._step_trimmed_history(1, history, ai_trainer.grok_backend())
+    window = await ai_trainer._step_trimmed_history(1, history, ai_trainer.luna_backend())
 
     assert window is history
     assert called == []
 
 
-async def test_grok_next_request_extends_previous_byte_for_byte(fresh_db, user_id, monkeypatch):
+async def test_next_request_extends_previous_byte_for_byte(fresh_db, user_id, monkeypatch):
     """Ниже порога каждый следующий запрос начинается ровно с того, что ушло в
     прошлый раз, — шапка, прошлые ходы, всё."""
-    grok = _Grok()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
 
     history: list = []
     for q in ("первый", "второй", "третий"):
         history = await _ask(user_id, q, history)
 
-    assert grok.summaries == []
-    first, second, third = (json.dumps(c["messages"], ensure_ascii=False) for c in grok.main)
+    assert fake.summaries == []
+    first, second, third = (json.dumps(c["messages"], ensure_ascii=False) for c in fake.main)
     assert second.startswith(first[:-1]) and third.startswith(second[:-1])
-    for earlier, later in zip(grok.main, grok.main[1:], strict=False):
+    for earlier, later in zip(fake.main, fake.main[1:], strict=False):
         n = len(earlier["messages"])
         assert later["messages"][:n] == earlier["messages"]
         assert later.get("tools") == earlier.get("tools")
@@ -140,13 +141,13 @@ async def test_grok_next_request_extends_previous_byte_for_byte(fresh_db, user_i
 
 
 async def test_over_threshold_cuts_down_to_lower_with_summary(fresh_db, user_id, monkeypatch, caplog):
-    grok = _Grok()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
     history = _history(12)
     assert _size(history) > UPPER
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
-        window = await ai_trainer._step_trimmed_history(user_id, history, ai_trainer.grok_backend())
+        window = await ai_trainer._step_trimmed_history(user_id, history, ai_trainer.luna_backend())
 
     summary, *kept = window
     assert summary[ai_trainer.HISTORY_SUMMARY_KEY] is True
@@ -156,7 +157,7 @@ async def test_over_threshold_cuts_down_to_lower_with_summary(fresh_db, user_id,
     assert _size(kept) <= LOWER
     # Ступенька, а не впритык: места ещё на несколько ходов.
     assert _size(window) < UPPER - 3 * _size(_turn(99))
-    assert len(grok.summaries) == 1
+    assert len(fake.summaries) == 1
     line = next(r.getMessage() for r in caplog.records if "step-trim" in r.getMessage())
     assert f"step-trim {len(history)}→{len(window)}, summary " in line
 
@@ -164,37 +165,37 @@ async def test_over_threshold_cuts_down_to_lower_with_summary(fresh_db, user_id,
 async def test_window_and_summary_stay_put_until_the_next_cut(fresh_db, user_id, monkeypatch):
     """После среза ходы снова только дописываются — заметка та же, начало то же,
     сводку второй раз не зовём."""
-    grok = _Grok()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
 
     history = await _ask(user_id, "вопрос после длинного разговора", _history(12))
-    assert len(grok.summaries) == 1
+    assert len(fake.summaries) == 1
     for q in ("ещё", "и ещё"):
         before = history
         history = await _ask(user_id, q, history)
         assert history[: len(before)] == before
 
-    assert len(grok.summaries) == 1
-    summary_msgs = [m for c in grok.main for m in c["messages"] if "колено болит" in (m.get("content") or "")]
+    assert len(fake.summaries) == 1
+    summary_msgs = [m for c in fake.main for m in c["messages"] if "колено болит" in (m.get("content") or "")]
     assert len(summary_msgs) == 3 and all(m == summary_msgs[0] for m in summary_msgs)
     # Заметка ушла провайдеру системным сообщением сразу за шапкой, без нашей пометки.
-    for call in grok.main:
+    for call in fake.main:
         assert call["messages"][1]["role"] == "system"
         assert "колено болит" in call["messages"][1]["content"]
         assert all(ai_trainer.HISTORY_SUMMARY_KEY not in m for m in call["messages"])
-    n = len(grok.main[0]["messages"]) - 1  # без вопроса хода: он у каждого свой
-    assert grok.main[1]["messages"][:n] == grok.main[0]["messages"][:n]
+    n = len(fake.main[0]["messages"]) - 1  # без вопроса хода: он у каждого свой
+    assert fake.main[1]["messages"][:n] == fake.main[0]["messages"][:n]
 
 
 async def test_second_cut_folds_old_summary_into_the_new_one(fresh_db, user_id, monkeypatch):
-    grok = _Grok(summary="- новая заметка")
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake(summary="- новая заметка")
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
     old = ai_trainer._history_summary_message("- колено болит с весны")
     history = [old, *_history(12)]
 
-    window = await ai_trainer._step_trimmed_history(user_id, history, ai_trainer.grok_backend())
+    window = await ai_trainer._step_trimmed_history(user_id, history, ai_trainer.luna_backend())
 
-    (call,) = grok.summaries
+    (call,) = fake.summaries
     prompt = call["messages"][1]["content"]
     assert "колено болит с весны" in prompt  # прошлая заметка — на вход новой
     assert "вопрос 0" in prompt  # и выброшенный кусок тоже
@@ -204,24 +205,24 @@ async def test_second_cut_folds_old_summary_into_the_new_one(fresh_db, user_id, 
 
 
 async def test_summary_failure_still_cuts_and_answers(fresh_db, user_id, monkeypatch, caplog):
-    grok = _Grok(fail_summary=True)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake(fail_summary=True)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
 
     with caplog.at_level(logging.WARNING, logger="ai_trainer"):
         wire = await _ask(user_id, "вопрос", _history(12))
 
-    assert len(grok.main) == 1, "ответ атлету состоялся"
+    assert len(fake.main) == 1, "ответ атлету состоялся"
     assert wire[0]["role"] == "user", "срез без заметки"
     assert _size(wire) < UPPER
     assert any("summary failed" in r.getMessage() for r in caplog.records)
 
 
 async def test_summary_failure_keeps_the_old_summary(fresh_db, user_id, monkeypatch):
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _Grok(fail_summary=True))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_ChatFake(fail_summary=True)))
     old = ai_trainer._history_summary_message("- колено болит с весны")
 
     window = await ai_trainer._step_trimmed_history(
-        user_id, [old, *_history(12)], ai_trainer.grok_backend()
+        user_id, [old, *_history(12)], ai_trainer.luna_backend()
     )
 
     assert window[0] is old
@@ -229,54 +230,54 @@ async def test_summary_failure_keeps_the_old_summary(fresh_db, user_id, monkeypa
 
 
 async def test_hard_stop_skips_the_summary_but_still_cuts(fresh_db, user_id, monkeypatch):
-    grok = _Grok()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
 
     async def hard():
         return ai_limits.Block(kind=ai_limits.KIND_SPEND_HARD, log="hard")
 
     monkeypatch.setattr(ai_limits, "hard_stop_block", hard)
-    window = await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.grok_backend())
+    window = await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.luna_backend())
 
-    assert grok.summaries == []
+    assert fake.summaries == []
     assert window[0]["role"] == "user"
 
 
 async def test_summary_call_is_priced_and_has_its_own_cache_slot(fresh_db, user_id, monkeypatch):
-    grok = _Grok()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
     logged = []
 
     async def log_cost(uid, model, usage, *, source="bot"):
         logged.append((uid, model))
 
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", log_cost)
-    await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.grok_backend())
+    await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.luna_backend())
 
-    (call,) = grok.summaries
+    (call,) = fake.summaries
     assert "tools" not in call
-    assert call["extra_headers"] == {"x-grok-conv-id": f"history_summary-{user_id}"}
-    assert call["extra_body"]["reasoning_effort"] == config.GROK_QUICK_REASONING_EFFORT
-    assert logged == [(user_id, config.GROK_MODEL)]
+    assert call["extra_body"]["prompt_cache_key"] == f"history_summary-{user_id}"
+    assert call["extra_body"]["reasoning_effort"] == config.OPENAI_QUICK_REASONING_EFFORT
+    assert logged == [(user_id, config.OPENAI_CHAT_MODEL)]
 
 
 async def test_summary_speaks_the_athletes_language(fresh_db, user_id, monkeypatch):
-    grok = _Grok()
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok)
+    fake = _ChatFake()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
 
     with i18n.use_lang("en"):
-        await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.grok_backend())
+        await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.luna_backend())
     with i18n.use_lang("ru"):
-        await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.grok_backend())
+        await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.luna_backend())
 
-    en, ru = (c["messages"][0]["content"] for c in grok.summaries)
+    en, ru = (c["messages"][0]["content"] for c in fake.summaries)
     assert en.endswith(i18n.t_in("en", "ai.language_tail"))
     assert ru.endswith(i18n.t_in("ru", "ai.language_tail"))
 
 
 async def test_summary_is_clipped_even_if_the_model_rambles(fresh_db, user_id, monkeypatch):
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _Grok(summary="- пункт\n" * 1000))
-    window = await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.grok_backend())
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_ChatFake(summary="- пункт\n" * 1000)))
+    window = await ai_trainer._step_trimmed_history(user_id, _history(12), ai_trainer.luna_backend())
     assert len(ai_trainer._history_summary_text(window[0])) <= ai_trainer._SUMMARY_MAX_CHARS
 
 
@@ -325,8 +326,7 @@ async def test_luna_cut_keeps_reasoning_with_its_message_and_calls():
                 {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": f"ответ {i}"}]},
             ]},
         ]
-    luna = SimpleNamespace(is_openai=True)
-    _summary, _dropped, kept = ai_trainer._plan_step_trim(history, luna, 4000, 2000)
+    _summary, _dropped, kept = ai_trainer._plan_step_trim(history, ai_trainer.luna_backend(), 4000, 2000)
 
     items = ai_trainer._responses_input(kept)
     assert items[0] == {"role": "user", "content": kept[0]["content"]}
@@ -346,8 +346,7 @@ async def test_luna_size_counts_what_is_sent_not_the_stored_double():
     msg = {"role": "assistant", "content": text, ai_trainer.OPENAI_OUTPUT_KEY: [
         {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]},
     ]}
-    luna = SimpleNamespace(is_openai=True)
-    assert ai_trainer._message_wire_chars(luna, msg) < 1200
+    assert ai_trainer._message_wire_chars(ai_trainer.luna_backend(), msg) < 1200
     assert ai_trainer._message_wire_chars(None, msg) < 1200
 
 
@@ -375,14 +374,11 @@ def _luna_post(sink: list, summaries: list):
 
 async def test_luna_input_prefix_is_stable_and_cut_is_a_step(fresh_db, monkeypatch):
     owner = 111
-    monkeypatch.setattr(config, "ADMIN_ID", 1)
-    monkeypatch.setattr(config, "TEST_USER_ID", owner)
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
     await db.get_or_create_user(telegram_id=owner, username="own")
-    assert await db.set_user_ai_model(owner, "luna")
     bodies: list = []
     summaries: list = []
-    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: _luna_post(bodies, summaries))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _luna_post(bodies, summaries))
 
     history: list = []
     for i in range(14):
