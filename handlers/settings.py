@@ -462,9 +462,16 @@ async def settings_pushes(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "settings:ai_comments")
 async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
+    """Тумблер «присылать комментарий сразу после тренировки». Выключенный —
+    не «комментариев нет», а «по кнопке «🤖 Комментарий AI-тренера» под
+    итогами» (по умолчанию у новичка так и есть, см. схему users). Подпись на
+    кнопке вмещает только «присылаю сразу / по кнопке», поэтому что именно
+    поменялось, говорит всплывашка после тапа."""
     user = await db.get_user(callback.from_user.id)
-    await db.update_user(callback.from_user.id, ai_comments_enabled=0 if user["ai_comments_enabled"] else 1)
-    await show_settings(callback, state)
+    enabled = not user["ai_comments_enabled"]
+    await db.update_user(callback.from_user.id, ai_comments_enabled=1 if enabled else 0)
+    toast = i18n.t("settings.ai_comments.toast_on" if enabled else "settings.ai_comments.toast_off")
+    await show_settings(callback, state, alert=toast, show_alert=False)
 
 
 async def _send_archive(callback: CallbackQuery, caption: str) -> None:
