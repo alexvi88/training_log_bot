@@ -209,6 +209,27 @@ async def test_workout_comment_uses_luna_and_logs_its_model(fresh_db, keys, monk
     assert (await db.get_llm_cost_breakdown(_today()))["gpt-6-luna"]["calls"] == 1
 
 
+PHOTO = "data:image/png;base64,iVBORw0KGgo="
+
+
+async def test_fact_check_with_photo_goes_to_the_vision_model(fresh_db, keys, monkeypatch):
+    """Разбор поста с картинкой — vision_backend(): config.OPENAI_VISION_MODEL
+    (по умолчанию та же Luna), картинка — image_url в chat-форме OpenAI; без
+    картинки — обычная модель тренера."""
+    await _users(fresh_db)
+    monkeypatch.setattr(config, "OPENAI_VISION_MODEL", "vision-test-model")
+    calls: list = []
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _fake_client(calls))
+
+    await ai_trainer.fact_check_post(STRANGER, "Пост", PHOTO)
+    await ai_trainer.fact_check_post(STRANGER, "Пост", None)
+    photo_kwargs, text_kwargs = calls
+    assert photo_kwargs["model"] == "vision-test-model"
+    assert photo_kwargs["messages"][-1]["content"][1] == {"type": "image_url", "image_url": {"url": PHOTO}}
+    assert text_kwargs["model"] == config.OPENAI_CHAT_MODEL
+    assert (await db.get_llm_cost_breakdown(_today()))["vision-test-model"]["calls"] == 1
+
+
 # ---------- цена ----------
 
 
