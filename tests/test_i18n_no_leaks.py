@@ -382,7 +382,7 @@ async def _screen_dashboard_menu(db, user_id: int) -> str:
 async def _screen_history_item_card(db, user_id: int) -> str:
     """Детальная карточка тренировки в истории (handlers.history.show_history_item).
     ai_trainer.ensure_workout_comment внутри неё не делает сетевых вызовов,
-    пока не настроен XAI_API_KEY (см. ai_trainer.is_configured) — в тестовом
+    пока не настроен OPENAI_API_KEY (см. ai_trainer.is_configured) — в тестовом
     окружении его нет, так что экран рендерится офлайн, как и в
     tests/test_history_item_card.py."""
     group_id = await db.create_muscle_group(user_id, "Legs")

@@ -40,6 +40,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
+from luna_fakes import as_luna
 
 import ai_trainer
 import api_v1
@@ -130,7 +131,7 @@ def fake_model(monkeypatch):
     completions = _FakeCompletions()
     fake = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
     # Разбор тренировки AI-тренером здесь не проверяется — он шёл бы в ту же
     # подменённую модель фоном и путал счёт вызовов сводки.
     monkeypatch.setattr(ai_trainer, "ensure_workout_comment", AsyncMock(return_value=None))

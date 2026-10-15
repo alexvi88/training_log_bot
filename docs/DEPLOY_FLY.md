@@ -22,7 +22,7 @@ fly volumes create data --region fra --size 3 -a training-log-bot
 ```sh
 fly secrets set -a training-log-bot \
   TG_TOKEN=... ADMIN_ID=... \
-  XAI_API_KEY=... OPENAI_API_KEY=... NOVITA_API_KEY=... \
+  OPENAI_API_KEY=... NOVITA_API_KEY=... \
   APNS_KEY_ID=... APNS_TEAM_ID=... APNS_ENV=production \
   MCP_PUBLIC_URL=https://training-log-bot.fly.dev
 fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"

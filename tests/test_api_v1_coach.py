@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from luna_fakes import as_luna
 
 import ai_limits
 import ai_trainer
@@ -439,7 +440,7 @@ class _FakeCompletions:
 def _summary_calls(completions) -> list[dict]:
     """Только вызовы сводки — комментарий тренера к тренировке после финиша
     идёт в ту же подменённую модель фоном."""
-    return [c for c in completions.calls if c["extra_headers"] == ai_trainer._cache_headers(COACH, scope="coach_summary")]
+    return [c for c in completions.calls if c["extra_body"].get("prompt_cache_key") == ai_trainer._cache_key(COACH, "coach_summary")]
 
 
 @pytest.fixture
@@ -447,7 +448,7 @@ def fake_model(monkeypatch):
     completions = _FakeCompletions("Маше пора в зал.")
     fake = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: fake)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(fake))
     return completions
 
 

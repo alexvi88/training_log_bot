@@ -256,13 +256,6 @@ AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower()
 
 
 
-# AI trainer (Grok-backed Q&A over the user's own training data). Same xAI
-# key/env names as fun_bot, so one key serves both bots. The menu entry stays
-# visible but answers with a hint until the key is set.
-XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
-GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
-
 # Согласие на передачу данных стороннему AI в приложении (App Store 5.1.2(i),
 # колонка users.ai_consent_at, см. api_v1_ai._require_ai_consent). Выключено по
 # умолчанию, потому что уже выпущенные сборки (1.0 (3)/(4)) о согласии не знают:
@@ -304,107 +297,24 @@ AI_STREAM_FLUSH_SECONDS = float(os.getenv("AI_STREAM_FLUSH_SECONDS", "0.6"))
 # Отдаём глазу время дочитать до того, как текст поедет дальше.
 AI_DRAFT_INTERVAL_SECONDS = float(os.getenv("AI_DRAFT_INTERVAL_SECONDS", "1.5"))
 
-# Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
-# "high" when unset, which reasoning models can't turn off). Split in two
-# rather than one flat value for every call:
-#
-# GROK_REASONING_EFFORT — the main agentic Q&A loop (_completion_round, see
-# ask/_ask_plain), where the model reads tool results and gives actual
-# coaching advice. Held at medium for a while on the theory that extra
-# thinking pays off here; the console says that theory costs real money —
-# reasoning tokens bill at the output rate, the priciest kind, and came to
-# $0.46 of a $3.01 week. Dropped to low: the tools already hand the model the
-# numbers it reasons about, so the thinking it was buying was mostly
-# re-deriving what it had been given. Raise it back if answers get shallower.
-#
-# GROK_QUICK_REASONING_EFFORT — everything else on GROK_MODEL: the workout
-# comment, the weekly digest, food-photo analysis, and the search-worth-it
-# gate (a 3-token yes/no classification). None of these need open-ended
-# reasoning, and none of them stream — unlike the chat loop, the user has
-# nothing live to watch while the model thinks, so low keeps that wait (and
-# the cost) down where it doesn't buy anything.
-GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "low")
-GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
-
-# Search-capable model used (via xAI's gRPC SDK, not the REST endpoint) when a
-# question is allowed web/X search access.
-#
-# ТЕПЕРЬ обычный grok, а не grok-4.20-multi-agent — и это не «оптимизация по
-# свежести модели», от которой предупреждал прежний комментарий здесь, а вывод из
-# первого живого поиска. Он показал, ЗА ЧТО платили:
-#
-#     multi-agent: 85217 входных токенов, 5438 размышлений      $0.099
-#     18 вызовов инструментов (14 web_search + 4 x_search)      $0.090
-#
-# Multi-agent дешевле грока за токен — это правда. Но он не «ищет дешевле», он
-# запускает ЧЕТЫРЕ независимых агента, каждый ищет сколько захочет, и биллятся
-# токены всех сразу. Дешевле четырёх не бывает: SDK принимает только 4 или 16.
-# То есть желание прежнего комментария (два агента ради экономии) невыполнимо в
-# принципе, и крутить agent_count смысла нет.
-#
-# Наш шаг — «сходи в сеть и перескажи», а не параллельный research по десятку
-# источников. Одному агенту с теми же web_search/x_search это по силам,
-# а фан-аута вчетверо не будет ни по токенам, ни по вызовам инструментов.
-#
-# Если однажды шаг действительно станет research'ем — возвращать multi-agent
-# осмысленно, но тогда и лимит AI_SEARCH_DAILY_LIMIT надо считать заново.
-GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.5-latest")
-
-# Parallel sub-agent count for the search step (xAI SDK's native agent_count
-# param — 4 or 16). Explicit and low: this step is one linear web/X lookup per
-# question (see _web_search_findings docstring), not multi-source research, so
-# it doesn't need 16 agents — and leaving this unset risks defaulting to the
-# most expensive tier (xAI's docs map an unset/high reasoning effort to 16
-# agents; all agents' tokens, including their own reasoning and tool calls,
-# get billed).
-# ЧЕТЫРЕ, а не два. Двойка стояла тут ради экономии — multi-agent самая дорогая
-# модель у бота, и биллятся токены всех агентов сразу, — но SDK принимает только
-# 4 или 16 (xai_sdk.chat.AgentCountMap) и на двойке падает ValueError ещё в
-# chat.create, ДО запроса. То есть живой поиск не работал вовсе: каждая попытка
-# умирала на входе, а в логе это выглядело безобидным «ran but found nothing».
-# Экономия обернулась молча выключенной функцией.
-#
-# Допустимые значения зашиты здесь, чтобы кривое значение из окружения снова не
-# выключило поиск тихо: неподходящее заменяется ближайшим разрешённым с
-# предупреждением в лог. Настоящий рычаг экономии тут не число агентов, а гейт,
-# который решает, поднимать ли поиск вообще (см. ai_trainer._gate_verdict).
-_ALLOWED_AGENT_COUNTS = (4, 16)
-GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "4"))
-if GROK_SEARCH_AGENT_COUNT not in _ALLOWED_AGENT_COUNTS:
-    _fallback = min(_ALLOWED_AGENT_COUNTS, key=lambda n: abs(n - GROK_SEARCH_AGENT_COUNT))
-    print(
-        f"⚠️ GROK_SEARCH_AGENT_COUNT={GROK_SEARCH_AGENT_COUNT} не поддерживается "
-        f"(допустимы {list(_ALLOWED_AGENT_COUNTS)}); беру {_fallback}, иначе живой "
-        "поиск падал бы на каждом запросе",
-        flush=True,
-    )
-    GROK_SEARCH_AGENT_COUNT = _fallback
-
-# Отдельный потолок для шага живого поиска — он один ходит по SDK и один живёт
-# по другим часам, чем обычный запрос к модели: multi-agent действительно
-# лазает по сети, и полутора минут ему регулярно не хватало (DEADLINE_EXCEEDED
+# Отдельный потолок для шага живого поиска — он живёт по другим часам, чем
+# обычный запрос к модели: web_search действительно лазает по сети, и у
+# прежнего провайдера полутора минут ему регулярно не хватало (DEADLINE_EXCEEDED
 # на 90с общего AI_REQUEST_TIMEOUT_SECONDS). Обрыв тут — худший из исходов:
 # ждали всё это время И остались без находок, а следом ещё ждём основной ответ.
 # Раз уж решили искать — доводим до конца; сэкономить время можно только не
 # начиная (за это отвечает гейт _gate_verdict).
 AI_SEARCH_TIMEOUT_SECONDS = float(os.getenv("AI_SEARCH_TIMEOUT_SECONDS", "180"))
 
-# Per-user daily cap on AI-trainer questions answered with web/X search access.
+# Per-user daily cap on AI-trainer questions answered with live web search.
 # Guards against runaway search cost; once hit, the AI trainer still answers
 # normally (own tools only, no live search) until the next day.
 #
-# ПЯТЬ, а не сорок. Сорок стояло, пока поиск был сломан неподдерживаемым
-# agent_count и не стоил ничего: каждая попытка падала до запроса. Первый живой
-# поиск показал настоящую цену вопроса — около $0.23:
-#
-#     multi-agent   85217 входных токенов          $0.099
-#     18 вызовов инструментов (14 web + 4 X)       $0.090
-#     ответ тренера                                $0.040
-#
-# На сорока это до $9 в день на одного человека — втрое больше всего недельного
-# бюджета бота за один день одним пользователем. Пять — чтобы возможность
-# осталась, а тумбочка не опустела; поднимать осмысленно после того, как
-# подешевеет сам шаг (см. GROK_SEARCH_MODEL).
+# ПЯТЬ. Цифра подбиралась на прежнем провайдере (xAI multi-agent), где живой
+# поиск стоил около $0.23 за вопрос. На OpenAI web_search — $0.01 за вызов
+# инструмента сверх токенов (OPENAI_WEB_SEARCH_USD_PER_CALL), а токены Luna в
+# 20 раз дешевле, так что вопрос с поиском — порядка цента-двух. Поднимать
+# можно после живых замеров на Luna (LLM_COSTS.md), не на глаз.
 AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "5"))
 
 # Тот же потолок, но на ВСЕХ пользователей за сутки (по UTC — счёт от провайдера
@@ -434,35 +344,36 @@ AI_SEARCH_GLOBAL_DAILY_LIMIT = int(os.getenv("AI_SEARCH_GLOBAL_DAILY_LIMIT", "10
 # разговор с тренером, до которого доходят единицы.
 AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "20"))
 
-# Voice input for the AI trainer chat: Telegram voice messages get transcribed
-# via OpenAI's speech-to-text before being asked to Grok as a normal text
-# question. Separate key from XAI_API_KEY since this hits OpenAI's own API,
-# not xAI's — the menu works without it, voice messages just get a hint to
-# type instead until it's set.
+# OpenAI — единственный провайдер текста AI-тренера (и расшифровки голоса).
+# Без ключа раздел тренера отвечает подсказкой, голос — просьбой написать текстом.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 
-# --- Вторая модель тренера: OpenAI GPT-6 Luna, ТОЛЬКО для своих аккаунтов ---
+# --- Модель тренера: OpenAI GPT-6 Luna --------------------------------------
 #
-# Проба Luna вместо Grok на текстовых вызовах тренера (ai_trainer.chat_backend).
-# Включается переключателем «Модель тренера» в профиле приложения (users.ai_model,
-# PATCH /v1/ai/model) или командой /aimodel в боте — и только у
-# ai_model_switch_ids(): обычный атлет его не видит, а записанное ему значение
-# игнорируется на чтении. Ключ тот же OPENAI_API_KEY, что у расшифровки голоса.
+# Все текстовые вызовы тренера (ai_trainer.luna_backend): главный цикл через
+# Responses API, короткие шаги — chat/completions. Выбора модели больше нет
+# (переключатель «Модель тренера», users.ai_model, /v1/ai/model, /aimodel —
+# сняты; колонка в базе осталась, её никто не читает).
 #
-# Точный id модели в API не проверен живым вызовом — поэтому в env. Сменил id —
-# допиши его строку в LLM_PRICES_USD_PER_1K и CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL,
-# иначе цена пойдёт по пессимистичному дефолту.
+# Сменил id — допиши его строку в LLM_PRICES_USD_PER_1K и
+# CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL, иначе цена пойдёт по
+# пессимистичному дефолту.
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-6-luna")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-# Живой поиск для Luna-аккаунтов — Responses API со встроенным web_search (у xAI
-# свой gRPC-путь, GROK_SEARCH_MODEL). По умолчанию та же модель, что отвечает.
+# Живой поиск — Responses API со встроенным web_search. По умолчанию та же
+# модель, что отвечает.
 OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "") or OPENAI_CHAT_MODEL
-# Главный ответ с инструментами — low, как у grok (GROK_REASONING_EFFORT).
-# Быстрые шаги (гейт, комментарий, дайджест, разбор поста, сводка тренера) —
-# none: в отличие от xAI, OpenAI это значение принимает, а размышления у OpenAI
-# съедают тот же max_completion_tokens, что и ответ, — на наших потолках в
-# 500–900 токенов размышление могло бы оставить ответ пустым.
+# Фото в вопросе тренеру и в разборе поста (ai_trainer.vision_backend) — одна
+# точка. По умолчанию та же Luna: по сторонним каталогам моделей она принимает
+# картинки на вход (официальная страница модели не сверена — см. LLM_COSTS.md);
+# окажется, что нет или хуже нужного, — сюда ставится модель OpenAI со зрением,
+# без правок кода. Картинки OpenAI биллит входными токенами — они уже в usage.
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "") or OPENAI_CHAT_MODEL
+# Быстрые шаги (гейт, комментарий, дайджест, разбор поста, сводка тренера,
+# импорт) — none: размышления у OpenAI съедают тот же max_completion_tokens,
+# что и ответ, — на наших потолках в 500–900 токенов размышление могло бы
+# оставить ответ пустым.
 # Порог long context у GPT-6 Luna, где ставки удваиваются (см. строку цены в
 # LLM_PRICES_USD_PER_1K). СВЕРИТЬ: на странице прайса порог не нашли, число —
 # заглушка. Наши запросы держатся в 30–50 тысячах, поэтому считаем по короткой
@@ -473,35 +384,19 @@ OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000
 # потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
 # с reasoning_effort (400 «Function tools with reasoning_effort are not
 # supported … use /v1/responses or set reasoning_effort to 'none'»). Тем же
-# значением рассуждает и живой поиск Luna (тоже Responses). Quick-вызовы без
+# значением рассуждает и живой поиск (тоже Responses). Quick-вызовы без
 # инструментов остаются на chat/completions с none (см. выше).
 OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
 
-# Короткие токены выбора модели тренера (users.ai_model). Первый — по умолчанию.
-AI_MODEL_GROK = "grok"
-AI_MODEL_LUNA = "luna"
-AI_MODEL_CHOICES: tuple[str, ...] = (AI_MODEL_GROK, AI_MODEL_LUNA)
-
-
-def ai_model_switch_ids() -> set[int]:
-    """Кому доступен переключатель модели тренера: свои аккаунты, и только они.
-
-    Тот же круг, что у limit_preview_ids, но отдельной функцией: смысл другой, и
-    если один из кругов когда-нибудь поменяется, второй не должен уехать за ним.
-    """
-    return {uid for uid in (ADMIN_ID, TEST_USER_ID) if uid is not None}
-
 
 # --- Разбор техники по видео (Novita, Qwen3-VL — см. video_analysis.py) ------
 #
-# Grok видео на вход не берёт: в его chat-API есть text, image_url и общий
-# файловый аттач, а отдельного видео-типа нет — «Video» в консоли xAI это
-# grok-imagine, генерация. Поэтому кадры смотрит Qwen3-VL, а говорит по-прежнему
-# Grok (ai_trainer.ask, параметр video_context) — один персонаж на весь продукт.
+# Кадры смотрит отдельная VL-модель на Novita, а говорит про них по-прежнему
+# тренер (ai_trainer.ask, параметр video_context) — один персонаж на весь продукт.
 #
 # Novita OpenAI-совместима, поэтому третьего SDK не завелось: тот же пакет
-# openai, только другой base_url. Ключ отдельный от XAI_API_KEY и OPENAI_API_KEY.
+# openai, только другой base_url. Ключ отдельный от OPENAI_API_KEY.
 # Без ключа раздел просто не показывается, как и голосовой ввод без OPENAI_API_KEY.
 NOVITA_API_KEY = os.getenv("NOVITA_API_KEY", "")
 # С /v1 на конце — именно этот путь в curl-примере Novita
@@ -664,23 +559,24 @@ VIDEO_ANALYSIS_JSON_MODE = os.getenv("VIDEO_ANALYSIS_JSON_MODE", "false").lower(
 
 
 # Потолок на историю, которую храним для кэша (см. ai_trainer._trim_wire_history).
-# Держим целиком то, что уехало модели, включая tool-вызовы и их результаты: по
-# документации xAI кэш живёт ровно на неизменном префиксе, и любая переписанная
-# история — промах.
+# Держим целиком то, что уехало модели, включая tool-вызовы и их результаты: кэш
+# входа (и у OpenAI, и у прежнего провайдера) живёт ровно на неизменном префиксе,
+# и любая переписанная история — промах.
 #
 # 150 тысяч, а не 60: на 60 обрезка срабатывала уже на втором вопросе подряд
 # («34 сообщений → 20»), потому что результаты инструментов идут на килобайты. А
 # обрезка — это холодный промах на следующем запросе, и вот его цена по живым
-# логам:
+# логам (прежний провайдер, кэш по 15%; у OpenAI доля 10% — вывод тот же):
 #
 #     холодный первый раунд   25106 токенов (из кэша 128)     $0.050
 #     тёплый после него       30272 токенов (из кэша 29696)   $0.011
 #
 # То есть держать историю ДЛИННЕЕ дешевле, чем обрезать: девяносто восемь
-# процентов её уезжает по кэш-ставке в 15%, а каждый промах платится целиком.
-# Выше поднимать не стоит — у xAI при 200K токенов контекста все ставки
-# удваиваются, а 150 тысяч символов это примерно сорок тысяч токенов истории
-# поверх одиннадцати тысяч шапки: до порога далеко, но запас нужен.
+# процентов её уезжает по кэш-ставке, а каждый промах платится целиком.
+# Выше поднимать не стоит — у Luna выше порога long context
+# (OPENAI_LONG_CONTEXT_TOKENS) все ставки дороже, а 150 тысяч символов это
+# примерно сорок тысяч токенов истории поверх шапки: до порога далеко, но
+# запас нужен.
 AI_WIRE_HISTORY_MAX_CHARS = int(os.getenv("AI_WIRE_HISTORY_MAX_CHARS", "150000"))
 
 
@@ -702,34 +598,18 @@ def video_analysis_available() -> bool:
 # report prices those against the tables below instead of a flat guess. $/1K
 # tokens as (input, output), keyed by the exact model name sent to the API.
 # Override without a code change via LLM_PRICES_USD_PER_1K_JSON, e.g.
-# '{"grok-4.5-latest": [0.002, 0.006]}'.
+# '{"gpt-6-luna": [0.0001, 0.0005]}'.
 #
-# grok-4.20-multi-agent's rate here is xAI's short-context per-token price;
-# per xAI's docs all sub-agents' tokens (reasoning + tool calls included) are
-# billed, not just the leader's — if the usage object we log doesn't already
-# sum across agents, this underestimates actual spend on that model. Not
-# verified either way.
-#
-# Стоимости в долларах на ответе чата xAI НЕ отдаёт — проверено по прото SDK:
-# `cost_usd_ticks` есть только у Batch API (batch_pb2.BatchCostBreakdown,
-# EndpointCost), у SamplingUsage такого поля нет. Прежний комментарий здесь
-# обещал его «на ответе» и посылал за авторитетной цифрой туда, где её нет.
-# Авторитетные источники — консоли: console.x.ai → Usage и Novita → Usage.
-#
-# Зато SamplingUsage отдаёт разбивку, из которой цену можно собрать точно:
-# prompt_text_tokens, cached_prompt_text_tokens, prompt_image_tokens,
-# completion_tokens и ОТДЕЛЬНО reasoning_tokens. Последние тарифицируются как
-# выход, по дорогой ставке, — поэтому в логе они печатаются отдельной цифрой:
-# если провайдер не включает их в completion_tokens, наш расчёт занижает
-# стоимость, и увидеть это можно только глазами на живых числах.
+# Строки grok-* — ИСТОРИЧЕСКИЕ: xAI больше не вызывается, но cost_events за
+# прошлые дни лежат с этими именами моделей, и дневной отчёт / потолок по
+# деньгам за те дни должен считать их по своей ставке, а не по дефолтной.
+# Удалять строки нельзя, пока в cost_events есть такие записи (90 дней).
 LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
-    # Снята xAI, в коде не используется. Строка оставлена, чтобы старые записи в
-    # cost_events считались по своей ставке, а не по дефолтной.
+    # xAI — историческая: в коде не вызывается, строки только для старых
+    # записей cost_events (см. выше). Ставки — прайс xAI на момент вызовов.
     "grok-4-1-fast": (0.0002, 0.0005),
     "grok-4.20-multi-agent": (0.00125, 0.0025),
     "grok-4.5-latest": (0.002, 0.006),
-    # По docs.x.ai/developers/models/grok-4.3: вход $1.25 за 1M, выход $2.50 за
-    # 1M. Заметно дешевле 4.5 ($2.00/$6.00) — на выходе втрое.
     "grok-4.3-latest": (0.00125, 0.0025),
     # Novita, разбор видео (video_analysis.py). $0.3/$1.5 за 1M по прайсу модели
     # на novita.ai — здесь в $/1K, как и остальные строки таблицы. Видео на входе
@@ -746,18 +626,19 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     "qwen/qwen3.5-122b-a10b": (0.0004, 0.0032),
     # Novita, Qwen3.6 27B — первый запасной вариант. $0.60/$3.60 за 1M.
     "qwen/qwen3.6-27b": (0.0006, 0.0036),
-    # OpenAI GPT-6 Luna — вторая модель тренера, только свои аккаунты
-    # (OPENAI_CHAT_MODEL). Официальный прайс OpenAI, Standard, short context, за
+    # OpenAI GPT-6 Luna — модель тренера (OPENAI_CHAT_MODEL). Официальный прайс OpenAI, Standard, short context, за
     # 1M: вход $0.10, кэшированный вход $0.01 (доля 0.1 — см.
     # CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL), выход $0.50. Long context дороже
     # ($0.20 / $0.02 / $0.75) — см. OPENAI_LONG_CONTEXT_TOKENS: таблица считает
     # по короткой ступени. Правится без кода — LLM_PRICES_USD_PER_1K_JSON.
     #
     # Запись в кэш OpenAI тоже берёт деньги ($0.125 за 1M, 1.25× входа), но в
-    # usage Chat Completions отдельного числа токенов записи нет (есть только
-    # prompt_tokens_details.cached_tokens — прочитанные), выдумывать поле не
+    # usage (ни в Chat Completions, ни в Responses) отдельного числа токенов
+    # записи нет (есть только cached_tokens — прочитанные), выдумывать поле не
     # стали: записанные токены считаются здесь по обычной ставке входа, то есть
     # занижение — максимум 0.25× от входа первого, холодного запроса.
+    # Картинки на входе (фото в вопросе) OpenAI считает входными токенами —
+    # они уже в prompt_tokens, отдельной ставки нет.
     "gpt-6-luna": (0.0001, 0.0005),
 }
 try:
@@ -767,7 +648,7 @@ except (TypeError, ValueError, IndexError, json.JSONDecodeError):
     pass
 # Ставка для модели, которой нет в таблице выше. ПЕССИМИСТИЧНАЯ намеренно — по
 # самой дорогой известной строке. Раньше здесь стояли (0.0002, 0.0005), то есть
-# ставка самой дешёвой модели (grok-4-1-fast, уже снятой): переключись мы на любую
+# ставка самой дешёвой модели (grok-4-1-fast): переключись мы на любую
 # новую модель, не добавив её в таблицу, — и лог с дневным отчётом занизили бы
 # расход в десять раз, молча. Занижать расход хуже, чем завышать: завышение
 # заметно и его идут проверять, занижение выглядит как хорошая новость.
@@ -781,27 +662,18 @@ DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (
 )
 
 
-# Во сколько раз кэшированный вход дешевле обычного. 0.15 — по прайсу grok-4.5:
-# вход $2.00 за 1M, кэшированный $0.30 за 1M. (У 4.3 доля 0.16: $1.25 и $0.20.)
-# Это доля по умолчанию — для grok и всех, у кого нет своей строки в
-# CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL ниже; при переезде grok на другую модель
-# её надо пересчитывать вместе с моделью — иначе экономия в логах поедет; тест
-# это стережёт.
-# За совпавший префикс платим 15% цены, и на наших запросах это главная экономия:
-# постоянная шапка (системный промпт + схемы 27 инструментов, вместе около
-# одиннадцати тысяч токенов) уезжает заново в каждом раунде tool-call'ов, и с
-# кэшем стоит копейки вместо трёх полных ставок.
+# Во сколько раз кэшированный вход дешевле обычного — доля ПО УМОЛЧАНИЮ, для
+# моделей без своей строки в CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL ниже
+# (это и исторические grok-*: 0.15 — их прайс, вход $2.00 за 1M, кэш $0.30).
+# Живая модель обязана иметь свою строку — тест это стережёт.
 #
-# ВНИМАНИЕ на будущее: у xAI прайс двухступенчатый — при контексте свыше 200K
-# токенов действует отдельная, более дорогая ставка (у 4.5 она была вдвое выше:
-# $4 вход / $0.60 кэш / $12 выход; для 4.3 её отдельно не смотрели). Таблица
-# выше этого не знает и считает по дешёвой ступени. Пока наши запросы держатся в
-# пределах пятнадцати тысяч токенов, разницы нет; если контекст когда-нибудь
-# распухнет за 200K, расчёт начнёт занижать.
+# За совпавший префикс платим долю цены, и на наших запросах это главная
+# экономия: постоянная шапка (системный промпт + схемы инструментов, вместе
+# около одиннадцати тысяч токенов) уезжает заново в каждом раунде
+# tool-call'ов, и с кэшем стоит копейки вместо трёх полных ставок.
 CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER", "0.15"))
 
-# Доля кэша для моделей, у которых она не та, что у grok выше. Модели нет в
-# словаре — CACHED_INPUT_PRICE_MULTIPLIER. У GPT-6 Luna кэшированный вход
+# Доля кэша по моделям. Модели нет в словаре — CACHED_INPUT_PRICE_MULTIPLIER. У GPT-6 Luna кэшированный вход
 # $0.01 при $0.10 обычного — ровно 0.1 (официальный прайс OpenAI).
 # Правится без кода: CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL_JSON='{"gpt-6-luna": 0.1}'.
 CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL: dict[str, float] = {
@@ -814,10 +686,12 @@ except (TypeError, ValueError, AttributeError, json.JSONDecodeError):
     pass
 
 # Модели, у которых размышления УЖЕ входят в completion_tokens. Так считает
-# OpenAI (completion_tokens_details.reasoning_tokens — часть completion_tokens),
-# а xAI — нет, там это отдельный тип. Прибавь их сверху для OpenAI — и каждое
+# OpenAI (reasoning_tokens — часть completion/output_tokens), а xAI (старые
+# записи) — нет, там это отдельный тип. Прибавь их сверху для OpenAI — и каждое
 # размышление Luna посчиталось бы дважды.
-REASONING_INCLUDED_IN_COMPLETION: set[str] = {"gpt-6-luna", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL}
+REASONING_INCLUDED_IN_COMPLETION: set[str] = {
+    "gpt-6-luna", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL, OPENAI_VISION_MODEL,
+}
 
 
 def cached_input_multiplier(model: str) -> float:
@@ -846,17 +720,14 @@ def call_price_usd(
     считается по сниженной ставке модели (cached_input_multiplier), а остаток
     входа — по полной.
 
-    reasoning_tokens — внутренние размышления модели. По прайсу xAI
-    (docs.x.ai/developers/pricing, «All standard token types are billed»)
-    это отдельный billable тип наравне с входом и выходом, и в completion_tokens
-    он не входит. Считаем его по ставке выхода: раньше эти токены не считались
-    вовсе, то есть расчёт занижал стоимость — ровно в обратную сторону от кэша,
-    из-за чего итог выглядел правдоподобным, будучи неверным дважды.
+    reasoning_tokens — внутренние размышления модели. У OpenAI они уже внутри
+    completion_tokens (REASONING_INCLUDED_IN_COMPLETION) и сверху не
+    прибавляются; у прежнего провайдера (исторические записи grok-*) это был
+    отдельный billable тип — для них прибавляем по ставке выхода.
 
-    Чего эта функция не знает: вызовы серверных инструментов xAI (web_search,
-    x_search — $5 за 1000 вызовов сверх токенов). Они бывают только на поисковых
-    ответах и в usage не приходят, так что учесть их можно лишь отдельным
-    счётчиком вызовов.
+    Чего эта функция не знает: вызовы серверных инструментов (web_search —
+    сверх токенов). В usage их нет, они пишутся отдельными событиями
+    server_tool (см. server_tool_price_usd).
     """
     inp, out = LLM_PRICES_USD_PER_1K.get(model, DEFAULT_LLM_PRICE_USD_PER_1K)
     # Больше входа, чем было, из кэша приехать не может — но провайдеру верить на
@@ -872,15 +743,13 @@ def call_price_usd(
         + (completion_tokens + extra_reasoning) / 1000 * out
     )
 
-# Вызовы серверных инструментов xAI (web_search, x_search) — $5 за 1000 вызовов
-# СВЕРХ токенов, по docs.x.ai/developers/pricing#tools-pricing. В usage по токенам
-# их нет, поэтому считаются отдельными событиями (см.
-# ai_trainer._log_server_tool_calls). В консоли за неделю это было «136 calls —
-# $0.68»: пятнадцать процентов текстового счёта, которых наш учёт не видел вовсе.
+# ИСТОРИЧЕСКАЯ ставка: вызовы серверных инструментов xAI (web_search, x_search) —
+# $5 за 1000 вызовов СВЕРХ токенов. xAI больше не вызывается, но строки
+# server_tool с этими именами лежат в cost_events за прошлые дни.
 SERVER_TOOL_PRICE_USD_PER_CALL = float(os.getenv("SERVER_TOOL_PRICE_USD_PER_CALL", "0.005"))
 
-# Встроенный web_search у OpenAI (Responses API) — поиск тренера на Luna, только
-# свои аккаунты (ai_trainer._openai_web_search_findings). $10 за 1000 вызовов по
+# Встроенный web_search у OpenAI (Responses API) — живой поиск тренера
+# (ai_trainer._openai_web_search_findings). $10 за 1000 вызовов по
 # официальному прайсу OpenAI (non-preview tool, все модели) — СВЕРХ токенов.
 # Найденный контент («search content tokens») OpenAI биллит по ставке модели, и
 # приезжает он в usage входными токенами — они уже в llm_call, второй раз не
@@ -888,7 +757,8 @@ SERVER_TOOL_PRICE_USD_PER_CALL = float(os.getenv("SERVER_TOOL_PRICE_USD_PER_CALL
 OPENAI_WEB_SEARCH_USD_PER_CALL = float(os.getenv("OPENAI_WEB_SEARCH_USD_PER_CALL", "0.01"))
 
 # Имя инструмента в cost_events (event_type='server_tool'), под которым пишутся
-# вызовы web_search у OpenAI, — отдельно от xAI'шного "web_search": ставки разные.
+# вызовы web_search у OpenAI, — отдельно от исторического xAI'шного "web_search":
+# ставки разные.
 OPENAI_WEB_SEARCH_TOOL = "openai_web_search"
 
 

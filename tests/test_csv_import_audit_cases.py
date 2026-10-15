@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from luna_fakes import as_luna
 
 import ai_limits
 import ai_trainer
@@ -260,7 +261,7 @@ async def test_alias_matching_is_batched(fresh_db, monkeypatch):
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))], usage=None)
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
     names = [f"Exercise {i}" for i in range(95)]
 

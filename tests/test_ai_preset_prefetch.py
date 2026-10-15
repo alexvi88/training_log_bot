@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from luna_fakes import as_luna, chat_view
 
 import ai_trainer
 import i18n
@@ -91,7 +92,7 @@ def _assert_valid_wire(messages: list[dict]) -> None:
 @pytest.mark.parametrize("key", [WEAK, PROGRESS])
 async def test_preset_is_answered_in_one_model_call(fresh_db, user_id, monkeypatch, lang, key):
     client = _FakeClient([_response(content="разбор")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     wires: list = []
 
     async def keep(w):
@@ -118,13 +119,13 @@ async def test_preset_is_answered_in_one_model_call(fresh_db, user_id, monkeypat
     assert client.calls[0]["tools"] == ai_trainer.TOOLS
 
     wire = wires[0]
-    assert wire == sent[1:] + [{"role": "assistant", "content": "разбор"}]
+    assert chat_view(wire) == sent[1:] + [{"role": "assistant", "content": "разбор"}]
     _assert_valid_wire(wire)
 
 
 async def test_ordinary_question_is_unchanged(fresh_db, user_id, monkeypatch):
     client = _FakeClient([_response(content="ок")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     await ai_trainer.ask(user_id, "Как мой прогресс?", history=[])
 
@@ -136,7 +137,7 @@ async def test_repeated_preset_keeps_history_valid_and_prefix_stable(fresh_db, u
     """Второй тап того же пресета дописывается к первому ходу: id не
     повторяются, а первый ход уезжает байт-в-байт тем, что сохранили."""
     client = _FakeClient([_response(content="раз"), _response(content="два")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     wires: list = []
 
     async def keep(w):
@@ -148,7 +149,7 @@ async def test_repeated_preset_keeps_history_valid_and_prefix_stable(fresh_db, u
 
     assert len(client.calls) == 2
     second = client.calls[1]["messages"]
-    assert second[1:1 + len(wires[0])] == wires[0]
+    assert second[1:1 + len(wires[0])] == chat_view(wires[0])
     _assert_valid_wire(wires[1])
 
 
@@ -157,7 +158,7 @@ async def test_model_may_still_ask_for_more(fresh_db, user_id, monkeypatch):
         _response(content="", tool_calls=[_tool_call("c9", "compare_periods")]),
         _response(content="итог"),
     ])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     wires: list = []
 
     async def keep(w):
@@ -178,7 +179,7 @@ async def test_model_may_still_ask_for_more(fresh_db, user_id, monkeypatch):
 async def test_streamed_preset_is_one_call_too(fresh_db, user_id, monkeypatch):
     """Стрим (/v1/ai/ask?stream, пузырь-черновик в Telegram) идёт через тот же ход."""
     client = _FakeClient([_FakeStream("разбор стримом")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     chunks: list = []
 
     async def on_chunk(text):
@@ -196,7 +197,7 @@ async def test_streamed_preset_is_one_call_too(fresh_db, user_id, monkeypatch):
 
 async def test_failed_prefetch_falls_back_to_the_ordinary_path(fresh_db, user_id, monkeypatch):
     client = _FakeClient([_response(content="ок")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     async def boom(*a, **kw):
         raise RuntimeError("db down")

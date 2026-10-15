@@ -1,4 +1,4 @@
-"""AI-тренер: чат с Grok, у которого есть доступ к данным текущего пользователя."""
+"""AI-тренер: чат с моделью (OpenAI Luna), у которой есть доступ к данным текущего пользователя."""
 
 import asyncio
 import base64
@@ -111,7 +111,8 @@ TG_CHUNK = 4000
 # С какого остатка начинаем показывать, сколько вопросов осталось на сегодня.
 _QUOTA_WARN_AT = 3
 
-# Лимит xAI на размер одного изображения (см. xai_sdk.chat.image).
+# Потолок на одно фото в вопросе тренеру: телеграмовское фото и так пережато, а
+# base64-раздутый мегабайтник в запросе к модели — это лишние входные токены.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 def _default_photo_question() -> str:
@@ -1969,7 +1970,7 @@ def _try_claim_busy(user_id: int) -> bool:
     several awaits later inside `_handle_question`, after reading the daily
     count and FSM state) left exactly that gap: two fast messages from the
     same user both passed the check before either reservation landed, so both
-    reached the model — double the Grok cost, and the daily-question limit
+    reached the model — double the model cost, and the daily-question limit
     (charged only after a successful answer) could be exceeded by however many
     requests raced through the gap.
 
@@ -2245,10 +2246,10 @@ async def _handle_question(
         setup_questions.extend(questions)
 
     # Размышления финального раунда. Пользователю они не показываются — они
-    # нужны, чтобы уехать назад вместе с ответом в истории: по документации xAI
-    # отсутствие reasoning_content в отправленной истории это причина промахов
-    # кэша номер один у ризонинговых моделей, а промах по нашей шапке в
-    # одиннадцать тысяч токенов стоит вчетверо дороже попадания.
+    # нужны, чтобы уехать назад вместе с ответом в истории (строка
+    # reasoning_content — формат прежнего провайдера; у Luna рассуждение едет
+    # в истории сырыми элементами Responses, см. ai_trainer.OPENAI_OUTPUT_KEY,
+    # и сюда не приходит).
     reasoning_cell: dict[str, str] = {}
 
     async def collect_reasoning(reasoning: str) -> None:
@@ -2257,8 +2258,8 @@ async def _handle_question(
     # Ровно тот список сообщений, что уехал модели — включая её обращения к
     # инструментам и их результаты. Его и сохраняем как историю: тогда следующий
     # вопрос ДОПИСЫВАЕТ к неизменному префиксу, а не отдаёт переписанный, и кэш
-    # xAI попадает. Собранная руками пара «вопрос-ответ» этого не даёт: по их
-    # документации любое изменение ранних сообщений — промах.
+    # входа попадает. Собранная руками пара «вопрос-ответ» этого не даёт: любое
+    # изменение ранних сообщений — промах.
     wire_cell: dict[str, list] = {}
 
     async def collect_wire(messages: list) -> None:

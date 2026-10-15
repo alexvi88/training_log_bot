@@ -97,9 +97,6 @@ MACHINE_KEYS = {
     "app_link",
     # Идентификатор мини-игры (catch/weigh/sort/runner) — название рисует приложение.
     "game",
-    # Выбор модели тренера (grok/luna, только свои аккаунты) — токены, подписи
-    # «Grok 4.5» / «GPT-6 Luna» рисует приложение.
-    "ai_model", "ai_model_options",
     # Маршрут пуша и строки «Уведомлений» (push_ios.ios_route): экран и неделя
     # — машинные значения, имя упражнения в нём — показываемое и проверяется.
     "screen", "week",
@@ -423,16 +420,14 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
 
     # --- аккаунт ---
     await w.call("GET", "/me", expect=200)
-    # Модель тренера: чужому аккаунту — 403 текстом на его языке; своему
-    # (TEST_USER_ID) — поля в /me и смена. Сразу назад: свой аккаунт иначе
-    # меняет поведение лимитов дальше по сценарию.
-    await w.call("PATCH", "/ai/model", json={"ai_model": "luna"}, expect=403)
+    # Выбора модели тренера больше нет: /me без ai_model/ai_model_options (iOS
+    # строку «Модель тренера» не показывает), PATCH /ai/model — 410 текстом на
+    # языке атлета, и своему аккаунту тоже.
+    await w.call("PATCH", "/ai/model", json={"ai_model": "luna"}, expect=410)
     monkeypatch.setattr(config, "TEST_USER_ID", 111)
     me_own = await w.call("GET", "/me", expect=200)
-    assert me_own.json()["ai_model_options"] == ["grok", "luna"]
-    await w.call("PATCH", "/ai/model", json={"ai_model": "gpt"}, expect=400)
-    await w.call("PATCH", "/ai/model", json={"ai_model": "luna"}, expect=200)
-    await w.call("PATCH", "/ai/model", json={"ai_model": "grok"}, expect=200)
+    assert "ai_model_options" not in me_own.json() and "ai_model" not in me_own.json()
+    await w.call("PATCH", "/ai/model", json={"ai_model": "luna"}, expect=410)
     monkeypatch.setattr(config, "TEST_USER_ID", None)
     await w.call("GET", "/settings", expect=200)
     await w.call("PATCH", "/settings", json={"unit": "kg"}, expect=200)

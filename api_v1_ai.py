@@ -232,8 +232,8 @@ async def _require_ai_consent(request: Request, user_id: int) -> None:
     стороннему AI (App Store 5.1.2(i), users.ai_consent_at).
 
     Зовут только ручки, которые реально отдают что-то модели: вопрос (текст и
-    фото, xAI), ответ на опросник (последний ответ — ход xAI), голос (OpenAI,
-    расшифровка) и видео (Novita, потом xAI). «Забрать»/«Начать тренировку» по
+    фото, OpenAI), ответ на опросник (последний ответ — ход OpenAI), голос
+    (OpenAI, расшифровка) и видео (Novita, потом OpenAI). «Забрать»/«Начать тренировку» по
     черновику, откат, история и лимиты ничего наружу не шлют — закрывать их
     незачем, а человек, отозвавший согласие, должен иметь возможность забрать
     уже предложенную программу.
@@ -355,44 +355,18 @@ async def get_limits(request: Request) -> JSONResponse:
     return JSONResponse(await _limits_json(user_id))
 
 
-# ---------- модель тренера: grok или Luna, только свои аккаунты ----------
-
-
-async def ai_model_json(user_id: int) -> dict[str, Any]:
-    """Поля выбора модели тренера для /me и ответа PATCH /ai/model.
-
-    Только своим аккаунтам (config.ai_model_switch_ids): `ai_model` — текущий
-    токен, `ai_model_options` — из чего выбирать (приложение по ним и решает,
-    показывать ли строку «Модель тренера»). Остальным — пусто: полей в ответе
-    нет вовсе, а не null, — старые сборки и обычные атлеты их не видят.
-    """
-    if not await db.ai_model_switch_allowed(user_id):
-        return {}
-    return {
-        "ai_model": await ai_trainer.ai_model_for(user_id),
-        "ai_model_options": list(config.AI_MODEL_CHOICES),
-    }
+# ---------- модель тренера: выбора больше нет ----------
 
 
 async def set_ai_model(request: Request) -> JSONResponse:
-    """PATCH /v1/ai/model {"ai_model": "grok" | "luna"} — сменить модель тренера.
+    """PATCH /v1/ai/model — снято: модель тренера одна на всех (Luna).
 
-    Только свои аккаунты; остальным — 403, и в базу ничего не пишется (это
-    держит ещё и db.set_user_ai_model). Действует со следующего вопроса: ход,
-    который уже идёт, доезжает на той модели, с которой начался.
-    """
-    user_id = await common.authed_user_id(request)
-    if not await db.ai_model_switch_allowed(user_id):
-        raise ApiError(
-            403, "forbidden", "ai model switch is for own accounts only",
-            key="api.error.ai_model_own_only",
-        )
-    body = await common.json_body(request)
-    value = common.require(body, "ai_model", str)
-    if value not in config.AI_MODEL_CHOICES:
-        raise ApiError(400, "bad_request", f"ai_model must be one of {list(config.AI_MODEL_CHOICES)}")
-    await db.set_user_ai_model(user_id, value)
-    return JSONResponse(await ai_model_json(user_id))
+    Сборки, где строка «Модель тренера» ещё есть, её не покажут — /me больше
+    не отдаёт ai_model_options. Если старая сборка всё-таки пришлёт PATCH,
+    она получает 410 с человеческим текстом, а не 404, и в базу ничего не
+    пишется (колонка users.ai_model осталась, её никто не читает)."""
+    await common.authed_user_id(request)
+    raise ApiError(410, "ai_model_gone", "the coach model switch was removed")
 
 
 # ---------- режим «программа атлету» (coach_program_ai) ----------
@@ -1504,7 +1478,7 @@ async def ask_video(request: Request) -> JSONResponse:
 
     В боте это два платных шага одного сценария: `video_analysis.analyze`
     (глаза, Qwen3-VL) и затем `ai_trainer.ask` с `video_context` (голос,
-    Grok) — см. `handlers/ai_trainer.py::_analyze_video_and_answer`. Здесь оба
+    тренер) — см. `handlers/ai_trainer.py::_analyze_video_and_answer`. Здесь оба
     шага за один HTTP-запрос, а не два отдельных маршрута, как у голоса: у
     голоса разделение окупается — расшифровку можно поправить ДО того, как
     потрачен вопрос из квоты (см. докстринг `transcribe_voice`). Результат
@@ -1558,7 +1532,7 @@ async def ask_video(request: Request) -> JSONResponse:
     # Бронь — ДО обеих проверок лимита и уж тем более до самого разбора: два
     # параллельных запроса с одним и тем же видео (двойной тап, ретрай) иначе
     # оба прошли бы `ai_limits.check` (он читает счётчик, ещё не знающий о
-    # текущем запросе) и оба заплатили бы за Qwen3-VL и за Grok — ровно та
+    # текущем запросе) и оба заплатили бы за Qwen3-VL и за ответ тренера — ровно та
     # гонка, что описана у `_busy` выше.
     _claim_turn_or_429(user_id, lang)
     saved_image_path: Optional[str] = None

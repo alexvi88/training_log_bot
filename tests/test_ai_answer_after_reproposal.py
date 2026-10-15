@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from luna_fakes import as_luna, chat_view
 
 import ai_trainer
 import api_v1
@@ -75,7 +76,7 @@ async def test_glued_interim_chatter_is_not_the_answer(fresh_db, user_id, monkey
         _response(content=INTERIM_1 + INTERIM_2),
         _response(content=EXPLANATION),
     ])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     drafts: list[dict] = []
     wire: list[list] = []
 
@@ -95,21 +96,21 @@ async def test_glued_interim_chatter_is_not_the_answer(fresh_db, user_id, monkey
     create = client.chat.completions.create
     assert create.await_count == 4
     # Дополнительный шаг ДОПИСЫВАЕТ разговор: всё, что ушло в прошлом запросе,
-    # — неизменный префикс нового, и набор инструментов тот же (кэш xAI).
+    # — неизменный префикс нового, и набор инструментов тот же (кэш входа).
     before = create.await_args_list[2].kwargs
     after = create.await_args_list[3].kwargs
     assert after["messages"][: len(before["messages"])] == before["messages"]
     assert after["messages"][-1]["role"] == "system"
     assert after.get("tools") == before.get("tools")
     # История следующего хода кончается объяснением, а не репликами.
-    assert wire[-1][-1] == {"role": "assistant", "content": EXPLANATION}
+    assert chat_view(wire[-1])[-1] == {"role": "assistant", "content": EXPLANATION}
 
 
 async def test_interim_chatter_is_cut_from_a_real_explanation(fresh_db, user_id, monkeypatch):
     """Объяснение есть, но к нему прилипли реплики про прошлые черновики —
     лишний шаг не нужен, нужно только вырезать прилипшее."""
     client = _reproposing_client([_response(content=INTERIM_2 + EXPLANATION)])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     answer = await ai_trainer._ask_plain(user_id, "Собери программу", history=[])
 
@@ -119,7 +120,7 @@ async def test_interim_chatter_is_cut_from_a_real_explanation(fresh_db, user_id,
 
 async def test_a_good_answer_after_reproposal_costs_no_extra_call(fresh_db, user_id, monkeypatch):
     client = _reproposing_client([_response(content=EXPLANATION)])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     answer = await ai_trainer._ask_plain(user_id, "Собери программу", history=[])
 
@@ -163,7 +164,7 @@ async def test_streamed_turn_gets_the_explanation_too(fresh_db, user_id, monkeyp
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=streams)))
     )
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     monkeypatch.setattr(ai_trainer, "STREAM_FLUSH_SECONDS", 0)
     monkeypatch.setattr(ai_trainer, "MIN_FIRST_FLUSH_CHARS", 0)
     chunks: list[str] = []
@@ -187,7 +188,7 @@ async def test_rest_ask_answers_with_the_final_program_explanation(fresh_db, mon
         _response(content=INTERIM_1 + INTERIM_2),
         _response(content=EXPLANATION),
     ])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
     await fresh_db.get_or_create_user(telegram_id=111, username="tester")

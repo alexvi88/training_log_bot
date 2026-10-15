@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from luna_fakes import as_luna
 
 import ai_trainer
 import api_v1
@@ -45,7 +46,7 @@ class _FakeCompletions:
 def _install(monkeypatch, answers):
     completions = _FakeCompletions(answers)
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
     async def no_cost(*a, **k):

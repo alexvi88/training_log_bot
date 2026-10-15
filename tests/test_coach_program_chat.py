@@ -22,6 +22,7 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
+from luna_fakes import as_luna
 
 import ai_limits
 import ai_trainer
@@ -99,7 +100,7 @@ def _scripted_model(monkeypatch, rounds: list) -> list[dict]:
         return FINAL, [], ""
 
     monkeypatch.setattr(ai_trainer, "_completion_round", fake_round)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: object())
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(object()))
     return seen
 
 

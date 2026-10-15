@@ -80,10 +80,10 @@ async def _build_cost_report(date_str: str) -> str:
 
     llm_cost, llm_calls, llm_tokens = _llm_cost(llm_breakdown)
     transcription_cost = await db.get_transcription_cost_usd(date_str)
-    # Вызовы web_search/x_search: $5 за 1000 СВЕРХ токенов. В консоли за неделю это
-    # было $0.68 — пятнадцать процентов текстового счёта, которых отчёт не видел.
+    # Вызовы web_search: СВЕРХ токенов (у OpenAI $10 за 1000). Без этой строки
+    # отчёт не видел заметную долю счёта.
     server_tool_calls = sum(server_tools.values())
-    # Ставка — по инструменту: у web_search xAI и OpenAI она разная.
+    # Ставка — по инструменту: у OpenAI и у исторических записей xAI она разная.
     server_tool_cost = sum(
         calls * config.server_tool_price_usd(tool) for tool, calls in server_tools.items()
     )

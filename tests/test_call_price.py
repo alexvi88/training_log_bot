@@ -118,18 +118,18 @@ def test_grok_43_price_matches_the_published_rates():
 # Цена кэшированного входа по docs.x.ai, $ за 1K токенов. В таблицу config она
 # не входит (там только вход/выход), а для проверки доли нужна.
 CACHED_INPUT_PRICE_USD_PER_1K = {
-    "grok-4.5-latest": 0.0003,   # $0.30 за 1M
-    "grok-4.3-latest": 0.0002,   # $0.20 за 1M
+    "gpt-6-luna": 0.00001,       # $0.01 за 1M (официальный прайс OpenAI)
+    "grok-4.5-latest": 0.0003,   # $0.30 за 1M — историческая, старые cost_events
 }
 
 
-def test_cache_share_matches_the_model_we_actually_run():
-    """Доля кэша одна на все модели, а прайс у каждой свой: у 4.5 это 0.15
-    ($0.30 при $2.00), у 4.3 — 0.16 ($0.20 при $1.25). Переехали моделью, а долю
+@pytest.mark.parametrize("model", [config.OPENAI_CHAT_MODEL, "grok-4.5-latest"])
+def test_cache_share_matches_the_model_we_actually_run(model):
+    """Доля кэша у каждой модели своя: у Luna 0.1 ($0.01 при $0.10), у
+    исторического grok-4.5 0.15 ($0.30 при $2.00). Переехали моделью, а долю
     забыли — экономия в логах поедет молча, и заметить это нечем."""
-    model = config.GROK_MODEL
     if model not in CACHED_INPUT_PRICE_USD_PER_1K:
         pytest.skip(f"цена кэша для {model} не записана — дописать сюда при переезде")
     inp, _out = config.LLM_PRICES_USD_PER_1K[model]
     expected = CACHED_INPUT_PRICE_USD_PER_1K[model] / inp
-    assert pytest.approx(expected, abs=0.005) == config.CACHED_INPUT_PRICE_MULTIPLIER
+    assert pytest.approx(expected, abs=0.005) == config.cached_input_multiplier(model)
