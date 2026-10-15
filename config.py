@@ -469,12 +469,13 @@ OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "") or OPENAI_CHAT_MODEL
 # ступени; вызов длиннее порога только пишет предупреждение в лог
 # (ai_trainer._log_llm_cost) — тогда расчёт занижает.
 OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000"))
-# Главный цикл — тоже none: в /v1/chat/completions gpt-6-luna не принимает
-# инструменты вместе с reasoning_effort (400 «Function tools with
-# reasoning_effort are not supported … use /v1/responses or set
-# reasoning_effort to 'none'»), а без инструментов главного цикла нет. Чтобы
-# Luna рассуждала с инструментами, цикл надо перевести на Responses API.
-OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "none")
+# Главный цикл — low: он идёт через Responses API (ai_trainer._responses_round),
+# потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
+# с reasoning_effort (400 «Function tools with reasoning_effort are not
+# supported … use /v1/responses or set reasoning_effort to 'none'»). Тем же
+# значением рассуждает и живой поиск Luna (тоже Responses). Quick-вызовы без
+# инструментов остаются на chat/completions с none (см. выше).
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
 
 # Короткие токены выбора модели тренера (users.ai_model). Первый — по умолчанию.
