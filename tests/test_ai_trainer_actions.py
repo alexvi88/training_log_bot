@@ -11,9 +11,7 @@
 отката, а откат — вернуть как было.
 """
 
-import asyncio
 import datetime as dt
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -246,131 +244,6 @@ async def test_log_bodyweight_rejects_nonsense(fresh_db, user_id):
     assert await dbmod.get_latest_bodyweight(user_id) is None
 
 
-async def test_log_food_lands_in_todays_diary(fresh_db, user_id):
-    payload, _undo = await ai_trainer._log_food(
-        user_id, {"description": "Овсянка с бананом", "calories": 420, "protein": 12}
-    )
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert [e["description"] for e in entries] == ["Овсянка с бананом"]
-    assert entries[0]["calories"] == 420
-
-
-async def test_log_food_without_numbers_is_still_an_entry(fresh_db, user_id):
-    """Без оценщика (ключа нет) запись всё равно ложится — просто без цифр."""
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Два яйца"})
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] is None
-    assert payload["macros_estimated"] is False
-
-
-async def test_log_food_without_numbers_asks_the_same_estimator_as_the_diary(
-    fresh_db, user_id, monkeypatch
-):
-    """Регрессия: одно и то же «хачапури» давало 865 ккал с экрана дневника и
-    пустую запись из чата с тренером, молча занижая итог дня."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def fake_analyze(uid, text="", **kwargs):
-        assert text == "Хачапури"
-        return {"is_food": True, "calories": 865, "protein": 35, "fat": 45, "carbs": 80}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fake_analyze)
-
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Хачапури"})
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] == 865
-    # Человек этих цифр не называл — тренер обязан сказать, что они прикидочные.
-    assert payload["macros_estimated"] is True
-
-
-async def test_log_food_estimate_respects_ai_limits(fresh_db, user_id, monkeypatch):
-    """Регрессия: чат с тренером (и MCP тем же путём) звал платный analyze_food
-    в обход ai_limits — раньше ни дневная квота еды, ни денежный стоп-кран сюда
-    не заглядывали вовсе, только экран 🍽 Дневник еды."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def fail(*a, **kw):
-        raise AssertionError("оценщик не должен вызываться при заблокированной квоте")
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fail)
-    monkeypatch.setattr(
-        ai_trainer.ai_limits, "check",
-        AsyncMock(return_value=ai_trainer.ai_limits.Block(kind="food", log="food: 30 из 30 за сутки")),
-    )
-    before = await dbmod.get_ai_food_count_today(user_id)
-
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Хачапури"})
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] is None
-    assert payload["macros_estimated"] is False
-    assert await dbmod.get_ai_food_count_today(user_id) == before
-
-
-async def test_log_food_keeps_numbers_the_person_named(fresh_db, user_id, monkeypatch):
-    """Названные вслух цифры важнее оценки: оценщик к ним не зовётся вовсе."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def fail(*a, **kw):
-        raise AssertionError("оценщик не должен вызываться, цифры уже есть")
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fail)
-
-    payload, _undo = await ai_trainer._log_food(
-        user_id, {"description": "Овсянка", "calories": 300}
-    )
-    assert payload["logged"]["calories"] == 300
-    assert payload["macros_estimated"] is False
-
-
-async def test_log_food_does_not_invent_numbers_for_a_non_meal(fresh_db, user_id, monkeypatch):
-    """«Поел» — не еда: оценщик отказывается, и запись остаётся без цифр."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def not_food(uid, text="", **kwargs):
-        return {"is_food": False, "calories": None}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", not_food)
-
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Поел"})
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] is None
-    assert payload["macros_estimated"] is False
-
-
-async def test_estimate_missing_macros_lets_a_timed_out_call_finish_in_background(
-    fresh_db, user_id, monkeypatch
-):
-    """asyncio.wait_for cancels what it wraps on timeout — if analyze_food had
-    already reached the provider by then, that used to cancel the request
-    client-side before its own cost-logging line ever ran, losing a call we
-    were billed for. asyncio.shield keeps the underlying call alive past the
-    timeout: we stop waiting for its answer, but it still runs to completion
-    (and logs its own cost) in the background."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ai_trainer, "_FOOD_ESTIMATE_TIMEOUT", 0.01)
-
-    finished = asyncio.Event()
-
-    async def slow_analyze(uid, text="", **kwargs):
-        await asyncio.sleep(0.05)  # дольше таймаута — успевает состояться
-        finished.set()
-        return {"is_food": True, "calories": 300, "protein": 10, "fat": 5, "carbs": 40}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", slow_analyze)
-
-    entry: dict = {}
-    got = await ai_trainer._estimate_missing_macros(user_id, "что-то съел", entry)
-
-    assert got is False  # тайм-аут снаружи всё равно честно отдаёт "не успел"
-    assert entry == {}  # запись не подождала цифр — они не пишутся в неё
-
-    await asyncio.wait_for(finished.wait(), timeout=1)  # но вызов реально состоялся
-
-
 # ---------- сравнение периодов ----------
 
 
@@ -465,9 +338,9 @@ async def test_every_self_acting_tool_offers_an_undo(fresh_db, user_id):
     """Опись, а не проверка одного случая: новый инструмент, который делает
     что-то сам, не должен незаметно проехать мимо кнопки отката."""
     assert set(ai_trainer._UNDOABLE_TOOLS) == {
-        "log_bodyweight", "log_food", "create_exercise", "rename_exercise",
+        "log_bodyweight", "create_exercise", "rename_exercise",
         "move_exercise_to_group", "rename_program", "copy_program",
-        "delete_food_entry", "delete_bodyweight_log",
+        "delete_bodyweight_log",
     }
     # И ни один из них не должен заодно оказаться среди тех, что только предлагают.
     assert not set(ai_trainer._UNDOABLE_TOOLS) & set(ai_trainer._ACTION_TOOLS)
@@ -509,15 +382,6 @@ async def test_undo_removes_that_entry_not_the_latest(fresh_db, user_id):
 
     left = [row["weight"] for row in await fresh_db.list_bodyweight_logs(user_id)]
     assert left == [81.0]
-
-
-async def test_logged_food_can_be_taken_back(fresh_db, user_id):
-    action = await _call(user_id, "log_food", {"description": "Овсянка", "calories": 300})
-    assert action["undo"]["kind"] == "food"
-
-    assert await ai_handler._apply_undo(user_id, action["undo"]) is not None
-    today = dt.date.today().isoformat()
-    assert await fresh_db.list_food_entries(user_id, today) == []
 
 
 async def test_created_exercise_is_removed_whole_not_archived(fresh_db, user_id):
@@ -677,43 +541,7 @@ async def test_several_profile_writes_in_one_turn_add_no_buttons(fresh_db, user_
     assert (user["experience"], user["goal"]) == ("новичок", "масса")
 
 
-# ---------- удаление записей веса и еды (delete_food_entry / delete_bodyweight_log) ----------
-
-
-async def test_delete_food_entry_removes_it_and_undo_restores_it_whole(fresh_db, user_id):
-    """Живой запрос из Claude Desktop: «удали эту запись» упирался в «у меня
-    нет инструмента на удаление» — get_food_diary не отдавал entry_id, и
-    убрать запись мог только человек руками в самом боте.
-
-    Откат тут — не «намекни переделать», а честное восстановление той же
-    строки: kind=food_restore в _apply_undo."""
-    entry_id = await fresh_db.add_food_entry(
-        user_id, eaten_on="2026-08-08", description="Протеиновый батончик",
-        calories=200, protein=20, fat=7, carbs=15,
-    )
-
-    action = await _call(user_id, "delete_food_entry", {"entry_id": entry_id})
-
-    assert action is not None and action["undo"]["kind"] == "food_restore"
-    assert await fresh_db.get_food_entry(entry_id) is None
-
-    assert await ai_handler._apply_undo(user_id, action["undo"]) is not None
-    restored = (await fresh_db.list_food_entries(user_id, "2026-08-08"))[0]
-    assert (restored["description"], restored["calories"]) == ("Протеиновый батончик", 200)
-
-
-async def test_delete_food_entry_refuses_someone_elses_row(fresh_db, user_id):
-    other = await fresh_db.get_or_create_user(telegram_id=user_id + 1, username="other")
-    entry_id = await fresh_db.add_food_entry(
-        other["telegram_id"], eaten_on="2026-08-08", description="Чужое"
-    )
-
-    payload = json.loads(
-        await ai_trainer.execute_tool(user_id, "delete_food_entry", {"entry_id": entry_id})
-    )
-
-    assert "error" in payload
-    assert await fresh_db.get_food_entry(entry_id) is not None
+# ---------- удаление записей веса (delete_bodyweight_log) ----------
 
 
 async def test_delete_bodyweight_log_removes_it_and_undo_restores_it(fresh_db, user_id):
@@ -867,25 +695,27 @@ async def test_folding_leaves_proposed_actions_where_they_were(fresh_db, user_id
 async def test_folded_undo_rolls_every_change_back(fresh_db, user_id):
     """Тап по общей кнопке возвращает всё, что сделал этот ход."""
     db = fresh_db
-    ids = [await db.add_food_entry(user_id, "2026-08-08", f"еда {i}") for i in range(3)]
+    ids = [await db.add_bodyweight_log(user_id, 80.0 + i) for i in range(3)]
 
     done = await ai_handler._apply_undo(
-        user_id, {"kind": "batch", "items": [{"kind": "food", "id": i} for i in ids]}
+        user_id, {"kind": "batch", "items": [{"kind": "bodyweight", "id": i} for i in ids]}
     )
 
     assert done == "Вернул 3 изменения"
-    assert await db.list_food_entries(user_id, "2026-08-08") == []
+    assert await db.list_bodyweight_logs(user_id) == []
 
 
 async def test_folded_undo_says_how_much_it_could_not_return(fresh_db, user_id):
     """Часть записей успели поправить руками — молчать об этом нельзя: человек
     решит, что вернулось всё."""
     db = fresh_db
-    kept = await db.add_food_entry(user_id, "2026-08-08", "каша")
+    kept = await db.add_bodyweight_log(user_id, 80.0)
 
     done = await ai_handler._apply_undo(
         user_id,
-        {"kind": "batch", "items": [{"kind": "food", "id": kept}, {"kind": "food", "id": 999999}]},
+        {"kind": "batch", "items": [
+            {"kind": "bodyweight", "id": kept}, {"kind": "bodyweight", "id": 999999},
+        ]},
     )
 
     assert done == "Вернул 1 изменение из 2 — остальное уже правили руками"
@@ -896,7 +726,9 @@ async def test_folded_undo_reports_failure_when_nothing_came_back(fresh_db, user
     покажет алерт вместо бодрого подтверждения."""
     done = await ai_handler._apply_undo(
         user_id,
-        {"kind": "batch", "items": [{"kind": "food", "id": 999998}, {"kind": "food", "id": 999999}]},
+        {"kind": "batch", "items": [
+            {"kind": "bodyweight", "id": 999998}, {"kind": "bodyweight", "id": 999999},
+        ]},
     )
 
     assert done is None
@@ -971,13 +803,6 @@ async def test_action_button_labels_are_english_under_lang_en(fresh_db, user_id,
         labels.append(action["label"])
 
         _, action = await ai_trainer._log_bodyweight(user_id, {"weight": 82.5})
-        labels.append(action["label"])
-
-        _, action = await ai_trainer._log_food(user_id, {"description": "Oatmeal", "calories": 300})
-        labels.append(action["label"])
-        food_undo = action["undo"]
-
-        _, action = await ai_trainer._delete_food_entry(user_id, {"entry_id": food_undo["id"]})
         labels.append(action["label"])
 
         weight_log = await dbmod.get_latest_bodyweight(user_id)

@@ -68,9 +68,11 @@ async def test_get_settings_returns_defaults(fresh_db, client_factory):
     assert body["e1rm_formula"] in ("epley", "brzycki")
     for field in (
         "pushes_enabled", "ai_comments_enabled", "progression_hint_enabled",
-        "food_macros_enabled", "show_extra_stats",
+        "show_extra_stats",
     ):
         assert isinstance(body[field], bool)
+    # Тумблер «КБЖУ» ушёл вместе с дневником еды.
+    assert "food_macros_enabled" not in body
 
 
 # ---------- settings: PATCH — happy path & partial update ----------

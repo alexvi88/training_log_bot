@@ -201,26 +201,22 @@ async def test_video_context_block_is_built_in_the_users_language(fresh_db):
     assert f"(уверенность {i18n.t_in('ru', 'ai.video.confidence_high')})" not in block
 
 
-async def test_factcheck_and_food_run_under_the_users_language(fresh_db, monkeypatch):
+async def test_factcheck_runs_under_the_users_language(fresh_db, monkeypatch):
     seen = []
 
     async def fake_fact(user_id, text, image_data_url=None):
         seen.append(("fact", i18n.get_lang()))
         return "ok"
 
-    async def fake_food(user_id, **kwargs):
-        seen.append(("food", i18n.get_lang()))
-        return {"is_food": True, "description": "Rice", "items": [], "calories": 1, "protein": 0,
-                "fat": 0, "carbs": 0}
-
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     monkeypatch.setattr(ai_trainer, "fact_check_post", fake_fact)
-    monkeypatch.setattr(ai_trainer, "analyze_food", fake_food)
     client = await _linked(fresh_db, "en")
     with i18n.use_lang("ru"):
         assert (await client.post("/factcheck", json={"text": "x"})).status_code == 200
-        assert (await client.post("/food/parse", json={"text": "rice"})).status_code == 200
-    assert seen == [("fact", "en"), ("food", "en")]
+        gone = await client.post("/food/parse", json={"text": "rice"})
+    assert seen == [("fact", "en")]
+    assert gone.status_code == 410
+    assert gone.json()["message"] == i18n.t_in("en", "api.error.food_gone")
 
 
 async def test_comment_on_missing_workout_speaks_the_users_language(fresh_db, user_id):

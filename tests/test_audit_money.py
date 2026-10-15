@@ -450,7 +450,7 @@ async def test_web_search_timeout_logs_flat_estimate_and_tool_call(fresh_db, use
 # ---------- 6. «Понятно» не снимает HARD ----------
 
 
-@pytest.mark.parametrize("kind", [ai_limits.KIND_FOOD, ai_limits.KIND_VIDEO, ai_limits.KIND_SEARCH])
+@pytest.mark.parametrize("kind", [ai_limits.KIND_VIDEO, ai_limits.KIND_SEARCH])
 async def test_ack_does_not_skip_hard_stop(fresh_db, user_id, hard_stop, monkeypatch, kind):
     monkeypatch.setattr(config, "limit_preview_ids", lambda: {user_id})
     await ai_limits.record_ack(user_id, kind)

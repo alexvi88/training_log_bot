@@ -83,7 +83,6 @@ CATALOG: list[Achievement] = [
     Achievement("night_owl", "🦉"),
     Achievement("marathon", "⏳"),
     Achievement("bwlog30", "📏"),
-    Achievement("food7", "🍱"),
     Achievement("new_year", "🎄"),
     Achievement("dec31", "🎇"),
 ]
@@ -119,12 +118,6 @@ _BODYWEIGHT_LOG_TIERS = [(30, "bwlog30")]
 # этих семейств — булевы или "разовые" (суперсет когда-то случился,
 # тренировка началась до 7 утра, 31 декабря) — у них нет расстояния до цели,
 # поэтому в «Ближайшие» они не участвуют.
-#
-# food7 («Неделя учёта») сюда сознательно не входит, хотя число у него есть
-# (food_diary_best_run): этот же список отдаёт /v1/achievements/nearest
-# iOS-приложению, где дневника еды нет, — там карточка «3 из 7 дней» звала бы
-# к экрану, которого не существует. Семейства не различаются по клиенту, так
-# что держим один набор для обоих.
 _TIERS_BY_FAMILY: dict[str, list[tuple[float, str]]] = {
     "workouts": _WORKOUT_TIERS,
     "weeks": _STREAK_TIERS,
@@ -246,7 +239,6 @@ class AchievementContext:
     all_weekdays_covered: bool = False
     has_dec31: bool = False
     bodyweight_logs: int = 0
-    food_diary_best_run: int = 0
     # Attributes of the workout that just finished (None when evaluating aggregates only).
     workout_start_hour: Optional[int] = None
     workout_date: Optional[dt.date] = None
@@ -257,18 +249,6 @@ def weekend_pair_exists(dates: list[dt.date]) -> bool:
     """Суббота и воскресенье одной и той же недели — обе с тренировкой."""
     days = set(dates)
     return any(d.weekday() == 5 and d + dt.timedelta(days=1) in days for d in days)
-
-
-def longest_daily_run(dates: list[dt.date]) -> int:
-    """Длина самой длинной цепочки дней подряд (для «Недели учёта»)."""
-    days = sorted(set(dates))
-    best = run = 0
-    prev: Optional[dt.date] = None
-    for d in days:
-        run = run + 1 if prev is not None and (d - prev).days == 1 else 1
-        best = max(best, run)
-        prev = d
-    return best
 
 
 def earned_codes(ctx: AchievementContext) -> set[str]:
@@ -310,8 +290,6 @@ def earned_codes(ctx: AchievementContext) -> set[str]:
         codes.add("all_weekdays")
     if ctx.has_dec31:
         codes.add("dec31")
-    if ctx.food_diary_best_run >= 7:
-        codes.add("food7")
     if ctx.workout_start_hour is not None:
         if ctx.workout_start_hour < 7:
             codes.add("early_bird")

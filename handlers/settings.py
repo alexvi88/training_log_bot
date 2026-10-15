@@ -50,7 +50,6 @@ async def show_settings(
         user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]),
         bool(user["ai_comments_enabled"]), bool(user["progression_hint_enabled"]),
         tz_offset=user["tz_offset"],
-        food_macros_enabled=bool(user["food_macros_enabled"]),
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
         lang=user["lang"],
@@ -465,15 +464,6 @@ async def settings_pushes(callback: CallbackQuery, state: FSMContext):
 async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await db.update_user(callback.from_user.id, ai_comments_enabled=0 if user["ai_comments_enabled"] else 1)
-    await show_settings(callback, state)
-
-
-@router.callback_query(F.data == "settings:food_macros")
-async def settings_food_macros(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    await db.update_user(
-        callback.from_user.id, food_macros_enabled=0 if user["food_macros_enabled"] else 1
-    )
     await show_settings(callback, state)
 
 

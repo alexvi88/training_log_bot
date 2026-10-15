@@ -24,7 +24,6 @@ from handlers import (
     edit_workout,
     exercise_resolve,
     exercises,
-    food_diary,
     history,
     routines,
     workout,
@@ -32,7 +31,7 @@ from handlers import (
 
 _MODULES = [
     backfill, bodyweight, csv_import, edit_workout, exercise_resolve,
-    exercises, food_diary, history, routines, workout,
+    exercises, history, routines, workout,
 ]
 
 # Reading message.text, or handing it to something that will.

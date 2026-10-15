@@ -61,21 +61,6 @@ async def test_show_settings_reflects_pushes_state_in_keyboard_labels(fresh_db, 
     assert any(label == "🔕 Пуши: молчу" for label in labels_off)
 
 
-async def test_settings_food_macros_toggles_off_then_on(fresh_db, user_id):
-    db = fresh_db
-    state = await _make_state(user_id)
-
-    assert (await db.get_user(user_id))["food_macros_enabled"] == 1  # по умолчанию считаем
-
-    callback = _make_callback(user_id, "settings:food_macros")
-    await settings.settings_food_macros(callback, state)
-    assert (await db.get_user(user_id))["food_macros_enabled"] == 0
-
-    callback = _make_callback(user_id, "settings:food_macros")
-    await settings.settings_food_macros(callback, state)
-    assert (await db.get_user(user_id))["food_macros_enabled"] == 1
-
-
 async def test_settings_progression_toggles_off_then_on(fresh_db, user_id):
     db = fresh_db
     state = await _make_state(user_id)
@@ -250,27 +235,26 @@ async def test_settings_keyboard_groups_into_three_blocks():
     # Профиль: единицы+пояс, язык+формула — парами по 2, короткие подписи.
     assert rows[0] == ["settings:unit", "settings:tz"]
     assert rows[1] == ["settings:lang", "settings:formula"]
-    # Как разговариваю: пять тумблеров, по одному в ряд — длинные подписи;
+    # Как разговариваю: тумблеры, по одному в ряд (КБЖУ ушёл вместе с AI-разбором еды) — длинные подписи;
     # диапазон повторов — сразу под подсказками прогрессии.
     assert rows[2] == ["settings:progression"]
     assert rows[3] == ["settings:rep_range"]
     assert rows[4] == ["settings:pushes"]
     assert rows[5] == ["settings:ai_comments"]
-    assert rows[6] == ["settings:food_macros"]
-    assert rows[7] == ["settings:card_detail"]
+    assert rows[6] == ["settings:card_detail"]
     # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
-    assert rows[8] == ["settings:profile"]
-    assert rows[9] == ["settings:export"]
-    assert rows[10] == ["settings:import"]
-    assert rows[11] == ["settings:mcp"]
-    assert rows[12] == ["feedback:open"]
+    assert rows[7] == ["settings:profile"]
+    assert rows[8] == ["settings:export"]
+    assert rows[9] == ["settings:import"]
+    assert rows[10] == ["settings:mcp"]
+    assert rows[11] == ["feedback:open"]
     # Сервис для тренеров — кто видит твой дневник (handlers/coach.py).
-    assert rows[13] == ["coach:hub"]
-    assert rows[14] == ["invite:show"]
+    assert rows[12] == ["coach:hub"]
+    assert rows[13] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[15] == ["settings:delete"]
-    assert rows[16] == ["settings:back"]
+    assert rows[14] == ["settings:delete"]
+    assert rows[15] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
@@ -327,10 +311,10 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     import keyboards
 
     on_kb = keyboards.settings_keyboard(
-        "kg", "epley", True, True, True, food_macros_enabled=True, show_extra_stats=True
+        "kg", "epley", True, True, True, show_extra_stats=True
     )
     off_kb = keyboards.settings_keyboard(
-        "kg", "epley", False, False, False, food_macros_enabled=False, show_extra_stats=False
+        "kg", "epley", False, False, False, show_extra_stats=False
     )
     on_texts = [b.text for row in on_kb.inline_keyboard for b in row]
     off_texts = [b.text for row in off_kb.inline_keyboard for b in row]
@@ -341,8 +325,8 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     assert "🔕 Пуши: молчу" in off_texts
     assert "🤖 Комментарии AI-тренера: комментирую" in on_texts
     assert "🤖 Комментарии AI-тренера: молчу" in off_texts
-    assert "🔢 КБЖУ: считаю" in on_texts
-    assert "📝 КБЖУ: не считаю" in off_texts
+    # «КБЖУ: считаю» ушёл вместе с AI-разбором еды — считать больше нечем.
+    assert not any("КБЖУ" in t for t in on_texts + off_texts)
     # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
     # переключается — это строка e1RM на итоговой карточке.
     assert "📊 e1RM на карточке: показываю" in on_texts

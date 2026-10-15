@@ -198,12 +198,6 @@ AI_SAVED_PROGRAMS_LIMIT = 50
 # можно переименовать обратно.
 MAX_PROGRAM_NAME_LENGTH = 48
 
-# Разумные границы дневной цели по калориям («🎯 Цель ккал» и REST
-# POST /food/goal) — просто чтобы не записать в базу опечатку («22000» вместо
-# «2200»), а не диетологический лимит. Общие для бота и API, чтобы не разъехались.
-KCAL_GOAL_MIN = 500
-KCAL_GOAL_MAX = 10000
-
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
 # PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
 # to silence the daily job entirely without touching per-user opt-outs.
@@ -318,7 +312,7 @@ AI_DRAFT_INTERVAL_SECONDS = float(os.getenv("AI_DRAFT_INTERVAL_SECONDS", "1.5"))
 # re-deriving what it had been given. Raise it back if answers get shallower.
 #
 # GROK_QUICK_REASONING_EFFORT — everything else on GROK_MODEL: the workout
-# comment, the weekly digest, food-photo analysis, and the search-worth-it
+# comment, the weekly digest, and the search-worth-it
 # gate (a 3-token yes/no classification). None of these need open-ended
 # reasoning, and none of them stream — unlike the chat loop, the user has
 # nothing live to watch while the model thinks, so low keeps that wait (and
@@ -433,20 +427,6 @@ AI_SEARCH_GLOBAL_DAILY_LIMIT = int(os.getenv("AI_SEARCH_GLOBAL_DAILY_LIMIT", "10
 # превращает их в трёхзначную сумму. Двадцать вопросов — это всё ещё длинный
 # разговор с тренером, до которого доходят единицы.
 AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "20"))
-
-# Сколько разборов еды в день на человека (дневник питания, ai_trainer.analyze_food).
-# Раньше единственная платная поверхность бота вообще без потолка: вопросы, видео и
-# поиск свои квоты имели, а фотографировать тарелку можно было бесконечно.
-#
-# Тридцать — это заметно больше, чем ест человек: пять приёмов пищи плюс правки и
-# переснятые фото. Упереться в него на честном использовании нельзя, а бесконечную
-# ленту фотографий он останавливает.
-#
-# Кончилась квота — дневник не запирается: текст сохраняется как есть, без модели
-# (тем же путём, что при выключенном КБЖУ, см. handlers/food_diary), и только фото
-# просит подождать до завтра. Пейволл на собственную еду — последнее, чего мы хотим.
-AI_FOOD_DAILY_LIMIT = int(os.getenv("AI_FOOD_DAILY_LIMIT", "30"))
-
 
 # Voice input for the AI trainer chat: Telegram voice messages get transcribed
 # via OpenAI's speech-to-text before being asked to Grok as a normal text
