@@ -132,7 +132,7 @@ async def _build_cost_report(date_str: str) -> str:
     elif config.AI_DAILY_COST_SOFT_CAP_USD > 0 and total_cost >= config.AI_DAILY_COST_SOFT_CAP_USD:
         lines.append(
             f"⚠️ Потолок расходов пройден (${config.AI_DAILY_COST_SOFT_CAP_USD:.0f}) — "
-            "поиск, видео и разбор еды выключались"
+            "поиск и видео выключались"
         )
     return "\n".join(lines)
 

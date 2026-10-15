@@ -16,6 +16,7 @@ api_v1.auth_apple), связывается с Telegram позже — тут е�
 
 import asyncio
 
+import legacy_food
 import pytest
 
 import db
@@ -33,7 +34,7 @@ async def _seed_content(telegram_id: int, *, tag: str) -> None:
     await db.add_block_exercise(block_id, exercise_id, 0)
     await db.append_set(block_id, exercise_id, 0, 100.0, 5, None)
     await db.add_bodyweight_log(telegram_id, 80.0, "2026-01-01T09:00:00")
-    await db.add_food_entry(telegram_id, "2026-01-01", f"{tag} meal", calories=500)
+    await legacy_food.insert_food_row(telegram_id, "2026-01-01", f"{tag} meal", calories=500)
     await db.create_program(telegram_id, f"{tag} program")
     await db.award_achievements(telegram_id, {f"{tag}_ach"})
     await db.issue_api_token(telegram_id)

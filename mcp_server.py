@@ -12,10 +12,10 @@ AI-клиентов (Claude Desktop / Claude Code / любой MCP-клиент)
   из базы. Ридер у пользовательских данных ровно один; иначе «сводка по
   тренировкам» тут и в боте разъезжаются молча, и заметить это можно только
   сравнив два ответа вручную.
-* Почти всё чтение. Пишущих инструментов здесь ровно два — `log_bodyweight` и
-  `log_food` — и оба выбраны по одному критерию: внутри бота они уже
-  «делают сразу и дают откат кнопкой» (`ai_trainer._UNDOABLE_TOOLS`), то есть
-  их и так можно вызвать одной репликой без подтверждения. Кнопки отката у
+* Почти всё чтение. Пишущие инструменты (`WRITE_TOOLS` ниже) выбраны по
+  одному критерию: внутри бота они уже «делают сразу и дают откат кнопкой»
+  (`ai_trainer._UNDOABLE_TOOLS`), то есть их и так можно вызвать одной
+  репликой без подтверждения. Кнопки отката у
   MCP-клиента нет — `_UNDO_NOTE`, который эти инструменты кладут в payload для
   модели тренера, здесь подменяется на честную подсказку (см. `_call`).
   Остальное пишущее (`save_athlete_profile`, `propose_program`, правки
@@ -80,7 +80,6 @@ READ_ONLY_TOOLS = frozenset(
         "get_exercise_progress",
         "list_exercise_catalog",
         "get_bodyweight_history",
-        "get_food_diary",
         "get_saved_programs",
         "get_program_adherence",
         "get_muscle_recovery",
@@ -91,15 +90,14 @@ READ_ONLY_TOOLS = frozenset(
 # Пишущие инструменты, разрешённые снаружи, — подмножество
 # `ai_trainer._UNDOABLE_TOOLS`, отобранное по двум критериям:
 #
-# 1. Добавление, а не правка существующего: log_bodyweight, log_food,
+# 1. Добавление, а не правка существующего: log_bodyweight,
 #    create_exercise, copy_program сами описаны как «ДЕЛАЕТ СРАЗУ — добавление
 #    ничего не портит». Новую строку легко найти и убрать вручную, если она
 #    лишняя.
-# 2. Удаление с полным восстановлением: delete_food_entry и
-#    delete_bodyweight_log удаляют конкретную запись (id — из get_food_diary /
-#    get_bodyweight_history), но их undo не «намекает вернуться и переделать»,
-#    а честно воссоздаёт ту же строку с теми же значениями (kind=
-#    food_restore/bodyweight_restore в handlers.ai_trainer._apply_undo). Это
+# 2. Удаление с полным восстановлением: delete_bodyweight_log удаляет
+#    конкретную запись (id — из get_bodyweight_history), но её undo не
+#    «намекает вернуться и переделать», а честно воссоздаёт ту же строку с теми
+#    же значениями (kind=bodyweight_restore в ai_undo.apply). Это
 #    ближе к «сходить и обратно», чем к «мутации задним числом».
 #
 # Кнопки отката у MCP-клиента нет, поэтому `_call` подменяет `note` в ответе
@@ -112,8 +110,7 @@ READ_ONLY_TOOLS = frozenset(
 # упражнение или программу снаружи легче, чем через бота (там подсказки,
 # автодополнение по точному имени).
 WRITE_TOOLS = frozenset({
-    "log_bodyweight", "log_food", "create_exercise", "copy_program",
-    "delete_food_entry", "delete_bodyweight_log",
+    "log_bodyweight", "create_exercise", "copy_program", "delete_bodyweight_log",
 })
 
 EXPOSED_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
@@ -121,10 +118,10 @@ EXPOSED_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
 # Инструменту нечего сказать про кнопку, которой здесь нет — см. WRITE_TOOLS.
 #
 # Без имени конкретного экрана: первая версия говорила «поправить можно в
-# 🏋️ Дневник веса или 🍽 Дневник еды» — текст, скопированный с log_bodyweight/
-# log_food и подставлявшийся ВСЕМ шести WRITE_TOOLS. create_exercise ответил
-# им же — «поправить упражнение можно в Дневнике веса» неправда, у него
-# вообще нет отдельного экрана. Общая формулировка верна для всех шести.
+# 🏋️ Дневник веса» — текст, скопированный с log_bodyweight и подставлявшийся
+# ВСЕМ WRITE_TOOLS. create_exercise ответил им же — «поправить упражнение
+# можно в Дневнике веса» неправда, у него вообще нет отдельного экрана. Общая
+# формулировка верна для всех.
 async def _mcp_write_note(user_id: int) -> str:
     """Приписка к успешной записи — уходит в клиент ДАННЫМИ (поле `note` в JSON),
     а не описанием инструмента, поэтому язык у неё пользовательский.
@@ -188,7 +185,7 @@ async def _call(tool_name: str, **arguments: Any) -> str:
     button here, and the same text would be a lie to an external client.
 
     We replace a substring rather than overwriting the whole field: for some
-    tools `note` IS `_UNDO_NOTE` verbatim (log_bodyweight, log_food,
+    tools `note` IS `_UNDO_NOTE` verbatim (log_bodyweight,
     create_exercise on success), while copy_program's is a prefix plus the
     same note ("Copy of "X" created. {_UNDO_NOTE}"). Those same create_exercise
     calls can also return entirely different notes ("this exercise already
@@ -202,7 +199,7 @@ async def _call(tool_name: str, **arguments: Any) -> str:
         raise ValueError(f"tool {tool_name} is not exposed over MCP")
     user_id = _user_id()
     logger.info("MCP tool %s for user %s", tool_name, user_id)
-    raw = await ai_trainer.execute_tool(user_id, tool_name, arguments, source="mcp")
+    raw = await ai_trainer.execute_tool(user_id, tool_name, arguments)
     if tool_name not in WRITE_TOOLS:
         return raw
     payload = json.loads(raw)
@@ -227,11 +224,10 @@ def build_server() -> MCPServer:
         title="Training Log",
         instructions=(
             "Training data for one Telegram bot user: workout and set history, exercise "
-            "progress, weekly volume by muscle group, body weight, food diary, and saved "
-            "programs. Almost everything is read-only — except log_bodyweight, log_food, "
-            "create_exercise, copy_program, delete_food_entry, and delete_bodyweight_log: "
-            "these write immediately, without confirmation (renaming and other edits are "
-            "bot-only). Start with get_training_overview — it shows the units (kg/lb) and "
+            "progress, weekly volume by muscle group, body weight, and saved programs. "
+            "Almost everything is read-only — except log_bodyweight, create_exercise, "
+            "copy_program, and delete_bodyweight_log: these write immediately, without "
+            "confirmation (renaming and other edits are bot-only). Start with get_training_overview — it shows the units (kg/lb) and "
             "the exact exercise names the other tools need."
         ),
         version="1.0.0",
@@ -304,12 +300,6 @@ def build_server() -> MCPServer:
         return await _call("get_bodyweight_history")
 
     @mcp.tool()
-    async def get_food_diary(days: int = 14) -> str:
-        """Food diary for the last N days (default 14): food entries with calories/
-        protein/fat/carbs and daily totals."""
-        return await _call("get_food_diary", days=max(1, min(int(days), 90)))
-
-    @mcp.tool()
     async def get_saved_programs(name: str = "") -> str:
         """The user's saved programs. Without `name` — the list: program names, kind
         (multi-day program or standalone day) and how many days each has. With `name`
@@ -338,24 +328,6 @@ def build_server() -> MCPServer:
         return await _call("log_bodyweight", weight=weight)
 
     @mcp.tool()
-    async def log_food(
-        description: str,
-        calories: float | None = None,
-        protein: float | None = None,
-        fat: float | None = None,
-        carbs: float | None = None,
-    ) -> str:
-        """Log something eaten today into the food diary — writes immediately, no
-        confirmation. Only pass calories/protein/fat/carbs if the person actually stated
-        them; leave them blank if you don't know — the same estimator used on the diary
-        screen will fill them in. Fixing or removing the entry is bot-only, in the Food
-        Diary screen."""
-        return await _call(
-            "log_food", description=description,
-            calories=calories, protein=protein, fat=fat, carbs=carbs,
-        )
-
-    @mcp.tool()
     async def create_exercise(name: str, group: str) -> str:
         """Add a custom exercise that's in neither the user's list nor the catalog —
         writes immediately, adding never breaks anything. Check get_training_overview
@@ -371,13 +343,6 @@ def build_server() -> MCPServer:
         from get_saved_programs. Without new_name, a free name near the original is
         picked automatically ("PPL (2)")."""
         return await _call("copy_program", name=name, new_name=new_name)
-
-    @mcp.tool()
-    async def delete_food_entry(entry_id: int) -> str:
-        """Remove one food diary entry — writes immediately. entry_id is the exact id
-        from get_food_diary, don't guess it; if the person didn't say which entry, check
-        the diary and ask if there's more than one entry for that day."""
-        return await _call("delete_food_entry", entry_id=entry_id)
 
     @mcp.tool()
     async def delete_bodyweight_log(log_id: int) -> str:

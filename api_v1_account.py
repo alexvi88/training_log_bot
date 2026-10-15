@@ -51,7 +51,6 @@ _BOOL_FIELDS = (
     "pushes_enabled",
     "ai_comments_enabled",
     "progression_hint_enabled",
-    "food_macros_enabled",
     "show_extra_stats",
 )
 

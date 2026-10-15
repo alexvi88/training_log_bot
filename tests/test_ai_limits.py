@@ -107,7 +107,7 @@ async def test_zero_cap_disables_the_step(monkeypatch):
 async def test_soft_cap_turns_off_extras_but_not_the_trainer(user_id, monkeypatch, free):
     _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD + 0.01)
 
-    for kind in (ai_limits.KIND_SEARCH, ai_limits.KIND_VIDEO, ai_limits.KIND_FOOD):
+    for kind in (ai_limits.KIND_SEARCH, ai_limits.KIND_VIDEO):
         block = await ai_limits.check(user_id, kind)
         assert block is not None, kind
         assert block.kind == kind
@@ -181,18 +181,18 @@ async def test_question_quota_blocks_at_the_limit(user_id, monkeypatch, free):
     assert str(config.AI_QUESTION_DAILY_LIMIT) in block.log
 
 
-async def test_food_quota_counts_and_blocks(user_id, monkeypatch, free):
-    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 2)
-    assert await ai_limits.check(user_id, ai_limits.KIND_FOOD) is None
+async def test_voice_quota_counts_and_blocks(user_id, monkeypatch, free):
+    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 2)
+    assert await ai_limits.check(user_id, ai_limits.KIND_VOICE) is None
 
-    await dbmod.increment_ai_food_count(user_id)
-    await dbmod.increment_ai_food_count(user_id)
-    assert await dbmod.get_ai_food_count_today(user_id) == 2
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+    assert await dbmod.get_ai_usage_today(user_id, ai_limits.KIND_VOICE) == 2
 
-    block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+    block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
     assert block is not None
     # Тупика нет: человеку сказано, что делать дальше (TONE_OF_VOICE.md).
-    assert "словами" in block.user_text
+    assert block.user_text
 
 
 async def test_search_block_stays_silent_for_the_athlete(user_id, monkeypatch, free):
@@ -225,11 +225,11 @@ async def test_global_search_cap_is_shared_between_people(user_id, monkeypatch, 
 
 async def test_own_account_sees_a_warning_instead_of_a_wall(user_id, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", user_id)
-    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
     _spend(monkeypatch, 0.0)
-    await dbmod.increment_ai_food_count(user_id)
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
 
-    block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+    block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
     assert block is not None and block.preview
     # В предупреждении — ровно тот текст, который увидел бы обычный атлет.
     assert block.user_text in ai_limits.preview_text(block, 1.23)
@@ -242,9 +242,9 @@ async def test_own_account_preview_follows_the_acting_users_language(user_id, mo
     оно и задумано как симуляция того, что увидел бы обычный атлет (CLAUDE.md,
     «Сколько это стоит»)."""
     monkeypatch.setattr(config, "ADMIN_ID", user_id)
-    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
     _spend(monkeypatch, 1.23)
-    await dbmod.increment_ai_food_count(user_id)
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
 
     # check() и последующий показ предупреждения всегда идут в рамках ОДНОГО
     # запроса, на языке которого и застывает block.user_text (см. ai_limits.py:
@@ -252,11 +252,11 @@ async def test_own_account_preview_follows_the_acting_users_language(user_id, mo
     # мидлварью до хендлера. Поэтому блок пересоздаётся под каждый язык
     # отдельно, а не переиспользуется между `use_lang`.
     with i18n.use_lang("ru"):
-        ru_block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        ru_block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
         assert ru_block is not None and ru_block.preview
         ru_text = ai_limits.preview_text(ru_block, 1.23)
     with i18n.use_lang("en"):
-        en_block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        en_block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
         assert en_block is not None and en_block.preview
         en_text = ai_limits.preview_text(en_block, 1.23)
 
@@ -270,34 +270,34 @@ async def test_own_account_preview_follows_the_acting_users_language(user_id, mo
 async def test_ack_lets_the_day_continue(user_id, monkeypatch):
     monkeypatch.setattr(config, "TEST_USER_ID", user_id)
     monkeypatch.setattr(config, "ADMIN_ID", None)
-    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
     _spend(monkeypatch, 0.0)
-    await dbmod.increment_ai_food_count(user_id)
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
 
-    assert (await ai_limits.check(user_id, ai_limits.KIND_FOOD)).preview
-    await ai_limits.record_ack(user_id, ai_limits.KIND_FOOD)
-    assert await ai_limits.check(user_id, ai_limits.KIND_FOOD) is None
+    assert (await ai_limits.check(user_id, ai_limits.KIND_VOICE)).preview
+    await ai_limits.record_ack(user_id, ai_limits.KIND_VOICE)
+    assert await ai_limits.check(user_id, ai_limits.KIND_VOICE) is None
 
 
 async def test_ack_covers_only_its_own_kind(user_id, monkeypatch):
-    """Нажал «Понятно» на еде — про видео это ничего не говорит."""
+    """Нажал «Понятно» на голосе — про видео это ничего не говорит."""
     monkeypatch.setattr(config, "ADMIN_ID", user_id)
-    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
     monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 1)
     _spend(monkeypatch, 0.0)
-    await dbmod.increment_ai_food_count(user_id)
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
     await dbmod.increment_ai_video_count(user_id)
 
-    await ai_limits.record_ack(user_id, ai_limits.KIND_FOOD)
-    assert await ai_limits.check(user_id, ai_limits.KIND_FOOD) is None
+    await ai_limits.record_ack(user_id, ai_limits.KIND_VOICE)
+    assert await ai_limits.check(user_id, ai_limits.KIND_VOICE) is None
     assert (await ai_limits.check(user_id, ai_limits.KIND_VIDEO)).preview
 
 
 async def test_strangers_never_get_the_warning(user_id, monkeypatch, free):
-    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
-    await dbmod.increment_ai_food_count(user_id)
+    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
+    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
 
-    block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+    block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
     assert block is not None and not block.preview
 
 
@@ -318,7 +318,7 @@ async def test_ack_confirmation_follows_the_acting_users_language(user_id, monke
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
-    callback.data = f"ail:ack:{ai_limits.KIND_FOOD}"
+    callback.data = f"ail:ack:{ai_limits.KIND_VOICE}"
     callback.answer = AsyncMock()
 
     with i18n.use_lang("en"):
@@ -370,28 +370,6 @@ async def test_try_increment_search_global_unlimited_when_limit_is_zero_or_less(
     assert await dbmod.get_ai_search_count_global() == 4
 
 
-# db.increment_ai_food_count был безусловным инкрементом без "WHERE count <
-# limit" — единственным из четырёх счётчиков (question/search/video/food),
-# который так и не получил атомарной версии, хотя доступен теми же двумя
-# путями (бот и REST) с той же гонкой. try_increment_ai_food_count чинит это
-# тем же приёмом, что и у вопросов.
-
-
-async def test_try_increment_food_count_stops_exactly_at_the_limit(user_id):
-    for _ in range(3):
-        assert await dbmod.try_increment_ai_food_count(user_id, limit=3) is True
-    assert await dbmod.try_increment_ai_food_count(user_id, limit=3) is False
-    assert await dbmod.get_ai_food_count_today(user_id) == 3
-
-
-async def test_try_increment_food_count_unlimited_when_limit_is_zero_or_less(fresh_db):
-    for limit in (0, -1):
-        user_id = 556_000 + limit
-        for _ in range(5):
-            assert await dbmod.try_increment_ai_food_count(user_id, limit=limit) is True
-        assert await dbmod.get_ai_food_count_today(user_id) == 5
-
-
 async def test_try_increment_search_global_survives_a_burst_of_concurrent_callers(fresh_db):
     """То самое: N «параллельных» вызовов (тут — конкурентных корутин на одном
     event loop, что и создавало реальную гонку в проде между чтением и
@@ -409,6 +387,6 @@ async def test_ack_lives_by_the_same_clock_as_its_limit(user_id, monkeypatch):
     monkeypatch.setattr(dbmod, "_quota_day", AsyncMock(return_value="2026-08-09"))
     monkeypatch.setattr(dbmod, "_utc_day", lambda: "2026-08-10")
 
-    assert await ai_limits.ack_day(user_id, ai_limits.KIND_FOOD) == "2026-08-09"
+    assert await ai_limits.ack_day(user_id, ai_limits.KIND_VOICE) == "2026-08-09"
     assert await ai_limits.ack_day(user_id, ai_limits.KIND_SEARCH_GLOBAL) == "2026-08-10"
     assert await ai_limits.ack_day(user_id, ai_limits.KIND_SPEND_SOFT) == "2026-08-10"

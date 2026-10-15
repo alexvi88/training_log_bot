@@ -7,6 +7,7 @@ push_rotation, счётчик лимита тренера…) делала app-o
 с both_accounts_have_data. Теперь — белый список db._MERGE_CONTENT_TABLES.
 """
 
+import legacy_food
 import pytest
 
 import db
@@ -141,7 +142,7 @@ async def test_each_kind_of_history_counts_as_content(fresh_db, seed):
     if seed == "workout":
         await db.get_or_create_active_workout(app_id)
     elif seed == "food":
-        await db.add_food_entry(app_id, "2026-01-01", "еда", calories=500)
+        await legacy_food.insert_food_row(app_id, "2026-01-01", "еда", calories=500)
     elif seed == "program":
         await db.create_program(app_id, "Моя программа")
     elif seed == "exercise":

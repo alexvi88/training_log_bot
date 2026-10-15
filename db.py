@@ -594,12 +594,11 @@ CREATE TABLE IF NOT EXISTS bodyweight_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
 
--- Дневник питания (см. handlers/food_diary.py). eaten_on — календарная дата
--- пользователя, к которой относится еда (она же ключ подневной группировки),
--- а не момент ввода: запись за прошлую дату заносится тем же путём.
--- Макросы/калории — оценка модели, поэтому все они nullable: запись без цифр
--- (модель не смогла или пользователь ввёл текстом без деталей) всё равно
--- имеет смысл как строка «что съел».
+-- Дневник питания — бывший: функцию убрали целиком (бот, приложение, тренер,
+-- MCP), в таблицу больше никто не пишет. Таблица и старые строки остаются:
+-- миграции здесь только добавляют, записи уезжают в полную выгрузку
+-- (full_export, food.csv) и стираются «Удалить аккаунт» вместе со всем
+-- остальным. eaten_on — календарная дата пользователя, макросы nullable.
 CREATE TABLE IF NOT EXISTS food_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -1812,8 +1811,8 @@ async def _migrate_schema() -> None:
             "UPDATE users SET source = 'legacy' WHERE source IS NULL"
         )
     if "food_macros_enabled" not in user_cols:
-        # 1 = model estimates КБЖУ for food-diary entries (current default);
-        # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.
+        # Тумблер «КБЖУ» бывшего дневника еды. Дневника больше нет, колонку
+        # никто не читает и не пишет; осталась, потому что миграции только добавляют.
         await _conn.execute("ALTER TABLE users ADD COLUMN food_macros_enabled INTEGER NOT NULL DEFAULT 1")
     if "e1rm_hint_seen" in user_cols:
         # Counted showings of the e1RM footnote, back when it faded out after a
@@ -1864,9 +1863,8 @@ async def _migrate_schema() -> None:
         # угаданный язык нельзя.
         await _conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'")
     if "kcal_goal" not in user_cols:
-        # Дневная цель по калориям для дневника питания (handlers/food_diary.py) —
-        # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
-        # просто не показывается, а не подставляет угаданное число.
+        # Дневная цель по калориям бывшего дневника еды — больше не читается и
+        # не пишется; колонка осталась, потому что миграции только добавляют.
         await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
     if "ai_consent_at" not in user_cols:
         # NULL всем существующим: согласие в приложении ещё никто не давал —
@@ -3163,18 +3161,6 @@ async def _relocalize_catalog_targets(
             await conn().commit()
         changed += 1
     return changed
-
-
-async def set_kcal_goal(telegram_id: int, goal: Optional[int]) -> None:
-    """Дневная цель по калориям для дневника питания (кнопка «🎯 Цель ккал» и
-    ai_trainer.save_athlete_profile). None снимает цель — экран дня перестаёт
-    показывать строку «Цель N · осталось M»."""
-    async with _write_lock:
-        await conn().execute(
-            "UPDATE users SET kcal_goal = ? WHERE telegram_id = ?",
-            (goal, telegram_id),
-        )
-        await conn().commit()
 
 
 # Подзапрос «сколько тренировок человек закрыл и когда последнюю» — общий для
@@ -6160,15 +6146,6 @@ async def count_bodyweight_logs(user_id: int) -> int:
     return (await cur.fetchone())["c"]
 
 
-async def list_food_entry_dates(telegram_id: int) -> list[str]:
-    """Все дни, в которые есть хоть одна запись еды, — для «Недели учёта»."""
-    cur = await conn().execute(
-        "SELECT DISTINCT eaten_on FROM food_entries WHERE telegram_id = ? ORDER BY eaten_on",
-        (telegram_id,),
-    )
-    return [r["eaten_on"] for r in await cur.fetchall()]
-
-
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
     achievements.
@@ -8122,7 +8099,7 @@ async def auth_identity_tokens_for_user(user_id: int, provider: str) -> list[dic
 #   workouts (+ blocks/sets через них) — тренировки и подходы, в т.ч. начатая;
 #   exercises, muscle_groups — свои упражнения и группы (уникальность имени на
 #     владельца: две стороны с упражнениями слить простым UPDATE нельзя);
-#   bodyweight_logs — вес тела; food_entries — дневник еды;
+#   bodyweight_logs — вес тела; food_entries — старые записи бывшего дневника еды;
 #   programs, routines — программы и дни (уникальность имени программы);
 #   ai_conversation_turns, ai_chat_messages — разговор с тренером;
 #   achievements — заработанные звания (UNIQUE (user_id, code));
@@ -11828,70 +11805,6 @@ async def increment_ai_usage(telegram_id: int, kind: str) -> None:
         await conn().commit()
 
 
-async def get_ai_food_count_today(telegram_id: int) -> int:
-    cur = await conn().execute(
-        "SELECT count FROM ai_food_usage WHERE telegram_id = ? AND date = ?",
-        (telegram_id, await _quota_day(telegram_id)),
-    )
-    row = await cur.fetchone()
-    return row["count"] if row else 0
-
-
-async def increment_ai_food_count(telegram_id: int) -> None:
-    today = await _quota_day(telegram_id)
-    async with _write_lock:
-        await conn().execute(
-            "INSERT INTO ai_food_usage (telegram_id, date, count) VALUES (?, ?, 1) "
-            "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
-            (telegram_id, today),
-        )
-        await conn().commit()
-
-
-async def try_increment_ai_food_count(telegram_id: int, limit: int) -> bool:
-    """Атомарно списать один разбор еды из дневной квоты — тот же приём, что
-    `try_increment_ai_question_count` (см. её докстринг про то, почему это
-    ОДИН `UPDATE ... WHERE count < limit`, а не «прочитать — увеличить»
-    двумя обращениями к базе).
-
-    В отличие от вопросов, до этой правки `increment_ai_food_count` был
-    обычным безусловным инкрементом без `WHERE count < limit` — единственная
-    защита от превышения квоты держалась целиком на busy-замке вызывающей
-    стороны (`_busy` в api_v1_food.py и handlers/food_diary.py), который не
-    даёт ОДНОМУ пользователю иметь два разбора еды в полёте одновременно.
-    Здесь та же вторая линия обороны, что и у вопросов: если busy-замок
-    когда-нибудь ослабят или обойдут, счётчик всё равно не сможет
-    перескочить свой потолок больше чем на действие, которое строго
-    единственным успело в него попасть.
-
-    limit <= 0 — квота снята, обычный инкремент без ограничения.
-    """
-    today = await _quota_day(telegram_id)
-    async with _write_lock:
-        await conn().execute(
-            "INSERT INTO ai_food_usage (telegram_id, date, count) VALUES (?, ?, 0) "
-            "ON CONFLICT (telegram_id, date) DO NOTHING",
-            (telegram_id, today),
-        )
-        if limit > 0:
-            cur = await conn().execute(
-                "UPDATE ai_food_usage SET count = count + 1 "
-                "WHERE telegram_id = ? AND date = ? AND count < ?",
-                (telegram_id, today, limit),
-            )
-        else:
-            cur = await conn().execute(
-                "UPDATE ai_food_usage SET count = count + 1 "
-                "WHERE telegram_id = ? AND date = ?",
-                (telegram_id, today),
-            )
-        await conn().commit()
-        return cur.rowcount > 0
-
-
-# ---------- «Понятно» на предупреждении о лимите (см. ai_limits.py) ----------
-
-
 async def has_limit_ack(telegram_id: int, kind: str, date_str: str) -> bool:
     cur = await conn().execute(
         "SELECT 1 FROM ai_limit_ack WHERE telegram_id = ? AND kind = ? AND date = ?",
@@ -12657,7 +12570,7 @@ async def get_ai_undo_actions(telegram_id: int, turn_id: int) -> list[dict[str, 
 
 
 def _ai_undo_kind(payload: dict[str, Any]) -> str:
-    """Что именно откатывает кнопка (`bodyweight`, `food`, …, `batch`) — отдаётся
+    """Что именно откатывает кнопка (`bodyweight`, `exercise_new`, …, `batch`) — отдаётся
     клиенту рядом с подписью. Подпись у всех одна («↩️ Отменить»), а
     приложению надо знать, запись ли это веса: бот под ней ставит ещё и
     «⚖️ Дневник веса» (ai_trainer._execute_tool), и без типа повторить это
@@ -12860,101 +12773,6 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
         )
         await conn().commit()
 
-
-# ---------- food diary ----------
-
-
-async def add_food_entry(
-    telegram_id: int,
-    eaten_on: str,
-    description: str,
-    details: Optional[str] = None,
-    calories: Optional[float] = None,
-    protein: Optional[float] = None,
-    fat: Optional[float] = None,
-    carbs: Optional[float] = None,
-    photo_file_id: Optional[str] = None,
-    source: str = "text",
-) -> int:
-    async with _write_lock:
-        cur = await conn().execute(
-            "INSERT INTO food_entries (telegram_id, eaten_on, description, details, calories, "
-            "protein, fat, carbs, photo_file_id, source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                telegram_id, eaten_on, description, details, calories,
-                protein, fat, carbs, photo_file_id, source, now_iso(),
-            ),
-        )
-        await conn().commit()
-        return cur.lastrowid
-
-
-async def list_food_entries(telegram_id: int, eaten_on: str) -> list[aiosqlite.Row]:
-    """One day's entries, in the order they were added."""
-    cur = await conn().execute(
-        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on = ? ORDER BY id",
-        (telegram_id, eaten_on),
-    )
-    return await cur.fetchall()
-
-
-async def list_recent_food_entries(telegram_id: int, since: str, limit: int = 200) -> list[aiosqlite.Row]:
-    """Food entries from `since` (YYYY-MM-DD) onward, oldest first.
-
-    For the AI trainer, which reasons over a stretch of days rather than one
-    screen's worth: without it the coach advises on nutrition while blind to
-    the diary sitting in the same database.
-    """
-    cur = await conn().execute(
-        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on >= ? "
-        "ORDER BY eaten_on, id LIMIT ?",
-        (telegram_id, since, limit),
-    )
-    return await cur.fetchall()
-
-
-async def get_food_entry(entry_id: int) -> Optional[aiosqlite.Row]:
-    cur = await conn().execute("SELECT * FROM food_entries WHERE id = ?", (entry_id,))
-    return await cur.fetchone()
-
-
-async def delete_food_entry(entry_id: int) -> None:
-    async with _write_lock:
-        await conn().execute("DELETE FROM food_entries WHERE id = ?", (entry_id,))
-        await conn().commit()
-
-
-async def list_food_days(
-    telegram_id: int, limit: int = 8, offset: int = 0
-) -> list[aiosqlite.Row]:
-    """Days that have entries, newest first, with per-day totals and the list of
-    what was eaten (as newline-joined descriptions) — the history list.
-
-    Aggregated in SQL rather than by loading every entry per day separately —
-    the history screen shows a handful of days at a time, but a year of
-    logging is thousands of rows. The inner subquery orders by id before the
-    GROUP BY so GROUP_CONCAT collects each day's descriptions in the order
-    they were logged, not an arbitrary one.
-    """
-    cur = await conn().execute(
-        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
-        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs, "
-        "GROUP_CONCAT(description, char(10)) AS descriptions "
-        "FROM (SELECT * FROM food_entries WHERE telegram_id = ? ORDER BY id) "
-        "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
-        (telegram_id, limit, offset),
-    )
-    return await cur.fetchall()
-
-
-async def count_food_days(telegram_id: int) -> int:
-    cur = await conn().execute(
-        "SELECT COUNT(DISTINCT eaten_on) FROM food_entries WHERE telegram_id = ?",
-        (telegram_id,),
-    )
-    (count,) = await cur.fetchone()
-    return count
 
 
 _WEIGHT_GRID = 0.05

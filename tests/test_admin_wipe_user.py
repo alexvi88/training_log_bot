@@ -1,6 +1,8 @@
 """wipe_user_account убирает пользователя целиком — данные и саму строку users,
 так что следующий /start видит его новичком."""
 
+import legacy_food
+
 import db
 
 
@@ -12,7 +14,7 @@ async def test_wipe_removes_account_and_all_scoped_data(fresh_db, user_id):
     block_id = await fresh_db.create_block(workout_id, "single")
     await fresh_db.add_set(block_id, ex_id, 1, 0, 100.0, 5)
     await fresh_db.add_bodyweight_log(user_id, 82.5)
-    await fresh_db.add_food_entry(user_id, "2026-08-01", "омлет", calories=300)
+    await legacy_food.insert_food_row(user_id, "2026-08-01", "омлет", calories=300)
 
     assert await fresh_db.get_user(user_id) is not None
 
@@ -21,7 +23,10 @@ async def test_wipe_removes_account_and_all_scoped_data(fresh_db, user_id):
     assert await fresh_db.get_user(user_id) is None
     assert await fresh_db.list_workouts(user_id, status="finished") == []
     assert await fresh_db.list_bodyweight_logs(user_id) == []
-    assert await fresh_db.list_food_entries(user_id, "2026-08-01") == []
+    cur = await fresh_db.conn().execute(
+        "SELECT COUNT(*) FROM food_entries WHERE telegram_id = ?", (user_id,)
+    )
+    assert (await cur.fetchone())[0] == 0
 
     conn = db.conn()
     for table, column in (
@@ -56,7 +61,7 @@ async def test_wipe_leaves_no_row_anywhere_in_the_schema(fresh_db, user_id):
     block_id = await fresh_db.create_block(workout_id, "single")
     await fresh_db.add_set(block_id, ex_id, 1, 0, 100.0, 5)
     await fresh_db.add_bodyweight_log(user_id, 82.5)
-    await fresh_db.add_food_entry(user_id, "2026-08-01", "омлет", calories=300)
+    await legacy_food.insert_food_row(user_id, "2026-08-01", "омлет", calories=300)
     await fresh_db.record_donation(user_id, "charge-1", 100)
     await fresh_db.log_cost_event(user_id, "question", model="grok", prompt_tokens=10)
     await fresh_db.issue_mcp_token(user_id)

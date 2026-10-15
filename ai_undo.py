@@ -1,6 +1,6 @@
 """Откат того, что тренер сделал сам, — общий для бота и для приложения.
 
-Инструменты тренера, которые пишут в базу (вес, еда, создание и
+Инструменты тренера, которые пишут в базу (вес, создание и
 переименование упражнения, копия программы, правка профиля — см.
 `_UNDO_NOTE` в ai_trainer.py), возвращают вторым значением описание отката:
 `{"label": ..., "undo": {"kind": ..., ...}}`. Модель в тексте ответа честно
@@ -57,24 +57,6 @@ async def apply(user_id: int, undo: dict) -> Optional[str]:
         if await db.delete_bodyweight_log(int(undo["id"]), user_id):
             return i18n.t("ai.screen.undo.bodyweight")
         return None
-
-    if kind == "food":
-        entry = await db.get_food_entry(int(undo["id"]))
-        if entry is None or entry["telegram_id"] != user_id:
-            return None
-        await db.delete_food_entry(entry["id"])
-        return i18n.t("ai.screen.undo.food")
-
-    if kind == "food_restore":
-        # Откат delete_food_entry: не «отменить запись», а «отменить удаление» —
-        # воссоздаём строку с теми же полями, что были у стёртой.
-        await db.add_food_entry(
-            user_id, undo["eaten_on"], undo["description"],
-            details=undo.get("details"), calories=undo.get("calories"),
-            protein=undo.get("protein"), fat=undo.get("fat"), carbs=undo.get("carbs"),
-            photo_file_id=undo.get("photo_file_id"), source=undo.get("source") or "text",
-        )
-        return i18n.t("ai.screen.undo.food_restore", description=undo["description"])
 
     if kind == "bodyweight_restore":
         await db.add_bodyweight_log(user_id, undo["weight"], logged_at=undo.get("logged_at"))

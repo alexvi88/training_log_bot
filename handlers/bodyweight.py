@@ -219,8 +219,8 @@ async def bw_delete_record(callback: CallbackQuery, state: FSMContext):
     """Удалить любую запись из списка — не только последнюю (см. модуль).
 
     Без StateFilter нарочно: экран «✏️ Записи» может пролежать в чате сколько
-    угодно, пока человек заглянет ещё куда-то и вернётся — тот же довод, что у
-    fd:delask в handlers/food_diary.py.
+    угодно, пока человек заглянет ещё куда-то и вернётся, и вернуться к нему
+    надо из любого состояния.
     """
     _, _, log_id_s, page_s = callback.data.split(":")
     log_id, page = int(log_id_s), int(page_s)

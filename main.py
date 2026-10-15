@@ -55,7 +55,6 @@ from handlers import (
     factcheck,
     fallback,
     feedback,
-    food_diary,
     history,
     ios_link,
     mcp_access,
@@ -361,9 +360,6 @@ def setup_routers(dp: Dispatcher) -> None:
     # FSM, иначе посреди тренировки или чата с тренером его съел бы их
     # catch-all текстовый обработчик.
     dp.include_router(factcheck.router)
-    # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
-    # must reach their router even when the user is mid-workout.
-    dp.include_router(food_diary.router)
     # Ahead of workout.router on purpose: the share deep link arrives as
     # "/start sh_<token>", and workout's bare Command("start") matches that too
     # — registered after it, the deep link never reaches sharing and the
@@ -396,7 +392,6 @@ def _public_commands(lang: str) -> list[BotCommand]:
         BotCommand(command="start", description=i18n.t_in(lang, "bot.commands.start")),
         BotCommand(command="help", description=i18n.t_in(lang, "bot.commands.help")),
         BotCommand(command="ai_trainer", description=i18n.t_in(lang, "bot.commands.ai_trainer")),
-        BotCommand(command="food_diary", description=i18n.t_in(lang, "bot.commands.food_diary")),
         BotCommand(command="feedback", description=i18n.t_in(lang, "bot.commands.feedback")),
     ]
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает

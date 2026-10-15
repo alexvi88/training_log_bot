@@ -240,7 +240,6 @@ async def _user_dates(telegram_id: int = 111) -> tuple[dt.date, dt.date]:
     return today, today + dt.timedelta(days=1)
 
 
-
 @pytest.mark.asyncio
 async def test_patch_workout_date_rejects_future(fresh_db, client_factory):
     """POST /workouts/backfill будущее отвергает, а перенос даты принимал."""
@@ -258,18 +257,3 @@ async def test_patch_workout_date_rejects_future(fresh_db, client_factory):
     assert today.status_code == 200
 
 
-@pytest.mark.asyncio
-async def test_add_food_entry_rejects_future_date(fresh_db, client_factory):
-    client = await _linked_client(fresh_db, client_factory)
-    _, tomorrow = await _user_dates()
-
-    resp = await client.post(
-        "/food", json={"name": "Овсянка", "kcal": 300, "eaten_on": tomorrow.isoformat()}
-    )
-    assert resp.status_code == 400, resp.text
-    assert resp.json()["detail"] == "eaten_on is in the future"
-
-    ok = await client.post(
-        "/food", json={"name": "Овсянка", "kcal": 300, "eaten_on": dt.date.today().isoformat()}
-    )
-    assert ok.status_code == 201, ok.text

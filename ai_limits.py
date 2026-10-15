@@ -8,7 +8,7 @@
 
 Что здесь решается:
 
-1. **Личные квоты** — сколько вопросов, поисков, видео и разборов еды в сутки
+1. **Личные квоты** — сколько вопросов, поисков, видео, голосовых и импортов в сутки
    можно одному человеку (config.AI_*_DAILY_LIMIT). Считаются по календарным
    суткам ПОЛЬЗОВАТЕЛЯ (db._quota_day): квота, которая обнуляется посреди
    вечерней тренировки, выглядит произвольной.
@@ -23,7 +23,7 @@
 4. **Режим предупреждений для своих** (config.limit_preview_ids) — на своих
    аккаунтах лимит не запирает вообще ничего: первый раз за сутки показывается
    предупреждением с кнопкой «Понятно» и текстом, который в этот момент увидел
-   бы обычный атлет, а сам шаг (вопрос, видео, фото еды) при этом всё равно
+   бы обычный атлет, а сам шаг (вопрос, видео, голосовое) при этом всё равно
    выполняется — «Понятно» лишь молчит предупреждение до конца суток, а не
    разблокирует что-то, что стояло. Так видно, КОГДА обычный человек впервые
    упёрся, и при этом бота можно смотреть дальше в тот же день без единого
@@ -50,7 +50,6 @@ KIND_QUESTION = "question"
 KIND_SEARCH = "search"
 KIND_SEARCH_GLOBAL = "search_global"
 KIND_VIDEO = "video"
-KIND_FOOD = "food"
 KIND_VOICE = "voice"
 KIND_IMPORT = "import"
 # Не вид лимита для check(): счётчик провальных разборов видео (после ответа
@@ -61,7 +60,7 @@ KIND_SPEND_HARD = "spend_hard"
 
 # Дорогие необязательные шаги: их SOFT-потолок выключает первыми, оставляя
 # тренера на связи. Вопрос сюда не входит намеренно — он и есть продукт.
-_EXTRAS = (KIND_SEARCH, KIND_SEARCH_GLOBAL, KIND_VIDEO, KIND_FOOD)
+_EXTRAS = (KIND_SEARCH, KIND_SEARCH_GLOBAL, KIND_VIDEO)
 
 # Виды, которые SOFT не выключает (голос — способ логировать подходы, импорт —
 # разовый переезд), но HARD-стоп по деньгам держит так же, как вопрос.
@@ -88,7 +87,7 @@ class Block:
         сторона обязана выполнить как обычно, просто заодно показав, что увидел
         бы обычный атлет. Раньше preview останавливал текущий шаг наравне с
         настоящим отказом, и «Понятно» снимало лимит только на будущее — то, что
-        уже отправили (вопрос, видео, фото еды), приходилось слать заново.
+        уже отправили (вопрос, видео, голосовое), приходилось слать заново.
     """
 
     kind: str
@@ -189,12 +188,6 @@ def _video_text(reason: str) -> str:
     return i18n.t("limit.video.generic")
 
 
-def _food_text(reason: str) -> str:
-    if reason == KIND_FOOD:
-        return i18n.t("limit.food.exact", n=config.AI_FOOD_DAILY_LIMIT)
-    return i18n.t("limit.food.generic")
-
-
 def _voice_text(reason: str) -> str:
     if reason == KIND_VOICE:
         return i18n.t("limit.voice.exact", n=config.AI_VOICE_DAILY_LIMIT)
@@ -219,8 +212,6 @@ def _user_text(kind: str, reason: str) -> Optional[str]:
         return _question_limit_text()
     if kind == KIND_VIDEO:
         return _video_text(reason)
-    if kind == KIND_FOOD:
-        return _food_text(reason)
     # Поисковые: молча отвечаем без свежести.
     return None
 
@@ -230,7 +221,6 @@ _KIND_TITLE_KEYS = {
     KIND_SEARCH: "limit.preview.kind.search",
     KIND_SEARCH_GLOBAL: "limit.preview.kind.search_global",
     KIND_VIDEO: "limit.preview.kind.video",
-    KIND_FOOD: "limit.preview.kind.food",
     KIND_VOICE: "limit.preview.kind.voice",
     KIND_IMPORT: "limit.preview.kind.import",
     KIND_SPEND_SOFT: "limit.preview.kind.spend_soft",
@@ -280,9 +270,6 @@ async def _exhausted(user_id: int, kind: str) -> Optional[str]:
     elif kind == KIND_VIDEO:
         used = await db.get_ai_video_count_today(user_id)
         limit = config.AI_VIDEO_DAILY_LIMIT
-    elif kind == KIND_FOOD:
-        used = await db.get_ai_food_count_today(user_id)
-        limit = config.AI_FOOD_DAILY_LIMIT
     elif kind in _GENERIC_USAGE:
         used = await db.get_ai_usage_today(user_id, kind)
         limit = _GENERIC_USAGE[kind]()

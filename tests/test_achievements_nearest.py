@@ -63,14 +63,6 @@ def test_nearest_excludes_boolean_and_one_off_badges():
     assert not codes & one_off
 
 
-def test_food7_stays_out_of_nearest():
-    """«Неделя учёта» — единственный числовой значок вне «Ближайших»: тот же
-    список уходит в iOS-приложение, где дневника еды нет."""
-    ctx = _ctx(total_workouts=1, food_diary_best_run=6)
-    codes = {bp.code for bp in nearest_progress(ctx, earned=set(), limit=50)}
-    assert "food7" not in codes
-
-
 # Код → (поле контекста, порог). Пороги — те же, что в earned_codes; сверка с
 # ним ниже, чтобы «X из Y» не разошлось с тем, когда значок реально дают.
 _COUNTABLE = {
