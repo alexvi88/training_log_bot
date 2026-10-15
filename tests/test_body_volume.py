@@ -1,6 +1,7 @@
 """`body_volume` в GET /v1/dashboard — фигура «ТЫ» в сцене зала приложения.
 
-Среднее рабочих подходов в неделю за 6 недель по семи группам, тем же счётом
+Среднее рабочих подходов в неделю за 8 недель по семи группам (и `body_sets` —
+их же всего за окно, для карточки «ТЫ»), тем же счётом
 подходов, что панель «ОБЪЁМ ЗА 7 ДНЕЙ» (db.weekly_volume_by_group).
 """
 
@@ -43,22 +44,27 @@ async def _train(user_id, group_name, sets, days_ago, ex_name):
 
 
 @pytest.mark.asyncio
-async def test_body_volume_averages_six_weeks_per_group(fresh_db):
+async def test_body_volume_averages_eight_weeks_per_group(fresh_db):
     client = await _client(fresh_db)
     await _train(111, "Грудь", 10, 1, "Bench A")
     await _train(111, "Грудь", 10, 20, "Bench B")
     await _train(111, "Ноги", 4, 3, "Squat")
     await _train(111, "Пресс", 3, 2, "Crunch")
     await _train(111, "Другое", 6, 2, "Shrug")
-    # Старше шести недель — за окном.
-    await _train(111, "Спина", 12, 50, "Row")
+    # Старше восьми недель — за окном.
+    await _train(111, "Спина", 12, 60, "Row")
 
     body = (await client.get("/dashboard")).json()
     assert list(body["body_volume"]) == KEYS
     assert body["body_volume"] == {
-        "chest": 3.3, "back": 0.0, "legs": 0.7, "shoulders": 0.0,
-        "biceps": 0.0, "triceps": 0.0, "abs": 0.5,
+        "chest": 2.5, "back": 0.0, "legs": 0.5, "shoulders": 0.0,
+        "biceps": 0.0, "triceps": 0.0, "abs": 0.4,
     }
+    assert list(body["body_sets"]) == KEYS
+    assert body["body_sets"] == {
+        "chest": 20, "back": 0, "legs": 4, "shoulders": 0, "biceps": 0, "triceps": 0, "abs": 3,
+    }
+    assert body["body_weeks"] == 8
     # Индекс звания в лестнице — rank.level (RANKS[i].level == i).
     assert isinstance(body["rank"]["level"], int)
 
@@ -70,7 +76,9 @@ async def test_body_volume_respects_excluded_workouts(fresh_db):
     wid = await _train(111, "Грудь", 6, 2, "Bench")
     body = (await client.get(f"/dashboard?exclude_workout={wid}")).json()
     assert body["body_volume"]["chest"] == 0.0
-    assert body["body_volume"]["legs"] == 1.0
+    assert body["body_volume"]["legs"] == 0.8
+    assert body["body_sets"]["chest"] == 0
+    assert body["body_sets"]["legs"] == 6
 
 
 def test_rank_level_is_the_ladder_index():
