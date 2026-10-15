@@ -2,6 +2,8 @@
 
 import datetime as dt
 
+import pytest
+
 import analytics
 import formatting
 import i18n
@@ -273,19 +275,91 @@ def test_ai_markdown_to_html_strips_hashes_mid_text():
     assert "<b>Заголовок</b>" in text
 
 
-def test_a_heading_is_given_its_own_paragraph():
-    """"## X" is a block and spaces itself out; "**X**" without a blank line
-    around it is just a bold run inside the neighbouring paragraph, and the
-    heading ends up welded to the text."""
+def test_a_heading_is_given_a_blank_line_before_and_none_after():
+    """Заголовок отбит от предыдущего раздела и прижат к своему."""
     out = formatting.markdown_headings_to_bold("текст.\n## Что дальше\nпродолжение")
-    assert out == "текст.\n\n**Что дальше**\n\nпродолжение"
+    assert out == "текст.\n\n**Что дальше**\nпродолжение"
 
 
-def test_a_heading_the_model_already_spaced_does_not_get_a_second_blank_line():
-    spaced = "текст.\n\n## Что дальше\n\nпродолжение"
-    assert formatting.markdown_headings_to_bold(spaced) == (
-        "текст.\n\n**Что дальше**\n\nпродолжение"
+def test_heading_spacing_is_normalised_whatever_the_model_sent():
+    messy = "текст.\n\n\n\n## Что дальше\n\n\nпродолжение"
+    assert formatting.markdown_headings_to_bold(messy) == (
+        "текст.\n\n**Что дальше**\nпродолжение"
     )
+
+
+def test_a_heading_on_the_first_line_gets_no_blank_line_before():
+    assert formatting.markdown_headings_to_bold("\n\n## Итог\nвсё ровно") == "**Итог**\nвсё ровно"
+
+
+def test_two_headings_in_a_row_are_separated_by_one_blank_line():
+    assert formatting.markdown_headings_to_bold("## Раз\n## Два\nтекст") == "**Раз**\n\n**Два**\nтекст"
+
+
+@pytest.mark.parametrize("hashes", ["#", "##", "###"])
+def test_plain_message_renders_heading_levels_one_to_three_as_bold(hashes):
+    assert formatting.ai_markdown_to_html(f"{hashes} Weight holds") == "<b>Weight holds</b>"
+
+
+def test_plain_message_heading_keeps_a_leading_emoji_and_cyrillic():
+    assert formatting.ai_markdown_to_html("## 📈 Вес стоит, повторы растут") == (
+        "<b>📈 Вес стоит, повторы растут</b>"
+    )
+
+
+def test_bold_inside_a_sentence_is_not_a_heading():
+    text = "Твой **жим лёжа** вырос.\n**Присед** держится."
+    assert formatting.ai_markdown_to_html(text) == (
+        "Твой <b>жим лёжа</b> вырос.\n<b>Присед</b> держится."
+    )
+    assert formatting.markdown_headings_for_rich(text) == text
+    assert not formatting.has_markdown_heading(text)
+
+
+@pytest.mark.parametrize("hashes", ["#", "##", "###", "######"])
+def test_rich_markdown_turns_every_heading_level_into_the_smallest(hashes):
+    smallest = "#" * formatting.RICH_HEADING_LEVEL
+    assert formatting.RICH_HEADING_LEVEL == 6
+    assert formatting.markdown_headings_for_rich(f"{hashes} 📈 Растёт") == f"{smallest} 📈 Растёт"
+
+
+def test_rich_markdown_spaces_a_heading_off_the_previous_paragraph():
+    smallest = "#" * formatting.RICH_HEADING_LEVEL
+    text = "Вступление.\n## Растёт\n**Жим лёжа** +5 кг\n\n\n## Стоит\n\nприсед"
+    assert formatting.markdown_headings_for_rich(text) == (
+        f"Вступление.\n\n{smallest} Растёт\n**Жим лёжа** +5 кг\n\n{smallest} Стоит\n\nприсед"
+    )
+    assert formatting.markdown_headings_for_rich("\n## Итог\nтекст") == f"{smallest} Итог\nтекст"
+
+
+def test_rich_markdown_leaves_code_blocks_alone():
+    text = "```\n# комментарий\n```"
+    assert formatting.markdown_headings_for_rich(text) == text
+    assert not formatting.has_markdown_heading(text)
+
+
+def test_streaming_a_heading_never_shows_hashes_or_breaks_html():
+    """Черновик гоняет конвертер по каждому префиксу ответа: недописанный
+    заголовок не должен показывать решётки или рвать теги."""
+    full = "Вступление.\n## 📈 Растёт\nжим +5 кг"
+    previous_title = ""
+    for cut in range(1, len(full) + 1):
+        html = formatting.ai_markdown_to_html(full[:cut], partial=True)
+        assert "#" not in html
+        assert html.count("<b>") == html.count("</b>")
+        if "<b>" in html:
+            title = html.split("<b>")[1].split("</b>")[0]
+            # Заголовок только дописывается — не перерисовывается.
+            assert title.startswith(previous_title)
+            previous_title = title
+    assert formatting.ai_markdown_to_html(full, partial=True) == (
+        "Вступление.\n\n<b>📈 Растёт</b>\nжим +5 кг"
+    )
+
+
+def test_partial_bare_hashes_are_hidden():
+    assert formatting.ai_markdown_to_html("текст\n##", partial=True) == "текст"
+    assert formatting.ai_markdown_to_html("текст\n## ", partial=True) == "текст"
 
 
 def test_ai_markdown_to_html_covers_the_rest_of_the_inline_markup():

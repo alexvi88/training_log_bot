@@ -374,7 +374,7 @@ def _draft_html(text: str) -> str:
     """
     limit = MAX_DRAFT_CHARS
     while True:
-        html = formatting.ai_markdown_to_html(_draft_tail(text, limit))
+        html = formatting.ai_markdown_to_html(_draft_tail(text, limit), partial=True)
         if formatting.telegram_length(html) <= DRAFT_TEXT_LIMIT or limit <= 400:
             return html
         limit //= 2
@@ -2053,10 +2053,11 @@ async def _send_rich_answer(
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
         chunk_markup = markup if is_last else None
-        # Заголовки идут как есть — настоящим rich-заголовком, а не жирной
-        # строкой: ответ и без того густо заполнен жирным текстом, и жирный
-        # «заголовок» в нём просто терялся, не выделяясь среди остального.
-        text = chunk + (quota_md if is_last else "")
+        # Заголовки идут настоящим rich-заголовком, а не жирной строкой: ответ
+        # и без того густо заполнен жирным текстом, и жирный «заголовок» в нём
+        # просто терялся, не выделяясь среди остального. Уровень — самый
+        # мелкий, подзаголовок, а не статья (formatting.RICH_HEADING_LEVEL).
+        text = formatting.markdown_headings_for_rich(chunk) + (quota_md if is_last else "")
         if i == 0:
             # placeholder мог быть уже удалён (черновик его гасит, см.
             # on_draft_start) — тогда правка не пройдёт, и это не повод считать,
@@ -2472,14 +2473,16 @@ async def _handle_question(
         client=client,
     )
     chunks = formatting.split_for_telegram(answer, TG_CHUNK)
-    # Rich — только ради таблицы, и только когда таблица в ответе есть.
-    # Rich-сообщение Telegram рисует статьёй: крупные заголовки, широкие
-    # отступы, воздух между абзацами. Для разбора с таблицей это уместно, а
-    # обычный ответ тренера на три абзаца в такой вёрстке просто раздувается на
-    # пол-экрана — при том что ничего, кроме таблицы, обычное сообщение
-    # передать и не мешает (заголовок станет жирной строкой, список останется
-    # списком).
-    sent_rich = formatting.has_markdown_table(answer) and await _send_rich_answer(
+    # Rich — только ради того, чего обычное сообщение передать не может:
+    # таблицы и заголовка. Rich-сообщение Telegram рисует с воздухом между
+    # абзацами, и обычный ответ тренера на три абзаца в такой вёрстке просто
+    # раздувается на пол-экрана — поэтому ответ без таблицы и без заголовков
+    # уходит обычным сообщением. А вот заголовок жирной строкой терялся среди
+    # жирных названий упражнений, и длинный ответ из нескольких разделов
+    # оставался без видимой структуры — ему rich нужен (заголовок самого
+    # мелкого уровня, см. formatting.markdown_headings_for_rich).
+    wants_rich = formatting.has_markdown_table(answer) or formatting.has_markdown_heading(answer)
+    sent_rich = wants_rich and await _send_rich_answer(
         message, placeholder, chunks, quota_md, quota_html, reply_markup
     )
     if not sent_rich:

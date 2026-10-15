@@ -131,7 +131,7 @@ async def test_luna_loop_goes_to_responses_with_reasoning(fresh_db, own_luna, mo
     first, second = fake.requests
     for body in (first, second):
         assert body["model"] == "gpt-6-luna"
-        # medium — решение владельца: на low Luna смешивала подходы разного веса.
+        # medium — решение владельца (low путал веса, high медленный без выигрыша).
         assert body["reasoning"] == {"effort": "medium"}
         assert body["store"] is False
         assert body["include"] == ["reasoning.encrypted_content"]

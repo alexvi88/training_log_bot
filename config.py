@@ -374,9 +374,10 @@ OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "") or OPENAI_CHAT_MODEL
 # ступени; вызов длиннее порога только пишет предупреждение в лог
 # (ai_trainer._log_llm_cost) — тогда расчёт занижает.
 OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000"))
-# Главный цикл — medium (решение владельца, 2026-10): на low Luna смешивала
-# подходы разного веса и сочиняла «застой» по сырому списку. medium дороже по
-# выходу (размышления — в output_tokens) и отвечает дольше; запас под
+# Главный цикл — medium (решение владельца, 2026-10-15). low: Luna смешивала
+# подходы разного веса и сочиняла «застой» по сырому списку. high пробовали в
+# тот же день: качество на прогоне сравнения не выросло, а тишина перед
+# программой выросла с ~51 до ~95 с, замена упражнения — с 12 до 73 с. Запас под
 # размышления — ai_trainer._reasoning_headroom. Цикл идёт через Responses API
 # (ai_trainer._responses_round), потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
 # с reasoning_effort (400 «Function tools with reasoning_effort are not
