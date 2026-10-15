@@ -435,7 +435,12 @@ def _pct(part: float, whole: float) -> str:
 async def _build_push_report(day: dt.date) -> str:
     """Блок «Пуши» за сутки — тем же расчётом, что строки сводки
     (product_metrics.push_stats), без своих аккаунтов. «Потренировались за
-    24 ч» — за позавчера: окно вчерашних пушей ещё не закрылось."""
+    24 ч» — за позавчера: окно вчерашних пушей ещё не закрылось.
+
+    Строка «Тапы» есть всегда, даже в день без отправок: тап считается в сутки
+    тапа (вчерашний пуш, открытый сегодня, — сегодняшний тап), поэтому CTR —
+    тапы суток к доставкам тех же суток. Telegram — первое нажатие кнопки под
+    пушем; прочтение без нажатия не видно."""
     own = config.limit_preview_ids()
     stats = await product_metrics.push_stats(day, own)
     sent = stats["sent_tg"] + stats["sent_ios"]
@@ -448,13 +453,17 @@ async def _build_push_report(day: dt.date) -> str:
             lines.append(
                 f"Получили: {stats['users']} чел., {sent / stats['users']:.1f} на человека"
             )
-        if stats["sent_ios"]:
-            lines.append(
-                f"CTR iOS: {_pct(stats['opens'], stats['sent_ios'])} "
-                f"({stats['opens']} из {stats['sent_ios']})"
-            )
-        if stats["failed_ios"]:
-            lines.append(f"Не доставлено на iOS: {stats['failed_ios']}")
+    ctr = []
+    if stats["sent_ios"]:
+        ctr.append(f"iOS {_pct(stats['opens_ios'], stats['sent_ios'])}")
+    if stats["sent_tg"]:
+        ctr.append(f"Telegram {_pct(stats['opens_tg'], stats['sent_tg'])}")
+    lines.append(
+        f"Тапы: {stats['opens']} (iOS {stats['opens_ios']} · Telegram {stats['opens_tg']})"
+        + (f", CTR {' · '.join(ctr)}" if ctr else "")
+    )
+    if stats["failed_ios"]:
+        lines.append(f"Не доставлено на iOS: {stats['failed_ios']}")
     before = day - dt.timedelta(days=1)
     converted, pushed = await product_metrics.push_to_workout(before, own)
     if pushed:
@@ -462,13 +471,15 @@ async def _build_push_report(day: dt.date) -> str:
             f"Потренировались за 24 ч после пуша ({before.strftime('%d.%m')}): "
             f"{_pct(converted, pushed)} ({converted} из {pushed})"
         )
+    # Категории с тапами, но без отправок в эти сутки (тап по вчерашнему
+    # пушу), тоже в списке — иначе их тапы были бы видны только итогом.
     top = sorted(
-        ((cat, c) for cat, c in stats["categories"].items() if c["sent"]),
-        key=lambda item: (-item[1]["sent"], item[0]),
+        ((cat, c) for cat, c in stats["categories"].items() if c["sent"] or c["opens"]),
+        key=lambda item: (-item[1]["sent"], -item[1]["opens"], item[0]),
     )[:PUSH_TOP_CATEGORIES]
     for category, counts in top:
-        ctr = f", CTR {_pct(counts['opens'], counts['ios'])}" if counts["ios"] else ""
-        lines.append(f"  └ {category}: {counts['sent']}{ctr}")
+        ctr = f", CTR {_pct(counts['opens'], counts['sent'])}" if counts["sent"] else ""
+        lines.append(f"  └ {category}: отправлено {counts['sent']} · тапов {counts['opens']}{ctr}")
     return "\n".join(lines)
 
 

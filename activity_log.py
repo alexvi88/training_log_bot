@@ -212,6 +212,12 @@ async def record_callback(callback: CallbackQuery) -> None:
         {"screen": ":".join(p for p in callback_prefix(data).split(":") if not p.isdigit())},
         platform=product_metrics.PLATFORM_TG,
     )
+    # Кнопка под пушем — это тап по пушу (push_open, platform tg): так в
+    # сводке видно, что Telegram-пуши тоже нажимают, а не только читают.
+    message = callback.message
+    await product_metrics.record_tg_push_tap(
+        callback.from_user.id, getattr(message, "message_id", None) if message else None
+    )
     await db.log_user_event(
         callback.from_user.id, KIND_CALLBACK, _truncate(label or data or "(кнопка)"), data or None
     )
