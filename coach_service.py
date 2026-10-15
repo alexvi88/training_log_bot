@@ -677,6 +677,8 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
 SUMMARY_WORKOUTS = 6
 SUMMARY_EXERCISES_PER_WORKOUT = 8
 SUMMARY_SETS_PER_EXERCISE = 10
+# Строк «упражнение: было → стало, вердикт» на атлета — самые недавние.
+SUMMARY_TREND_EXERCISES = 8
 
 
 def _set_text(row: Any) -> str:
@@ -709,7 +711,8 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str
     else:
         clock.append(i18n.t("coach.ai.data.days_since", n=signals["days_since_last_workout"]))
     data = [i18n.t("coach.ai.data.unit", unit=formatting.unit_label(client["unit"]))]
-    for record in await recent_records(client):
+    records = await recent_records(client)
+    for record in records:
         # «62.5×9» — тот же вид, что у подходов ниже: модель сверяет рекорд с
         # тренировками, а не два разных формата.
         data.append(i18n.t("coach.ai.data.record", exercise=record["exercise"], best=record["best_set"]))
@@ -721,9 +724,17 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str
     workouts = await db.list_workouts(client["telegram_id"], limit=SUMMARY_WORKOUTS)
     sets_by_workout: dict[int, dict[int, tuple[str, list[str]]]] = {}
     counts: dict[int, int] = {}
+    started = {w["id"]: w["started_at"] for w in workouts}
+    lift_sets: dict[int, list[analytics.SetRow]] = {}
+    lift_names: dict[int, str] = {}
     for row in await db.list_sets_for_workouts([w["id"] for w in workouts]):
         wid = row["workout_id"]
         counts[wid] = counts.get(wid, 0) + 1
+        lift_sets.setdefault(row["exercise_id"], []).append(analytics.SetRow(
+            weight=row["weight"] or 0.0, reps=row["reps"] or 0, workout_id=wid,
+            started_at=started[wid], rpe=row["rpe"],
+        ))
+        lift_names.setdefault(row["exercise_id"], client_exercise_name(client, row["display_name"]))
         by_exercise = sets_by_workout.setdefault(wid, {})
         name, sets = by_exercise.setdefault(
             row["exercise_id"], (client_exercise_name(client, row["display_name"]), [])
@@ -738,8 +749,78 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str
             ),
             n=counts.get(w["id"], 0),
         ))
+    data.extend(_lift_verdict_lines(client, lift_sets, lift_names, records))
     text = "\n".join(head + clock + data)
     return text, "\n".join(head + data)
+
+
+def _lift_verdict_lines(
+    client: Any, lift_sets: dict[int, list[analytics.SetRow]], lift_names: dict[int, str],
+    records: list[dict[str, Any]],
+) -> list[str]:
+    """Вердикты, посчитанные кодом до модели: по каждому упражнению, что есть
+    хотя бы в двух тренировках брифа, — первый и последний лучший подход,
+    e1RM и вердикт (analytics.lift_change, та же мерка, что у прогресса
+    атлета), и общий вердикт атлета (analytics.client_lift_verdict). Модель
+    сама подходы не сравнивает: «92.5×5 → 70×8» она звала ростом."""
+    unit = client["unit"]
+    formula = client["e1rm_formula"] or "epley"
+    changes: list[tuple[str, analytics.LiftChange]] = []
+    # Самые недавние упражнения первыми: последняя тренировка — то, о чём
+    # тренер спросит.
+    recent_first = sorted(
+        lift_sets, key=lambda ex: max(r.started_at for r in lift_sets[ex]), reverse=True
+    )
+    for exercise_id in recent_first:
+        sessions = analytics.group_sets_by_session(lift_sets[exercise_id])
+        for session in sessions:
+            session.formula = formula
+        change = analytics.lift_change(sessions, unit)
+        if change is not None:
+            changes.append((lift_names[exercise_id], change))
+    changes = changes[:SUMMARY_TREND_EXERCISES]
+    # Рекорд недели делает атлета «растущим», только если по этому упражнению
+    # нет своей строки: «рекорд» 32×10 → 34×8 (e1RM +0.4) — это шум, и
+    # строка упражнения уже назвала его ровным.
+    judged = {name for name, _c in changes}
+    has_record = any(record["exercise"] not in judged for record in records)
+    overall = analytics.client_lift_verdict([c for _n, c in changes], has_record)
+    if overall is None:
+        return []
+    lines = [i18n.t("coach.ai.data.overall", verdict=i18n.t(f"coach.ai.verdict.client.{overall}"))]
+    for name, change in changes:
+        lines.append(_lift_verdict_line(name, change, unit))
+    return lines
+
+
+def _signed_pct(pct: float) -> str:
+    """«+7%», «−18%» (минус — типографский), «0%»."""
+    value = round(pct)
+    if value == 0:
+        return "0%"
+    return f"+{value}%" if value > 0 else f"\u2212{-value}%"
+
+
+def _lift_verdict_line(name: str, change: analytics.LiftChange, unit: str) -> str:
+    def set_text(point: tuple[str, float, int]) -> str:
+        _day, weight, reps = point
+        if not weight:
+            return i18n.t("coach.ai.data.bodyweight_set", reps=reps)
+        return formatting.format_set(weight, reps)
+
+    verdict = i18n.t(f"coach.ai.verdict.lift.{change.verdict}")
+    common = dict(
+        exercise=name, first=set_text(change.first), first_date=change.first[0],
+        last=set_text(change.last), last_date=change.last[0], verdict=verdict,
+    )
+    if change.first_e1rm is None or change.last_e1rm is None or change.pct is None or change.same_best_set:
+        return i18n.t("coach.ai.data.lift_sets", **common)
+    return i18n.t(
+        "coach.ai.data.lift_e1rm", **common,
+        first_e1rm=formatting.format_weight(change.first_e1rm),
+        last_e1rm=formatting.format_weight(change.last_e1rm),
+        unit=formatting.unit_label(unit), pct=_signed_pct(change.pct),
+    )
 
 
 async def _model_answer(coach_id: int, messages: list[dict[str, Any]]) -> str:

@@ -1599,3 +1599,104 @@ def progress_facts(
         "weight_increase": weight_increase(sessions, today),
         "same_weight_reps": same_weight_reps(sessions[-recent:]),
     }
+
+
+# ---------- вердикт по упражнению для AI-сводки тренера ----------
+#
+# Модель сводки тренера сама сравнивала подходы и ошибалась: «присед 92.5×5 →
+# 70×8» назвала ростом (e1RM ~107.9 → ~88.7, это спад), «40×8 → 40×8» —
+# ростом, «32×10 → 34×8» (~42.7 → ~43.1) — «improved». Вердикт считается здесь
+# той же меркой, что у прогресса атлета (лучший e1RM сессии по всем подходам,
+# trend_best_set: подходы длиннее TREND_MAX_REPS не в счёте, одиночная лёгкая
+# сессия — light_sessions — тоже), а модель только пересказывает его.
+
+LIFT_UP = "up"
+LIFT_DROP = "drop"
+LIFT_FLAT = "flat"            # лучший подход тот же самый (40×8 → 40×8)
+LIFT_NEAR_FLAT = "near_flat"  # e1RM сдвинулся в пределах шума (e1rm_change_is_noise)
+
+
+@dataclass
+class LiftChange:
+    """Первая и последняя сессия упражнения в данных сводки и вердикт по ним.
+
+    first/last — (дата, вес, повторы). e1RM — None у упражнения своим весом:
+    там сравниваются лучшие повторы. pct — изменение e1RM в процентах."""
+    verdict: str
+    first: tuple[str, float, int]
+    last: tuple[str, float, int]
+    first_e1rm: Optional[float]
+    last_e1rm: Optional[float]
+    pct: Optional[float]
+    sessions: int
+
+    @property
+    def same_best_set(self) -> bool:
+        return self.first[1:] == self.last[1:]
+
+
+def lift_change(sessions: list[SessionStats], unit: str = "kg") -> Optional[LiftChange]:
+    """Вердикт по упражнению между первой и последней его сессией. None — сравнивать
+    нечего (меньше двух сессий с годным подходом).
+
+    - лучший подход тот же (вес и повторы) — LIFT_FLAT;
+    - вес выше, повторы держатся или растут — LIFT_UP (прибавка веса);
+    - разница e1RM в пределах шума (меньше 1 кг или 2%) — LIFT_NEAR_FLAT;
+    - иначе по знаку e1RM: LIFT_UP или LIFT_DROP.
+    """
+    ordered = sorted(sessions, key=lambda s: s.started_at)
+    if ordered and all(s.is_bodyweight_mode for s in ordered):
+        reps = [(s, s.max_reps_in_set) for s in ordered if s.max_reps_in_set > 0]
+        if len(reps) < 2:
+            return None
+        (fs, fr), (ls, lr) = reps[0], reps[-1]
+        verdict = LIFT_FLAT if fr == lr else (LIFT_UP if lr > fr else LIFT_DROP)
+        return LiftChange(
+            verdict, (_date(fs), 0.0, fr), (_date(ls), 0.0, lr), None, None, None, len(reps)
+        )
+    light = {id(s) for s in light_sessions(ordered)}
+    scored = [
+        (s, best) for s in ordered
+        if id(s) not in light and (best := trend_best_set(s)) is not None
+    ]
+    if len(scored) < 2:
+        return None
+    (fs, fb), (ls, lb) = scored[0], scored[-1]
+    fv = _trend_e1rm_of(fb.weight, fb.reps, fs.formula)
+    lv = _trend_e1rm_of(lb.weight, lb.reps, ls.formula)
+    if (fb.weight, fb.reps) == (lb.weight, lb.reps):
+        verdict = LIFT_FLAT
+    elif lb.weight > fb.weight and lb.reps >= fb.reps:
+        verdict = LIFT_UP
+    elif e1rm_change_is_noise(fv, lv, unit):
+        verdict = LIFT_NEAR_FLAT
+    else:
+        verdict = LIFT_UP if lv > fv else LIFT_DROP
+    return LiftChange(
+        verdict,
+        (_date(fs), fb.weight, fb.reps),
+        (_date(ls), lb.weight, lb.reps),
+        round(fv, 1), round(lv, 1),
+        round((lv - fv) / fv * 100, 1) if fv > 0 else None,
+        len(scored),
+    )
+
+
+CLIENT_PROGRESSING = "progressing"
+CLIENT_MIXED = "mixed"
+CLIENT_DROPPING = "dropping"
+CLIENT_FLAT = "flat"
+
+
+def client_lift_verdict(changes: list[LiftChange], has_record: bool) -> Optional[str]:
+    """Общий вердикт атлета по вердиктам упражнений: «растёт» — только если
+    e1RM где-то вырос (LIFT_UP или свежий рекорд). None — сравнивать нечего."""
+    up = has_record or any(c.verdict == LIFT_UP for c in changes)
+    down = any(c.verdict == LIFT_DROP for c in changes)
+    if up and down:
+        return CLIENT_MIXED
+    if up:
+        return CLIENT_PROGRESSING
+    if down:
+        return CLIENT_DROPPING
+    return CLIENT_FLAT if changes else None
