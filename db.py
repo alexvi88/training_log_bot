@@ -7599,6 +7599,73 @@ async def list_sets_by_exercise_since(user_id: int, since: str) -> list[aiosqlit
     return await cur.fetchall()
 
 
+async def list_sets_for_coach(
+    user_id: int, since: str, *, include_archived: bool = False
+) -> list[aiosqlite.Row]:
+    """Подходы за окно для карточек движений и отчёта о балансе
+    (coach_facts): и записанный вес (`logged_weight` — «+10» на подтягиваниях,
+    0 — вес тела), и нагрузка (`weight`, LOAD_WEIGHT_SQL) — показ по первому,
+    арифметика по второй. Плюс идентичность шаблона и режим веса тела.
+
+    Архивные — только по просьбе: объём, сделанный упражнением, которое потом
+    убрали, всё равно был объёмом (отчёт о балансе), а карточку заброшенному
+    движению рисовать незачем.
+    """
+    archived = "" if include_archived else " AND e.is_archived = 0"
+    cur = await conn().execute(
+        f"SELECT s.weight AS logged_weight, {LOAD_WEIGHT_SQL} AS weight, s.reps, s.rpe, "
+        "       e.id AS exercise_id, e.display_name, e.original_name, e.bodyweight_load, "
+        "       g.name AS group_name, w.id AS workout_id, w.started_at "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "LEFT JOIN muscle_groups g ON g.id = e.primary_group_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? "
+        f"  AND e.is_template = 0{archived} "
+        "ORDER BY e.id, w.started_at, w.id, s.id",
+        (user_id, since),
+    )
+    return await cur.fetchall()
+
+
+async def list_notes_for_coach(user_id: int, since: str) -> list[aiosqlite.Row]:
+    """Заметки за окно — к тренировке (exercise_id NULL) и к упражнению в
+    тренировке, старые первыми. Из них coach_facts берёт только упоминания
+    боли, сна и болезни."""
+    cur = await conn().execute(
+        "SELECT w.id AS workout_id, w.started_at, NULL AS exercise_id, w.note AS note "
+        "FROM workouts w WHERE w.user_id = ? AND w.status = 'finished' "
+        "  AND w.started_at >= ? AND w.note IS NOT NULL AND TRIM(w.note) != '' "
+        "UNION ALL "
+        "SELECT w.id, w.started_at, n.exercise_id, n.note FROM exercise_notes n "
+        "JOIN workouts w ON w.id = n.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? "
+        "  AND TRIM(n.note) != '' "
+        "ORDER BY 2",
+        (user_id, since, user_id, since),
+    )
+    return await cur.fetchall()
+
+
+async def list_program_sessions_since(user_id: int, since: str) -> list[aiosqlite.Row]:
+    """Завершённые тренировки за окно, начатые с дня программы: программа,
+    её имя и число дней в ней, день, дата. Для «план против факта» в отчёте о
+    балансе (coach_facts.balance_report)."""
+    cur = await conn().execute(
+        "SELECT p.id AS program_id, p.name AS program_name, r.id AS routine_id, "
+        "       r.name AS day_name, w.started_at, "
+        "       (SELECT COUNT(*) FROM routines rr WHERE rr.program_id = p.id) AS day_count "
+        "FROM workouts w "
+        "JOIN routines r ON r.id = w.routine_id "
+        "JOIN programs p ON p.id = r.program_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? "
+        "ORDER BY w.started_at",
+        (user_id, since),
+    )
+    return await cur.fetchall()
+
+
 async def list_sets_for_workout_exercise(workout_id: int, exercise_id: int) -> list[aiosqlite.Row]:
     """Every set of one exercise in one workout, in the order the tracker shows
     them.

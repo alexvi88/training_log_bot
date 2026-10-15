@@ -46,6 +46,7 @@ from xai_sdk.tools import x_search as xai_x_search
 
 import ai_limits
 import analytics
+import coach_facts
 import config
 import db
 import formatting
@@ -2686,10 +2687,9 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "list_recent_workouts",
             "description": (
-                "Последние завершённые тренировки: дата, заметка к тренировке и все "
-                "подходы (вес x повторы) по каждому упражнению с его заметкой за эту "
-                "тренировку (note, null если не оставлял). Для быстрой проверки "
-                "последних; на долгий период — get_full_workout_history, тут максимум 10."
+                "Последние завершённые тренировки, старые первыми: дата, заметка и "
+                "подходы (вес x повторы@RPE) по упражнениям с заметкой к упражнению "
+                "(note). На долгий период — get_full_workout_history."
             ),
             "parameters": {
                 "type": "object",
@@ -2709,12 +2709,9 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_full_workout_history",
             "description": (
-                "Вся история завершённых тренировок без лимита в 10: дата, заметка и "
-                "все подходы по каждому упражнению. Вызывай, когда вопрос требует "
-                "долгого периода — сравнить месяцы, найти когда что-то было, оценить "
-                "динамику по многим тренировкам. Про последние тренировки хватит "
-                "list_recent_workouts, про одно упражнение — get_exercise_progress; по "
-                "умолчанию не вызывай, ответ может быть большим."
+                "Вся история тренировок, как list_recent_workouts, но без лимита. "
+                "Только когда нужен долгий период (найти давнюю тренировку); про "
+                "прогресс — get_progress_report, про баланс — get_balance_report."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -2754,10 +2751,10 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_exercise_progress",
             "description": (
-                "История одного упражнения: группа мышц (muscle_group), последние сессии "
-                "(дата, подходы, лучший подход, e1RM, тоннаж, note — заметка за ту "
-                "тренировку, null если не оставлял), рекорды и факты тренда/застоя. "
-                "Название — точный display_name из get_training_overview."
+                "Одно упражнение: card — карточка движения (статус, рабочий вес с "
+                "датой, повторы на одном весе, e1RM, перерывы, заметки), сессии старые "
+                "первыми (подходы с RPE, e1RM, тоннаж, note), рекорды с датами, факты "
+                "тренда и застоя. Название — display_name из get_training_overview."
             ),
             "parameters": {
                 "type": "object",
@@ -3365,12 +3362,10 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "compare_periods",
             "description": (
-                "Что изменилось по ВСЕМ упражнениям за период: последние N дней против "
-                "предыдущих N. По каждому — тренировки, подходы, лучший e1RM и тоннаж в "
-                "каждом окне плюс разница, отсортировано по величине сдвига в любую "
-                "сторону; отдельно те, что перестал и начал делать. Вызывай на «что "
-                "изменилось за 3 месяца», «я вообще прогрессирую», «стало лучше или "
-                "хуже». Про одно движение — get_exercise_progress, там подробнее."
+                "Все упражнения: последние N дней против предыдущих N (окна не "
+                "пересекаются). По каждому — тренировки, подходы, лучший e1RM, тоннаж "
+                "на сессию и разница; отдельно брошенные и новые. На «что изменилось "
+                "за 3 месяца», «стало лучше или хуже»."
             ),
             "parameters": {
                 "type": "object",
@@ -3390,15 +3385,11 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_stalled_lifts",
             "description": (
-                "Что встало и ПОЧЕМУ, по всем упражнениям сразу. verdict: dead_end — "
-                "вес и повторы стоят, тупик; double_progression — вес стоит, повторы "
-                "растут, схема РАБОТАЕТ, менять нечего; growing; regressing. Плюс "
-                "наклон e1RM в неделю, рабочий вес, сколько недель он не двигался, "
-                "повторы на нём первая→последняя, ready_to_add_weight (добрал верх "
-                "диапазона — пора прибавить вес), avg_top_rpe: 6-7 — недогруз, 9-10 — "
-                "усталость или техника. Вызывай на «что встало», «почему не растёт», "
-                "«плато», «что менять в программе». Меньше min_sessions сессий в окне — "
-                "упражнение не попадает: на трёх точках застоя не видно."
+                "Что встало и почему, по всем упражнениям. verdict: dead_end — вес и "
+                "повторы стоят; double_progression — вес стоит, повторы растут, схема "
+                "работает; growing; regressing. Плюс рабочий вес с датой, повторы на "
+                "нём, ready_to_add_weight, avg_top_rpe (6-7 недогруз, 9-10 усталость) и "
+                "card — карточка движения. Меньше min_sessions сессий — не попадает."
             ),
             "parameters": {
                 "type": "object",
@@ -3411,6 +3402,31 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_progress_report",
+            "description": (
+                "Что растёт, что встало: карточки движений за 8 недель (статус, "
+                "рабочий вес с датой, повторы на одном весе, прошлый вес, e1RM, серия, "
+                "перерывы, заметки о боли, сне, болезни) и контекст: частота, перерывы, "
+                "вес тела. На «как мой прогресс», «что встало»."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_balance_report",
+            "description": (
+                "Баланс за 4 недели: рабочие подходы в неделю по группам и мишеням "
+                "против нормы, частота групп, паттерны движений, программа "
+                "план/факт, что встало. На «слабые места», «чего не хватает»."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -4280,7 +4296,11 @@ async def _recent_workouts(user_id: int, limit: int) -> dict[str, Any]:
                 "exercises": exercises,
             }
         )
-    return {"workouts": result}
+    # Старые первыми — один порядок с get_exercise_progress: модель читает
+    # списки сверху вниз как время, и разный порядок в соседних инструментах
+    # превращал рост в «спад».
+    result.reverse()
+    return {"order": "old→new", "workouts": result}
 
 
 async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]:
@@ -4303,16 +4323,35 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
     records = analytics.compute_personal_records(sessions)
     notes_by_workout = await db.list_workout_notes_for_exercise(ex["id"])
     group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
+    # Подходы — как их записал атлет («+10x8@9» у подтягиваний с поясом, 0 —
+    # вес тела), а не нагрузкой: модель цитирует их человеку. Арифметика выше
+    # (e1RM, тоннаж, рекорды) — по нагрузке, db.load_of.
+    shown_sets: dict[int, list[str]] = {}
+    for r in rows:
+        shown_sets.setdefault(r["workout_id"], []).append(_fmt_set(r))
+    # У каждого рекорда — дата: «лучший e1RM 102» без даты модель не может ни
+    # процитировать честно, ни сравнить со свежей сессией.
+    record_dates: dict[str, Optional[str]] = {"max_weight": None, "max_e1rm": None}
+    for s in sessions:
+        if records.max_weight and any(r.weight == records.max_weight for r in s.sets):
+            record_dates["max_weight"] = record_dates["max_weight"] or s.started_at[:10]
+        if records.max_e1rm and round(s.top_e1rm, 1) == round(records.max_e1rm, 1):
+            record_dates["max_e1rm"] = record_dates["max_e1rm"] or s.started_at[:10]
     return {
         "exercise": ex["display_name"],
         "muscle_group": _shown_group(group["name"]) if group else None,
         # Веса и e1RM — в единицах атлета, как их и хранит база.
         "unit": user["unit"],
+        # Карточка движения (coach_facts): статус, рабочий вес с датой, повторы
+        # на одном весе, прошлый вес и бэкоффы, e1RM, перерывы и заметки о
+        # боли, сне, болезни. Сначала она, сырые сессии — для деталей.
+        "card": await coach_facts.exercise_card(user_id, ex["id"]),
         "total_sessions": len(sessions),
+        # Старые первыми, как у list_recent_workouts и get_full_workout_history.
         "sessions": [
             {
                 "date": s.started_at[:10],
-                "sets": [f"{r.weight:g}x{r.reps}" for r in s.sets],
+                "sets": shown_sets.get(s.workout_id, []),
                 "top_e1rm": round(s.top_e1rm, 1),
                 "tonnage": round(s.tonnage, 1),
                 "note": notes_by_workout.get(s.workout_id),
@@ -4321,7 +4360,9 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
         ],
         "records": {
             "max_weight": records.max_weight,
+            "max_weight_date": record_dates["max_weight"],
             "max_e1rm": round(records.max_e1rm, 1),
+            "max_e1rm_date": record_dates["max_e1rm"],
             "best_e1rm_set": f"{records.best_e1rm_weight:g}x{records.best_e1rm_reps}",
             "max_session_tonnage": round(records.max_session_tonnage, 1),
         },
@@ -5662,6 +5703,10 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
         names[r["exercise_id"]] = (r["display_name"], _shown_group(r["group_name"]))
 
     order = {"dead_end": 0, "regressing": 1, "double_progression": 2, "growing": 3}
+    # Карточка движения рядом с вердиктом — те же факты текстом, с датами,
+    # прошлым весом, перерывами и заметками (coach_facts). Вердикт в ней тот
+    # же: оба зовут analytics.classify_stall.
+    cards = await coach_facts.cards_by_exercise(user_id)
     found = []
     for ex_id, set_rows in by_exercise.items():
         sessions = analytics.group_sets_by_session(set_rows)
@@ -5685,6 +5730,7 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
             "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",
             "ready_to_add_weight": verdict.ready_to_add_weight,
             "avg_top_rpe": verdict.avg_top_rpe,
+            "card": cards[ex_id].text if ex_id in cards else None,
         })
     found.sort(key=lambda f: (order.get(f["verdict"], 9), -(f["sessions_in_window"])))
     return {
@@ -5712,8 +5758,11 @@ async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str
     days = _clean_int(tool_input.get("days"), 7, 365) or 90
     user = await db.get_user(user_id)
     today = timeutil.user_today(user)
-    recent_from = today - dt.timedelta(days=days)
-    prior_from = today - dt.timedelta(days=days * 2)
+    # Окна не пересекаются и оба ровно по `days` дней, сегодня включительно:
+    # раньше граница recent_from стояла в обоих («to» прошлого окна = «from»
+    # свежего), и модель не знала, куда отнесён день на стыке.
+    recent_from = today - dt.timedelta(days=days - 1)
+    prior_from = today - dt.timedelta(days=days * 2 - 1)
     formula = user["e1rm_formula"]
 
     rows = []
@@ -5742,12 +5791,20 @@ async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str
             sessions = analytics.group_sets_by_session(sets)
             for session in sessions:
                 session.formula = formula
-            return {
+            top_e1rm = max(s.top_e1rm for s in sessions)
+            out = {
                 "workouts": len(sessions),
                 "sets": len(sets),
-                "top_e1rm": round(max(s.top_e1rm for s in sessions), 1),
-                "tonnage": round(sum(s.tonnage for s in sessions)),
+                "top_e1rm": round(top_e1rm, 1),
+                # На сессию, а не за окно: за окно тоннаж растёт от одного
+                # лишнего похода в зал, и «тоннаж вырос» значило «ходил чаще».
+                "tonnage_per_session": round(sum(s.tonnage for s in sessions) / len(sessions)),
             }
+            if top_e1rm == 0:
+                # Вес тела без записанного взвешивания: нагрузки нет, e1RM 0 —
+                # не «ноль силы». Тогда сравниваются лучшие повторы.
+                out["best_reps"] = max(s.reps for s in sets)
+            return out
 
         before, after = _summary(windows["before"]), _summary(windows["after"])
         rows.append(
@@ -5757,7 +5814,7 @@ async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str
                 "after": after,
                 "e1rm_delta": (
                     round(after["top_e1rm"] - before["top_e1rm"], 1)
-                    if before and after else None
+                    if before and after and before["top_e1rm"] and after["top_e1rm"] else None
                 ),
             }
         )
@@ -5770,7 +5827,10 @@ async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str
     return {
         "window_days": days,
         "recent": {"from": recent_from.isoformat(), "to": today.isoformat()},
-        "previous": {"from": prior_from.isoformat(), "to": recent_from.isoformat()},
+        "previous": {
+            "from": prior_from.isoformat(),
+            "to": (recent_from - dt.timedelta(days=1)).isoformat(),
+        },
         "exercises": rows[:_COMPARE_TOP],
         "stopped_doing": dropped,
         "started_doing": started,
@@ -5884,11 +5944,10 @@ async def _weekly_sets_by_target_canonical(
             name = item["name"]
             if name not in cache:
                 identity = await db.exercise_template_identity(user_id, name)
-                target = seed_data.EXERCISE_MUSCLE_TARGET.get(identity or "")
-                if target is not None:
+                target = None
+                if seed_data.EXERCISE_MUSCLE_TARGET.get(identity or "") is not None:
                     group = await db.exercise_group_name(user_id, name)
-                    if group != seed_data.muscle_target_group(target):
-                        target = None
+                    target = seed_data.muscle_target_for(identity, group)
                 cache[name] = target
             target = cache[name]
             if target is None:
@@ -6614,6 +6673,12 @@ async def execute_tool(
         payload = await _stalled_lifts(user_id, tool_input)
     elif name == "compare_periods":
         payload = await _compare_periods(user_id, tool_input)
+    elif name == "get_progress_report":
+        payload = await coach_facts.progress_report(user_id)
+    elif name == "get_balance_report":
+        payload = await coach_facts.balance_report(
+            user_id, target_min=PROGRAM_TARGET_MIN_SETS, group_min=PROGRAM_GROUP_MIN_SETS,
+        )
     elif name in _ACTION_TOOLS or name in _UNDOABLE_TOOLS:
         # Обе категории отдают (payload, действие для кнопки) и обрабатываются
         # одинаково — различаются они только тем, что кнопка означает: у
@@ -6635,7 +6700,19 @@ async def execute_tool(
                 )
     else:
         payload = {"error": f"unknown tool: {name}"}
-    return json.dumps(payload, ensure_ascii=False)
+    return json.dumps(_without_negative_zero(payload), ensure_ascii=False)
+
+
+def _without_negative_zero(value: Any) -> Any:
+    """-0.0 → 0.0 во всём ответе инструмента: round(-0.04, 1) даёт «-0.0», и
+    модель читала его как спад («e1RM -0.0»)."""
+    if isinstance(value, float):
+        return 0.0 if value == 0 else value
+    if isinstance(value, dict):
+        return {k: _without_negative_zero(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_without_negative_zero(v) for v in value]
+    return value
 
 
 # ---------- agentic loop ----------
@@ -7315,12 +7392,18 @@ _PRESET_PREFETCH: dict[str, tuple[str, ...]] = {
     # недельный объём по группам против цели + вся история. Без последней
     # модель на проде всё равно шла вторым раундом за get_full_workout_history:
     # вопрос сам говорит «посмотри мою историю тренировок».
+    #
+    # Вместо всей истории — отчёт о балансе (coach_facts.balance_report):
+    # подходы по группам и мишеням за 4 недели, паттерны, план против факта,
+    # что встало. Те же выводы, посчитанные кодом, в ~10 раз короче сырой
+    # истории, по которой модель считала объём в уме.
     "ai.screen.preset.weak.question": (
-        "get_training_overview", "get_weekly_volume_by_group", "get_full_workout_history",
+        "get_training_overview", "get_weekly_volume_by_group", "get_balance_report",
     ),
-    # «что растёт, что застряло и почему»: контекст и частота + разбор застоя
-    # по всем упражнениям (growing / dead_end / double_progression / regressing).
-    "ai.screen.preset.progress.question": ("get_training_overview", "get_stalled_lifts"),
+    # «что растёт, что застряло и почему»: контекст + карточки движений
+    # (coach_facts.progress_report) — вердикт classify_stall, рабочий вес с
+    # датой, повторы только на одном весе, перерывы и заметки.
+    "ai.screen.preset.progress.question": ("get_training_overview", "get_progress_report"),
 }
 
 
