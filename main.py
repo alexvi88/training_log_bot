@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import signal
 import time
 from contextlib import suppress
 
@@ -39,6 +40,7 @@ import keyboards
 import ops_alerts
 import product_metrics
 import review_watch
+import shutdown_drain
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -554,18 +556,63 @@ async def main() -> None:
     # один контейнер с одной SQLite-базой на единственном соединении (см. db.py),
     # и второй процесс к ней просто не подключить. Импорт локальный — mcp тянет
     # за собой starlette/uvicorn, и разворот без MCP не должен на них падать.
+    stop_http = None
     if config.mcp_available():
         import mcp_server
 
         background.append(asyncio.create_task(mcp_server.serve()))
+
+        async def stop_http() -> None:
+            await mcp_server.stop(shutdown_drain.HTTP_STOP_SECONDS)
+
     for task in background:
         task.add_done_callback(_log_if_task_dies)
+    _install_shutdown_signals(dp)
     try:
-        await dp.start_polling(bot)
+        # Сигналы ловит _install_shutdown_signals, а не aiogram: его обработчик
+        # сразу закрыл бы и сессию бота — а ход тренера, который ещё дописывает
+        # ответ, ей пользуется. Сессию закрываем сами, после дренажа.
+        await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
     finally:
-        for task in background:
-            task.cancel()
-        await db.close_db()
+        # Порядок остановки — в shutdown_drain.shutdown: дождаться идущих ходов
+        # AI-тренера, погасить HTTP, фон и сессию бота, и только потом закрыть
+        # базу. Раньше база закрывалась через 0.1 с после сигнала — посреди
+        # стримов /v1/ai/ask и ответов в Telegram.
+        await shutdown_drain.shutdown(
+            stop_http=stop_http,
+            background=background,
+            closers=[bot.session.close],
+        )
+
+
+_signal_tasks: set[asyncio.Task] = set()
+
+
+def _install_shutdown_signals(dp: Dispatcher) -> None:
+    """SIGTERM (kill_signal в fly.toml) и SIGINT (Ctrl+C, прежний сигнал Fly)
+    — одно и то же: перестать брать новую работу и выйти из поллинга;
+    остальное доделает `finally` в main(). Повторный сигнал ничего не
+    ускоряет — дренаж и так ограничен config.SHUTDOWN_AI_GRACE_SECONDS, а
+    после kill_timeout Fly добьёт процесс сам."""
+    loop = asyncio.get_running_loop()
+
+    async def _stop_polling() -> None:
+        with suppress(RuntimeError):  # поллинг ещё не начался или уже стоит
+            await dp.stop_polling()
+
+    def _on_signal(sig: signal.Signals) -> None:
+        if shutdown_drain.is_draining():
+            logger.warning("shutdown: %s again, still draining", sig.name)
+            return
+        logger.warning("shutdown: received %s, stopping polling", sig.name)
+        shutdown_drain.begin_drain()
+        task = loop.create_task(_stop_polling())
+        _signal_tasks.add(task)  # сильная ссылка, иначе задачу может собрать GC
+        task.add_done_callback(_signal_tasks.discard)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with suppress(NotImplementedError):  # Windows
+            loop.add_signal_handler(sig, _on_signal, sig)
 
 
 if __name__ == "__main__":

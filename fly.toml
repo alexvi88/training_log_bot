@@ -6,6 +6,15 @@
 app = "training-log-bot"
 primary_region = "fra"
 
+# Остановка на деплое (shutdown_drain.py): по сигналу бот перестаёт брать
+# новые ходы AI-тренера и ждёт идущие до config.SHUTDOWN_AI_GRACE_SECONDS
+# (45 с), потом дописывает хвосты HTTP (5 с) и закрывает базу. kill_timeout —
+# с запасом сверх этого: по его истечении Fly добивает процесс SIGKILL.
+# Сигнал Litestream (start.sh) пересылает боту и ждёт его выхода; main.py
+# ловит и SIGTERM, и SIGINT одинаково.
+kill_signal = "SIGTERM"
+kill_timeout = 60
+
 [build]
   dockerfile = "Dockerfile"
 

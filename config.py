@@ -282,6 +282,14 @@ AI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90")
 # бывает долгой, и убивать её на 90 секундах нельзя.
 AI_TOTAL_ANSWER_SECONDS = float(os.getenv("AI_TOTAL_ANSWER_SECONDS", "300"))
 
+# Сколько на деплое ждём, пока идущие ходы AI-тренера договорят, прежде чем
+# закрыть базу (shutdown_drain.py). Обязано укладываться в `kill_timeout` из
+# fly.toml вместе с shutdown_drain.HTTP_STOP_SECONDS и закрытием базы: Fly
+# по его истечении добивает процесс SIGKILL, и тогда не сохранится ничего.
+# Обычный ход — 10–90 с; самые длинные (сборка программы с поиском) не
+# дождёмся всё равно, держать из-за них деплой минутами незачем.
+SHUTDOWN_AI_GRACE_SECONDS = float(os.getenv("SHUTDOWN_AI_GRACE_SECONDS", "45"))
+
 # Как часто накопленный текст ответа уходит в черновик во время стриминга
 # (см. ai_trainer._completion_round). Не на каждый токен: каждый флаш — это
 # запрос sendMessageDraft, а у Telegram свои лимиты на частоту. Мельче шаг —

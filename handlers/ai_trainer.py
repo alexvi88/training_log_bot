@@ -33,6 +33,7 @@ import keyboards
 import program_mentions
 import progress_ui
 import running_texts
+import shutdown_drain
 import timeutil
 import ui
 import video_analysis
@@ -2105,6 +2106,10 @@ async def _send_html_answer(
             logger.exception("AI answer chunk %s failed to send for user chat %s", i, message.chat.id)
 
 
+
+# Ход тренера учитывается целиком: на деплое остановка ждёт, пока он
+# договорит и запишет цену, а не рвёт ответ на полуслове (shutdown_drain.py).
+@shutdown_drain.tracked("bot")
 async def _handle_question(
     message: Message,
     state: FSMContext,

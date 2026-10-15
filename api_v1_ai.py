@@ -162,6 +162,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import functools
 import json
 import logging
 import os
@@ -190,6 +191,7 @@ import formatting
 import i18n
 import program_mentions
 import running_texts
+import shutdown_drain
 import timeutil
 import video_analysis
 from api_v1_common import JSONResponse
@@ -199,6 +201,30 @@ from handlers.ai_trainer import MAX_IMAGE_BYTES
 logger = logging.getLogger(__name__)
 
 ApiError = common.ApiError
+
+
+def _drain_aware(handler: Any) -> Any:
+    """Ручка, которая зовёт модель: на остановке процесса (деплой) новый ход не
+    начинаем — честный 503 с `Retry-After` на языке атлета, — а идущий
+    считаем, чтобы остановка его дождалась (shutdown_drain.py).
+
+    Вход проверяем и на 503: `authed_user_id` выставляет язык из users.lang, и
+    атлет видит текст на своём языке, а не по Accept-Language. База на
+    дренаже ещё открыта."""
+
+    @functools.wraps(handler)
+    async def wrapper(request: Request) -> Any:
+        if shutdown_drain.is_draining():
+            await common.authed_user_id(request)
+            raise ApiError(
+                503, "shutting_down", "server is restarting, retry later",
+                key="api.error.shutting_down",
+                headers={"Retry-After": str(shutdown_drain.RETRY_AFTER_SECONDS)},
+            )
+        async with shutdown_drain.track("v1"):
+            return await handler(request)
+
+    return wrapper
 
 # Тот же замок, что у бота — один платный AI-шаг на пользователя в этом
 # модуле одновременно (см. busy_lock.py и handlers/ai_trainer._busy, у
@@ -1088,6 +1114,12 @@ def _stream_turn(user_id: int, lang: str, run: Any) -> StreamingResponse:
             await queue.put(_sse("status", {"text": text}))
 
     async def produce() -> None:
+        # Ход стрима живёт дольше своего обработчика (и дольше соединения,
+        # если клиент ушёл) — поэтому считается сам, отдельно от `_drain_aware`.
+        async with shutdown_drain.track("v1_stream"):
+            await _produce()
+
+    async def _produce() -> None:
         try:
             payload = await run(on_chunk, on_status)
             await queue.put(_sse("done", payload))
@@ -2057,10 +2089,10 @@ async def get_thinking(request: Request) -> JSONResponse:
 routes = [
     Route("/ai/limits", get_limits, methods=["GET"]),
     Route("/ai/model", set_ai_model, methods=["PATCH"]),
-    Route("/ai/ask", ask_question, methods=["POST"]),
-    Route("/ai/voice", transcribe_voice, methods=["POST"]),
-    Route("/ai/video", ask_video, methods=["POST"]),
-    Route("/ai/questions/answer", answer_setup_question, methods=["POST"]),
+    Route("/ai/ask", _drain_aware(ask_question), methods=["POST"]),
+    Route("/ai/voice", _drain_aware(transcribe_voice), methods=["POST"]),
+    Route("/ai/video", _drain_aware(ask_video), methods=["POST"]),
+    Route("/ai/questions/answer", _drain_aware(answer_setup_question), methods=["POST"]),
     Route("/ai/program/save", save_program, methods=["POST"]),
     Route("/ai/program/train", train_from_draft, methods=["POST"]),
     Route("/ai/undo", undo_action, methods=["POST"]),

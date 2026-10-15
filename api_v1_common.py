@@ -123,6 +123,7 @@ class ApiError(Exception):
         *,
         human: str | None = None,
         key: str | None = None,
+        headers: dict[str, str] | None = None,
         **params: Any,
     ):
         super().__init__(message)
@@ -132,6 +133,9 @@ class ApiError(Exception):
         self.human = human
         self.key = key
         self.params = params
+        # Заголовки ответа сверх тела — например, `Retry-After` у 503 на
+        # остановке процесса (shutdown_drain.py).
+        self.headers = headers
 
 
 def request_lang(request: Request) -> str:
@@ -188,6 +192,7 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
             "detail": exc.message,
         },
         status_code=exc.status_code,
+        headers=exc.headers,
     )
 
 
