@@ -986,6 +986,11 @@
     "exercises": {
      "type": "[CoachClientExercises.Item]",
      "optional": false
+    },
+    "groups": {
+     "type": "[MuscleGroup]",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1007,6 +1012,21 @@
     "lastWorkoutAt": {
      "type": "String",
      "optional": true
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "groupId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "group": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1069,6 +1089,11 @@
     "recentRecordDays": {
      "type": "Int",
      "optional": false
+    },
+    "growth": {
+     "type": "Dashboard.Lifts",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1413,6 +1438,11 @@
     "visibility": {
      "type": "CoachVisibility",
      "optional": false
+    },
+    "suggestedName": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4441,6 +4471,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.renameForMyCoach",
+   "method": "PATCH",
+   "path": "/coach-links/{}",
+   "root": "MyCoach",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.updateMyCoach",
    "method": "PATCH",
    "path": "/coach-links/{}",
@@ -4515,6 +4552,13 @@
    "method": "GET",
    "path": "/coach/clients/{}/progress",
    "root": "CoachClientProgress",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.coachClientVisits",
+   "method": "GET",
+   "path": "/coach/clients/{}/visits",
+   "root": "WorkoutVisits",
    "nullable": false
   },
   {
@@ -5267,5 +5311,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "1ef1d6208407b480aa6bb027f7594b22c5d097b5"
+ "_ios_commit": "d9fca2770461010093763a2e81fc516f6f04958e"
 }
