@@ -5,6 +5,7 @@ DB layer and is trivially testable.
 """
 
 import datetime as dt
+import statistics
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
@@ -148,8 +149,8 @@ class SessionStats:
         Нужен там, где смотрят на НАКЛОН по нескольким сессиям. RPE —
         самооценка с шагом в полбалла, и на одинаковой работе она гуляет: четыре
         сессии 140×5 с RPE 9.5 / 10 / 9.5 / 10 дают пилу ±1.2 кг, а метод
-        наименьших квадратов на такой пиле выдаёт −0.5 кг/нед — больше порога
-        STALL_SLOPE_EPS, то есть «регрессируешь» на неизменных числах. Для
+        наименьших квадратов на такой пиле выдаёт −0.5 кг/нед — «регрессируешь»
+        на неизменных числах. Для
         вердикта у RPE свой канал (StallVerdict.avg_top_rpe), и наклону он не
         нужен. В показе, рекордах и сравнении двух сессий остаётся top_e1rm.
         """
@@ -1090,17 +1091,16 @@ def is_seasoned(workout_dates: Iterable[dt.date], today: dt.date) -> bool:
     return recent >= RECENT_TRAINING_THRESHOLD
 
 
-# ---------- застой: почему вес стоит ----------
+# ---------- застой: растёт, стоит или падает ----------
 #
-# Три случая, которые снаружи выглядят одинаково («вес не растёт»), а лечатся
-# по-разному, и модель их путала, потому что различать ей было нечем: она
-# смотрела на историю одного-двух упражнений (get_exercise_progress — один
-# вызов на упражнение, а раундов у хода всего шесть) и решала на глаз.
+# Вердикт — по НАКЛОНУ лучшего e1RM сессии за окно, а не по повторам
+# на одном весе: многие тренируются с разным весом каждую тренировку, и пар
+# «тот же вес» у них просто нет. Повторы на одном весе и прибавка веса — только
+# опорные факты; вердикт они не переворачивают, кроме одного правила: вес
+# подняли, а повторы на новом весе держатся — это не застой и не регресс.
 #
-#   - вес стоит и повторы стоят — настоящий тупик, что-то менять надо;
-#   - вес стоит, а повторы растут — двойная прогрессия РАБОТАЕТ, трогать
-#     нельзя: следующим шагом вес прибавится сам (см. suggest_progression);
-#   - e1RM растёт — застоя нет вовсе, как бы ни выглядел последний подход.
+# Раньше модель путала здесь веса: «на 77 кг повторы упали с 12 до 7», когда 12
+# было на 73 (подход после 77×6), а на 77 повторы выросли 6→7.
 
 # Сессий в окне меньше этого — судить не о чем: две-три точки складываются в
 # любой наклон, и «встало» на них означает только «мало данных».
@@ -1111,19 +1111,98 @@ STALL_MIN_SESSIONS = 4
 # месяца, из которого человек уже вылез.
 STALL_WINDOW_WEEKS = 8
 
-# Наклон e1RM, ниже которого рост считаем шумом, кг в неделю. 0.25 кг/нед —
-# это килограмм в месяц: меньше — колебания формы, а не прогресс.
-STALL_SLOPE_EPS = 0.25
+# «Ровно» — наклон по модулю меньше этой доли от e1RM в неделю: 0.5% от 100 кг
+# — полкило в неделю, два кило в месяц. Доля, а не килограммы: у гантелей на
+# 12 кг и у приседа на 180 шум разный.
+STALL_FLAT_SHARE = 0.005
 
-# Столько недель без прибавки веса — уже «стоит». Три, а не одна: на двойной
-# прогрессии вес по определению держится пару недель, пока набираются повторы.
+# Застой называем только на ≥ стольких точках, растянутых на ≥ столько недель:
+# три сессии за неделю ровными бывают у кого угодно.
+STALL_MIN_POINTS = 3
+STALL_MIN_SPAN_WEEKS = 3
+
+# Столько недель на одном весе — «вес стоит» (для двойной прогрессии): на ней
+# вес по определению держится пару недель, пока набираются повторы.
 STALL_WEEKS_FLAT = 3
+
+# Подходы длиннее — разминка или «сгорание», в e1RM не идут. Других фильтров
+# по повторам нет: кто работает в 12-15, должен получить тренд.
+TREND_MAX_REPS = 20
+
+
+def _trend_e1rm_of(weight: float, reps: int, formula: str) -> float:
+    # Мимо analytics.e1rm: тот обнуляет подходы длиннее E1RM_MAX_REPS (для
+    # рекордов), а для наклона подход 60×14 у того, кто работает в 12-15, —
+    # обычная рабочая точка. Сравнение тут — с собой же, тем же способом.
+    if formula == "brzycki":
+        return brzycki_e1rm(weight, reps)
+    return epley_e1rm(weight, reps)
+
+
+def trend_best_set(session: "SessionStats") -> Optional["SetRow"]:
+    """Подход с лучшим e1RM сессии (без RPE), добивки на меньшем весе тоже
+    в счёте. Подходы длиннее TREND_MAX_REPS не считаются, других фильтров по
+    повторам нет."""
+    sets = [s for s in session.sets if s.weight > 0 and 0 < s.reps <= TREND_MAX_REPS]
+    if not sets:
+        return None
+    return max(sets, key=lambda s: (_trend_e1rm_of(s.weight, s.reps, session.formula), s.weight))
+
+
+def trend_e1rm(session: "SessionStats") -> Optional[float]:
+    """Лучший e1RM сессии (trend_best_set) — точка наклона. None — у сессии
+    нет подходящего подхода, и в наклон она не идёт вовсе."""
+    best = trend_best_set(session)
+    return None if best is None else _trend_e1rm_of(best.weight, best.reps, session.formula)
+
+
+# Сессия, чей лучший e1RM ниже этой доли от медианы трёх предыдущих, —
+# «лёгкая»: разминка без рабочих подходов или недописанная тренировка. Прод:
+# присед 05.10 записан одним «20×8» после сессий 92.5×5, e1RM ~25 обвалил наклон,
+# и обе модели сказали «регресс, −10 кг/нед».
+LIGHT_SESSION_SHARE = 0.7
+LIGHT_SESSION_BASELINE = 3
+
+
+def light_sessions(sessions: list["SessionStats"]) -> list["SessionStats"]:
+    """Одиночные провалы: сессии, которые в наклон и вердикт не идут.
+
+    Исключается только ОДИНОЧНАЯ лёгкая сессия — соседи по обе стороны
+    нормальные (последняя сессия годится, если перед ней нормальная). Две
+    лёгкие подряд — это уже разгрузка или возвращение после перерыва, и
+    прятать их значило бы прятать правду.
+    """
+    values = [trend_e1rm(s) for s in sessions]
+    candidate = [False] * len(sessions)
+    baseline: list[float] = []
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        ref = baseline[-LIGHT_SESSION_BASELINE:]
+        if ref and v < statistics.median(ref) * LIGHT_SESSION_SHARE:
+            candidate[i] = True
+            continue
+        baseline.append(v)
+    out = []
+    for i, s in enumerate(sessions):
+        if not candidate[i]:
+            continue
+        prev_light = i > 0 and candidate[i - 1]
+        next_light = i + 1 < len(sessions) and candidate[i + 1]
+        if not prev_light and not next_light:
+            out.append(s)
+    return out
 
 
 @dataclass
 class StallVerdict:
-    """Чем именно «встало» это упражнение — и встало ли вообще."""
-    kind: str  # "growing" | "double_progression" | "dead_end" | "regressing"
+    """Растёт, стоит или падает это упражнение — и почему.
+
+    kind: "growing" | "double_progression" (рост повторами на том же весе) |
+    "progressing" (вес подняли, повторы на новом держатся) | "dead_end" |
+    "regressing" | "unclear" (ровно, но точек или недель мало для «застоя»).
+    """
+    kind: str
     sessions_in_window: int
     e1rm_slope_per_week: Optional[float]
     top_weight: float
@@ -1138,6 +1217,18 @@ class StallVerdict:
     # начало окна) и сколько сессий на нём было. None — упражнение на весе тела.
     weight_since: Optional[str] = None
     sessions_at_top_weight: int = 0
+    # С какого веса прибавили до текущего внутри окна; None — прибавки в окне
+    # не было (или вес тела).
+    weight_raised_from: Optional[float] = None
+    # Наклон в процентах от среднего e1RM (повторов — для веса тела) в неделю.
+    slope_pct_per_week: Optional[float] = None
+    trend_points: int = 0
+    # Лучшая точка окна и последняя: (дата, вес, повторы, e1RM) — чтобы «почему»
+    # называл оба факта, а не один удобный.
+    e1rm_peak: Optional[tuple[str, float, int, float]] = None
+    e1rm_latest: Optional[tuple[str, float, int, float]] = None
+    # Одиночные лёгкие сессии окна, не взятые в расчёт: (дата, "20×8, ...").
+    light_sessions: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _session_top_weight(session: SessionStats) -> float:
@@ -1149,8 +1240,7 @@ def best_reps_at(session: SessionStats, weight: float) -> int:
 
     Не max_reps_in_set: в сессии «77×6, 73×12» лучший подход по повторам — на
     73, и сравнение «повторы на рабочем весе было 12, стало 7» смешивало два
-    разных веса. Так тренер однажды и сказал «повторы упали с 12 до 7» там, где
-    на 77 они выросли 6→7.
+    разных веса.
     """
     return max((s.reps for s in session.sets if s.weight == weight), default=0)
 
@@ -1161,8 +1251,8 @@ def _last_weight_bump(sessions: list[SessionStats]) -> tuple[int, float]:
     Прибавка — сессия, чей рабочий вес выше всего, что было до неё в этом
     списке. Именно рекорд, а не «больше, чем в прошлый раз»: пила 100 → 95 →
     100 иначе каждую вторую сессию читалась бы как прибавка. Прибавок не было —
-    (0, вес первой сессии): вес стоит с начала списка. Одна точка правды для
-    classify_stall и progress_facts.
+    (0, вес первой сессии). Одна точка правды для classify_stall и
+    progress_facts.
     """
     best = _session_top_weight(sessions[0])
     idx, before = 0, best
@@ -1187,44 +1277,58 @@ def classify_stall(
     место (иначе на вопрос «что у меня встало» приезжает список заброшенного).
     """
     since = today - dt.timedelta(weeks=window_weeks)
-    window = [
+    light = {id(s) for s in light_sessions(sessions)}
+    in_window = [
         s for s in sessions
         if dt.datetime.fromisoformat(s.started_at).date() >= since
     ]
+    skipped = [
+        (s.started_at[:10], ", ".join(f"{x.weight:g}×{x.reps}" for x in s.sets))
+        for s in in_window if id(s) in light
+    ]
+    window = [s for s in in_window if id(s) not in light]
     if len(window) < min_sessions:
         return None
-
-    # Без RPE — см. SessionStats.top_e1rm_ignoring_rpe: иначе полбалла
-    # самооценки решают, «встал» человек или «регрессирует».
-    points = [
-        (dt.datetime.fromisoformat(s.started_at), s.top_e1rm_ignoring_rpe) for s in window
-    ]
-    trend = linear_trend(points)
-    slope = trend.slope_per_week if trend else None
 
     bodyweight_only = all(s.is_bodyweight_mode for s in window)
     top_weight = _session_top_weight(window[-1])
 
-    # Когда вес последний раз прибавился: последняя сессия, чей рабочий вес
-    # выше всего, что было в окне до неё. Именно рекорд окна, а не «больше, чем
-    # в прошлый раз»: пила 100 → 95 → 100 иначе каждую вторую сессию читалась
-    # бы как прибавка.
+    # Точка наклона — лучший e1RM сессии без RPE (полбалла самооценки иначе
+    # решали бы, «встал» человек или «регрессирует»); у веса тела — повторы.
+    points: list[tuple[dt.datetime, float]] = []
+    marks: list[tuple[str, float, int, float]] = []
+    for s in window:
+        if bodyweight_only:
+            value: Optional[float] = float(s.max_reps_in_set)
+        else:
+            best = trend_best_set(s)
+            value = trend_e1rm(s)
+            if best is not None and value:
+                marks.append((s.started_at[:10], best.weight, best.reps, round(value, 1)))
+        if value:
+            points.append((dt.datetime.fromisoformat(s.started_at), value))
+    trend = linear_trend(points)
+    slope = trend.slope_per_week if trend else None
+    mean = sum(v for _, v in points) / len(points) if points else 0.0
+    rel = slope / mean if slope is not None and mean > 0 else None
+    span_weeks = (points[-1][0].date() - points[0][0].date()).days / 7 if points else 0.0
+
     weeks_flat: Optional[float] = None
     weight_since: Optional[str] = None
+    raised_from: Optional[float] = None
     if not bodyweight_only:
         # Сколько вес стоит — между первым и последним появлением текущего
-        # рабочего веса, а не до сегодня: «77 кг около четырёх недель» на двух
-        # сессиях за три недели плюс неделю отдыха — уже преувеличение.
-        bump_idx, _ = _last_weight_bump(window)
+        # рабочего веса, а не до сегодня.
+        bump_idx, before = _last_weight_bump(window)
+        if bump_idx > 0 and _session_top_weight(window[bump_idx]) == top_weight:
+            raised_from = before
         last_bump_at = dt.datetime.fromisoformat(window[bump_idx].started_at).date()
         last_at = dt.datetime.fromisoformat(window[-1].started_at).date()
         weeks_flat = round((last_at - last_bump_at).days / 7, 1)
         weight_since = last_bump_at.isoformat()
 
-    # Повторы на текущем рабочем весе: первая и последняя сессия, где он стоял,
-    # и повторы — только подходов НА этом весе (best_reps_at), а не лучший
-    # подход сессии вообще. Для веса тела «текущий вес» нулевой и условие ловит
-    # все сессии — как раз то, что нужно: там вся прогрессия и есть в повторах.
+    # Повторы на текущем рабочем весе — только подходов НА этом весе. Для веса
+    # тела «текущий вес» нулевой и условие ловит все сессии.
     at_top = [
         s for s in window
         if bodyweight_only or _session_top_weight(s) == top_weight
@@ -1238,25 +1342,27 @@ def classify_stall(
     ]
     avg_rpe = round(sum(rpes) / len(rpes), 1) if rpes else None
 
-    weight_flat = bodyweight_only or (
-        weeks_flat is not None and weeks_flat >= STALL_WEEKS_FLAT
-    )
-    if slope is not None and slope <= -STALL_SLOPE_EPS:
+    enough = len(points) >= STALL_MIN_POINTS
+    if rel is None or not enough:
+        kind = "unclear"
+    elif rel <= -STALL_FLAT_SHARE:
         kind = "regressing"
-    elif weight_flat and reps_last > reps_first:
-        # Повторы ползут на том же весе — работающая двойная прогрессия, и это
-        # ПЕРВАЯ проверка, а не последняя: наклон e1RM тут тоже положительный
-        # (лишний повтор поднимает e1RM), так что «growing» забрал бы этот
-        # случай себе — и ответ снова стал бы «растёшь», хотя вопрос был
-        # «почему вес стоит». Ровно те два случая, которые модель и путала.
-        kind = "double_progression"
-    elif (slope is not None and slope >= STALL_SLOPE_EPS) or not weight_flat:
-        # Второе условие — про вес, прибавленный только что: пары сессий на
-        # новом весе мало, чтобы наклон успел стать заметным, а застоем это
-        # называть уже нельзя.
-        kind = "growing"
+    elif rel < STALL_FLAT_SHARE:
+        kind = "dead_end" if span_weeks >= STALL_MIN_SPAN_WEEKS else "unclear"
     else:
-        kind = "dead_end"
+        weight_flat = bodyweight_only or (
+            weeks_flat is not None and weeks_flat >= STALL_WEEKS_FLAT
+        )
+        # Рост повторами на том же весе — отдельное имя: на вопрос «почему вес
+        # стоит» ответ «растёшь» не отвечает, а «схема работает, вес прибавится
+        # сам» — отвечает.
+        kind = "double_progression" if weight_flat and reps_last > reps_first else "growing"
+
+    # Единственное правило, где опорные факты сильнее наклона: вес подняли в
+    # окне, а повторы на новом весе держатся или растут — привыкание к новому
+    # весу, не застой и не регресс.
+    if kind in ("dead_end", "regressing") and raised_from is not None and reps_last >= reps_first:
+        kind = "progressing"
 
     return StallVerdict(
         kind=kind,
@@ -1270,6 +1376,12 @@ def classify_stall(
         avg_top_rpe=avg_rpe,
         weight_since=weight_since,
         sessions_at_top_weight=len(at_top),
+        weight_raised_from=raised_from,
+        slope_pct_per_week=round(rel * 100, 2) if rel is not None else None,
+        trend_points=len(points),
+        e1rm_peak=max(marks, key=lambda m: m[3]) if marks else None,
+        e1rm_latest=marks[-1] if marks else None,
+        light_sessions=skipped,
     )
 
 
@@ -1327,9 +1439,12 @@ def e1rm_trend(
 ) -> Optional[dict[str, Any]]:
     """Лучший e1RM по сессиям за окно: наклон в неделю и изменение против
     сессии четырёхнедельной давности. None — у упражнения нет e1RM (вес тела).
-    e1RM без RPE — тот же, по которому classify_stall считает наклон."""
-    scored = [(s, s.top_e1rm_ignoring_rpe) for s in sessions]
-    scored = [(s, v) for s, v in scored if v > 0]
+    Точки — trend_e1rm без одиночных лёгких сессий (light_sessions), те же,
+    по которым classify_stall считает наклон."""
+    light = {id(s) for s in light_sessions(sessions)}
+    scored = [
+        (s, v) for s in sessions if id(s) not in light and (v := trend_e1rm(s)) is not None
+    ]
     if not scored:
         return None
     since = today - dt.timedelta(weeks=window_weeks)
@@ -1384,7 +1499,8 @@ def _fmt(x: float) -> str:
 def stall_facts(sessions: list[SessionStats], today: dt.date, unit: str) -> dict[str, Any]:
     """classify_stall в виде, который модель пересказывает: вердикт, флаг
     «встал» (dead_end/regressing), с какой даты стоит рабочий вес и строка
-    фактов «почему»."""
+    фактов «почему» — наклон, лучшая и последняя точка e1RM и опорные факты
+    (прибавка веса, повторы на текущем весе)."""
     v = classify_stall(sessions, today)
     if v is None:
         since = today - dt.timedelta(weeks=STALL_WINDOW_WEEKS)
@@ -1398,9 +1514,36 @@ def stall_facts(sessions: list[SessionStats], today: dt.date, unit: str) -> dict
                 f"{STALL_MIN_SESSIONS} to judge"
             ),
         }
+    return {
+        "stalled": v.kind in ("dead_end", "regressing"),
+        "verdict": v.kind,
+        "top_weight_since": v.weight_since,
+        "why": stall_why(v, unit),
+    }
+
+
+def stall_why(v: StallVerdict, unit: str) -> str:
+    """Строка фактов к вердикту — одна на get_exercise_progress и
+    get_stalled_lifts: модель пересказывает её, а не выводит сама."""
     parts = [f"{v.sessions_in_window} sessions in {STALL_WINDOW_WEEKS} weeks"]
     if v.e1rm_slope_per_week is not None:
-        parts.append(f"e1RM {v.e1rm_slope_per_week:+g} {unit}/week")
+        what = "best reps" if v.weight_since is None else "best e1RM"
+        per = "" if v.weight_since is None else f" {unit}"
+        parts.append(
+            f"{what} slope {v.e1rm_slope_per_week:+g}{per}/week ({v.slope_pct_per_week:+g}%/week)"
+        )
+    if v.e1rm_peak is not None and v.e1rm_latest is not None:
+        def _mark(m: tuple[str, float, int, float]) -> str:
+            return f"{m[3]:g} ({_fmt(m[1])}×{m[2]}, {m[0]})"
+        if v.e1rm_peak == v.e1rm_latest:
+            parts.append(f"best e1RM in window is the latest: {_mark(v.e1rm_latest)}")
+        else:
+            parts.append(f"best e1RM {_mark(v.e1rm_peak)} → latest {_mark(v.e1rm_latest)}")
+    if v.weight_raised_from is not None:
+        parts.append(
+            f"weight raised {_fmt(v.weight_raised_from)}→{_fmt(v.top_weight)} {unit} "
+            f"on {v.weight_since}"
+        )
     if v.weight_since is not None:
         parts.append(
             f"top weight {_fmt(v.top_weight)} {unit} since {v.weight_since} "
@@ -1411,12 +1554,9 @@ def stall_facts(sessions: list[SessionStats], today: dt.date, unit: str) -> dict
         )
     else:
         parts.append(f"bodyweight, best reps {v.reps_at_top_first}→{v.reps_at_top_last}")
-    return {
-        "stalled": v.kind in ("dead_end", "regressing"),
-        "verdict": v.kind,
-        "top_weight_since": v.weight_since,
-        "why": "; ".join(parts),
-    }
+    for day, sets in v.light_sessions:
+        parts.append(f"{day}: only {sets} — looks like warm-up or not fully logged, left out of trend")
+    return "; ".join(parts)
 
 
 def progress_facts(
