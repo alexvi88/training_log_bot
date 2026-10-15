@@ -428,7 +428,7 @@ async def _accept(event, state: FSMContext, name: str) -> None:
     text = f"<b>{i18n.t('coach.linked_done', name=coach_name)}</b>\n\n{i18n.t('coach.linked_done_hint')}"
     await _show(event, text, kb)
     # Тренеру — «новый клиент» банером и в Telegram, на его языке.
-    await coach_notify.deliver_new_client(invite["owner_id"], name, bot=event.bot)
+    await coach_notify.deliver_new_client(invite["owner_id"], name, user_id, bot=event.bot)
 
 
 # ---------- атлет: «Мой тренер» ----------

@@ -6,7 +6,8 @@
 - тренер назначил программу → атлету (`deliver_program`), банер ведёт в
   программу, кнопка в боте — «Открыть программу» (`rt:prg:<id>`);
 - атлет принял приглашение → тренеру (`deliver_new_client`), банер ведёт в
-  «Мои клиенты», кнопка в боте — туда же (`coach:clients:0`);
+  карточку этого клиента поверх «Мои клиенты», кнопка в боте — в неё же
+  (`coach:cl:<id>`);
 - связку разорвали (`deliver_unlinked`) → второй стороне: атлет закрыл
   доступ — тренеру «Клиент закрыл доступ» (в «Мои клиенты»), тренер убрал
   клиента — атлету «Тренер больше не ведёт тебя» (в его программу от тренера,
@@ -276,30 +277,38 @@ async def deliver_program(
 # ---------- атлет принял приглашение → тренеру ----------
 
 
-async def push_ios_new_client(coach: Any, client_name: str) -> int:
-    """Банер тренеру «Новый клиент»; тап — в «Мои клиенты»."""
+async def push_ios_new_client(coach: Any, client_name: str, client_id: int) -> int:
+    """Банер тренеру «Новый клиент»; тап — в карточку этого клиента поверх
+    «Мои клиенты» (старые сборки не знают `client_id` и открывают список)."""
     return await _push_ios(
         coach, "coach.push.new_client_title", "coach.push.new_client_body",
-        category=push_ios.COACH_NEW_CLIENT, route=push_ios.coach_clients_route(),
+        category=push_ios.COACH_NEW_CLIENT, route=push_ios.coach_clients_route(client_id),
         name=push_ios._clip_param(client_name, 24),
     )
 
 
-async def telegram_new_client_message(coach: Any, client_name: str) -> tuple[str, InlineKeyboardMarkup]:
-    """Текст и кнопка «Мои клиенты» — на языке тренера."""
+async def telegram_new_client_message(
+    coach: Any, client_name: str, client_id: int
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Текст на языке тренера и кнопка с именем клиента — сразу в его карточку
+    (`coach:cl:<id>`, оттуда «Назад» ведёт в «Мои клиенты»)."""
     with i18n.use_lang(_lang_of(coach)):
         body = i18n.t("coach.tg.new_client", name=escape(client_name))
         kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=i18n.t("coach.btn.my_clients_short"), callback_data="coach:clients:0")
+            InlineKeyboardButton(text=client_name, callback_data=f"coach:cl:{int(client_id)}")
         ]])
     return body, kb
 
 
-async def send_telegram_new_client(bot, coach: Any, client_name: str) -> bool:
-    return await _send_telegram(bot, coach, lambda: telegram_new_client_message(coach, client_name), "new client")
+async def send_telegram_new_client(bot, coach: Any, client_name: str, client_id: int) -> bool:
+    return await _send_telegram(
+        bot, coach, lambda: telegram_new_client_message(coach, client_name, client_id), "new client"
+    )
 
 
-async def deliver_new_client(coach_id: int, client_name: str, *, bot: Optional[Any] = None) -> tuple[int, bool]:
+async def deliver_new_client(
+    coach_id: int, client_name: str, client_id: int, *, bot: Optional[Any] = None
+) -> tuple[int, bool]:
     """Атлет только что нажал «Разрешить» — тренеру обоими каналами: (сколько
     устройств приняли банер, ушло ли в Telegram). Строку тренера читаем
     здесь: нужен его язык и его каналы. Не бросает: связка уже заведена."""
@@ -310,9 +319,9 @@ async def deliver_new_client(coach_id: int, client_name: str, *, bot: Optional[A
         return 0, False
     if coach is None:
         return 0, False
-    pushed = await push_ios_new_client(coach, client_name)
+    pushed = await push_ios_new_client(coach, client_name, client_id)
     telegram = await _telegram_any_bot(
-        bot, coach, lambda b: send_telegram_new_client(b, coach, client_name), "new client"
+        bot, coach, lambda b: send_telegram_new_client(b, coach, client_name, client_id), "new client"
     )
     return pushed, telegram
 

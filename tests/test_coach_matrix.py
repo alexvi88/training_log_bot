@@ -581,8 +581,9 @@ async def test_coach_athlete_flow(
     assert_delivered(
         trainer, telegram, push,
         tg_key="coach.tg.new_client", tg_params={"name": ""},
-        button=(i18n.t_in(coach_lang, "coach.btn.my_clients_short"), "coach:clients:0"),
-        title_key="coach.push.new_client_title", route={"screen": "coach_clients"},
+        button=(athlete_name, f"coach:cl:{athlete.uid}"),
+        title_key="coach.push.new_client_title",
+        route={"screen": "coach_clients", "client_id": athlete.uid},
         data=(athlete_name,),
     )
     telegram.sent.clear()
