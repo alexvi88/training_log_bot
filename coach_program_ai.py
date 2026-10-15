@@ -143,6 +143,7 @@ class ClientChat:
             payload, questions = await ai_trainer._ask_setup_questions(self.coach_id, tool_input)
             if questions is not None and on_questions is not None:
                 await on_questions(questions)
+                ai_trainer.sync_setup_payload(payload, questions)
         elif name == "propose_program":
             # Только новая программа тренера: правка его сохранённых — не этот
             # разговор, а программы атлета модель отсюда не трогает вовсе.
