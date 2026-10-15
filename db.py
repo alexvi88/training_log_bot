@@ -56,6 +56,7 @@ from seed_data import (
     localized_program_name,
     localized_target,
     progression_kind,
+    relocalized_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,9 +78,10 @@ CREATE TABLE IF NOT EXISTS users (
     -- приходил сам, включает тумблер в настройках. Новая запись всё равно пишет
     -- 0 явно (get_or_create_user, create_app_only_user): у живой базы DEFAULT
     -- колонки тот, с которым её когда-то добавили, — ALTER TABLE в SQLite его
-    -- не меняет. Старые записи не трогаем: у кого 1 — тот остаётся с
-    -- автокомментарием; «ни разу не открывал настройку» и «включил сам» в базе
-    -- неотличимы (отметки времени смены тумблера нет).
+    -- не меняет. Старые записи выключены один раз миграцией v14
+    -- (_turn_off_ai_comments_for_everyone, решение владельца): «ни разу не
+    -- открывал настройку» и «включил сам» в базе неотличимы, так что выключено
+    -- у всех; кто включит снова — тому рестарт его не выключит.
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     -- Диапазон повторов для подсказки «Цель» (analytics.REP_RANGE_PRESETS).
@@ -2253,7 +2255,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 14
 
 
 async def _run_one_shot_migrations() -> None:
@@ -2293,6 +2295,10 @@ async def _run_one_shot_migrations() -> None:
         await _migrate_legacy_catalog_program_texts()
     if version < 9:
         await _move_ungrouped_exercises_to_other()
+    if version < 13:
+        await _relocalize_old_coach_copies()
+    if version < 14:
+        await _turn_off_ai_comments_for_everyone()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -2844,14 +2850,20 @@ async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
 
 
 async def is_walk_demo(telegram_id: int) -> bool:
-    """Аккаунт прогона скриншотов (WALK_DEMO_USERNAME, вход по паролю). Демо
+    """Аккаунт прогонов владельца, вход по паролю: прогон скриншотов
+    (WALK_DEMO_USERNAME) или новичок (config.newbie_demo_username()). Демо
     App Review (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
     if not config.WALK_DEMO_USERNAME:
         return False
+    names = [config.WALK_DEMO_USERNAME.strip()]
+    newbie = config.newbie_demo_username()
+    if newbie:
+        names.append(newbie)
+    marks = ", ".join("?" for _ in names)
     cur = await conn().execute(
         "SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'review_demo' "
-        "AND provider_user_id = ?",
-        (telegram_id, config.WALK_DEMO_USERNAME),
+        f"AND provider_user_id IN ({marks})",
+        (telegram_id, *names),
     )
     return await cur.fetchone() is not None
 
@@ -3042,16 +3054,7 @@ async def relocalize_catalog_copies(user_id: int, lang: str) -> dict[str, int]:
         (user_id,),
     )
     for row in await cur.fetchall():
-        canonical = row["original_name"]
-        if canonical not in templates:
-            continue
-        wanted = localized_exercise_name(canonical, lang)
-        current = (row["name"] or "").strip()
-        if current == wanted:
-            continue
-        if current not in _catalog_spellings(localized_exercise_name, canonical):
-            continue
-        if await update_exercise_name(row["id"], wanted):
+        if await _relocalize_catalog_exercise(row, lang, templates):
             counts["exercises"] += 1
 
     # Каталожные программы — и свои («➕ Добавить себе», source='catalog'),
@@ -3068,6 +3071,121 @@ async def relocalize_catalog_copies(user_id: int, lang: str) -> dict[str, int]:
     if any(counts.values()):
         logger.info("relocalize_catalog_copies: user %s -> %s: %s", user_id, lang, counts)
     return counts
+
+
+async def _relocalize_catalog_exercise(row: Any, lang: str, templates: set[str]) -> bool:
+    """Копия шаблона каталога (по идентичности — `original_name`) под
+    нетронутым каталожным именем — на `lang`. Своё имя и занятое — пропуск."""
+    canonical = row["original_name"]
+    if canonical not in templates:
+        return False
+    wanted = localized_exercise_name(canonical, lang)
+    current = (row["name"] or "").strip()
+    if current == wanted or current not in _catalog_spellings(localized_exercise_name, canonical):
+        return False
+    return bool(await update_exercise_name(row["id"], wanted))
+
+
+def _catalog_key_of_program(name: str, day_names: list[str]) -> Optional[str]:
+    """Ключ каталога для программы, у которой он не записан: по имени (на
+    любом языке, включая прежние тексты каталога) или — если имя набрано
+    своё — по полному совпадению состава дней с одной программой каталога."""
+    for key in PROGRAM_BY_KEY:
+        if name in _catalog_spellings(localized_program_name, key) or name in legacy_program_texts(key, "name"):
+            return key
+    if not day_names:
+        return None
+    for key, catalog in PROGRAM_BY_KEY.items():
+        if len(catalog["days"]) != len(day_names):
+            continue
+        spellings = [
+            _catalog_spellings(localized_program_day_name, key, i) | legacy_program_texts(key, f"day.{i}")
+            for i in range(len(catalog["days"]))
+        ]
+        if sorted(
+            next((i for i, names in enumerate(spellings) if day in names), -1) for day in day_names
+        ) == list(range(len(spellings))):
+            return key
+    return None
+
+
+async def _relocalize_old_coach_copies() -> None:
+    """Копии программ, назначенные тренером ДО того, как assign_program стал
+    класть их на языке атлета и записывать ключ каталога (#847): лежат на
+    языке тренера и без `source_ref`, так что смена языка их не переводила.
+
+    Каталожную копию узнаём по имени или составу дней (`_catalog_key_of_program`)
+    на любом языке, пишем ключ в `source_ref` и переводим на `users.lang`
+    атлета тем же `relocalize_catalog_program`, что и смену языка. Своё имя
+    программы и дня, набранное тренером, остаётся как набрано. Схемы подходов
+    («3 подхода» / «3 sets», «…сек» / «…sec») переводятся у любой копии —
+    это текст каталога, а не набранный человеком. Упражнения дней — копии
+    шаблонов по идентичности (`original_name`) — тоже.
+
+    Правок атлета после назначения ничем не отмечено (у программ и дней нет
+    `edited_at`), поэтому правило то же, что у смены языка: переводится только
+    текст, всё ещё совпадающий с каталожным на каком-нибудь языке; всё, что
+    атлет переименовал или переписал, стоит как было.
+
+    One-shot (см. `_run_one_shot_migrations`), но и повтор безвреден: он
+    находит только копии без ключа, а переводит только нетронутое."""
+    cur = await _conn.execute(
+        "SELECT p.id, p.user_id, p.name, p.description, u.lang FROM programs p "
+        "LEFT JOIN users u ON u.telegram_id = p.user_id "
+        "WHERE p.source = 'coach' AND (p.source_ref IS NULL OR p.source_ref = '')"
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return
+    templates = {name for _group, name in EXERCISE_TEMPLATES}
+    relocalized = skipped = 0
+    for row in rows:
+        lang = row["lang"] if row["lang"] in i18n.SUPPORTED else i18n.DEFAULT_LANG
+        days = await list_program_days_by_id(row["id"])
+        changed = 0
+        key = _catalog_key_of_program(row["name"], [d["name"] for d in days])
+        if key is not None:
+            await _conn.execute("UPDATE programs SET source_ref = ? WHERE id = ?", (key, row["id"]))
+            await _conn.commit()
+            program = {"id": row["id"], "name": row["name"], "description": row["description"], "source_ref": key}
+            changed += sum((await relocalize_catalog_program(program, lang)).values())
+        for day in days:
+            cur = await _conn.execute(
+                "SELECT re.id, re.target, e.id AS exercise_id, e.name, e.original_name, e.user_id "
+                "FROM routine_exercises re JOIN exercises e ON e.id = re.exercise_id "
+                "WHERE re.routine_id = ?",
+                (day["id"],),
+            )
+            for ex in await cur.fetchall():
+                wanted = relocalized_target(ex["target"], lang)
+                if wanted != ex["target"]:
+                    await _conn.execute(
+                        "UPDATE routine_exercises SET target = ? WHERE id = ?", (wanted, ex["id"])
+                    )
+                    await _conn.commit()
+                    changed += 1
+                if ex["user_id"] == row["user_id"] and await _relocalize_catalog_exercise(
+                    {"id": ex["exercise_id"], "name": ex["name"], "original_name": ex["original_name"]},
+                    lang, templates,
+                ):
+                    changed += 1
+        if changed or key is not None:
+            relocalized += 1
+        else:
+            skipped += 1
+    logger.info(
+        "relocalize_old_coach_copies: %d copies relocalized, %d skipped", relocalized, skipped
+    )
+
+
+async def _turn_off_ai_comments_for_everyone() -> None:
+    """Автокомментарий AI к тренировке — выключен у всех, кто есть сейчас
+    (решение владельца; новым он выключен с #844). Кнопка под итогом
+    тренировки работает как была. One-shot (см. `_run_one_shot_migrations`):
+    кто включит его снова в настройках, тому рестарт его не выключит."""
+    cur = await _conn.execute("UPDATE users SET ai_comments_enabled = 0 WHERE ai_comments_enabled != 0")
+    await _conn.commit()
+    logger.info("turn_off_ai_comments_for_everyone: %d users", cur.rowcount)
 
 
 async def relocalize_catalog_program(
