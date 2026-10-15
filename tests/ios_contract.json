@@ -241,6 +241,11 @@
     "actions": {
      "type": "[AIUndoAction]",
      "optional": true
+    },
+    "turnInFlight": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4327,6 +4332,13 @@
   },
   {
    "swift": "APIClient.askCoach",
+   "method": "POST",
+   "path": "/ai/ask",
+   "root": "AIAnswer",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.askCoachStreaming",
    "method": "POST",
    "path": "/ai/ask",
    "root": "AIAnswer",

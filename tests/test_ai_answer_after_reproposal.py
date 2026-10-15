@@ -203,3 +203,65 @@ async def test_rest_ask_answers_with_the_final_program_explanation(fresh_db, mon
     body = resp.json()
     assert body["answer"] == EXPLANATION
     assert body["program"] is not None
+
+
+# ---------- потолок черновиков за ход ----------
+
+
+def _tool_payloads(create) -> list[dict]:
+    """Ответы инструментов, ушедшие модели в последнем запросе хода."""
+    messages = create.await_args_list[-1].kwargs["messages"]
+    return [json.loads(m["content"]) for m in messages if m.get("role") == "tool"]
+
+
+async def test_second_draft_is_final_and_a_third_call_is_not_run(fresh_db, user_id, monkeypatch):
+    """Живой прогон (тренер собирал программу клиенту): три propose_program
+    подряд, каждый раз в ответ «вызови ещё раз» — полторы минуты хода. Второй
+    показанный черновик — окончательный: приглашений пересобрать в нём нет, а
+    третий вызов не исполняется, и под сообщением остаётся второй черновик."""
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=[
+        _response(content=INTERIM_1, tool_calls=[_propose("call_1", 4)]),
+        _response(content=INTERIM_2, tool_calls=[_propose("call_2", 3)]),
+        _response(content=None, tool_calls=[_propose("call_3", 2)]),
+        _response(content=EXPLANATION),
+    ]))))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    drafts: list[dict] = []
+
+    async def on_program(draft):
+        drafts.append(draft)
+
+    answer = await ai_trainer._ask_plain(user_id, "Собери программу", history=[], on_program=on_program)
+
+    assert answer == EXPLANATION
+    assert len(drafts) == 2
+    first, second, third = _tool_payloads(client.chat.completions.create)
+    # Первый черновик без описания — модель зовут дописать.
+    assert "description_missing" in first and "final" not in first
+    # Второй — окончательный: без приглашений пересобрать.
+    assert "final" in second
+    assert not set(ai_trainer._REPROPOSE_NUDGES) & set(second)
+    # Третий не исполнен — черновик на экране прежний.
+    assert third["shown_to_user"] is False and "error" in third
+    assert drafts[-1]["days"][0]["items"][0]["sets"] == 3
+
+
+async def test_a_failed_proposal_does_not_count_toward_the_cap(fresh_db, user_id, monkeypatch):
+    """Вызов, который ничего не показал (названия не из каталога), — не
+    черновик: следующий показанный ещё может получить подсказку поправить."""
+    bad = {"name": "X", "days": [{"name": "Д", "exercises": [{"name": "Несуществующее", "sets": 3}]}]}
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=[
+        _response(tool_calls=[SimpleNamespace(
+            id="call_0", type="function",
+            function=SimpleNamespace(name="propose_program", arguments=json.dumps(bad)),
+        )]),
+        _response(content=INTERIM_1, tool_calls=[_propose("call_1", 4)]),
+        _response(content=EXPLANATION),
+    ]))))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer._ask_plain(user_id, "Собери программу", history=[])
+
+    failed, shown = _tool_payloads(client.chat.completions.create)
+    assert failed["shown_to_user"] is False
+    assert "final" not in shown and "description_missing" in shown

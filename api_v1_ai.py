@@ -55,7 +55,8 @@
   (`questions.index` из ответа `/ai/ask`) — HTTP-аналог тапа по варианту
   (`ai:qa:`) или «⏭ Пропустить» (`ai:qskip`) в боте. Отдаёт следующий вопрос
   или, когда опросник закончился, реальный ответ модели с составом программы
-  — как и `_finish_setup` в боте.
+  — как и `_finish_setup` в боте. С `"stream": true` последний ответ (ход
+  модели) идёт тем же стримом, что у `/ai/ask`.
 - `GET /ai/history` — история ТЕКУЩЕГО разговора для отрисовки чата: только
   видимая часть (роль, текст, время), без wire-формата с tool-calls — клиенту
   нечего с ними делать, а тащить внутренности модели в JSON лишним трафиком
@@ -80,7 +81,9 @@
   (`program`, тем же JSON, что и в ответе `/ai/ask` — с `draft_id`, чтобы
   «Забрать себе» было чем вызвать), текущий неотвеченный вопрос опросника
   (`questions`, тем же JSON, что и там же) и живые кнопки отката под
-  последним ходом (`actions`, чтобы «Отменить» пережило уход с экрана). Оба уже лежат в БД
+  последним ходом (`actions`, чтобы «Отменить» пережило уход с экрана), плюс
+  `turn_in_flight` — ход тренера идёт прямо сейчас (опросник тогда не
+  отдаётся: ответ на него уже в работе). Оба уже лежат в БД
   (`ai_program_drafts`/`ai_setup_states`) ради `/ai/program/save` и
   `/ai/questions/answer` — этой ручки не хватало только чтобы клиент мог их
   ПРОЧИТАТЬ, а не только записать ответ на них. Отдельная ручка, а не поле в
@@ -1230,17 +1233,40 @@ async def answer_setup_question(request: Request) -> JSONResponse:
     # хода нет, в базе лежит состояние ДО этого ответа (его мы не записывали),
     # так что повтор с тем же question_index честно проходит проверку выше.
     subject = await _chat_subject(user_id)
-    _claim_turn_or_429(user_id, lang)
-    try:
+    goal = state.get("goal") or text
+
+    async def finish(on_chunk: Optional[Any] = None, on_status: Optional[Any] = None) -> dict[str, Any]:
         history = await db.get_ai_conversation_wire_history(user_id)
-        turn = await _run_turn(user_id, text, history, subject=subject)
+        turn = await _run_turn(
+            user_id, text, history, on_chunk=on_chunk, on_status=on_status, subject=subject,
+        )
         # До _turn_response, а не после: он сам решает, заводить ли новый
         # опросник, и смотрит на «предыдущий» (_next_setup_step) — законченный
         # там лежать не должен, как и прежде.
         await db.clear_ai_setup_state(user_id)
-        return JSONResponse(await _turn_response(
-            user_id, turn, goal=state.get("goal") or text, subject=subject,
-        ))
+        return await _turn_response(user_id, turn, goal=goal, subject=subject)
+
+    _claim_turn_or_429(user_id, lang)
+    # «stream»: true — как у /ai/ask (`_stream_turn`): последний ответ опросника
+    # — это ход со сборкой программы на минуту-полторы. Обычным JSON он шёл
+    # молча до самого конца, и такое соединение по дороге (прокси, мобильный
+    # оператор, телефон, ушедший в фон) рвалось — приложение показывало «Связи
+    # нет», а ход на сервере тем временем доезжал. Стрим держит соединение
+    # пульсом и отдаёт статусы «что тренер делает». Шаги опросника ДО
+    # последнего (выше) отвечают обычным JSON и со `stream` — клиент это
+    # различает по Content-Type.
+    if body.get("stream") is True:
+        try:
+            block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        except BaseException:
+            _busy.discard(user_id)
+            raise
+        if block is not None:
+            _busy.discard(user_id)
+            raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
+        return _stream_turn(user_id, lang, finish)
+    try:
+        return JSONResponse(await finish())
     finally:
         _busy.discard(user_id)
 
@@ -1703,7 +1729,19 @@ async def get_pending_state(request: Request) -> JSONResponse:
             else None
         )
 
-    return JSONResponse({"program": program_json, "questions": questions_json, "actions": actions})
+    # Ход тренера идёт прямо сейчас (бронь `_busy`): клиент, вернувшийся на
+    # экран посреди хода, не должен звать его ещё раз (это 429 `busy`), а
+    # должен показать «тренер работает» и дождаться ответа в истории. Опросник
+    # на это время не отдаём: последний ответ уже ушёл, а в базе до конца хода
+    # лежит состояние ДО него (см. answer_setup_question) — живые варианты под
+    # «Вопрос 6 из 6» звали бы ответить ещё раз.
+    turn_in_flight = user_id in _busy
+    if turn_in_flight:
+        questions_json = None
+    return JSONResponse({
+        "program": program_json, "questions": questions_json, "actions": actions,
+        "turn_in_flight": turn_in_flight,
+    })
 
 
 async def get_history(request: Request) -> JSONResponse:
