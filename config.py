@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import os
 
@@ -241,6 +242,11 @@ FEEDBACK_PUSH_INTERVAL_DAYS = 60
 # Реплика в поддержку в течение стольких дней после пуша считается ответом на
 # него (событие feedback_push_replied) — засчитывается только первая.
 FEEDBACK_PUSH_REPLY_WINDOW_DAYS = 7
+# Запуск пуша для тех, кто тренировался ДО него. До этой метки (naive UTC) пуш
+# не уходит никому. Тем, у кого первая тренировка была раньше метки, первый
+# вопрос уходит сразу с неё (12:00 по Москве), а не в вечернее окно, — любой
+# не тихий час по местному. Новички после запуска живут по обычным правилам.
+FEEDBACK_PUSH_LAUNCH_UTC = dt.datetime(2026, 10, 15, 9, 0)
 
 # Use an AI-generated personalized weekly digest (Sundays) in place of the static
 # rotation text, when the AI trainer is configured. Falls back to static copy on
@@ -943,6 +949,13 @@ WEEKLY_DIGEST_RETENTION_DAYS = int(os.getenv("WEEKLY_DIGEST_RETENTION_DAYS", "90
 # тренируются сейчас: через три месяца она описывает уже другую жизнь. Срок
 # назван в политике конфиденциальности (legal/privacy.*.html).
 COACH_SUMMARY_RETENTION_DAYS = int(os.getenv("COACH_SUMMARY_RETENTION_DAYS", "90"))
+
+# Сколько тренер видит в «Моих клиентах» серую строку «Маша больше не делится
+# дневником · 14 окт» после того, как атлет закрыл доступ (db.coach_unlinks).
+# Неделя — чтобы заметить уход, даже если пуш пропустил; дальше строка и имя
+# бывшего клиента стираются. Срок назван в политике конфиденциальности
+# (legal/privacy.*.html).
+COACH_UNLINK_SHOWN_DAYS = int(os.getenv("COACH_UNLINK_SHOWN_DAYS", "7"))
 
 # Сколько живёт строка в «Уведомлениях» приложения (db.inbox, inbox.py) — копия
 # пуша, которую человек может перечитать, даже если пуши выключены. Пуш — про

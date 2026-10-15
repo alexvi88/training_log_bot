@@ -1312,6 +1312,10 @@
     "clients": {
      "type": "[CoachClient]",
      "optional": false
+    },
+    "recentlyUnlinked": {
+     "type": "[CoachUnlinkedClient]",
+     "optional": true
     }
    }
   },
@@ -1477,6 +1481,23 @@
     },
     "clientCount": {
      "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "CoachUnlinkedClient": {
+   "file": "TrainingLog/Models/CoachModels.swift",
+   "fields": {
+    "clientId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "unlinkedAt": {
+     "type": "String",
      "optional": false
     }
    }
