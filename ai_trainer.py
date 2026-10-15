@@ -118,6 +118,13 @@ SETUP_CHOICE_LIMIT = 32
 # прибавлять вес (в единицах пользователя), зажат тем же приёмом, что sets/reps
 # в _clean_program_item.
 PROGRESSION_RULES = ("double_progression", "linear_load", "top_set_backoff")
+
+# Цель программы из propose_program. Плановая разгрузка (deload_every_weeks)
+# живёт только в силовой: на массе, похудении, общей форме и у новичков
+# неделя «60 % подходов на 90 % веса» — потерянная неделя, а не восстановление.
+PROGRAM_GOAL_STRENGTH = "strength"
+PROGRAM_GOALS = (PROGRAM_GOAL_STRENGTH, "hypertrophy", "general", "fat_loss")
+
 PROGRESSION_MIN_STEP = 0.25
 # Потолок шага — в кг, для фунтов тот же физический (analytics.
 # progression_max_step): одно число на обе единицы зажимало атлету в lb шаг
@@ -1045,10 +1052,17 @@ save_athlete_profile сразу, без спроса и без кнопок по
 невыполнимо — так не пишут программу сильному атлету. Остальные упражнения —
 двойная прогрессия, как обычно.
 
-Разгрузка: в каждой программе для всех, кроме совсем новичков в первые два
-месяца, ставь deload_every_weeks 4-6. В эту неделю ты сам подскажешь на
-тренировке ~60% подходов на ~90% веса — скажи об этом одной фразой в ответе
-(«каждую 5-ю неделю подрежу подходы сам»).
+Цель программы — goal в propose_program, каждый раз: strength — человек просит
+силу, пауэрлифтинг, максимум в приседе/жиме/становой; hypertrophy — масса,
+объём, рельеф; fat_loss — похудение; general — общая форма, здоровье, первые
+шаги и всё, что не подходит выше.
+
+Разгрузка — только в силовой программе (goal strength): ставь
+deload_every_weeks 4-6, кроме совсем новичков в первые два месяца. В эту неделю
+ты сам подскажешь на тренировке ~60% подходов на ~90% веса — скажи об этом
+одной фразой в ответе («каждую 5-ю неделю подрежу подходы сам»). В программе на
+массу, похудение, общую форму и для новичков разгрузки нет: deload_every_weeks
+не передавай и в ответе её не обещай — бот её всё равно не сохранит.
 
 НИКОГДА не обещай действие вместо того, чтобы его сделать. «Сейчас исправлю
 программу», «сейчас соберу», «минуту, пересоберу» — и конец хода: человек
@@ -2666,11 +2680,16 @@ TOOLS: list[dict[str, Any]] = [
                             "пересказывай. На «ты», без приветствия."
                         ),
                     },
+                    "goal": {
+                        "type": "string",
+                        "enum": list(PROGRAM_GOALS),
+                        "description": "Цель этой программы",
+                    },
                     "deload_every_weeks": {
                         "type": "integer",
                         "minimum": db.DELOAD_MIN_WEEKS,
                         "maximum": db.DELOAD_MAX_WEEKS,
-                        "description": "Каждая N-я неделя — разгрузка",
+                        "description": "Каждая N-я неделя — разгрузка; только при goal strength",
                     },
                     "days": {
                         "type": "array",
@@ -2773,7 +2792,7 @@ TOOLS: list[dict[str, Any]] = [
                         },
                     },
                 },
-                "required": ["name", "description", "days"],
+                "required": ["name", "description", "goal", "days"],
             },
         },
     },
@@ -3798,7 +3817,8 @@ def _program_detail_payload(program: dict[str, Any]) -> dict[str, Any]:
             "программу, вызови propose_program целиком (со всеми днями, "
             "включая нетронутые) и передай её точное имя в replaces_program. "
             "Правила progression нетронутых упражнений и deload_every_weeks тоже "
-            "переноси как есть — чего не пришлёшь, у того сотрётся."
+            "переноси как есть — чего не пришлёшь, у того сотрётся. goal ставь по "
+            "цели программы: разгрузку бот сохранит только при goal strength."
         ),
     }
 
@@ -5757,6 +5777,22 @@ async def _ask_setup_questions(
     return payload, questions
 
 
+def clean_program_goal(raw: Any) -> Optional[str]:
+    """Цель из вызова модели — одно из PROGRAM_GOALS, иначе None («не сказала»)."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    return value if value in PROGRAM_GOALS else None
+
+
+def deload_for_goal(goal: Optional[str], deload_every_weeks: Optional[int]) -> Optional[int]:
+    """Разгрузка, которую программа с этой целью сохраняет: только силовая.
+
+    Цель не названа — разгрузки нет: модель, забывшая goal, не должна молча
+    вернуть разгрузку в программу на массу."""
+    return deload_every_weeks if goal == PROGRAM_GOAL_STRENGTH else None
+
+
 async def _propose_program(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
@@ -5779,7 +5815,9 @@ async def _propose_program(
     # показываем, а модели говорим, чего не хватает — тем же способом, что и про
     # урезанные дни: пусть допишет вызовом заново.
     description = db.clean_program_description(tool_input.get("description"))
-    deload_every_weeks = db.clean_deload_every_weeks(tool_input.get("deload_every_weeks"))
+    goal = clean_program_goal(tool_input.get("goal"))
+    requested_deload = db.clean_deload_every_weeks(tool_input.get("deload_every_weeks"))
+    deload_every_weeks = deload_for_goal(goal, requested_deload)
     replaces, replaces_error = await _resolve_replaced_program(
         user_id, tool_input.get("replaces_program")
     )
@@ -5935,6 +5973,15 @@ async def _propose_program(
             "description не прислан — программа сохранится без описания, и на её "
             "экране останутся одни списки упражнений. Вызови propose_program "
             "заново с тем же составом и парой фраз о программе."
+        )
+    if requested_deload and not deload_every_weeks:
+        # Решение продукта: плановая разгрузка — только в силовых программах.
+        # Модели мало сказать это в промпте — отбрасываем здесь и говорим ей,
+        # чтобы она не пообещала человеку разгрузку, которой в программе нет.
+        payload["deload_dropped"] = (
+            "deload_every_weeks не сохранён: разгрузка бывает только в программе с "
+            f"goal strength, а здесь goal {goal or 'не указан'}. Разгрузку в ответе "
+            "не обещай."
         )
     if dropped_days:
         payload["dropped_days"] = dropped_days
