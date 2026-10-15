@@ -443,6 +443,23 @@ def exercise_json(row) -> dict[str, Any]:
     return data
 
 
+async def trained_exercise_stats(user_id: int, *, tz_offset: int | None = None) -> dict[int, dict[str, Any]]:
+    """Сколько законченных тренировок с упражнением и местный день последней —
+    `sessions` и `last_workout_at` по id упражнения. Та же выборка
+    (db.list_trained_exercises) и те же имена полей, что у строк «Всех
+    упражнений» клиента у тренера (coach_service.client_exercises): свой
+    «Прогресс» атлета и «Прогресс клиента» показывают одно и то же. Упражнения
+    без законченных тренировок в словарь не попадают — поля им не нужны."""
+    rows = await db.list_trained_exercises(user_id, tz_offset=tz_offset, limit=TRAINED_STATS_LIMIT)
+    return {row["id"]: {"sessions": row["sessions"], "last_workout_at": row["last_day"]} for row in rows}
+
+
+# Потолок выборки для подписей своих упражнений: больше упражнений с
+# законченными подходами у одного атлета не бывает на практике, а без потолка
+# выборка тянула бы всё подряд.
+TRAINED_STATS_LIMIT = 2000
+
+
 def query_int(request: Request, key: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
     """Числовой query-параметр с потолком. Потолок обязателен там, где
     параметр управляет размером выборки: `?limit=1000000` иначе тянет из

@@ -562,10 +562,15 @@ async def list_exercises(request: Request) -> JSONResponse:
             # «Похоже, ты про:», а «Создать» — ниже (GET /exercise-templates
             # отдаёт каталожную половину тем же ходом).
             own, _ = await db.similar_exercise_matches(user_id, query)
-            return JSONResponse([{**_exercise_json(r), "similar": True} for r in own])
+            stats = await common.trained_exercise_stats(user_id)
+            return JSONResponse([{**_exercise_json(r), **stats.get(r["id"], {}), "similar": True} for r in own])
     else:
         rows = await db.list_user_exercises(user_id)
-    return JSONResponse([_exercise_json(r) for r in rows])
+    # «18 тренировок · последняя 7 окт.» под строкой своего «Прогресса» — те же
+    # числа, что у тренера в «Прогрессе клиента» (одна выборка,
+    # common.trained_exercise_stats). Без законченных тренировок полей нет.
+    stats = await common.trained_exercise_stats(user_id)
+    return JSONResponse([{**_exercise_json(r), **stats.get(r["id"], {})} for r in rows])
 
 
 def _exercise_name(body: dict[str, Any]) -> str:

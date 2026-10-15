@@ -6388,7 +6388,9 @@ async def list_trained_exercises(
 ) -> list[aiosqlite.Row]:
     """Все упражнения атлета, у которых есть хоть один подход в законченной
     тренировке, — список «Все упражнения» в «Прогрессе клиента» тренера (бот
-    и `GET /coach/clients/{id}/exercises`).
+    и `GET /coach/clients/{id}/exercises`) и подписи строк своего «Прогресса»
+    атлета (`sessions`/`last_workout_at` у GET /exercises,
+    api_v1_common.trained_exercise_stats) — одни числа на обоих экранах.
 
     Чаще делаемое — выше (по числу тренировок, как top_exercises_by_frequency),
     при равенстве — то, что делал недавно, потом по имени: порядок не прыгает
