@@ -2307,6 +2307,7 @@
   "ai.tool_status.default.1": "🔍 копаюсь в данных...",
   "ai.tool_status.default.2": "🗄️ роюсь в базе, момент...",
   "ai.tool_status.default.3": "🧐 ищу нужные цифры...",
+  "ai.tool_status.program_build": "🧠 думаю над программой...",
   "ai.tool_status.web_search": "🔎 ищу свежую информацию в сети...",
   "ai.tool_status.get_muscle_recovery.1": "🔋 смотрю, какие мышцы уже восстановились...",
   "ai.tool_status.get_muscle_recovery.2": "🧮 прикидываю отдых по группам с прошлых тренировок...",
