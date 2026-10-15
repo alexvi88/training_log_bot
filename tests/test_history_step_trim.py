@@ -326,8 +326,7 @@ async def test_luna_cut_keeps_reasoning_with_its_message_and_calls():
                 {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": f"ответ {i}"}]},
             ]},
         ]
-    luna = SimpleNamespace(is_openai=True)
-    _summary, _dropped, kept = ai_trainer._plan_step_trim(history, luna, 4000, 2000)
+    _summary, _dropped, kept = ai_trainer._plan_step_trim(history, ai_trainer.luna_backend(), 4000, 2000)
 
     items = ai_trainer._responses_input(kept)
     assert items[0] == {"role": "user", "content": kept[0]["content"]}
