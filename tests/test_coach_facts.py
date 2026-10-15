@@ -86,12 +86,13 @@ async def test_biceps_card_compares_reps_only_at_one_weight(fresh_db, user_id):
     lines = card.split("\n")
 
     assert lines[0].startswith("Сгибание рук в блоке · Бицепс · ")
+    assert "последний раз 10-12 (3 дня назад)" in lines[0]
     assert "(перешёл на новый вес)" in lines[0]
     # Рабочий вес с датой и повторы ТОЛЬКО на нём.
     assert "рабочий 77 с 09-28: 77×6@9 → 77×7@9 (2 сессии)" in card
     assert "диапазон 5–12 — добирать повторы" in card
     # Прошлый вес: 8 → 11 за четыре сессии, бэкоффы на нём — отдельно.
-    assert "до этого 73: 8 → 11 за 4 сессии; бэкофф 73×12@9 на 09-28, 73×7 на 10-12" in card
+    assert "до этого 73: 8 → 9 → 10 → 11 за 4 сессии; бэкофф 73×12@9 на 09-28, 73×7 на 10-12" in card
     # e1RM без RPE, с датами: лучший — 73×12, последний — 77×7.
     assert "e1RM: лучший 102 (73×12@9, 09-28) → последний 95 (77×7@9, 10-12)" in card
     # Разминка 40×10 в серии не показывается, бэкоффы — компактно.
@@ -149,6 +150,52 @@ async def test_stalled_lifts_carry_the_card(fresh_db, user_id):
     (lift,) = payload["lifts"]
     assert lift["reps_at_top_weight"] == "6→7"
     assert lift["card"] == await coach_facts.exercise_card(user_id, ex_id)
+    assert lift["last_done"] == "2026-10-12" and lift["days_since_last"] == 3
+    assert payload["rep_range"] == "5-12"
+
+
+async def test_ready_to_add_weight_uses_the_personal_range(fresh_db, user_id):
+    """Живой ответ звал «добить до 12» — это захардкоженная 12, а не диапазон атлета."""
+    await fresh_db.conn().execute(
+        "UPDATE users SET rep_range_min = 3, rep_range_max = 6 WHERE telegram_id = ?", (user_id,))
+    await fresh_db.conn().commit()
+    ex = await fresh_db.create_exercise(user_id, "Жим", await _group_id(fresh_db, user_id, "Грудь"))
+    for day in ["2026-09-17", "2026-09-24", "2026-10-01", "2026-10-08"]:
+        await _session(fresh_db, user_id, ex, day, [(100, 7)])
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
+    (lift,) = payload["lifts"]
+    assert lift["ready_to_add_weight"] is True
+    assert payload["rep_range"] == "3-6"
+    assert "диапазон 3–6 — добрал верх — пора прибавить вес" in lift["card"]
+    progress = json.loads(await ai_trainer.execute_tool(user_id, "get_exercise_progress", {"exercise_name": "Жим"}))
+    assert progress["rep_range"] == "3-6"
+
+
+async def test_headline_is_the_window_change_not_a_one_rep_delta(fresh_db, user_id):
+    """Прод: тренер назвал ростом «10→11 на 68.3» (сессии через 4 дня) и
+    пропустил главное — тяга сидя e1RM 76.7→93.3 (+22%) за 7 недель, рабочий
+    59→68.3. Изменение за окно стоит в заголовке, повторы на весе — ниже."""
+    ex = await fresh_db.create_exercise(user_id, "Тяга сидя", await _group_id(fresh_db, user_id, "Спина"))
+    for day, sets in [("2026-08-24", [(59, 9)]), ("2026-09-07", [(63.5, 9)]), ("2026-09-21", [(68.3, 8)]),
+                      ("2026-10-08", [(68.3, 10)]), ("2026-10-12", [(68.3, 11)])]:
+        await _session(fresh_db, user_id, ex, day, sets)
+    card = await coach_facts.exercise_card(user_id, ex)
+    head, *rest = card.split("\n")
+    assert head.endswith(" · e1RM 76.7→93.3 (+22%) за 7 нед; рабочий 59→68.3")
+    assert any(line.startswith("  рабочий 68.3 с 09-21: 68.3×8 → 68.3×10 → 68.3×11") for line in rest)
+
+
+async def test_stale_lift_is_not_called_growing_and_a_dip_shows_its_peak(fresh_db, user_id):
+    """Прод: жим одной рукой, последний раз 18.09, был назван «прогрессом 6→8»,
+    хотя серия была 39×6 → 39×9 → 39×8 и почти четыре недели паузы."""
+    ex = await fresh_db.create_exercise(user_id, "Жим одной рукой", await _group_id(fresh_db, user_id, "Грудь"))
+    for day, reps in [("2026-09-04", 6), ("2026-09-11", 9), ("2026-09-18", 8)]:
+        await _session(fresh_db, user_id, ex, day, [(39, reps)])
+    card = await coach_facts.exercise_card(user_id, ex)
+    head = card.split("\n")[0]
+    assert "последний раз 09-18 (27 дней назад)" in head
+    assert "не делал 27 дней — брошено или пауза, не «растёт»" in head
+    assert "39×6 → 39×9 → 39×8 (пик 39×9 на 09-11) (3 сессии)" in card
 
 
 async def test_progress_report_context_and_order(fresh_db, user_id):
@@ -188,7 +235,7 @@ async def test_lb_athlete_card_stays_in_pounds(fresh_db, user_id):
     (card,) = report["cards"]
     assert "веса в lb" in report["context"]
     assert "рабочий 165 с 09-17: 165×6 → 165×7 → 165×8 (3 сессии)" in card
-    assert "до этого 160: 8 → 8 за 1 сессию" in card
+    assert "до этого 160: 8 за 1 сессию" in card
     assert "lb/week" in card  # «why» из stall_facts — в единицах атлета
 
 
@@ -206,6 +253,7 @@ async def test_bodyweight_lift_shows_bw_and_added_weight(fresh_db, user_id):
     card = await coach_facts.exercise_card(user_id, ex_id)
     assert "рабочий +10 с 09-15: +10×6 → +10×7 (2 сессии)" in card
     assert "до этого вес тела: 8 → 9 за 2 сессии; бэкофф вес тела×9 на 09-15" in card
+    assert "не делал 23 дня — брошено или пауза" in card
     assert not re.search(r"(?<![\d.+])0×", card) and "0.0" not in card
     # e1RM — по нагрузке с весом тела (80 + 10), а не по нулю.
     assert "e1RM: лучший 111 (+10×7, 09-22)" in card
@@ -239,7 +287,8 @@ async def test_english_athlete_gets_english_cards_end_to_end(fresh_db, user_id):
     card = next(c for c in report["cards"] if c.startswith("Cable Curl"))
     assert card.startswith("Cable Curl · Biceps · ")
     assert "working 77 since 09-28: 77×6@9 → 77×7@9 (2 sessions)" in card
-    assert "before that 73: 8 → 11 over 4 sessions" in card
+    assert "before that 73: 8 → 9 → 10 → 11 over 4 sessions" in card
+    assert "last done 10-12 (3 days ago)" in card
     assert "break 09-15–09-27 (13 days)" in card
     assert 'note "shoulder aches" ×3 since 09-28' in card
     assert "today 2026-10-15; weights in kg" in report["context"]
@@ -367,13 +416,20 @@ def test_prompt_has_a_static_section_on_judging_progress():
     prompt = ai_trainer.SYSTEM_PROMPT
     assert "Как судить о прогрессе." in prompt
     for rule in (
-        "повторы сравнивай только на одном весе",
+        "прогресс называй изменением e1RM и рабочего веса за окно — с датами и %",
+        "+1 повтор между соседними сессиями — не «прогресс»",
+        "повторы на одном весе — только чтобы объяснить застой или свежую прибавку",
         "бэкофф и разминка — не рабочий вес",
         "меньше трёх сессий на весе — начало, а не тупик",
         "посмотри перерывы, болезнь и заметки и назови их",
         "числа цитируй из полей инструментов вместе с датой",
         "статус инструмента не переворачивай без явной причины",
         "свежая прибавка веса, на которой повторы держатся, — это прогресс",
+        "не делал движение 14 дней и больше — оно не «растёт»",
+        "личный диапазон атлета (rep_range",
+        "был пик выше — назови его",
+        "не пересказывай, сколько упражнений без данных",
+        "без дежурных оговорок",
     ):
         assert rule in prompt, rule
     # Поиск отключён гейтом (search=False) и инструментом модели не был никогда.

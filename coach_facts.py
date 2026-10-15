@@ -55,6 +55,9 @@ CARD_HISTORY_WEEKS = 16
 BREAK_MIN_DAYS = 7
 # Сессий в строке «серия» и точек в строке рабочего веса.
 CARD_SERIES_SESSIONS = 4
+# Не делал столько дней — движение брошено или на паузе, а не «растёт»: живой
+# ответ назвал «прогрессом 6→8» жим, который не делали почти четыре недели.
+STALE_DAYS = 14
 # Карточек в отчёте о прогрессе: ~150-250 токенов на карточку.
 REPORT_MAX_CARDS = 12
 # Окно отчёта о балансе.
@@ -228,6 +231,18 @@ def compact_session(sets: list[LoggedSet], mode: str) -> str:
     return _set(top, mode) + (f" (+{tail})" if tail else "")
 
 
+def _peak(points: list[tuple[Session, Optional[LoggedSet]]], mode: str, today: dt.date) -> str:
+    """« (пик 39×9 на 10-01)», если последняя точка серии не лучшая: «6→8»
+    прятал провал 6 → 9 → 8, и модель называла его ростом."""
+    pts = [(s, x) for s, x in points if x is not None]
+    if len(pts) < 2:
+        return ""
+    best_s, best = max(pts, key=lambda t: t[1].reps)
+    if pts[-1][1].reps >= best.reps:
+        return ""
+    return i18n.t("coach.card.peak", set=_set(best, mode), date=_day(best_s.day, today))
+
+
 # ---------- перерывы и заметки ----------
 
 
@@ -288,6 +303,36 @@ class Card:
     exercise: str
 
 
+def _session_e1rm(s: Session, formula: str) -> float:
+    """Лучший e1RM сессии по всем подходам, без RPE — та же мера, что у
+    analytics.e1rm_trend и classify_stall."""
+    return max((analytics.e1rm(x.load, x.reps, formula) for x in s.sets), default=0.0)
+
+
+def _window_change(in_window: list[Session], mode: str, formula: str) -> str:
+    """« · e1RM 76.7→93.3 (+22%) за 7 нед; рабочий 59→68.3» — изменение за
+    окно, первым делом в заголовке карточки. Живой ответ назвал прогрессом
+    «10→11 на 68.3» между соседними сессиями и пропустил главное: e1RM +22% и
+    рабочий 59→68.3 за семь недель. Повторы на одном весе — деталь ниже.
+
+    TODO: когда analytics.progress_facts начнёт отдавать ту же сводку окна,
+    брать её оттуда — две формулы одного числа разъедутся."""
+    scored = [(s, _session_e1rm(s, formula)) for s in in_window]
+    scored = [(s, v) for s, v in scored if v > 0]
+    if len(scored) < 2:
+        return ""
+    (first_s, first_v), (last_s, last_v) = scored[0], scored[-1]
+    weeks = round((last_s.day - first_s.day).days / 7)
+    if weeks < 1:
+        return ""
+    pct = round((last_v - first_v) / first_v * 100)
+    return i18n.t(
+        "coach.card.window", first=_num(round(first_v, 1)), last=_num(round(last_v, 1)),
+        pct=f"{pct:+d}%", weeks=weeks,
+        w0=_w(first_s.top_key, mode), w1=_w(last_s.top_key, mode),
+    )
+
+
 def _status(verdict: Optional[str]) -> str:
     return i18n.t(f"coach.status.{verdict or 'unknown'}")
 
@@ -336,14 +381,17 @@ def movement_card(
     lines: list[str] = []
     group = seed_data.localized_muscle_group_name(m.group, i18n.get_lang()) if m.group else ""
     status = _status(verdict)
+    days_ago = (today - sessions[-1].day).days
     bump = analytics.weight_increase(stats, today)
-    if bump is not None and bump["weeks_ago"] <= 4:
+    if days_ago >= STALE_DAYS:
+        status += i18n.t("coach.status.stale", n=days_ago)
+    elif bump is not None and bump["weeks_ago"] <= 4:
         status += i18n.t("coach.status.new_weight")
     lines.append(i18n.t(
         "coach.card.head", name=m.name, group=f" · {group}" if group else "",
         freq=_num(round(len(in_window) / observed_weeks([sessions[0].day], today, CARD_WINDOW_WEEKS), 1)),
-        status=status,
-    ))
+        last=_day(sessions[-1].day, today), n=days_ago, status=status,
+    ) + _window_change(in_window, mode, formula))
     if facts.get("why"):
         lines.append(i18n.t("coach.card.why", why=facts["why"]))
 
@@ -357,6 +405,7 @@ def movement_card(
     advice = "add_weight" if last_reps >= hi else ("below" if last_reps < lo else "add_reps")
     lines.append(i18n.t(
         "coach.card.working", w=_w(w, mode), date=_day(at_w[0].day, today), series=series,
+        peak=_peak(list(zip(at_w, points, strict=True)), mode, today),
         n=len(at_w), lo=lo, hi=hi, advice=i18n.t(f"coach.advice.{advice}"),
     ))
 
@@ -371,10 +420,12 @@ def movement_card(
                     break
                 if before[i].top_key == p:
                     run_start = i
-            run = [s.best_reps_at(p) for s in before[run_start:] if s.top_key == p]
-            run = [x for x in run if x]
+            run_sessions = [s for s in before[run_start:] if s.top_key == p]
+            run = [(s, s.best_reps_at(p)) for s in run_sessions]
             text = i18n.t(
-                "coach.card.before", w=_w(p, mode), first=run[0].reps, last=run[-1].reps, n=len(run),
+                "coach.card.before", w=_w(p, mode), n=len(run),
+                series=" → ".join(f"{x.reps}{_rpe(x)}" for _, x in run[-CARD_SERIES_SESSIONS:]),
+                peak=_peak(run, mode, today),
             )
             backoffs = [
                 i18n.t("coach.card.set_on", set=_set(b, mode), date=_day(s.day, today))

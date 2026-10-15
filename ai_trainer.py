@@ -4354,6 +4354,8 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
         "muscle_group": _shown_group(group["name"]) if group else None,
         # Веса и e1RM — в единицах атлета, как их и хранит база.
         "unit": user["unit"],
+        # Личный диапазон повторов атлета — цель двойной прогрессии, не 12.
+        "rep_range": "{}-{}".format(*analytics.user_rep_range(user)),
         # Карточка движения (coach_facts): статус, рабочий вес с датой, повторы
         # на одном весе, прошлый вес и бэкоффы, e1RM, перерывы и заметки о
         # боли, сне, болезни. Сначала она, сырые сессии — для деталей.
@@ -5719,6 +5721,7 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
     # прошлым весом, перерывами и заметками (coach_facts). Вердикт в ней тот
     # же: оба зовут analytics.classify_stall.
     cards = await coach_facts.cards_by_exercise(user_id)
+    rep_low, rep_high = analytics.user_rep_range(user)
     found = []
     for ex_id, set_rows in by_exercise.items():
         sessions = analytics.group_sets_by_session(set_rows)
@@ -5728,6 +5731,7 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
         if verdict is None:
             continue
         name, group = names[ex_id]
+        last_day = dt.datetime.fromisoformat(sessions[-1].started_at).date()
         found.append({
             "exercise": name,
             "muscle_group": group,
@@ -5740,14 +5744,21 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
             "sessions_at_top_weight": verdict.sessions_at_top_weight,
             # Повторы только подходов НА рабочем весе (analytics.best_reps_at).
             "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",
-            "ready_to_add_weight": verdict.ready_to_add_weight,
+            # По ЛИЧНОМУ диапазону атлета, а не по 12 по умолчанию: живой ответ
+            # звал «добить до 12» человека с диапазоном 3-6.
+            "ready_to_add_weight": verdict.reps_at_top_last >= rep_high,
             "avg_top_rpe": verdict.avg_top_rpe,
+            # Когда делал в последний раз: две-три недели без движения — это
+            # брошено или пауза, а не «растёт» (живой ответ так и ошибся).
+            "last_done": last_day.isoformat(),
+            "days_since_last": (today - last_day).days,
             "card": cards[ex_id].text if ex_id in cards else None,
         })
     found.sort(key=lambda f: (order.get(f["verdict"], 9), -(f["sessions_in_window"])))
     return {
         "unit": user["unit"],
         "window_weeks": weeks,
+        "rep_range": f"{rep_low}-{rep_high}",
         "min_sessions": analytics.STALL_MIN_SESSIONS,
         "lifts": found[:STALLED_LIFTS_LIMIT],
         "skipped_too_few_sessions": len(by_exercise) - len(found),
