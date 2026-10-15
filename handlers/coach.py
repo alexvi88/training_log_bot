@@ -1719,16 +1719,31 @@ async def coach_ai_one_refresh(callback: CallbackQuery, state: FSMContext):
 
 
 async def athlete_comments_block(workout_id: int, user: Any) -> str:
-    """Блок «🧑‍🏫 Твой тренер» под карточкой своей тренировки в истории (пусто
-    — комментариев нет). Открыл — прочитал, как у GET /workouts/{id}/coach-comments."""
+    """Блок живого тренера под карточкой своей тренировки в истории (пусто
+    — комментариев нет). Открыл — прочитал, как у GET /workouts/{id}/coach-comments.
+
+    Тренер один — его имя в заголовке («🧑‍🏫 Марина, твой тренер»), чтобы блок
+    не путали с «🤖 Комментарий AI-тренера» над ним (аудит u7); так же у
+    приложения (`CoachCommentsSection`). Тренеров несколько — «Твои тренеры»
+    и имя у каждого комментария."""
     comments = await db.list_coach_comments(workout_id)
     if not comments:
         return ""
     await db.mark_coach_comments_read(workout_id, user["telegram_id"])
 
+    single = len({row["coach_name"] for row in comments}) == 1
+    if not single:
+        header = i18n.t("coach.card.header_many")
+    elif comments[0]["coach_name"]:
+        header = i18n.t("coach.card.header_named", name=escape(comments[0]["coach_name"]))
+    else:
+        header = i18n.t("coach.card.header")
+
     def render(row) -> str:
-        name = escape(_coach_name(row["coach_name"]))
         when = escape(_local_day(row["created_at"], user))
+        if single:
+            return f"<i>{when}</i>\n{escape(row['text'])}"
+        name = escape(_coach_name(row["coach_name"]))
         return f"<b>{name}</b> · <i>{when}</i>\n{escape(row['text'])}"
 
-    return "\n\n" + i18n.t("coach.card.header") + "\n" + "\n\n".join(_clip_comments(comments, render))
+    return "\n\n" + header + "\n" + "\n\n".join(_clip_comments(comments, render))
