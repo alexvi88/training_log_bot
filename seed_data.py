@@ -71,6 +71,10 @@ ABS_GROUP_NAME = "Пресс"
 # групп). Упражнения без группы не бывает — см. db.create_exercise.
 OTHER_GROUP_NAME = "Другое"
 
+# Ноги — группа, где объём выше 6-12 норма (несколько крупных мышц): так
+# говорит методика в промпте, так судит и отчёт о балансе.
+LEGS_GROUP_NAME = "Ноги"
+
 # Locale-catalog slug for each preset group's English name — English's own
 # small, hand-written table (only 8 entries, no risk of drifting the way 100
 # exercise names would) rather than a locale key derived from the Russian
@@ -1466,3 +1470,98 @@ def localized_muscle_target_name(target: str, lang: str) -> str:
     (см. tests/test_no_frozen_language.py).
     """
     return i18n.t_in(lang, f"muscle_target.{target}.name")
+
+
+def muscle_target_for(identity: Optional[str], group: Optional[str]) -> Optional[str]:
+    """Мишень упражнения по идентичности шаблона — только если упражнение
+    стоит в группе своей мишени (перенесённое атлетом в другую группу мишень
+    прежней не набирает). Одно правило для объёма программы
+    (ai_trainer._weekly_sets_by_target_canonical) и объёма по истории
+    (coach_facts.balance_report)."""
+    target = EXERCISE_MUSCLE_TARGET.get(identity or "")
+    if target is None or group != muscle_target_group(target):
+        return None
+    return target
+
+
+# ---------- паттерны движений и раскладка становой ----------
+#
+# Шесть базовых паттернов: присед, наклон (hinge), жим горизонтальный и
+# вертикальный, тяга горизонтальная и вертикальная. Нужны отчёту «слабые
+# места» (coach_facts.balance_report): «по объёму всё в норме, но вертикальной
+# тяги за месяц ни одной» — то, что из подходов на группу не видно.
+#
+# Правило — по словам в идентичности шаблона (или в своём названии
+# упражнения без шаблона), с оглядкой на группу: «жим» в группе «Плечи» —
+# вертикальный, в «Груди» — горизонтальный. Изоляция (разведения, сгибания,
+# разгибания, пулловер) паттерном не считается — None.
+MOVEMENT_PATTERNS: tuple[str, ...] = (
+    "squat", "hinge", "horizontal_push", "vertical_push", "horizontal_pull", "vertical_pull",
+)
+
+_HINGE_WORDS = (
+    "становая", "румынская", "тяга на прямых ногах", "гудморнинг", "мостик", "хип-траст",
+    "гиперэкстензия", "свинги", "тяга с плинтов", "глют-хам", "тяга каната между ног",
+    "deadlift", "rdl", "romanian", "good morning", "hip thrust", "glute bridge",
+    "hyperextension", "kettlebell swing",
+)
+_SQUAT_WORDS = (
+    "присед", "жим ногами", "выпад", "зашагиван", "squat", "leg press", "lunge", "step-up", "step up",
+)
+_VERTICAL_PULL_WORDS = (
+    "подтягивания", "тяга верхнего блока", "тяга блока на коленях", "шотган",
+    "pull-up", "pullup", "pull up", "chin-up", "chinup", "chin up", "pulldown", "pull down",
+)
+_HORIZONTAL_PULL_EXCEPTIONS = ("австралийск", "inverted row")
+
+
+def movement_pattern(name: Optional[str], group: Optional[str]) -> Optional[str]:
+    """Паттерн движения по имени (идентичность шаблона или своё название) и
+    канонической группе; None — изоляция или не узнали."""
+    n = (name or "").lower()
+    if not n:
+        return None
+    if any(w in n for w in _HINGE_WORDS):
+        return "hinge"
+    if any(w in n for w in _SQUAT_WORDS):
+        return "squat"
+    if any(w in n for w in _HORIZONTAL_PULL_EXCEPTIONS):
+        return "horizontal_pull"
+    if any(w in n for w in _VERTICAL_PULL_WORDS):
+        return "vertical_pull"
+    if group == "Спина" and (n.startswith("тяга") or " row" in f" {n}"):
+        return "horizontal_pull"
+    if group == "Плечи" and ("жим" in n or "press" in n):
+        return "vertical_push"
+    if group == "Грудь" and any(w in n for w in ("жим", "отжимания", "press", "push-up", "push up", "dip")):
+        return "horizontal_push"
+    if group == "Трицепс" and "жим" in n and "лёжа" in n:
+        return "horizontal_push"
+    return None
+
+
+# Становая (классика, сумо, с дефицитом, с плинтов, трэп-гриф) стоит в группе
+# «Спина», но работают в ней в первую очередь ягодицы и бицепс бедра, а
+# разгибатели спины держат корпус. Целиком в спину она завышала объём спины
+# и прятала от отчёта работу задней цепи ног. Поэтому подход становой — это
+# 0.5 подхода спине и 0.5 ногам (по 0.25 на бицепс бедра и ягодицы). Доли
+# круглые нарочно: точнее по ЭМГ всё равно не сказать, а честная половина
+# лучше, чем ноль или единица. Только пока упражнение стоит в «Спине»: если
+# атлет сам перенёс его в «Ноги», его решение старше.
+DEADLIFT_SPLIT_GROUPS: dict[str, float] = {"Спина": 0.5, "Ноги": 0.5}
+DEADLIFT_SPLIT_TARGETS: dict[str, float] = {"hamstrings": 0.25, "glutes": 0.25}
+
+
+def volume_split(
+    identity: Optional[str], name: Optional[str], group: Optional[str]
+) -> tuple[dict[str, float], dict[str, float]]:
+    """({группа: доля подхода}, {мишень: доля подхода}) для одного подхода.
+
+    Обычное упражнение — целиком в свою группу и (если есть) мишень; становая
+    в «Спине» — по DEADLIFT_SPLIT_*."""
+    probe = (identity or name or "").lower()
+    if group == "Спина" and ("становая" in probe or "deadlift" in probe):
+        return dict(DEADLIFT_SPLIT_GROUPS), dict(DEADLIFT_SPLIT_TARGETS)
+    groups = {group: 1.0} if group else {}
+    target = muscle_target_for(identity, group)
+    return groups, ({target: 1.0} if target else {})
