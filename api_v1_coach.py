@@ -507,7 +507,7 @@ async def accept_invite(request: Request) -> JSONResponse:
         raise ApiError(409, "coach_already_linked", "this coach is already linked")
     link = await db.get_coach_link(coach_id, user_id)
     # Тренеру — «новый клиент» банером и в Telegram, на его языке.
-    await coach_notify.deliver_new_client(coach_id, link["client_name"])
+    await coach_notify.deliver_new_client(coach_id, link["client_name"], user_id)
     return JSONResponse(_my_coach_json(link, profile["display_name"]), status_code=201)
 
 

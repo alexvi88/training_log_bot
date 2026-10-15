@@ -351,9 +351,15 @@ COACH_NEW_CLIENT = "coach_new_client"
 SCREEN_COACH_CLIENTS = "coach_clients"
 
 
-def coach_clients_route() -> dict:
-    """Маршрут банера «новый клиент»: `{"screen": "coach_clients"}`."""
-    return {"screen": SCREEN_COACH_CLIENTS}
+def coach_clients_route(client_id: Optional[int] = None) -> dict:
+    """Маршрут в «Мои клиенты»: `{"screen": "coach_clients"}`. С `client_id`
+    (банер «новый клиент») приложение поверх списка открывает карточку этого
+    клиента; старые сборки лишний ключ не читают и открывают список. Без него —
+    «клиент закрыл доступ»: карточки уже нет, остаётся список."""
+    route: dict = {"screen": SCREEN_COACH_CLIENTS}
+    if client_id is not None:
+        route["client_id"] = int(client_id)
+    return route
 
 
 # Связка тренер ↔ атлет разорвана (api_v1_coach.revoke_my_coach /

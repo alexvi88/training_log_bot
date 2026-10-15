@@ -758,7 +758,7 @@ async def test_new_client_reaches_the_coach_in_their_language(fresh_db, monkeypa
         assert not i18n_coverage.has_cyrillic(body.replace("Маша", ""))
     kb = bot.send_message.await_args.kwargs["reply_markup"]
     assert [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row] == [
-        (i18n.t_in(coach_lang, "coach.btn.my_clients_short"), "coach:clients:0")
+        ("Маша", f"coach:cl:{ATHLETE}")
     ]
 
 
@@ -785,14 +785,14 @@ async def test_coach_event_banners_carry_routes(fresh_db, monkeypatch):
     monkeypatch.setattr(apns, "send_alert", send_alert)
     athlete = await fresh_db.get_user(ATHLETE)
     assert await coach_notify.push_ios_program(athlete, "Иван Петров", "Сплит", 77) == 1
-    assert await coach_notify.push_ios_new_client(await fresh_db.get_user(COACH), "Маша") == 1
+    assert await coach_notify.push_ios_new_client(await fresh_db.get_user(COACH), "Маша", ATHLETE) == 1
     program, client = alerts
     assert program["user_id"] == ATHLETE and program["title"] == "A program from your coach"
     assert "Иван Петров" in program["body"] and "Сплит" in program["body"]
     assert program["route"] == {"screen": "program", "program_id": 77}
     assert program["category"] == "coach_program"
     assert client["user_id"] == COACH and client["title"] == "Новый клиент" and "Маша" in client["body"]
-    assert client["route"] == {"screen": "coach_clients"}
+    assert client["route"] == {"screen": "coach_clients", "client_id": ATHLETE}
     assert client["category"] == "coach_new_client"
 
 
@@ -806,8 +806,8 @@ async def test_coach_event_delivery_never_raises(fresh_db, monkeypatch):
     bot.send_message = AsyncMock(side_effect=RuntimeError("Forbidden: bot was blocked"))
     athlete = await fresh_db.get_user(ATHLETE)
     assert await coach_notify.deliver_program(athlete, "Иван", "Сплит", 1, bot=bot) == (0, False)
-    assert await coach_notify.deliver_new_client(COACH, "Маша", bot=bot) == (0, False)
-    assert await coach_notify.deliver_new_client(999_999, "Маша", bot=bot) == (0, False)
+    assert await coach_notify.deliver_new_client(COACH, "Маша", ATHLETE, bot=bot) == (0, False)
+    assert await coach_notify.deliver_new_client(999_999, "Маша", ATHLETE, bot=bot) == (0, False)
 
     # Без бота (REST) и без Telegram у получателя — короткоживущий бот даже
     # не заводится.
@@ -820,7 +820,7 @@ async def test_coach_event_delivery_never_raises(fresh_db, monkeypatch):
     app_only = await fresh_db.create_app_only_user(language_code="en")
     assert app_only["telegram_id"] < 0
     assert await coach_notify.deliver_program(app_only, "Иван", "Сплит", 1) == (0, False)
-    assert await coach_notify.deliver_new_client(app_only["telegram_id"], "Маша") == (0, False)
+    assert await coach_notify.deliver_new_client(app_only["telegram_id"], "Маша", ATHLETE) == (0, False)
 
 
 async def test_rest_assign_and_accept_notify_through_coach_notify(fresh_db, monkeypatch):
@@ -840,7 +840,7 @@ async def test_rest_assign_and_accept_notify_through_coach_notify(fresh_db, monk
     athlete_api.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(ATHLETE)}"
     resp = await athlete_api.post(f"/coach/invites/{code}/accept", json={"name": "Маша"})
     assert resp.status_code == 201, resp.text
-    assert delivered_client.await_args.args == (COACH, "Маша")
+    assert delivered_client.await_args.args == (COACH, "Маша", ATHLETE)
     assert "bot" not in delivered_client.await_args.kwargs
 
     program_id = await _coach_program(fresh_db)
