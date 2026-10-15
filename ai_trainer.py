@@ -762,8 +762,9 @@ def _get_audio_client() -> AsyncOpenAI:
 #
 # Не переключаются: живой поиск (xAI gRPC, GROK_SEARCH_MODEL — это инструмент
 # xAI), разбор видео (Novita), расшифровка голоса, еда (фото тарелки — свой
-# вызов), разбор импорта (strict-схемы на Luna не проверены, шаг
-# разовый) и суточный разбор лога для админа (без пользователя).
+# вызов) и разбор импорта (strict-схемы на Luna не проверены, шаг
+# разовый). Суточный разбор лога для админа — своей моделью OpenAI
+# (config.OPENAI_ADMIN_DIGEST_MODEL, _behaviour_digest_request).
 
 _openai_chat_client: Optional[AsyncOpenAI] = None
 
@@ -2121,6 +2122,35 @@ BEHAVIOUR_DIGEST_SYSTEM_PROMPT = """\
 """
 
 
+_BEHAVIOUR_DIGEST_MAX_TOKENS = 1200
+
+
+def _behaviour_digest_request() -> Optional[tuple[AsyncOpenAI, dict[str, Any]]]:
+    """Клиент и параметры суточного разбора: старшая модель OpenAI
+    (config.OPENAI_ADMIN_DIGEST_MODEL), а без OPENAI_API_KEY — прежний бэкенд с
+    предупреждением, чтобы разбор не пропал молча. None — не настроено ничего.
+
+    Без инструментов, поэтому chat/completions принимает reasoning_effort (400
+    бывает только на инструментах вместе с ним, см. _responses_round). Размышления
+    у OpenAI съедают тот же max_completion_tokens — отсюда запас сверху.
+    """
+    if config.OPENAI_API_KEY:
+        effort = config.OPENAI_ADMIN_DIGEST_REASONING_EFFORT
+        return _get_openai_chat_client(), {
+            "model": config.OPENAI_ADMIN_DIGEST_MODEL,
+            "max_completion_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS + _reasoning_headroom(effort),
+            "extra_body": {"reasoning_effort": effort},
+        }
+    if not is_configured():
+        return None
+    logger.warning("OPENAI_API_KEY is not set — admin behaviour digest falls back to %s", config.GROK_MODEL)
+    return _get_client(), {
+        "model": config.GROK_MODEL,
+        "max_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS,
+        "extra_body": {"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+    }
+
+
 async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Optional[str]:
     """Разбор суточного лога действий для админа — или None, если не вышло.
 
@@ -2137,27 +2167,27 @@ async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Option
     и может исчерпать за день, — раз в сутки на весь бот (как недельный
     дайджест, см. paid_call).
     """
-    if not is_configured():
-        return None
     # Суточный разбор для админа — платный вызов без квоты: на HARD-стопе молчит.
     if await ai_limits.hard_stop_block() is not None:
         return None
-    client = _get_client()
+    request = _behaviour_digest_request()
+    if request is None:
+        return None
+    client, kwargs = request
     try:
         response = await paid_call(
             None, None,
             lambda: client.chat.completions.create(
-                model=config.GROK_MODEL,
-                max_tokens=1200,
-                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-                # Без conv-id (_cache_headers): вызов раз в сутки, кэшу входа
-                # нечего тут ловить, а чужой слот занимать незачем.
+                **kwargs,
+                # Без conv-id и ключа кэша: вызов раз в сутки, кэшу входа нечего
+                # тут ловить, а чужой слот занимать незачем.
                 messages=[
                     {"role": "system", "content": BEHAVIOUR_DIGEST_SYSTEM_PROMPT},
                     *([{"role": "user", "content": memory}] if memory else []),
                     {"role": "user", "content": summary},
                 ],
             ),
+            model=kwargs["model"],
             source="admin",
         )
     except Exception:
