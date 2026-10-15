@@ -381,7 +381,9 @@ async def test_serve_restarts_after_a_crash_instead_of_dying_silently(monkeypatc
                 raise RuntimeError("port taken")
             return  # чистая остановка на второй попытке
 
-    monkeypatch.setattr(mcp_server.uvicorn, "Server", FlakyServer)
+    # _Server — uvicorn.Server без своих обработчиков сигналов (остановкой
+    # командует main.py, см. shutdown_drain.py).
+    monkeypatch.setattr(mcp_server, "_Server", FlakyServer)
     monkeypatch.setattr(mcp_server.uvicorn, "Config", lambda *a, **kw: None)
 
     await mcp_server.serve()

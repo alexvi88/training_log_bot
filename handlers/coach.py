@@ -856,7 +856,7 @@ async def _client_view(coach_id: int, link: Any, client: Any) -> tuple[str, Inli
     comments = await db.count_coach_comments_by_workout(ids)
     for w in workouts:
         names, _sets = contents.get(w["id"], ([], 0))
-        names = coach_service.shown_exercise_names(names)
+        names = coach_service.shown_exercise_names(client, names)
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     if more:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.all_workouts"), callback_data=f"coach:ws:{client_id}:0"))
@@ -905,7 +905,7 @@ async def coach_client_workouts(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for w in workouts:
         names, _sets = contents.get(w["id"], ([], 0))
-        names = coach_service.shown_exercise_names(names)
+        names = coach_service.shown_exercise_names(client, names)
         kb.row(_workout_button(w, names, client, comments.get(w["id"], 0) > 0, client_id))
     nav = []
     if page > 0:
@@ -1144,7 +1144,7 @@ async def coach_client_exercise_progress(callback: CallbackQuery, state: FSMCont
     """Прогресс одного упражнения клиента — ровно тот экран, что атлет видит
     на «📈 Прогресс → упражнение» (history.progress_screen: график, золотая
     книга, подходы по дням с заметками), по его формуле и в его единице, а
-    подписи — на языке тренера. Сначала связка, потом — что упражнение этого
+    подписи — на языке тренера, а имя упражнения — на языке атлета. Сначала связка, потом — что упражнение этого
     атлета: id из кнопки мог быть подменён."""
     args = await _int_args(callback, 4)
     if args is None:
@@ -1161,7 +1161,7 @@ async def coach_client_exercise_progress(callback: CallbackQuery, state: FSMCont
     limit = max(1, min(limit, 9999))
     sessions = await progress_data.load_sessions(exercise_id, client["e1rm_formula"])
     notes = await db.list_workout_notes_for_exercise(exercise_id)
-    name = sharing.shown_exercise_name(exercise["display_name"])
+    name = coach_service.client_exercise_name(client, exercise["display_name"])
     text, png = await history_screens.progress_screen(name, sessions, notes, client, limit)
     kb = _exercise_progress_keyboard(client_id, exercise_id, limit, page)
     if png:
@@ -1194,9 +1194,10 @@ async def _coach_workout_text(coach_id: int, link: Any, client: Any, workout: An
     AI-тренера (его тренер не видит никогда) и с комментариями тренера."""
     from handlers.workout import _finished_summary
 
-    # Каталожные упражнения атлета — на языке тренера (coach_service.shown_exercise_names).
+    # Имена упражнений и теги групп — данные атлета, на его языке
+    # (coach_service.client_exercise_name); подписи карточки — на языке тренера.
     summary_fn, tonnage, _duration = await _finished_summary(
-        workout, client, workout["note"], shown_name=sharing.shown_exercise_name
+        workout, client, workout["note"], data_lang=coach_service.client_lang(client)
     )
     suffix = ""
     equivalent = formatting.format_tonnage_equivalent(tonnage, seed=workout["id"], unit=client["unit"])

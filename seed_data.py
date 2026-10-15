@@ -1274,6 +1274,29 @@ def localized_target(target: str | None, lang: str) -> str | None:
     return target
 
 
+def relocalized_target(target: str | None, lang: str) -> str | None:
+    """Схема подходов, записанная на ЛЮБОМ из языков, — на `lang`.
+
+    `localized_target` знает только путь из русского (так схемы лежат в
+    каталоге). А схема программы, которую тренер назначает атлету, лежит на
+    языке тренера: англоязычный тренер отдал бы «3×30–60 sec» и «3 sets»
+    (formatting.build_routine_target) русскому атлету как есть. Слово в
+    схеме бывает только в этих двух видах; цифры и «×» возвращаются как есть.
+    """
+    if not target:
+        return target
+    for src in i18n.SUPPORTED:
+        suffix = f" {i18n.t_in(src, 'program.target.seconds')}"
+        if target.endswith(suffix):
+            return localized_target(target[: -len(suffix)] + _TARGET_SECONDS_SUFFIX, lang)
+        head, _, tail = i18n.t_in(src, "routine.target_sets_only", sets="\0").partition("\0")
+        if target.startswith(head) and target.endswith(tail) and len(target) > len(head) + len(tail):
+            middle = target[len(head): len(target) - len(tail)]
+            if middle.isdigit():
+                return i18n.t_in(lang, "routine.target_sets_only", sets=int(middle))
+    return target
+
+
 async def instantiate_program(
     user_id: int, key: str, name: str, revived: list[int] | None = None
 ) -> int:

@@ -144,7 +144,7 @@ def entities_at(text: str, marker: str, entity: MessageEntity) -> list[MessageEn
     return [entity.model_copy(update={"offset": prefix_len})]
 
 
-def format_group(name: str) -> str:
+def format_group(name: str, lang: str | None = None) -> str:
     """A muscle group's name as it's shown anywhere in the UI: uppercase.
 
     The group is context around whatever it labels (an exercise name, a card
@@ -164,7 +164,7 @@ def format_group(name: str) -> str:
     Своя группа пользователя слага не имеет и возвращается как есть: это его
     данные, а не наш пресет.
     """
-    return seed_data.localized_muscle_group_name(name, i18n.get_lang()).upper()
+    return seed_data.localized_muscle_group_name(name, lang or i18n.get_lang()).upper()
 
 
 def format_group_lower(name: str) -> str:
@@ -180,7 +180,7 @@ def format_group_lower(name: str) -> str:
     return seed_data.localized_muscle_group_name(name, i18n.get_lang()).lower()
 
 
-def format_group_tag(name: str) -> str:
+def format_group_tag(name: str, lang: str | None = None) -> str:
     """Группа в квадратных скобках рядом с названием упражнения — тем же капсом,
     что и везде (см. format_group): «Румынская тяга [НОГИ]», один регистр на
     весь бот, а не два разных в зависимости от того, стоит группа одна или
@@ -188,8 +188,11 @@ def format_group_tag(name: str) -> str:
 
     Экранирование остаётся на вызывающем: этим же тегом подписаны и картинки,
     где HTML не при чём.
+
+    `lang` — язык группы, если он не текущий (чужая тренировка глазами
+    тренера: группа — данные атлета, на языке атлета).
     """
-    return format_group(name.strip())
+    return format_group(name.strip(), lang)
 
 
 def clamp_caption(text: str, limit: int = CAPTION_LIMIT) -> str:
@@ -452,6 +455,10 @@ class ExerciseBlockView:
     # (или это первая сессия упражнения, бить нечего). См. view_builder.
     record_e1rm_delta: float | None = None
     record_reps: int | None = None
+    # Язык тега группы, если он не язык карточки: тренер смотрит тренировку
+    # атлета с подписями на своём языке, а группу — данные атлета — на языке
+    # атлета (handlers.workout._finished_summary, data_lang). None — текущий.
+    group_lang: str | None = None
 
     def load_for(self, index: int) -> float:
         """Нагрузка подхода — то, по чему считается e1RM (не то, что показано)."""
@@ -762,7 +769,7 @@ def format_block_e1rm(block: ExerciseBlockView, unit: str, show_extra: bool = Tr
 
 
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
-    label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name))}]"
+    label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name, block.group_lang))}]"
     lines = [f"<b>{label}</b>"]
     if block.note:
         lines.append(f"  📝 <i>{escape(block.note)}</i>")

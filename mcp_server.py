@@ -37,9 +37,10 @@ AI-клиентов (Claude Desktop / Claude Code / любой MCP-клиент)
 """
 
 import asyncio
+import contextlib
 import json
 import logging
-from typing import Any
+from typing import Any, Iterator, Optional
 
 import uvicorn
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -438,6 +439,41 @@ class _PrefixDispatch:
         await self._default_app(scope, receive, send)
 
 
+class _Server(uvicorn.Server):
+    """uvicorn без своих обработчиков сигналов: остановкой процесса командует
+    main.py (shutdown_drain.py). Свой `capture_signals` перехватывал SIGINT/
+    SIGTERM поверх наших и гасил HTTP за 0.1 с — вместе со стримами /v1/ai/ask,
+    которые ещё писались."""
+
+    @contextlib.contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        yield
+
+
+_server: Optional[_Server] = None
+_serve_task: Optional[asyncio.Task] = None
+_stopping = False
+
+
+async def stop(timeout: float) -> None:
+    """Мягко погасить HTTP: перестать принимать соединения, дать идущим
+    запросам до `timeout` секунд (uvicorn `timeout_graceful_shutdown`) и
+    дождаться выхода `serve()`. Зовёт shutdown_drain.shutdown — уже ПОСЛЕ того,
+    как ходы AI-тренера договорили."""
+    global _stopping
+    _stopping = True
+    server, task = _server, _serve_task
+    if server is not None:
+        server.config.timeout_graceful_shutdown = timeout
+        server.should_exit = True
+    if task is None or task.done():
+        return
+    # Запас сверх таймаута uvicorn — на lifespan shutdown; не уложился — рвём.
+    _done, pending = await asyncio.wait({task}, timeout=timeout + 2)
+    for leftover in pending:
+        leftover.cancel()
+
+
 async def serve() -> None:
     """Bring up the MCP server on the current event loop (alongside polling, see
     main.py).
@@ -467,8 +503,10 @@ async def serve() -> None:
             "Проверь MCP_PUBLIC_URL — для OAuth он обязан быть https://"
         )
         return
-    while True:
-        server = uvicorn.Server(
+    global _server, _serve_task
+    _serve_task = asyncio.current_task()
+    while not _stopping:
+        server = _server = _Server(
             uvicorn.Config(
                 app,
                 host="0.0.0.0",  # noqa: S104 — контейнер, наружу торчит один порт

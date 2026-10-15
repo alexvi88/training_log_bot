@@ -2062,7 +2062,7 @@ async def _history_extras_by_exercise(
         return extras
 
 
-async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
+async def _workout_detail_json(workout, user=None, *, group_lang: Optional[str] = None) -> dict[str, Any]:
     """`user` задан у GET /workouts/{id} и у ответа finish — тогда каждое
     упражнение получает `record_text`/`has_record`/`previous_sets_text`
     (см. _history_extras_by_exercise). У прочих ручек (активная/бэкофилл-
@@ -2078,6 +2078,10 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     считается не из extras_by_exercise, а всегда — язык берётся у `user`,
     а если его не передали, подгружается тем же способом, что и для
     gold_formula ниже.
+
+    `group_lang` — язык тегов групп, если он не язык `user`: тренер смотрит
+    тренировку атлета с подписями на своём языке, а группы мышц — данные
+    атлета — на языке атлета (api_v1_coach.client_workout).
     """
     data = _workout_json(workout)
     # Строки тренировки — один раз на весь ответ и пачкой по таблице (см.
@@ -2099,7 +2103,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
             group = rows.groups.get(group_id)
             if group is None:
                 return None
-            with i18n.use_lang(lang_user["lang"]):
+            with i18n.use_lang(group_lang or lang_user["lang"]):
                 group_tag_cache[group_id] = formatting.format_group_tag(group["name"])
         return group_tag_cache[group_id]
 

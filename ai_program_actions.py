@@ -26,21 +26,28 @@ async def create_program_day(user_id: int, day: dict[str, Any], program_id: int)
 
     Порядок routine_exercises после create_routine_from_program совпадает с
     порядком day["items"] (тот же список, без пропусков — дубли и нерезолвнутые
-    имена уже отфильтрованы в ai_trainer._propose_program), поэтому сверяем по
-    display_name, а не по позиции — устойчивее, если это когда-нибудь перестанет
-    быть так.
+    имена уже отфильтрованы в ai_trainer._propose_program), но сверяем не по
+    позиции, а по упражнению — устойчивее, если это когда-нибудь перестанет
+    быть так. По id, а не по имени: черновик программы атлету называет
+    каталожные упражнения на языке атлета (coach_program_ai), а день ложится
+    тренеру его же упражнениями под его именами — «Жим штанги лёжа» из
+    черновика у англоязычного тренера становится его «Barbell Bench Press».
     """
     routine_id = await db.create_routine_from_program(
         user_id, day["name"],
         [(item["name"], item.get("target")) for item in day["items"]],
         program_id=program_id,
     )
-    progressions = {
-        item["name"]: item["progression"] for item in day["items"] if item.get("progression")
-    }
+    progressions: dict[int, Any] = {}
+    for item in day["items"]:
+        if item.get("progression"):
+            # Упражнение уже заведено строкой выше — тут оно только находится.
+            ex_id = await db.get_or_create_user_exercise_by_name(user_id, item["name"])
+            if ex_id is not None:
+                progressions.setdefault(ex_id, item["progression"])
     if progressions:
         for re_row in await db.list_routine_exercises(routine_id):
-            progression = progressions.get(re_row["display_name"])
+            progression = progressions.get(re_row["exercise_id"])
             if progression:
                 await db.set_routine_exercise_progression(
                     re_row["id"], json.dumps(progression, ensure_ascii=False)
