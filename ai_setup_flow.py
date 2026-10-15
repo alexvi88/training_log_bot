@@ -15,6 +15,7 @@ from typing import Any, Optional
 import db
 import formatting
 import i18n
+import running_texts
 
 # Сколько кругов уточнений подряд разрешаем одной просьбе. Второй круг нужен по
 # делу: увидев в ответах встречный вопрос или «хз», тренер вправе ответить и
@@ -260,6 +261,31 @@ def is_build_program_seed(text: str) -> bool:
     return bool(stripped) and any(
         stripped == i18n.t_in(lang, "ai.screen.build_program_seed").strip() for lang in i18n.SUPPORTED
     )
+
+
+def is_program_build_turn(text: str) -> bool:
+    """Этим ходом тренер садится за программу: ответы на опросник, «хватит
+    спрашивать, собирай», кнопка «Составь мне программу» или вопрос на тему
+    программы (running_texts.classify).
+
+    Нужен ради статуса «🧠 думаю над программой...» (ai_trainer._ask_plain):
+    до первого вызова инструмента модель с рассуждением молчит десятки секунд
+    (живой прогон — 86 с до первого токена), и без статуса человек смотрит на
+    пустой экран. Смотрит на оба языка разом — как is_build_program_seed."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if is_build_program_seed(stripped):
+        return True
+    for lang in i18n.SUPPORTED:
+        if stripped.startswith(i18n.t_in(lang, "ai.screen.setup_enough_frame")):
+            return True
+        header = i18n.t_in(lang, "ai.screen.setup_answers_header")
+        if stripped.startswith(header + "\n") and stripped.endswith(
+            i18n.t_in(lang, "ai.screen.setup_answers_frame").strip()
+        ):
+            return True
+    return running_texts.classify(stripped) == running_texts.PROGRAM
 
 
 async def is_fresh_start(user_id: int) -> bool:

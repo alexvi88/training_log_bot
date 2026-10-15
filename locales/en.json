@@ -2306,6 +2306,7 @@
   "ai.tool_status.default.1": "🔍 digging through the data...",
   "ai.tool_status.default.2": "🗄️ going through the database, one sec...",
   "ai.tool_status.default.3": "🧐 looking for the right numbers...",
+  "ai.tool_status.program_build": "🧠 working out your program...",
   "ai.tool_status.web_search": "🔎 looking up fresh info online...",
   "ai.tool_status.get_muscle_recovery.1": "🔋 checking which muscles have recovered...",
   "ai.tool_status.get_muscle_recovery.2": "🧮 working out rest per group since your last workouts...",

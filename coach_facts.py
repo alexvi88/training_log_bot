@@ -333,8 +333,11 @@ def _window_change(in_window: list[Session], mode: str, formula: str) -> str:
     )
 
 
-def _status(verdict: Optional[str]) -> str:
+def status_text(verdict: Optional[str]) -> str:
+    """Вердикт analytics.classify_stall словами на языке атлета. Код вердикта —
+    внутренний: в выдачу инструментов модели едет только этот текст."""
     return i18n.t(f"coach.status.{verdict or 'unknown'}")
+
 
 
 def _working_weight(sessions: list[Session]) -> tuple[float, int]:
@@ -380,7 +383,7 @@ def movement_card(
 
     lines: list[str] = []
     group = seed_data.localized_muscle_group_name(m.group, i18n.get_lang()) if m.group else ""
-    status = _status(verdict)
+    status = status_text(verdict)
     days_ago = (today - sessions[-1].day).days
     bump = analytics.weight_increase(stats, today)
     if days_ago >= STALE_DAYS:
@@ -752,7 +755,7 @@ async def balance_report(
     for m in movements_from_rows(await db.list_sets_for_coach(user_id, since)):
         facts = analytics.stall_facts(_stats_sessions(m, data.formula), today, data.unit)
         if facts.get("stalled"):
-            stalled.append(f"{m.name} ({_status(facts['verdict'])})")
+            stalled.append(f"{m.name} ({status_text(facts['verdict'])})")
     lines.append(
         i18n.t("coach.balance.stalled", items="; ".join(stalled)) if stalled
         else i18n.t("coach.balance.no_stalled")

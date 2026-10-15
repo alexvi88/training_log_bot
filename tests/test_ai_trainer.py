@@ -421,7 +421,7 @@ async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id,
     assert payload["same_weight_reps"] == []
     assert payload["weight_increase"]["from"] == 102.0
     assert payload["weight_increase"]["to"] == 103.0
-    assert payload["stall"]["verdict"] is None  # три сессии — судить рано
+    assert payload["stall"]["status"] == i18n.t("coach.status.unknown")  # три сессии — судить рано
 
 
 async def test_exercise_progress_unknown_name_suggests_candidates(fresh_db, user_id):
@@ -1924,7 +1924,7 @@ async def test_bodyweight_can_be_logged_for_a_past_day(fresh_db, user_id, monkey
     monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 8, 22))
 
     for weight, date in ((85.2, "2026-08-21"), (85.6, None)):
-        payload = {"weight": weight}
+        payload = {"weight": weight, "user_asked_to_log": True}
         if date:
             payload["date"] = date
         result = json.loads(await ai_trainer.execute_tool(user_id, "log_bodyweight", payload))
@@ -1945,7 +1945,7 @@ async def test_bodyweight_refuses_a_day_that_has_not_happened(fresh_db, user_id,
 
     result = json.loads(
         await ai_trainer.execute_tool(
-            user_id, "log_bodyweight", {"weight": 85.6, "date": "2026-08-23"}
+            user_id, "log_bodyweight", {"weight": 85.6, "date": "2026-08-23", "user_asked_to_log": True}
         )
     )
 
@@ -1960,7 +1960,7 @@ async def test_bodyweight_says_which_day_it_wrote_to(fresh_db, user_id, monkeypa
 
     result = json.loads(
         await ai_trainer.execute_tool(
-            user_id, "log_bodyweight", {"weight": 85.2, "date": "2026-08-21"}
+            user_id, "log_bodyweight", {"weight": 85.2, "date": "2026-08-21", "user_asked_to_log": True}
         )
     )
 
@@ -2009,8 +2009,8 @@ async def test_stalled_lifts_separates_a_dead_end_from_working_double_progressio
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
 
     by_name = {lift["exercise"]: lift for lift in payload["lifts"]}
-    assert by_name["Жим лёжа"]["verdict"] == "dead_end"
-    assert by_name["Тяга штанги"]["verdict"] == "double_progression"
+    assert by_name["Жим лёжа"]["status"] == i18n.t("coach.status.dead_end")
+    assert by_name["Тяга штанги"]["status"] == i18n.t("coach.status.double_progression")
     assert by_name["Тяга штанги"]["reps_at_top_weight"] == "6→10"
     # Тупик — первым: на вопрос «что чинить» первым абзацем должно быть то, что
     # действительно стоит.
@@ -2029,7 +2029,7 @@ async def test_stalled_lifts_reports_the_rpe_the_stall_sits_at(fresh_db, user_id
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
 
     (lift,) = payload["lifts"]
-    assert lift["verdict"] == "dead_end"
+    assert lift["status"] == i18n.t("coach.status.dead_end")
     assert lift["avg_top_rpe"] == 9.8  # округление до десятой, как в выдаче
 
 
@@ -2155,7 +2155,7 @@ async def test_exercise_progress_never_compares_reps_across_weights(
     assert all(row["change"] != "down" for row in payload["same_weight_reps"])
 
     stall = payload["stall"]
-    assert stall["verdict"] == "progressing" and stall["stalled"] is False
+    assert stall["status"] == i18n.t("coach.status.progressing") and stall["stalled"] is False
     assert "reps at 77 kg: 6→7" in stall["why"]
     assert "12→7" not in json.dumps(payload, ensure_ascii=False)
     assert stall["top_weight_since"] == "2026-09-18"
@@ -2180,7 +2180,7 @@ async def test_stalled_lifts_reports_reps_on_the_top_weight_only(fresh_db, user_
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
 
     (lift,) = payload["lifts"]
-    assert lift["verdict"] == "progressing"
+    assert lift["status"] == i18n.t("coach.status.progressing")
     assert lift["weight_raised_from"] == 73
     assert "reps at 77 kg: 6→7" in lift["why"]
     assert lift["reps_at_top_weight"] == "6→7"
@@ -2208,3 +2208,169 @@ async def test_exercise_progress_facts_stay_in_pounds_for_an_lb_athlete(
     assert payload["weight_increase"]["step"] == 5.0
     assert "lb/week" in payload["stall"]["why"]
     assert "reps at 165 lb: 6→8" in payload["stall"]["why"]
+
+
+# ---------- сравнение Grok и Luna на проде: голос, переспросы, записи, коды, статус ----------
+
+
+_INTERNAL_CODES = ("dead_end", "regressing", "double_progression", '"verdict"', "verdict’", "verdict'")
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_progress_tools_show_the_model_words_not_verdict_codes(fresh_db, user_id, monkeypatch, lang):
+    """Живой ответ: «ни одно движение не висит в dead_end / regressing — все
+    verdict’ы growing». Модель цитирует то, что видит, — поэтому в выдаче
+    инструментов кода вердикта нет вовсе, только статус словами на языке атлета."""
+    today = dt.date(2026, 8, 23)
+    monkeypatch.setattr(timeutil, "user_today", lambda user: today)
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    await _seed_weekly(fresh_db, user_id, "Жим лёжа", group_id,
+                       [(100, 8), (100, 8), (100, 8), (100, 8), (100, 8)], today)
+    await _seed_weekly(fresh_db, user_id, "Тяга штанги", group_id,
+                       [(100, 8), (97.5, 8), (95, 8), (92.5, 8), (90, 8)], today)
+    await _seed_weekly(fresh_db, user_id, "Жим гантелей", group_id,
+                       [(30, 6), (30, 7), (30, 8), (30, 9), (30, 10)], today)
+
+    with i18n.use_lang(lang):
+        outputs = {
+            "get_stalled_lifts": await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}),
+            "get_exercise_progress": await ai_trainer.execute_tool(
+                user_id, "get_exercise_progress", {"exercise_name": "Жим лёжа"}
+            ),
+            "get_progress_report": await ai_trainer.execute_tool(user_id, "get_progress_report", {}),
+            "get_balance_report": await ai_trainer.execute_tool(user_id, "get_balance_report", {}),
+        }
+        stalled = json.loads(outputs["get_stalled_lifts"])
+        by_name = {lift["exercise"]: lift for lift in stalled["lifts"]}
+        assert by_name["Жим лёжа"]["status"] == i18n.t("coach.status.dead_end")
+        assert by_name["Тяга штанги"]["status"] == i18n.t("coach.status.regressing")
+        assert stalled["lifts"][0]["exercise"] == "Жим лёжа", "тупики — первыми, как и раньше"
+        assert "_order" not in outputs["get_stalled_lifts"]
+
+    for tool, raw in outputs.items():
+        for code in _INTERNAL_CODES:
+            assert code not in raw, f"{tool} отдаёт модели внутренний код {code!r}"
+    # double_progression — ещё и законное правило прогрессии в propose_program,
+    # поэтому в описаниях ищем только коды вердикта.
+    tool_text = json.dumps(ai_trainer.TOOLS, ensure_ascii=False)
+    for code in ("dead_end", "regressing", "verdict"):
+        assert code not in tool_text, f"описания инструментов учат модель коду {code!r}"
+
+
+async def test_prompt_forbids_naming_internal_fields_and_codes():
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "имён полей и кодов из инструментов" in prompt
+    assert "dead_end" in prompt and "человеку не называй" in prompt
+    assert "поля verdict" not in prompt, "о вердикте модель знает только как о status"
+
+
+async def test_bodyweight_given_as_context_for_a_question_is_not_logged(fresh_db, user_id):
+    """«Я вешу 80 кг, рост 180. Хочу набрать массу — сколько калорий?» grok
+    записал как взвешивание. Без явного user_asked_to_log запись не ложится,
+    а модель получает подсказку спросить «записать?»."""
+    for tool_input in ({"weight": 80}, {"weight": 80, "user_asked_to_log": False},
+                       {"weight": 80, "user_asked_to_log": "true"}):
+        actions: list = []
+
+        async def on_action(action, _sink=actions):
+            _sink.append(action)
+
+        result = json.loads(await ai_trainer.execute_tool(
+            user_id, "log_bodyweight", tool_input, on_action=on_action,
+        ))
+        assert result["not_logged"] is True and result["ok"] is False
+        assert "записать" in result["note"]
+        assert actions == [], "без записи нет ни отката, ни ссылки на дневник"
+    assert await fresh_db.list_bodyweight_logs(user_id) == []
+
+    result = json.loads(await ai_trainer.execute_tool(
+        user_id, "log_bodyweight", {"weight": 80, "user_asked_to_log": True},
+    ))
+    assert result["ok"] is True
+    assert [row["weight"] for row in await fresh_db.list_bodyweight_logs(user_id)] == [80]
+
+
+async def test_bodyweight_schema_requires_the_explicit_flag():
+    (tool,) = [t for t in ai_trainer.TOOLS if t["function"]["name"] == "log_bodyweight"]
+    params = tool["function"]["parameters"]
+    assert "user_asked_to_log" in params["required"]
+    assert params["properties"]["user_asked_to_log"]["type"] == "boolean"
+    assert "вводные к вопросу" in tool["function"]["description"]
+    (profile,) = [t for t in ai_trainer.TOOLS if t["function"]["name"] == "save_athlete_profile"]
+    assert "условие одного" in profile["function"]["description"]
+
+
+async def test_prompt_writes_only_reported_facts_not_numbers_given_as_context():
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Я вешу 80кг, рост 180, хочу набрать массу — сколько калорий?" in prompt
+    assert "в дневник веса не пиши" in prompt
+    assert "«записать 80кг в дневник?»" in prompt
+
+
+async def test_prompt_answers_on_an_obvious_default_instead_of_asking_back():
+    """Luna 3 из 3 раз переспрашивала там, где ответ очевиден: «замени жим стоя
+    на что-нибудь без нагрузки на плечо», «жим?»."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Не переспрашивай, когда у просьбы есть очевидное прочтение" in prompt
+    assert "Замени жим штанги стоя на что-нибудь без нагрузки на плечо" in prompt
+    assert "«жим?»" in prompt
+    assert "это 2-3 конкретные замены" in prompt
+    assert "разрушающая правка" in prompt
+
+
+async def test_prompt_voice_has_do_and_dont_examples_in_both_languages_and_keeps_safety():
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Как звучишь" in prompt
+    assert "«Записал 78.4кг" in prompt
+    assert "Logged 78.4kg" in prompt, "нужен английский пример голоса"
+    assert "рекомендуется" in prompt and "It is\n  recommended" in prompt
+    assert "Нет страдательного залога" in prompt
+    assert "один конкретный следующий шаг" in prompt
+    assert "Голос не важнее безопасности" in prompt
+    # Старое «суровый ... жёстко» тянуло в браваду — характер теперь по гайду.
+    assert "немногословный, наблюдательный, свой" in prompt
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_program_build_turns_are_recognised(lang):
+    import ai_setup_flow
+
+    with i18n.use_lang(lang):
+        answers = ai_setup_flow.setup_answers_text(
+            {"questions": [{"question": "?"}], "answers": ["3"], "goal": "x"}
+        )
+        assert ai_setup_flow.is_program_build_turn(answers)
+        assert ai_setup_flow.is_program_build_turn(ai_setup_flow.setup_enough_text("x"))
+        assert ai_setup_flow.is_program_build_turn(i18n.t("ai.screen.build_program_seed"))
+    assert ai_setup_flow.is_program_build_turn("Собери программу на 4 дня")
+    assert ai_setup_flow.is_program_build_turn("build me a split")
+    assert not ai_setup_flow.is_program_build_turn("жим?")
+    assert not ai_setup_flow.is_program_build_turn("")
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_program_build_shows_a_status_before_the_first_round(fresh_db, user_id, monkeypatch, lang):
+    """Luna молчала 86 с до первого токена, пока рассуждала над программой.
+    Статус уходит до первого раунда — его же видят бот (set_status) и /v1 (SSE status)."""
+    import ai_setup_flow
+
+    events: list[str] = []
+
+    async def fake_round(client, messages, uid, on_chunk=None, **kwargs):
+        events.append("round")
+        return "Готово.", [], ""
+
+    async def on_status(text):
+        events.append(text)
+
+    monkeypatch.setattr(ai_trainer, "_completion_round", fake_round)
+    with i18n.use_lang(lang):
+        answers = ai_setup_flow.setup_answers_text(
+            {"questions": [{"question": "?"}], "answers": ["3"], "goal": "x"}
+        )
+        await ai_trainer._ask_plain(user_id, answers, [], on_status=on_status, backend=object())
+        assert events[:2] == [i18n.t("ai.tool_status.program_build"), "round"]
+
+        events.clear()
+        await ai_trainer._ask_plain(user_id, "жим?", [], on_status=on_status, backend=object())
+        assert i18n.t("ai.tool_status.program_build") not in events
