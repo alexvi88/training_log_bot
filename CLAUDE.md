@@ -93,6 +93,10 @@ effort `none`, машинные ответы — строгой JSON-схемо�
 `vision_backend()` (`OPENAI_VISION_MODEL`, по умолчанию та же Luna). Живой
 поиск — Responses со встроенным `web_search` (поиска по X нет). Фейки в тестах:
 `tests/luna_fakes.py` (`as_luna` — chat-фейк поверх Responses, `ResponsesScript`).
+Согласие на AI (App Store 5.1.2(i)) — одна проверка, `db.ai_consent_valid`:
+метка `ai_consent_at` есть и не старше `config.AI_CONSENT_VALID_FROM` (момент
+смены получателя xAI → OpenAI, env; ставится при деплое перехода). Старое
+согласие читается как «нет» — приложение спрашивает заново.
 
 Два правила, которые ломают интуицию и стоят денег, если их забыть:
 кэшированный вход у OpenAI стоит 10% обычного (запись в кэш — 1.25× входа, а

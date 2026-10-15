@@ -14,6 +14,7 @@
 """
 
 import asyncio
+import datetime as dt
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ import pytest
 import ai_trainer
 import api_v1
 import config
+import db
 
 HEADER = {config.AI_CONSENT_CLIENT_HEADER: "1"}
 
@@ -339,3 +341,101 @@ async def test_finish_reports_comment_pending_only_when_ordered(fresh_db, client
     await fresh_db.update_user(111, ai_comments_enabled=1)
     await client.patch("/settings", json={"ai_consent": False})
     assert (await _finish_payload(client, headers=HEADER))["ai_comment_pending"] is False
+
+
+# ---------- смена получателя: согласие до AI_CONSENT_VALID_FROM устарело ----------
+#
+# Получатель данных сменился (xAI → OpenAI). Согласие, данное до момента
+# смены, — согласие на другую компанию: /settings отдаёт ai_consent=false,
+# приложение снова показывает лист, фоновые вызовы AI app-атлета молчат, а
+# повторное «Согласен» ставит новую метку. Чисто телеграмного атлета это не
+# касается: бот лист не показывает и AI не запирает.
+
+# Момент смены — вчера (метка «сейчас» после него), устаревшая — неделей раньше.
+SWITCH = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(days=1)).replace(microsecond=0)
+STALE = (SWITCH - dt.timedelta(days=7)).isoformat()
+
+
+@pytest.fixture
+def switched(monkeypatch):
+    monkeypatch.setattr(config, "AI_CONSENT_VALID_FROM", SWITCH)
+
+
+def test_consent_valid_helper(switched, monkeypatch):
+    assert not db.ai_consent_valid(None)
+    assert not db.ai_consent_valid({"ai_consent_at": None})
+    assert not db.ai_consent_valid({"ai_consent_at": STALE})
+    assert db.ai_consent_valid({"ai_consent_at": SWITCH.isoformat()})
+    assert db.ai_consent_valid({"ai_consent_at": (SWITCH + dt.timedelta(hours=8)).isoformat() + "+00:00"})
+    assert not db.ai_consent_valid({"ai_consent_at": "мусор"})
+    # Без момента смены — любая метка действует, как раньше.
+    monkeypatch.setattr(config, "AI_CONSENT_VALID_FROM", None)
+    assert db.ai_consent_valid({"ai_consent_at": STALE})
+
+
+def test_valid_from_reads_env(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("AI_CONSENT_VALID_FROM", "2026-10-20T03:00:00+03:00")
+    try:
+        reloaded = importlib.reload(config)
+        assert dt.datetime(2026, 10, 20, 0, 0, 0) == reloaded.AI_CONSENT_VALID_FROM
+    finally:
+        monkeypatch.delenv("AI_CONSENT_VALID_FROM")
+        importlib.reload(config)
+    assert config.AI_CONSENT_VALID_FROM is None
+
+
+@pytest.mark.asyncio
+async def test_stale_consent_reads_as_no_consent_and_blocks(
+    fresh_db, client_factory, fake_model, switched
+):
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_consent_at=STALE)
+
+    body = (await client.get("/settings")).json()
+    assert body["ai_consent"] is False
+    resp = await client.post("/ai/ask", json={"question": "Как мой прогресс?"}, headers=HEADER)
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "ai_consent_required"
+    assert fake_model == []
+
+
+@pytest.mark.asyncio
+async def test_reconsent_overwrites_a_stale_timestamp(fresh_db, client_factory, fake_model, switched):
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, ai_consent_at=STALE)
+
+    body = (await client.patch("/settings", json={"ai_consent": True})).json()
+    assert body["ai_consent"] is True
+    assert body["ai_consent_at"] != STALE
+    assert dt.datetime.fromisoformat(body["ai_consent_at"]) >= SWITCH
+    # Действующую метку повторное «Согласен» по-прежнему не двигает.
+    again = (await client.patch("/settings", json={"ai_consent": True})).json()
+    assert again["ai_consent_at"] == body["ai_consent_at"]
+    resp = await client.post("/ai/ask", json={"question": "Как мой прогресс?"}, headers=HEADER)
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_stale_consent_turns_background_ai_off_for_app_athletes(fresh_db, switched):
+    app_user = await fresh_db.create_app_only_user(language_code="en")
+    uid = app_user["telegram_id"]
+    await fresh_db.update_user(uid, ai_consent_at=STALE)
+    assert not await ai_trainer._background_ai_allowed(await fresh_db.get_user(uid))
+
+    await fresh_db.update_user(uid, ai_consent_at=fresh_db.now_iso())
+    assert await ai_trainer._background_ai_allowed(await fresh_db.get_user(uid))
+
+
+@pytest.mark.asyncio
+async def test_telegram_only_athlete_is_unaffected(fresh_db, switched):
+    """Чисто телеграмный атлет (без iOS-токена) листа не видит — фоновый AI
+    ему идёт как раньше, со старой меткой и без неё."""
+    await fresh_db.get_or_create_user(telegram_id=333, username="tg")
+    assert await ai_trainer._background_ai_allowed(await fresh_db.get_user(333))
+    await fresh_db.update_user(333, ai_consent_at=STALE)
+    assert await ai_trainer._background_ai_allowed(await fresh_db.get_user(333))
+    # А с iOS-токеном он уже клиент приложения — старая метка не согласие.
+    await fresh_db.register_push_token(333, "ios", "tok")
+    assert not await ai_trainer._background_ai_allowed(await fresh_db.get_user(333))

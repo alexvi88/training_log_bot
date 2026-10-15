@@ -266,6 +266,23 @@ AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower()
 AI_CONSENT_REQUIRED = os.getenv("AI_CONSENT_REQUIRED", "false").lower() == "true"
 AI_CONSENT_CLIENT_HEADER = "X-AI-Consent-Flow"
 
+# С какого момента (UTC) согласие на передачу данных AI считается данным ТЕКУЩЕМУ
+# получателю. Получатель сменился (xAI → OpenAI): согласие, данное раньше, —
+# согласие на другую компанию, и по App Store 5.1.2(i) его надо спросить заново.
+# Метка users.ai_consent_at старше этого момента — «согласия нет»: /settings
+# отдаёт ai_consent=false, приложение снова показывает лист, фоновые вызовы AI
+# у app-атлета молчат (db.ai_consent_valid — единственная проверка).
+# None — любое согласие действует (как до смены получателя). Ставится в момент
+# мержа/деплоя перехода на OpenAI: env AI_CONSENT_VALID_FROM=2026-10-20T00:00:00
+# (ISO, UTC; можно с суффиксом Z/+00:00).
+AI_CONSENT_VALID_FROM: "dt.datetime | None" = None
+_consent_from_raw = os.getenv("AI_CONSENT_VALID_FROM", "").strip()
+if _consent_from_raw:
+    _parsed_consent_from = dt.datetime.fromisoformat(_consent_from_raw.replace("Z", "+00:00"))
+    if _parsed_consent_from.tzinfo is not None:
+        _parsed_consent_from = _parsed_consent_from.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    AI_CONSENT_VALID_FROM = _parsed_consent_from
+
 # Hard ceiling on a single model call. The OpenAI SDK defaults to 600s, which
 # is not a timeout so much as an abandonment: a hung request leaves the user
 # watching "🤔 думаю…" for ten minutes, and the placeholder animation keeps

@@ -56,7 +56,7 @@ def ai_consent_given(request: Request, user: Any) -> bool:
         or request.headers.get(config.AI_CONSENT_CLIENT_HEADER) == "1"
     ):
         return True
-    return user is not None and bool(user["ai_consent_at"])
+    return db.ai_consent_valid(user)
 
 def _round_floats(value: Any) -> Any:
     """Все дробные в ответе — до 2 знаков.

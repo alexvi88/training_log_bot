@@ -89,7 +89,9 @@ def _settings_json(user) -> dict[str, Any]:
         # не тумблер из _BOOL_FIELDS: в базе это метка времени, а не 0/1,
         # чтобы было видно, КОГДА человек разрешил. PATCH принимает bool
         # `ai_consent`, отдаём и то и другое.
-        "ai_consent": bool(user["ai_consent_at"]),
+        # Действует ли согласие: метка старше config.AI_CONSENT_VALID_FROM
+        # (получатель сменился) — false, и приложение снова показывает лист.
+        "ai_consent": db.ai_consent_valid(user),
         "ai_consent_at": user["ai_consent_at"],
         # Записывал ли человек подход с экрана блокировки — по нему
         # приложение не зовёт на локскрин того, кто уже пишет оттуда (после
@@ -373,9 +375,11 @@ async def update_settings(request: Request) -> JSONResponse:
         plain_updates["e1rm_formula"] = new_formula
     if new_rep_range is not None:
         plain_updates["rep_range_min"], plain_updates["rep_range_max"] = new_rep_range
-    if new_consent is True and not user["ai_consent_at"]:
-        # Повторное «Согласен» метку не двигает: важен первый момент, с
-        # которого данные начали уходить модели, а не последний тап.
+    if new_consent is True and not db.ai_consent_valid(user):
+        # Повторное «Согласен» действующую метку не двигает: важен первый
+        # момент, с которого данные начали уходить модели, а не последний тап.
+        # Устаревшую (дано прежнему получателю, до AI_CONSENT_VALID_FROM) —
+        # перезаписывает: это согласие на нового получателя.
         plain_updates["ai_consent_at"] = db.now_iso()
     elif new_consent is False:
         plain_updates["ai_consent_at"] = None
