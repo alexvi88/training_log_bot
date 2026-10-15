@@ -370,23 +370,26 @@ OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "") or OPENAI_CHAT_MODEL
 # окажется, что нет или хуже нужного, — сюда ставится модель OpenAI со зрением,
 # без правок кода. Картинки OpenAI биллит входными токенами — они уже в usage.
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "") or OPENAI_CHAT_MODEL
-# Быстрые шаги (гейт, комментарий, дайджест, разбор поста, сводка тренера,
-# импорт) — none: размышления у OpenAI съедают тот же max_completion_tokens,
-# что и ответ, — на наших потолках в 500–900 токенов размышление могло бы
-# оставить ответ пустым.
+# Главный ответ с инструментами — medium (см. ниже). Быстрые шаги (гейт,
+# комментарий, дайджест, разбор поста, сводка тренера, импорт) — none:
+# размышления у OpenAI съедают тот же max_completion_tokens, что и ответ, — на
+# наших потолках в 500–900 токенов размышление могло бы оставить ответ пустым.
 # Порог long context у GPT-6 Luna, где ставки удваиваются (см. строку цены в
 # LLM_PRICES_USD_PER_1K). СВЕРИТЬ: на странице прайса порог не нашли, число —
 # заглушка. Наши запросы держатся в 30–50 тысячах, поэтому считаем по короткой
 # ступени; вызов длиннее порога только пишет предупреждение в лог
 # (ai_trainer._log_llm_cost) — тогда расчёт занижает.
 OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000"))
-# Главный цикл — low: он идёт через Responses API (ai_trainer._responses_round),
-# потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
+# Главный цикл — medium (решение владельца, 2026-10): на low Luna смешивала
+# подходы разного веса и сочиняла «застой» по сырому списку. medium дороже по
+# выходу (размышления — в output_tokens) и отвечает дольше; запас под
+# размышления — ai_trainer._reasoning_headroom. Цикл идёт через Responses API
+# (ai_trainer._responses_round), потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
 # с reasoning_effort (400 «Function tools with reasoning_effort are not
 # supported … use /v1/responses or set reasoning_effort to 'none'»). Тем же
 # значением рассуждает и живой поиск (тоже Responses). Quick-вызовы без
 # инструментов остаются на chat/completions с none (см. выше).
-OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low")
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
 
 
@@ -558,7 +561,9 @@ VIDEO_ANALYSIS_JSON_MODE = os.getenv("VIDEO_ANALYSIS_JSON_MODE", "false").lower(
 )
 
 
-# Потолок на историю, которую храним для кэша (см. ai_trainer._trim_wire_history).
+# Верхний порог окна истории, которую храним для кэша (см.
+# ai_trainer._step_trimmed_history). Меряется тем, что реально уезжает модели
+# (элементы Responses с зашифрованным рассуждением).
 # Держим целиком то, что уехало модели, включая tool-вызовы и их результаты: кэш
 # входа (и у OpenAI, и у прежнего провайдера) живёт ровно на неизменном префиксе,
 # и любая переписанная история — промах.
@@ -578,6 +583,17 @@ VIDEO_ANALYSIS_JSON_MODE = os.getenv("VIDEO_ANALYSIS_JSON_MODE", "false").lower(
 # примерно сорок тысяч токенов истории поверх шапки: до порога далеко, но
 # запас нужен.
 AI_WIRE_HISTORY_MAX_CHARS = int(os.getenv("AI_WIRE_HISTORY_MAX_CHARS", "150000"))
+
+# Нижний порог: переступив верхний, окно режется сразу сюда, а не впритык к
+# верхнему. Впритык история оставалась у самого лимита, следующий же ход снова
+# его переступал, и обрезка — то есть промах по всему запросу — повторялась на
+# каждом вопросе (прод: 66214 токенов, из кэша 384, $0.135 за ответ). Ступенька
+# в ~43% лимита — это несколько ходов подряд по кэшу до следующего среза.
+AI_WIRE_HISTORY_TRIM_TO_CHARS = int(os.getenv("AI_WIRE_HISTORY_TRIM_TO_CHARS", "85000"))
+
+# Сколько ждём сводку выброшенного куска при срезе (quick-вызов). Дольше — срез
+# без новой сводки: ход атлета из-за заметки не ждёт.
+AI_HISTORY_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("AI_HISTORY_SUMMARY_TIMEOUT_SECONDS", "20"))
 
 
 # Сколько символов вопроса показываем дешёвому гейту. Ему нужно понять ТЕМУ, а не

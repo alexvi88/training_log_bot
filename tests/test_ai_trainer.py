@@ -403,7 +403,8 @@ async def test_full_workout_history_is_not_capped_at_ten(fresh_db, user_id):
     assert full["workouts"][-1]["date"] == "2026-01-01"  # oldest last, same ordering as list_recent_workouts
 
 
-async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id):
+async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 1, 5))
     await _seed_bench_history(fresh_db, user_id, 3)
 
     payload = json.loads(
@@ -414,7 +415,13 @@ async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id)
     assert payload["total_sessions"] == 3
     assert payload["sessions"][-1]["sets"] == ["103x8"]
     assert payload["records"]["max_weight"] == 103.0
-    assert payload["e1rm_trend_per_week"] > 0
+    assert payload["unit"] == "kg"
+    assert payload["e1rm_trend"]["slope_per_week"] > 0
+    # Вес рос каждую сессию — повторять нечего, прибавка последняя 102→103.
+    assert payload["same_weight_reps"] == []
+    assert payload["weight_increase"]["from"] == 102.0
+    assert payload["weight_increase"]["to"] == 103.0
+    assert payload["stall"]["verdict"] is None  # три сессии — судить рано
 
 
 async def test_exercise_progress_unknown_name_suggests_candidates(fresh_db, user_id):
@@ -2110,3 +2117,110 @@ async def test_workout_comment_does_not_argue_with_imaginary_objection():
     prompt = ai_trainer.WORKOUT_COMMENT_SYSTEM_PROMPT
     assert "не комментируй вовсе" in prompt
     assert "«не цепляйся»" in prompt
+
+
+# ---------- факты тренда в get_exercise_progress ----------
+#
+# Живой случай: тренер сказал «вес стоит на 77 кг около четырёх недель, повторы
+# на этом весе упали с 12 до 7», а 12 было на 73, на 77 повторы выросли 6→7.
+
+
+async def _seed_sessions(db, user_id: int, name: str, sessions) -> None:
+    """sessions — (дата, [(вес, повторы), ...])."""
+    group_id = await db.create_muscle_group(user_id, "Бицепс")
+    ex_id = await db.create_exercise(user_id, name, group_id)
+    for day, sets in sessions:
+        workout_id = await db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T10:30:00",
+        )
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        for i, (weight, reps) in enumerate(sets, start=1):
+            await db.add_set(block_id, ex_id, round_index=i, order_in_round=0,
+                             weight=weight, reps=reps)
+
+
+# Ровно данные из прод-лога (пресет «что растёт, что встало»).
+_CURL_HISTORY = [
+    ("2026-08-09", [(67.5, 12), (72.5, 8)]),
+    ("2026-08-13", [(73, 7), (73, 9)]),
+    ("2026-08-18", [(73, 8), (73, 6)]),
+    ("2026-08-22", [(73, 9)]),
+    ("2026-08-26", [(73, 9), (73, 10)]),
+    ("2026-08-30", [(73, 11)]),
+    ("2026-09-18", [(77, 6), (73, 12)]),
+    ("2026-10-08", [(77, 7)]),
+]
+
+
+async def test_exercise_progress_never_compares_reps_across_weights(
+    fresh_db, user_id, monkeypatch
+):
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 10, 15))
+    await _seed_sessions(fresh_db, user_id, "Сгибания на бицепс", _CURL_HISTORY)
+
+    payload = json.loads(await ai_trainer.execute_tool(
+        user_id, "get_exercise_progress", {"exercise_name": "Сгибания на бицепс"}))
+
+    by_weight = {row["weight"]: row for row in payload["same_weight_reps"]}
+    assert by_weight[77]["reps"] == [["2026-09-18", 6], ["2026-10-08", 7]]
+    assert by_weight[77]["change"] == "up"
+    # По 73 — только последние PROGRESS_SESSIONS_LIMIT сессий, все восемь влезают.
+    assert by_weight[73]["reps"] == [
+        ["2026-08-13", 9], ["2026-08-18", 8], ["2026-08-22", 9], ["2026-08-26", 10],
+        ["2026-08-30", 11], ["2026-09-18", 12],
+    ]
+    assert by_weight[73]["change"] == "up"
+    # Падения на одном весе нет нигде.
+    assert all(row["change"] != "down" for row in payload["same_weight_reps"])
+
+    stall = payload["stall"]
+    assert "reps at 77 kg: 6→7" in stall["why"]
+    assert "12→7" not in json.dumps(payload, ensure_ascii=False)
+    assert stall["top_weight_since"] == "2026-09-18"
+    # Длительность — между первым и последним появлением 77 (18.09 → 08.10),
+    # а не «около четырёх недель» до сегодня.
+    assert "(2.9 weeks, 2 sessions on it)" in stall["why"]
+
+    assert payload["weight_increase"] == {
+        "date": "2026-09-18", "from": 73.0, "to": 77.0, "step": 4.0, "weeks_ago": 3.9,
+    }
+    trend = payload["e1rm_trend"]
+    assert trend["latest"] == ["2026-10-08", 95.0]
+    assert trend["four_weeks_ago"][0] == "2026-08-30"
+
+
+async def test_stalled_lifts_reports_reps_on_the_top_weight_only(fresh_db, user_id, monkeypatch):
+    """Тот же случай через get_stalled_lifts — именно отсюда и приехало «12→7»:
+    повторы брались лучшим подходом сессии, а он был на 73."""
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 10, 15))
+    await _seed_sessions(fresh_db, user_id, "Сгибания на бицепс", _CURL_HISTORY)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
+
+    (lift,) = payload["lifts"]
+    assert lift["reps_at_top_weight"] == "6→7"
+    assert lift["top_weight_since"] == "2026-09-18"
+    assert lift["sessions_at_top_weight"] == 2
+    assert lift["weeks_weight_flat"] == 2.9
+
+
+async def test_exercise_progress_facts_stay_in_pounds_for_an_lb_athlete(
+    fresh_db, user_id, monkeypatch
+):
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 10, 15))
+    await fresh_db.conn().execute("UPDATE users SET unit = 'lb' WHERE telegram_id = ?", (user_id,))
+    await fresh_db.conn().commit()
+    await _seed_sessions(fresh_db, user_id, "Сгибания на бицепс", [
+        ("2026-09-10", [(160, 8)]), ("2026-09-17", [(165, 6)]),
+        ("2026-09-24", [(165, 7)]), ("2026-10-01", [(165, 8)]),
+    ])
+
+    payload = json.loads(await ai_trainer.execute_tool(
+        user_id, "get_exercise_progress", {"exercise_name": "Сгибания на бицепс"}))
+
+    assert payload["unit"] == "lb"
+    assert payload["same_weight_reps"][0]["weight"] == 165
+    assert payload["weight_increase"]["step"] == 5.0
+    assert "lb/week" in payload["stall"]["why"]
+    assert "reps at 165 lb: 6→8" in payload["stall"]["why"]

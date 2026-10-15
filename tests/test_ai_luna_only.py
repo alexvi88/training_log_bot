@@ -63,7 +63,7 @@ async def test_every_account_gets_luna(fresh_db, keys):
         backend = await ai_trainer.chat_backend(uid)
         assert backend.model == config.OPENAI_CHAT_MODEL == "gpt-6-luna"
         # Главный цикл рассуждает (Responses API), быстрые вызовы — нет.
-        assert backend.effort == "low" and backend.quick_effort == "none"
+        assert backend.effort == config.OPENAI_REASONING_EFFORT == "medium" and backend.quick_effort == "none"
 
 
 async def test_old_ai_model_value_in_db_changes_nothing(fresh_db, keys):

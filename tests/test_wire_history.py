@@ -68,54 +68,61 @@ async def test_light_history_drops_injected_system_context():
 
 
 # ---------- обрезка: главное, чтобы не сломать структуру запроса ----------
+# Сама ступенька, заметка и кэш — tests/test_history_step_trim.py.
+
+
+def _plan(history, upper, lower):
+    return ai_trainer._plan_step_trim(history, None, upper, lower)
 
 
 async def test_trim_never_orphans_a_tool_message():
     """tool без своего assistant(tool_calls) выше — невалидный запрос, API
     отвергнет его целиком. Поэтому режем только по границам ходов."""
     history = _turn("первый", "ответ 1") + _turn("второй", "ответ 2") + _turn("третий", "ответ 3")
+    one_turn = len(json.dumps(_turn("x", "y"), ensure_ascii=False)) + 50
 
-    # Лимит такой, что влезает примерно один ход.
-    trimmed = ai_trainer._trim_wire_history(history, max_chars=len(json.dumps(_turn("x", "y"), ensure_ascii=False)) + 50)
+    _summary, _dropped, kept = _plan(history, upper=one_turn, lower=one_turn)
 
-    assert trimmed[0]["role"] == "user", "обрезали не по границе хода"
-    for i, m in enumerate(trimmed):
+    assert kept[0]["role"] == "user", "обрезали не по границе хода"
+    for i, m in enumerate(kept):
         if m.get("role") == "tool":
-            prev = trimmed[i - 1]
+            prev = kept[i - 1]
             assert prev.get("tool_calls"), "tool-сообщение осталось без своего вызова"
 
 
 async def test_trim_keeps_everything_under_the_limit():
     history = _turn("вопрос", "ответ")
-    assert ai_trainer._trim_wire_history(history, max_chars=100_000) == history
+    assert _plan(history, upper=100_000, lower=50_000) is None
 
 
 async def test_trim_drops_oldest_turns_first():
     history = _turn("старый", "ответ старый") + _turn("новый", "ответ новый")
     one_turn = len(json.dumps(_turn("новый", "ответ новый"), ensure_ascii=False))
 
-    trimmed = ai_trainer._trim_wire_history(history, max_chars=one_turn + 20)
+    _summary, dropped, kept = _plan(history, upper=one_turn + 20, lower=one_turn + 20)
 
-    texts = [m.get("content") for m in trimmed]
-    assert "новый" in texts
-    assert "старый" not in texts
+    assert "новый" in [m.get("content") for m in kept]
+    assert "старый" not in [m.get("content") for m in kept]
+    assert "старый" in [m.get("content") for m in dropped]
 
 
 async def test_trim_keeps_the_last_turn_even_if_it_alone_exceeds_the_limit():
     """Резать ВНУТРЬ хода нельзя, а пустая история потеряла бы разговор совсем."""
     history = _turn("старый", "ответ") + _turn("огромный", "х" * 5000)
 
-    trimmed = ai_trainer._trim_wire_history(history, max_chars=100)
+    _summary, _dropped, kept = _plan(history, upper=100, lower=100)
 
-    assert trimmed
-    assert trimmed[0]["role"] == "user"
-    assert trimmed[0]["content"] == "огромный"
+    assert kept
+    assert kept[0]["role"] == "user"
+    assert kept[0]["content"] == "огромный"
 
 
 async def test_configured_limit_is_generous_enough_for_a_real_conversation():
-    """Каждая обрезка — промах кэша, поэтому порог должен быть высоким."""
+    """Каждая обрезка — промах кэша, поэтому порог должен быть высоким, а
+    ступенька — заметной: после среза должно оставаться место на несколько ходов."""
     five_turns = sum((_turn(f"в{i}", f"о{i}") for i in range(5)), [])
     assert len(json.dumps(five_turns, ensure_ascii=False)) < config.AI_WIRE_HISTORY_MAX_CHARS
+    assert config.AI_WIRE_HISTORY_TRIM_TO_CHARS <= config.AI_WIRE_HISTORY_MAX_CHARS * 0.6
 
 
 # ---------- сквозное: ask отдаёт то, что уехало модели ----------
