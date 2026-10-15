@@ -1105,10 +1105,11 @@ SYSTEM_PROMPT = """\
 касается настроек профиля: единицы измерения (кг/lb), часовой пояс, формула
 e1RM — бери их из get_training_overview, а не угадывай или предполагай.
 
-О застое, тренде и «упали/выросли повторы» говори только по полям same_weight_reps,
-e1rm_trend и stall (get_exercise_progress) или по get_stalled_lifts. Не сравнивай
-повторы на разном весе как одно и то же: 73×12 и 77×7 — это не «повторы упали с 12
-до 7».
+О застое, тренде и «упали/выросли повторы» говори только по verdict и why
+(stall в get_exercise_progress, get_stalled_lifts) и по same_weight_reps /
+e1rm_trend. Не сравнивай повторы на разном весе как одно и то же: 73×12 и 77×7 —
+это не «повторы упали с 12 до 7». Застой или регресс называй, только если так
+сказал verdict.
 
 Если пользователь спрашивает про «сегодняшнюю», «текущую» или «эту» тренировку —
 сначала вызови get_active_workout. Если он вернул тренировку, она ЕЩЁ НЕ
@@ -3390,15 +3391,15 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_stalled_lifts",
             "description": (
-                "Что встало и ПОЧЕМУ, по всем упражнениям сразу. verdict: dead_end — "
-                "вес и повторы стоят, тупик; double_progression — вес стоит, повторы "
-                "растут, схема РАБОТАЕТ, менять нечего; growing; regressing. Плюс "
-                "наклон e1RM в неделю, рабочий вес, сколько недель он не двигался, "
-                "повторы на нём первая→последняя, ready_to_add_weight (добрал верх "
-                "диапазона — пора прибавить вес), avg_top_rpe: 6-7 — недогруз, 9-10 — "
-                "усталость или техника. Вызывай на «что встало», «почему не растёт», "
-                "«плато», «что менять в программе». Меньше min_sessions сессий в окне — "
-                "упражнение не попадает: на трёх точках застоя не видно."
+                "Что растёт, стоит или падает и ПОЧЕМУ, по всем упражнениям. verdict — "
+                "по наклону лучшего e1RM сессии за окно: growing; double_progression — "
+                "вес стоит, повторы растут, схема работает; progressing — вес поднят, "
+                "повторы на новом держатся; dead_end — ровно ≥3 недели; regressing; "
+                "unclear — мало точек. why — факты к вердикту, пересказывай их. "
+                "ready_to_add_weight — добрал верх диапазона; avg_top_rpe 6-7 — "
+                "недогруз, 9-10 — усталость или техника. Меньше min_sessions сессий "
+                "в окне — упражнения нет в выдаче. Вызывай на «что встало», «плато», "
+                "«почему не растёт»."
             ),
             "parameters": {
                 "type": "object",
@@ -5661,7 +5662,10 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
         )
         names[r["exercise_id"]] = (r["display_name"], _shown_group(r["group_name"]))
 
-    order = {"dead_end": 0, "regressing": 1, "double_progression": 2, "growing": 3}
+    order = {
+        "dead_end": 0, "regressing": 1, "double_progression": 2, "progressing": 3,
+        "growing": 4, "unclear": 5,
+    }
     found = []
     for ex_id, set_rows in by_exercise.items():
         sessions = analytics.group_sets_by_session(set_rows)
@@ -5680,6 +5684,8 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
             "top_weight": verdict.top_weight,
             "weeks_weight_flat": verdict.weeks_weight_flat,
             "top_weight_since": verdict.weight_since,
+            "weight_raised_from": verdict.weight_raised_from,
+            "why": analytics.stall_why(verdict, user["unit"]),
             "sessions_at_top_weight": verdict.sessions_at_top_weight,
             # Повторы только подходов НА рабочем весе (analytics.best_reps_at).
             "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",
