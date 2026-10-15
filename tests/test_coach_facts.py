@@ -437,3 +437,42 @@ def test_prompt_has_a_static_section_on_judging_progress():
     assert "не притворяйся, что искал в интернете" in prompt
     # Промпт — статичный префикс: ни даты, ни данных атлета.
     assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT)
+
+
+def test_prompt_shapes_a_progress_review():
+    """Живой ответ Luna на «how's my progress»: верный по фактам, но с
+    оговорками «can't confirm muscle-size», «don't prove the cause», с
+    пересказом своих правил («I shouldn't describe them as progressing») и
+    одним шагом на весь разбор. Grok вдобавок ссылался на «status says»."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    for rule in (
+        # Оговорка — только если меняет действие; неизвестная причина не называется.
+        "оговорка — только если от неё\n  меняется, что делать атлету",
+        "причина неизвестна — просто не называй её",
+        # Мета-разговор о своих правилах вместо вывода.
+        "свои правила вслух не пересказывай",
+        "«**молотки** — на паузе с 26.09»",
+        # Вывод не приписывается инструменту.
+        "вывод не приписывай инструменту",
+        "«status says»",
+        # Структура разбора.
+        "Разбор прогресса или застоя",
+        "короткие разделы «## »: Растёт, На паузе, Под вопросом",
+        "до 6 движений, остальные — только если спросят",
+        "один следующий шаг вес×повторы",
+        "в личном диапазоне атлета",
+        "в конце — ОДИН главный шаг",
+    ):
+        assert rule in prompt, rule
+    # Пара «плохо → хорошо» в обоих языках, короткая: она в кэшируемом префиксе.
+    start = prompt.index("Разбор прогресса или застоя")
+    example = prompt[start:prompt.index("Main step:", start)]
+    assert "I shouldn't call it progressing" in example
+    assert "## Растёт" in example and "## На паузе" in example
+    assert "## Moving" in example and "## On pause" in example
+    assert "Главное:" in example
+    assert len(example) < 1200, "пример разбора разросся — он живёт в кэшируемом префиксе"
+    # Плохие фразы из живого ответа звучат только в «Нет», не в образце.
+    good = example[example.index("Да:"):]
+    for leak in ("can't confirm", "shouldn't", "не должен", "status says"):
+        assert leak not in good, leak
