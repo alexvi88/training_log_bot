@@ -249,3 +249,27 @@ async def test_crash_command_shows_attributed_stack_and_sends_json(fresh_db, mon
     missing.answer = AsyncMock()
     await admin.cmd_crash(missing, None)
     assert "нет" in missing.answer.await_args.args[0]
+
+
+async def test_crash_command_shows_screens_before_the_hang(fresh_db, monkeypatch):
+    """В стеке зависания часто только SwiftUI; экраны из окна отчёта
+    (payload.appScreens, кладёт приложение) говорят, где висло."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    payload = dict(HANG, appScreens=[
+        {"screen": "menu", "at": "2026-10-16T01:40:00Z"},
+        {"screen": "workout", "at": "2026-10-16T01:41:00Z"},
+        {"bad": "row"},
+    ])
+    diag_id = await db.log_diagnostic(
+        user_id=None, app_version="1.0.4", build="75", os_version="iOS 27", device="iPhone13,2",
+        kind="hang", payload=json.dumps(payload),
+    )
+    monkeypatch.setattr(admin, "_is_admin", lambda uid: True)
+    msg = MagicMock()
+    msg.from_user.id = 1
+    msg.text = f"/crash {diag_id}"
+    msg.answer = AsyncMock()
+    msg.answer_document = AsyncMock()
+    await admin.cmd_crash(msg, None)
+    assert "экраны: menu → workout" in msg.answer.await_args.args[0]

@@ -892,6 +892,8 @@ def format_crash_report(summary, recent, days: int) -> str:
 
 # Сколько кадров главного потока показать текстом в `/crash N`.
 CRASH_FRAMES_SHOWN = 15
+# Сколько последних экранов перед сбоем показать в `/crash`.
+CRASH_SCREENS_SHOWN = 8
 
 
 def _attributed_frames(payload: dict) -> list[dict]:
@@ -930,6 +932,15 @@ def format_crash_detail(row, payload: dict) -> str:
     ):
         if meta.get(key) is not None:
             lines.append(f"{label}: {escape(str(meta[key])[:200])}")
+    # Экраны из окна отчёта (приложение кладёт их в payload.appScreens): в
+    # стеке зависания часто только SwiftUI, и без них не понять, где висло.
+    screens = [
+        str(item.get("screen"))[:40]
+        for item in (payload.get("appScreens") or [])
+        if isinstance(item, dict) and item.get("screen")
+    ]
+    if screens:
+        lines.append("экраны: " + escape(" → ".join(screens[-CRASH_SCREENS_SHOWN:])))
     frames = _attributed_frames(payload)
     if frames:
         lines += ["", "<b>Верх стека:</b>"]
