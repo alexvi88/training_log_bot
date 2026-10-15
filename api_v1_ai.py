@@ -355,6 +355,46 @@ async def get_limits(request: Request) -> JSONResponse:
     return JSONResponse(await _limits_json(user_id))
 
 
+# ---------- модель тренера: grok или Luna, только свои аккаунты ----------
+
+
+async def ai_model_json(user_id: int) -> dict[str, Any]:
+    """Поля выбора модели тренера для /me и ответа PATCH /ai/model.
+
+    Только своим аккаунтам (config.ai_model_switch_ids): `ai_model` — текущий
+    токен, `ai_model_options` — из чего выбирать (приложение по ним и решает,
+    показывать ли строку «Модель тренера»). Остальным — пусто: полей в ответе
+    нет вовсе, а не null, — старые сборки и обычные атлеты их не видят.
+    """
+    if user_id not in config.ai_model_switch_ids():
+        return {}
+    return {
+        "ai_model": await ai_trainer.ai_model_for(user_id),
+        "ai_model_options": list(config.AI_MODEL_CHOICES),
+    }
+
+
+async def set_ai_model(request: Request) -> JSONResponse:
+    """PATCH /v1/ai/model {"ai_model": "grok" | "luna"} — сменить модель тренера.
+
+    Только свои аккаунты; остальным — 403, и в базу ничего не пишется (это
+    держит ещё и db.set_user_ai_model). Действует со следующего вопроса: ход,
+    который уже идёт, доезжает на той модели, с которой начался.
+    """
+    user_id = await common.authed_user_id(request)
+    if user_id not in config.ai_model_switch_ids():
+        raise ApiError(
+            403, "forbidden", "ai model switch is for own accounts only",
+            key="api.error.ai_model_own_only",
+        )
+    body = await common.json_body(request)
+    value = common.require(body, "ai_model", str)
+    if value not in config.AI_MODEL_CHOICES:
+        raise ApiError(400, "bad_request", f"ai_model must be one of {list(config.AI_MODEL_CHOICES)}")
+    await db.set_user_ai_model(user_id, value)
+    return JSONResponse(await ai_model_json(user_id))
+
+
 # ---------- режим «программа атлету» (coach_program_ai) ----------
 
 
@@ -1998,6 +2038,7 @@ async def get_thinking(request: Request) -> JSONResponse:
 
 routes = [
     Route("/ai/limits", get_limits, methods=["GET"]),
+    Route("/ai/model", set_ai_model, methods=["PATCH"]),
     Route("/ai/ask", ask_question, methods=["POST"]),
     Route("/ai/voice", transcribe_voice, methods=["POST"]),
     Route("/ai/video", ask_video, methods=["POST"]),

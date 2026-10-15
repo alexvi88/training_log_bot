@@ -162,7 +162,12 @@ CREATE TABLE IF NOT EXISTS users (
     -- боту после появления колонки. Пишет только SetUserLanguageMiddleware
     -- (main.py). Нужно одному: заранее вписать имя на приглашении тренера
     -- (api_v1_coach.suggested_client_name), чтобы атлет не набирал его сам.
-    first_name TEXT
+    first_name TEXT,
+    -- Какой моделью отвечает тренер: 'grok' | 'luna' (OpenAI GPT-6 Luna).
+    -- NULL — по умолчанию, grok. Проба второй модели ТОЛЬКО на своих
+    -- аккаунтах (config.ai_model_switch_ids): пишет set_user_ai_model, и
+    -- только им; читает ai_trainer.chat_backend, у чужих — всегда grok.
+    ai_model TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1859,6 +1864,9 @@ async def _migrate_schema() -> None:
         )
     if "first_name" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
+    if "ai_model" not in user_cols:
+        # NULL всем: модель по умолчанию (grok), переключатель — только своим.
+        await _conn.execute("ALTER TABLE users ADD COLUMN ai_model TEXT")
     if "app_since" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN app_since TEXT")
         # Кто уже входил в приложение до этой колонки: живой или прошлый токен
@@ -2787,6 +2795,35 @@ async def get_or_create_user(
 async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     return await cur.fetchone()
+
+
+async def get_user_ai_model(telegram_id: int) -> Optional[str]:
+    """Сырой выбор модели тренера (users.ai_model) или None. Кому он вообще
+    положен, решает вызывающий (ai_trainer.ai_model_for)."""
+    cur = await conn().execute("SELECT ai_model FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = await cur.fetchone()
+    return row[0] if row is not None else None
+
+
+async def set_user_ai_model(telegram_id: int, ai_model: Optional[str]) -> bool:
+    """Записать выбор модели тренера — только своим аккаунтам.
+
+    Проверка круга здесь, в единственной точке записи, а не у ручек: чужому
+    атлету значение не пишется ни через какой вход. 'grok' хранится как NULL —
+    «по умолчанию», чтобы смена дефолта когда-нибудь не застряла у тех, кто
+    просто вернул grok. Неизвестный токен — ValueError. Возвращает, записал ли.
+    """
+    if telegram_id not in config.ai_model_switch_ids():
+        return False
+    if ai_model is not None and ai_model not in config.AI_MODEL_CHOICES:
+        raise ValueError(f"unknown ai_model {ai_model!r}")
+    value = None if ai_model in (None, config.AI_MODEL_GROK) else ai_model
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE users SET ai_model = ? WHERE telegram_id = ?", (value, telegram_id)
+        )
+        await conn().commit()
+    return cur.rowcount > 0
 
 
 async def set_user_first_name(telegram_id: int, first_name: Optional[str]) -> None:
@@ -10511,7 +10548,7 @@ async def log_cost_event(
     когда-нибудь ещё, попадёт в лог сама, без напоминания.
 
     cached_tokens — часть входа, приехавшая из кэша провайдера: считается по
-    сниженной ставке (config.CACHED_INPUT_PRICE_MULTIPLIER). Пока множитель равен
+    сниженной ставке модели (config.cached_input_multiplier). Пока множитель равен
     единице, цена — честный потолок, и в строке про это сказано прямо.
 
     reasoning_tokens — внутренние размышления модели, отдельный billable тип у
@@ -10527,7 +10564,7 @@ async def log_cost_event(
         prompt_tokens = audio_seconds
         price = config.transcription_price_usd(audio_seconds)
     elif event_type == "server_tool":
-        price = config.SERVER_TOOL_PRICE_USD_PER_CALL
+        price = config.server_tool_price_usd(model)
     else:
         price = config.call_price_usd(
             model or "", prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens
@@ -10678,7 +10715,7 @@ async def get_cost_total_usd(date_str: Optional[str] = None) -> float:
         if event_type == "transcription":
             continue  # считаем одним запросом ниже — у расшифровок цена по секундам
         elif event_type == "server_tool":
-            total += calls * config.SERVER_TOOL_PRICE_USD_PER_CALL
+            total += calls * config.server_tool_price_usd(model)
         else:
             total += config.call_price_usd(model or "", prompt, completion, cached, reasoning)
     return total + await _transcription_cost_usd(start, end)

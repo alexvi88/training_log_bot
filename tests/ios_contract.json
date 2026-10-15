@@ -214,6 +214,19 @@
     }
    }
   },
+  "AIModelChoiceResponse": {
+   "file": "TrainingLog/Features/Settings/AIModelChoice.swift",
+   "fields": {
+    "aiModel": {
+     "type": "String",
+     "optional": false
+    },
+    "aiModelOptions": {
+     "type": "[String]",
+     "optional": false
+    }
+   }
+  },
   "AIPendingState": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -2932,6 +2945,16 @@
      "type": "Int",
      "optional": true,
      "default": true
+    },
+    "aiModel": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "aiModelOptions": {
+     "type": "[String]",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4352,6 +4375,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.setAIModel",
+   "method": "PATCH",
+   "path": "/ai/model",
+   "root": "AIModelChoiceResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.aiPending",
    "method": "GET",
    "path": "/ai/pending",
@@ -5311,5 +5341,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "d9fca2770461010093763a2e81fc516f6f04958e"
+ "_ios_commit": "4204e286365a7b11aedf12735cafa6d02d9dd9ca"
 }
