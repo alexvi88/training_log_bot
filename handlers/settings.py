@@ -1,4 +1,4 @@
-"""User settings: units, e1RM formula, CSV export, account deletion."""
+"""User settings: units, e1RM formula, full export (ZIP), account deletion."""
 
 import json
 import logging
@@ -13,9 +13,9 @@ import account_deletion
 import achievement_sync
 import analytics
 import config
-import csv_export
 import db
 import fsm_unit_rescale
+import full_export
 import i18n
 import keyboards
 import ui
@@ -477,12 +477,16 @@ async def settings_food_macros(callback: CallbackQuery, state: FSMContext):
     await show_settings(callback, state)
 
 
+async def _send_archive(callback: CallbackQuery, caption: str) -> None:
+    """Архив всего дневника (full_export.py) документом в чат. Тот же файл,
+    что отдаёт приложению GET /v1/export/archive."""
+    data, filename = await full_export.build_archive_bytes(callback.from_user.id)
+    await callback.message.answer_document(BufferedInputFile(data, filename=filename), caption=caption)
+
+
 @router.callback_query(F.data == "settings:export")
 async def settings_export(callback: CallbackQuery, state: FSMContext):
-    data = await csv_export.build_csv(callback.from_user.id)
-    await callback.message.answer_document(
-        BufferedInputFile(data, filename="training_log.csv"), caption=i18n.t("settings.export.caption")
-    )
+    await _send_archive(callback, i18n.t("settings.export.caption"))
     await callback.answer()
 
 
@@ -492,12 +496,27 @@ async def settings_delete_confirm(callback: CallbackQuery, state: FSMContext):
     на бота и на приложение, и человек, нажавший «удалить» в приложении, иначе
     снесёт год истории, думая, что отвязывает приложение (то же требование к
     клиенту у DELETE /v1/account — см. api_v1_account.delete_account)."""
-    kb = keyboards.yes_no_keyboard(
-        yes_cb="settings:deleteyes", no_cb="settings:menu",
-        yes_text=i18n.t("settings.delete.yes"), no_text=i18n.t("btn.cancel"),
+    await ui.safe_edit(
+        callback, i18n.t("settings.delete.confirm"), reply_markup=keyboards.delete_account_keyboard()
     )
-    await ui.safe_edit(callback, i18n.t("settings.delete.confirm"), reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data == "settings:delete:export")
+async def settings_delete_export_first(callback: CallbackQuery, state: FSMContext):
+    """«📦 Сначала выгрузить» на экране удаления: пришлю архив, а под ним —
+    тот же экран подтверждения заново, чтобы решение оставалось последним
+    сообщением в чате. У старого экрана кнопки снимаю — двух живых «Да,
+    удалить всё» в одном чате быть не должно."""
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # сообщение уже правили или удалили — не помеха выгрузке
+        logger.debug("delete screen markup not cleared", exc_info=True)
+    await _send_archive(callback, i18n.t("settings.delete.export_caption"))
+    await callback.message.answer(
+        i18n.t("settings.delete.confirm"), reply_markup=keyboards.delete_account_keyboard()
+    )
 
 
 @router.callback_query(F.data == "settings:deleteyes")

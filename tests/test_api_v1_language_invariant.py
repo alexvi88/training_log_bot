@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import json
 import re
 from typing import Any
 
@@ -96,6 +97,9 @@ MACHINE_KEYS = {
     "app_link",
     # Идентификатор мини-игры (catch/weigh/sort/runner) — название рисует приложение.
     "game",
+    # Маршрут пуша и строки «Уведомлений» (push_ios.ios_route): экран и неделя
+    # — машинные значения, имя упражнения в нём — показываемое и проверяется.
+    "screen", "week",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -156,7 +160,7 @@ SKIPPED: dict[str, str] = {
 }
 
 # Ответы не-JSON, которые сценарий зовёт, но языком не проверяет.
-NON_JSON = {"GET /export/csv"}
+NON_JSON = {"GET /export/csv", "GET /export/archive"}
 
 
 class _Walker:
@@ -188,6 +192,22 @@ class _Walker:
         for v in language_violations(body, self.lang):
             self.violations.append(f"{method} {path} [{resp.status_code}]: {v}")
         return resp
+
+
+def _sse_events(raw: str) -> list[tuple[str, Any]]:
+    """События `text/event-stream` (стрим тренера): (имя, data как JSON), без пингов."""
+    events: list[tuple[str, Any]] = []
+    for block in raw.split("\n\n"):
+        if not block.strip() or block.startswith(":"):
+            continue
+        name, data = "message", None
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                name = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        events.append((name, data))
+    return events
 
 
 # Текст, который атлет вводит сам, — на его языке.
@@ -268,6 +288,15 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         elif question.startswith("SETUP"):
             await on_questions([{"question": model["question"], "choices": []}])
         else:
+            # Стрим: строка «что тренер делает» — настоящий каталог
+            # ai.tool_status.* под языком хода, как её шлёт цикл инструментов.
+            on_status = kwargs.get("on_status")
+            if on_status is not None:
+                await on_status(ai_trainer._tool_status_variants("get_full_workout_history")[0])
+                await on_status(ai_trainer._tool_status_variants("no_such_tool")[0])
+            on_chunk = kwargs.get("on_chunk")
+            if on_chunk is not None:
+                await on_chunk(model["answer"])
             # Настоящий инструмент тренера, пишущий в базу: он же собирает
             # подпись кнопки отката через i18n.t — под языком хода.
             await ai_trainer.execute_tool(
@@ -536,6 +565,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/exercises/{forked_id}/progress", expect=200)
     await w.call("GET", f"/exercises/{forked_id}/progress/sessions", expect=200)
     await w.call("GET", "/export/csv", expect=200)
+    # ZIP: README.txt внутри на языке атлета держит tests/test_full_export.py.
+    await w.call("GET", "/export/archive", expect=200)
     rid_from_workout = (await w.call("POST", f"/workouts/{wid}/routines", json={"name": text["routine"]},
                                      expect=201)).json()["id"]
     await w.call("POST", f"/workouts/{wid}/repeat", expect=(200, 201))
@@ -645,9 +676,13 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", f"/routines/{rid}/exercises", json={"exercise_id": squat_id}, expect=201)
     await w.call("PATCH", f"/routine-exercises/{item_id}", json={"target": "4×6"}, expect=200)
     await w.call("POST", f"/routine-exercises/{item_id}/reorder", json={"direction": "down"}, expect=200)
+    await w.call("POST", f"/routines/{rid}/exercises/order", json={"item_ids": [item_id]}, expect=200)
+    await w.call("POST", f"/routines/{rid}/exercises/order", json={"item_ids": "x"}, expect=400)
     await w.call("DELETE", f"/routine-exercises/{item_id}", expect=200)
     day_id = day["id"] if "id" in day else day["days"][-1]["id"]
     await w.call("POST", f"/routines/{day_id}/reorder", json={"direction": "up"}, expect=(200, 400))
+    await w.call("POST", f"/programs/{pid}/days/order", json={"routine_ids": [day_id]}, expect=200)
+    await w.call("POST", f"/programs/{pid}/days/order", json={}, expect=400)
     detached = (await w.call("PATCH", f"/routines/{day_id}", json={"program_id": None}, expect=200)).json()
     await w.call("POST", f"/routines/{day_id}/attach", json={"program_id": detached["former_program_id"],
                                                              "position": detached["former_position"]}, expect=200)
@@ -676,6 +711,17 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert asked["actions"], "тренер завёл упражнение — кнопка отката обязана прийти"
     assert len(asked["mentions"]["exercises"]) >= 2, "ответ назвал два упражнения — чипы обязаны прийти"
     await w.call("POST", "/ai/ask", json={"question": ""}, expect=400)
+    # Тот же ход стримом: события `chunk`/`status`/`done` — не JSON-ответ, и
+    # обходчик их не читает, поэтому разбираем их здесь и меряем тем же
+    # `language_violations`.
+    streamed = await w.call("POST", "/ai/ask", json={"question": text["question"], "stream": True}, expect=200)
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+    stream_events = _sse_events(streamed.text)
+    assert "status" in [name for name, _ in stream_events], "стрим обязан сказать, что тренер делает"
+    assert stream_events[-1][0] == "done"
+    for name, data in stream_events:
+        for v in language_violations(data, lang):
+            w.violations.append(f"POST /ai/ask stream [{name}]: {v}")
     await w.call("GET", "/ai/history", expect=200)
     conversations = (await w.call("GET", "/ai/conversations", expect=200)).json()
     conv_items = conversations.get("conversations") or conversations.get("items") or []
@@ -724,6 +770,31 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", "/support/threads/111/messages", expect=403)
     await w.call("POST", "/support/threads/111/messages", json={"text": text["feedback"]}, expect=403)
     await w.call("POST", "/support/threads/111/read", expect=403)
+    # «Уведомления» (api_v1_inbox): строки кладут настоящие отправители —
+    # ответ поддержки, ежедневный пуш, анонс — на языке атлета; список,
+    # страница по курсору, отметка одной и всех, и ошибка тела на его языке.
+    import api_v1_support
+    import inbox as inbox_module
+    import push_ios
+    import push_texts
+
+    await api_v1_support.send_admin_reply(111, text["feedback"])
+    title, body = await push_ios.ios_alert(111, push_texts.SKIP_CATEGORY_BY_DAY[7], lang)
+    await inbox_module.deliver(
+        111, push_texts.SKIP_CATEGORY_BY_DAY[7], title, body, lang=lang,
+        route=push_ios.ios_route(push_texts.SKIP_CATEGORY_BY_DAY[7]),
+    )
+    title, body = await push_ios.ios_alert(111, push_ios.ANNOUNCEMENT, lang)
+    await inbox_module.deliver(111, push_ios.ANNOUNCEMENT, title, body, lang=lang)
+    listed = (await w.call("GET", "/inbox", expect=200)).json()
+    # Тренер и клиент выше тоже уже положили сюда свои пуши.
+    assert len(listed["items"]) >= 3 and listed["unread"] >= 3
+    page = (await w.call("GET", "/inbox?limit=1", expect=200)).json()
+    await w.call("GET", f"/inbox?limit=1&before={page['next_before']}", expect=200)
+    await w.call("GET", "/inbox?before=nope", expect=400)
+    await w.call("POST", "/inbox/read", json={"id": listed["items"][0]["id"]}, expect=200)
+    await w.call("POST", "/inbox/read", json={"id": "nope"}, expect=400)
+    await w.call("POST", "/inbox/read", json={"all": True}, expect=200)
     await w.call("POST", "/factcheck", json={"text": text["post"]}, expect=200)
     await w.call("POST", "/diagnostics", json={
         "kind": "crash", "payload": {"diagnosticMetaData": {"appVersion": "1.0", "signal": 11}},
@@ -861,6 +932,9 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await a.call("POST", f"/coach/invites/{code}/accept", json={"name": text["client_name"]}, expect=201)
     await a.call("DELETE", "/coach-links/111", expect=200)
     await a.call("DELETE", "/coach-links/111", expect=404)
+    # Атлет сам закрыл доступ — у тренера серая строка `recently_unlinked`.
+    gone = (await w.call("GET", "/coach/clients", expect=200)).json()["recently_unlinked"]
+    assert [g["client_id"] for g in gone] == [222]
 
     w.walked |= a.walked
     w.violations += a.violations

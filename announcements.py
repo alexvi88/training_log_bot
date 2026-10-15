@@ -43,7 +43,7 @@
 ошибкой на каждого такого человека, `record_push` не писался, и на
 следующем перезапуске рассылка пыталась снова — а сам атлет анонс вообще не
 получал, хотя у него есть свой канал (APNs, см. engagement.py
-`_send_apns_push`/`_ios_device_tokens`), просто это не Telegram.
+`_send_apns_push`), просто это не Telegram.
 
 Ветвление — по `users.telegram_linked`, тот же признак, каким engagement.py
 уже отличает app-only от обычных в `_deliver`. У app-only анонс уходит
@@ -51,6 +51,9 @@
 вовсе, значит и дублировать анонс телеграмному каналу нечем. У обычных всё
 как раньше: только Telegram, без APNs — у них уже есть рабочая доставка, и
 класть баннер туда же означало бы получить один и тот же релиз дважды.
+Во «Уведомления» приложения (inbox.py) анонс ложится обоим, у кого
+приложение есть: app-only — вместе с баннером, телеграмному — строкой без
+баннера, после доставки в Telegram (см. `_send_apns_announcement`).
 `record_push` пишется в обоих случаях (даже если APNs не настроен или
 устройство не привязано) — ровно как в engagement.py: без отметки о
 доставке следующий тик рассылки увидит того же app-only человека как
@@ -74,9 +77,10 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import FSInputFile
 
-import apns
 import config
 import db
+import i18n
+import inbox
 import keyboards
 import push_ios
 
@@ -327,21 +331,20 @@ def _photo(ann: Announcement) -> FSInputFile | None:
     return None
 
 
-async def _send_apns_announcement(telegram_id: int, ann: Announcement, lang: str) -> None:
-    """APNs-баннер анонса app-only атлету (см. докстринг модуля, «App-only
-    атлеты»). Ничего не делает молча, если APNs не настроен или устройство
-    не привязано — тот же контракт, что у engagement._send_apns_push."""
-    if not apns.is_configured():
-        return
-    device_tokens = await db.get_push_tokens(telegram_id, "ios")
-    if not device_tokens:
+async def _send_apns_announcement(
+    telegram_id: int, ann: Announcement, lang: str, *, push: bool = True
+) -> None:
+    """Анонс во «Уведомления» и баннером (inbox.deliver) — человеку с
+    приложением. Баннер — app-only атлету (см. докстринг модуля, «App-only
+    атлеты»); тому, кто получил анонс в Telegram, — только строка во
+    «Уведомлениях» (`push=False`), второй раз тот же релиз не звенит. Без
+    приложения — ничего: inbox.deliver сам не пишет, а баннеру некуда."""
+    if not await db.is_app_user(telegram_id):
         return
     title, body = await push_ios.ios_alert(telegram_id, push_ios.ANNOUNCEMENT, lang)
-    # Каждое устройство атлета (iPhone и iPad) — тот же баннер.
-    for device_token in device_tokens:
-        await apns.send_alert(
-            telegram_id, device_token, title, body, category=push_ios.ANNOUNCEMENT
-        )
+    await inbox.deliver(
+        telegram_id, push_ios.ANNOUNCEMENT, title, body, lang=lang, push=push
+    )
 
 
 async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
@@ -485,7 +488,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
         if await _not_for(ann, telegram_id, user):
             # Не отправка, а отметка «этому не нужно» — иначе следующий прогон
             # снова увидит его неотправленным. В счёт доставленных не идёт.
-            await db.record_push(telegram_id, ann.key, ann.text, today)
+            await db.record_push(telegram_id, ann.key, ann.text, today, channel=None)
             continue
         if user is not None and not user["telegram_linked"]:
             # App-only атлет — чата с ботом нет, Telegram-попытка тут ничего
@@ -498,7 +501,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
             except Exception:
                 logger.exception("Announcement %s: APNs banner failed for user %s", ann.key, telegram_id)
             sent += 1
-            await db.record_push(telegram_id, ann.key, ann.text, today)
+            await db.record_push(telegram_id, ann.key, ann.text, today, channel=None)
             continue
         try:
             await _send_one(bot, telegram_id, ann)
@@ -516,6 +519,15 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
             continue
         sent += 1
         await db.record_push(telegram_id, ann.key, ann.text, today)
+        # Дошло в Telegram — и во «Уведомления» приложения, если оно у
+        # человека есть: одна строка, без второго баннера. Только после
+        # доставки: несостоявшаяся попытка повторится на следующем старте и
+        # иначе легла бы дважды.
+        try:
+            lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
+            await _send_apns_announcement(telegram_id, ann, lang, push=False)
+        except Exception:
+            logger.exception("Announcement %s: inbox entry failed for user %s", ann.key, telegram_id)
         await asyncio.sleep(SEND_DELAY)
     logger.info("Announcement %s done: %s sent, %s blocked, %s failed", ann.key, sent, blocked, failed)
     return sent, blocked, failed

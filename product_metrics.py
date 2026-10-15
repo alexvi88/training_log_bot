@@ -14,7 +14,11 @@
 - сервер пишет сам: `action` — меняющий запрос приложения (`route` — шаблон
   маршрута, `api_v1_activity`), `tg_message`/`tg_callback` — сообщение и
   нажатие в боте (`activity_log`: вид сообщения или команда, экран по префиксу
-  callback_data);
+  callback_data); `feedback_push_sent` (`round` first|repeat) — ушёл iOS-пуш
+  «Как тебе дневник?» (engagement), `feedback_push_replied` (`after`
+  under_1h|under_24h|later) — первая реплика в поддержку за неделю после него
+  (api_v1_support); открытие этого пуша — обычный `push_open` с
+  `category=feedback_ask`;
 - приложение присылает `POST /v1/events` (`api_v1_events`): открытие и уход в
   фон с длиной сессии, просмотр экрана, тап по пушу — то, чего сервер не видит:
   GET'ы в ленту не пишутся, а тап по баннеру до сервера не доходит вовсе.
@@ -23,7 +27,20 @@
 сутки в строки (сутки, метрика) — активные (всего, в боте, в приложении), за
 7 и 30 дней, новые, тренировавшиеся, подходы, закрытые тренировки, вызовы и
 расход AI, пуши, открытия приложения, шаги воронки до входа, удержание когорт
-на 1/7/30 день. Свои аккаунты (`config.limit_preview_ids`) в сводку не входят:
+на 1/7/30 день.
+
+Пуши в сводке. `pushes_sent` — строки `pushes` (решения «пушу быть», как
+было); по каналам — `pushes_sent_tg` (сообщение в Telegram реально ушло,
+`pushes.channel`) и `pushes_sent_ios` (Apple принял баннер — серверное событие
+`push_sent` из `apns.send_alert`, по одному на устройство), `push_failed_ios`
+(Apple не принял, мёртвые токены тоже). `push_users` — разных людей с хотя бы
+одной доставкой, `pushes_per_user` — (tg + ios) / push_users. `push_ctr_ios` —
+тапы `push_open` / доставленные iOS (тап в Telegram до сервера не доходит).
+`push_to_workout_24h` — доля получивших пуш, кто начал или закончил
+тренировку в 24 часа после него; пишется на сутки позже, когда окно закрыто.
+По категориям — `pushes_sent:<категория>` и `push_opens:<категория>` (только в
+CSV). Сводку пушей за вчера утренний отчёт админу (`admin_tasks`) показывает
+тем же расчётом (`push_stats`). Свои аккаунты (`config.limit_preview_ids`) в сводку не входят:
 владелец, гоняющий бота руками, — это не рост.
 
 `catch_up` досчитывает все пропущенные сутки с первого пользователя: у старых
@@ -51,6 +68,12 @@ logger = logging.getLogger(__name__)
 PLATFORM_TG = "tg"
 PLATFORM_IOS = "ios"
 
+# Серверное событие: баннер APNs ушёл на одно устройство (apns.send_alert),
+# props category и ok (принял ли Apple). Приложение его не присылает.
+PUSH_SENT_EVENT = "push_sent"
+# Категория, не похожая на машинный токен, — в общий ящик, а не в отдельный ряд.
+OTHER_CATEGORY = "other"
+
 # События, которые принимает POST /v1/events, и какие свойства у каждого. Новое
 # событие приложения — сначала сюда, иначе сервер его молча пропустит.
 CLIENT_EVENTS: dict[str, frozenset[str]] = {
@@ -73,6 +96,11 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
     "coach_invite": frozenset({"action"}),
+    # «Уведомления» в «Профиле» (api_v1_inbox.py): открыл раздел и тапнул
+    # карточку — с категорией пуша (как у push_open), без текста. По паре
+    # видно, читают ли раздел те, кто выключил пуши, и что в нём открывают.
+    "inbox_open": frozenset(),
+    "inbox_item_open": frozenset({"category"}),
 }
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")
@@ -90,6 +118,11 @@ def clean_token(value: Any) -> Optional[str]:
         return None
     value = value.split(":", 1)[0].strip().lower()
     return value if _TOKEN.fullmatch(value) else None
+
+
+def push_category(value: Any) -> str:
+    """Категория пуша для сводки: короткий токен или `other`."""
+    return clean_token(value) or OTHER_CATEGORY
 
 
 def clean_props(event: str, props: Any) -> Optional[dict]:
@@ -170,6 +203,99 @@ async def _active(
     return active
 
 
+def _moment(value: Optional[str]) -> Optional[dt.datetime]:
+    """Метка времени из базы → naive UTC. С поясом (время от телефона) —
+    переводится; без пояса — уже UTC, как now_iso."""
+    if not value:
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return moment
+
+
+async def push_stats(day: dt.date, own: set[int]) -> dict[str, Any]:
+    """Пуши суток без своих аккаунтов — и для сводки, и для утреннего отчёта
+    админу (admin_tasks). `categories` — {категория: {sent, ios, opens}}:
+    sent — доставлено по обоим каналам, ios — из них на iOS, opens — тапы."""
+    rows = await db.push_deliveries(_day(day), own)
+    sent_tg = sent_ios = failed_ios = 0
+    users: set[int] = set()
+    categories: dict[str, dict[str, int]] = {}
+    for uid, channel, category, _, ok in rows:
+        if not ok:
+            failed_ios += 1
+            continue
+        users.add(uid)
+        cat = categories.setdefault(push_category(category), {"sent": 0, "ios": 0, "opens": 0})
+        cat["sent"] += 1
+        if channel == PLATFORM_IOS:
+            sent_ios += 1
+            cat["ios"] += 1
+        else:
+            sent_tg += 1
+    opens = await db.push_open_categories(_day(day), own)
+    for category in opens:
+        cat = categories.setdefault(push_category(category), {"sent": 0, "ios": 0, "opens": 0})
+        cat["opens"] += 1
+    return {
+        "sent_tg": sent_tg,
+        "sent_ios": sent_ios,
+        "failed_ios": failed_ios,
+        "users": len(users),
+        "opens": len(opens),
+        "categories": categories,
+    }
+
+
+def push_metrics(stats: dict[str, Any]) -> dict[str, float]:
+    """Строки сводки из push_stats. Доли с пустым знаменателем не пишутся
+    вовсе: «0% CTR» в день без iOS-пушей — неправда, а пустая клетка — нет."""
+    total = stats["sent_tg"] + stats["sent_ios"]
+    out: dict[str, float] = {
+        "pushes_sent_tg": stats["sent_tg"],
+        "pushes_sent_ios": stats["sent_ios"],
+        "push_failed_ios": stats["failed_ios"],
+        "push_users": stats["users"],
+    }
+    if stats["users"]:
+        out["pushes_per_user"] = round(total / stats["users"], 2)
+    if stats["sent_ios"]:
+        out["push_ctr_ios"] = round(stats["opens"] / stats["sent_ios"], 4)
+    for category, counts in stats["categories"].items():
+        out[f"pushes_sent:{category}"] = counts["sent"]
+        out[f"push_opens:{category}"] = counts["opens"]
+    return out
+
+
+async def push_to_workout(day: dt.date, own: set[int]) -> tuple[int, int]:
+    """(сколько начали или закончили тренировку в 24 часа после любого своего
+    пуша суток `day`, сколько вообще получили пуш в эти сутки).
+
+    Окно пуша, отправленного в 23:00, кончается в 23:00 следующих суток —
+    поэтому досчитывать это можно только когда кончились и они: rollup_day(D)
+    пишет значение в строку D−1 (см. там)."""
+    pushed: dict[int, list[dt.datetime]] = {}
+    for uid, _, _, sent_at, ok in await db.push_deliveries(_day(day), own):
+        moment = _moment(sent_at)
+        if ok and moment is not None:
+            pushed.setdefault(uid, []).append(moment)
+    if not pushed:
+        return 0, 0
+    converted: set[int] = set()
+    window_end = _day(day + dt.timedelta(days=2))
+    for uid, value in await db.workout_moments(set(pushed), _day(day), window_end):
+        moment = _moment(value)
+        if moment is None or uid in converted:
+            continue
+        if any(p <= moment <= p + dt.timedelta(hours=24) for p in pushed[uid]):
+            converted.add(uid)
+    return len(converted), len(pushed)
+
+
 async def rollup_day(
     day: dt.date, cache: Optional[dict[str, dict[int, set[str]]]] = None
 ) -> dict[str, float]:
@@ -191,7 +317,23 @@ async def rollup_day(
             metrics["wau"] = len(window)
     metrics["mau"] = len(window)
 
+    metrics.update(push_metrics(await push_stats(day, own)))
+
     await db.upsert_daily_metrics(_day(day), metrics)
+
+    # Пуш → тренировка за 24 часа — с отставанием на сутки и в строку D−1.
+    # Окно пуша суток D−1 кончается не позже конца суток D, а rollup_day(D)
+    # идёт уже после них (catch_up считает только кончившиеся сутки) — значит,
+    # окно закрыто целиком. Считать это для самих суток D значило бы писать
+    # заниженную долю, которую потом молча переписывают. У последних суток
+    # сводки клетка пустая, пока не кончатся следующие; досчёт истории
+    # заполняет каждую строку, когда проходит по следующей за ней.
+    prev = day - dt.timedelta(days=1)
+    converted, pushed = await push_to_workout(prev, own)
+    if pushed:
+        await db.upsert_daily_metrics(
+            _day(prev), {"push_to_workout_24h": round(converted / pushed, 4)}
+        )
 
     for n in RETENTION_DAYS:
         cohort_day = day - dt.timedelta(days=n)

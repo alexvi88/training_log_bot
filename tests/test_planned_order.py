@@ -13,6 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import db
 import keyboards
 from fsm import WorkoutFlow
 from handlers import routines, workout
@@ -90,8 +91,17 @@ def _button_texts(kb):
     return [b.text for row in kb.inline_keyboard for b in row]
 
 
-async def _go_idle(user_id, state):
-    """Finish the exercise that's open, landing on the between-exercises screen."""
+async def _go_idle(user_id, state, *, done: bool = True):
+    """Finish the exercise that's open, landing on the between-exercises screen.
+
+    `done` — сделано: без подходов у открытого записывается один. Закрытое
+    пустым — это «убрал из тренировки», и пункт плана возвращается в остаток
+    (см. test_plan_remove_restore.py), а здесь проверяется ход по плану."""
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    block_id = (data.get("open_blocks") or {}).get(active)
+    if done and block_id is not None and not await db.list_sets_for_block(block_id):
+        await db.append_set(block_id, active, 0, 50, 10)
     cb = _make_callback(user_id, "live:finish_exercise")
     await workout.live_finish_exercise(cb, state)
     return cb

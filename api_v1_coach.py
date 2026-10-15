@@ -6,7 +6,8 @@
   (список с сигналами, дневник атлета только на чтение, прогресс — недели,
   движения и рекорды, «Все упражнения» и прогресс любого из них тем же
   ответом, что у атлета, назначить программу,
-  комментарий к тренировке, убрать клиента), `/coach/ai-summary` (POST —
+  комментарий к тренировке, убрать клиента; кто сам закрыл доступ за неделю —
+  `recently_unlinked` в списке), `/coach/ai-summary` (POST —
   собрать сводку, GET — последняя сохранённая);
 - атлет: `/coach/invites/{code}` (кто зовёт и что увидит → «Разрешить»),
   `/coach-links…` (мои тренеры: что открыто, отозвать) и комментарии тренера
@@ -190,7 +191,10 @@ async def list_clients(request: Request) -> JSONResponse:
         client = await db.get_user(link["client_id"])
         if client is not None:
             items.append(await _client_json(user_id, link, client))
-    return JSONResponse({"clients": items})
+    # Серые строки «Маша больше не делится дневником · 14 окт»: кто сам закрыл
+    # доступ за последнюю неделю. Отдельным списком — это не клиенты, открыть
+    # их нельзя (coach_service.recent_unlinks).
+    return JSONResponse({"clients": items, "recently_unlinked": await coach_service.recent_unlinks(user_id)})
 
 
 async def get_client(request: Request) -> JSONResponse:
@@ -253,7 +257,13 @@ async def client_exercise_progress(request: Request) -> JSONResponse:
 async def remove_client(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
     link, _ = await _linked_client(user_id, _client_id(request))
-    await db.delete_coach_link(user_id, link["client_id"])
+    await db.delete_coach_link(user_id, link["client_id"], by=db.COACH_UNLINK_BY_COACH)
+    # Атлету — «тренер больше не ведёт тебя», на его языке (coach_notify).
+    profile = await db.get_coach_profile(user_id)
+    await coach_notify.deliver_unlinked(
+        user_id, link["client_id"], by=db.COACH_UNLINK_BY_COACH, client_name=link["client_name"],
+        coach_name=profile["display_name"] if profile is not None else None,
+    )
     return JSONResponse({"removed": True})
 
 
@@ -405,7 +415,11 @@ async def saved_ai_summary(request: Request) -> JSONResponse:
     него — по всем). Бесплатно: модель не зовётся. `summary` — null, если
     сводки нет, она старше срока хранения, связку разрывали или сводка
     написана на другом языке, чем сейчас у тренера (coach_service.saved_summary).
-    Форма `summary` — та же, что у ответа POST."""
+    Форма `summary` — та же, что у ответа POST. `summary.stale` — данные
+    клиентов с тех пор поменялись (новый клиент, тренировка, рекорд,
+    видимость): как текущую её не показывать. Приложение тогда само зовёт
+    POST за свежей, а упёрлось в лимит — показывает эту с пометкой «устарела».
+    GET модель не зовёт никогда — он бесплатный."""
     user_id = await common.authed_user_id(request)
     await _coach_profile(user_id)
     raw = request.query_params.get("client_id")
@@ -442,7 +456,23 @@ async def invite_preview(request: Request) -> JSONResponse:
         "is_own": invite["owner_id"] == user_id,
         "already_linked": link is not None,
         "visibility": coach_service.visibility_json(link),
+        # Чем вписать поле «Как тебя назвать тренеру» заранее; null — нечем,
+        # атлет набирает сам. Только подсказка: принимается то имя, что
+        # пришло в «Разрешить».
+        "suggested_name": await suggested_client_name(user_id),
     })
+
+
+async def suggested_client_name(user_id: int) -> Optional[str]:
+    """Имя для приглашения тренера: как атлет уже назвался другому тренеру,
+    иначе его имя тренера, иначе имя из Telegram. Берётся первое, что прошло
+    бы проверку «Разрешить» (`_display_name`), — подсказка, которую сервер
+    сам потом отклонит, хуже пустого поля."""
+    for raw in await db.coach_client_name_candidates(user_id):
+        name = coach_service.clean_display_name(raw)
+        if name is not None and len(name) <= coach_service.MAX_DISPLAY_NAME_LENGTH:
+            return name
+    return None
 
 
 async def accept_invite(request: Request) -> JSONResponse:
@@ -507,8 +537,13 @@ async def update_my_coach(request: Request) -> JSONResponse:
 async def revoke_my_coach(request: Request) -> JSONResponse:
     user_id = await common.authed_user_id(request)
     coach_id = int(request.path_params["coach_id"])
-    await _my_link(user_id, coach_id)
-    await db.delete_coach_link(coach_id, user_id)
+    link = await _my_link(user_id, coach_id)
+    await db.delete_coach_link(coach_id, user_id, by=db.COACH_UNLINK_BY_CLIENT)
+    # Тренеру — «клиент закрыл доступ», на его языке (coach_notify); в «Моих
+    # клиентах» неделю стоит серая строка.
+    await coach_notify.deliver_unlinked(
+        coach_id, user_id, by=db.COACH_UNLINK_BY_CLIENT, client_name=link["client_name"]
+    )
     return JSONResponse({"revoked": True})
 
 

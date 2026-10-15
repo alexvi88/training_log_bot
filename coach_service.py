@@ -33,6 +33,8 @@ AI-сводка для тренера отдаёт модели данные а�
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import secrets
 from typing import Any, Optional
 
@@ -198,6 +200,19 @@ def visibility_json(link: Any) -> dict[str, Any]:
 
 
 # ---------- сигналы по атлету ----------
+
+
+async def recent_unlinks(coach_id: int) -> list[dict[str, Any]]:
+    """Кто из клиентов сам закрыл доступ за последние
+    config.COACH_UNLINK_SHOWN_DAYS дней — серые строки в «Моих клиентах»,
+    свежие выше. Тех, кого тренер убрал сам, здесь нет: он и так знает, а
+    кнопка «Убрать» уже ответила ему «Убрал из клиентов». Вернулся (повторное
+    «Разрешить») — строки тоже нет: он снова обычный клиент."""
+    rows = await db.list_recent_coach_unlinks(coach_id, config.COACH_UNLINK_SHOWN_DAYS)
+    return [
+        {"client_id": r["client_id"], "name": r["client_name"], "unlinked_at": r["unlinked_at"]}
+        for r in rows
+    ]
 
 
 async def client_signals(client: Any, link: Any, coach_id: int) -> dict[str, Any]:
@@ -571,34 +586,69 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
 # ---------- AI-сводка для тренера ----------
 
 
-async def _client_brief(coach_id: int, client: Any, link: Any) -> str:
+SUMMARY_WORKOUTS = 6
+SUMMARY_EXERCISES_PER_WORKOUT = 8
+SUMMARY_SETS_PER_EXERCISE = 10
+
+
+def _set_text(row: Any) -> str:
+    """Подход для модели — «62.5×9» (вид подхода у графиков и рекордов); без
+    внешнего веса — «свой вес×12», а не «0×12», которое модель читала бы как
+    «веса нет»."""
+    if not row["weight"]:
+        return i18n.t("coach.ai.data.bodyweight_set", reps=row["reps"]) + formatting.format_rpe(row["rpe"])
+    return formatting.format_set(row["weight"], row["reps"], row["rpe"])
+
+
+async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str]:
     """Атлет текстом для модели: имя, неделя, пропуск, рекорды, назначенные
-    программы, последние тренировки. Только то, что тренер и так видит на
-    экранах — ни веса тела, ни переписки с AI-тренером."""
+    программы, последние тренировки с подходами. Только то, что тренер и так
+    видит на экранах — ни веса тела, ни переписки с AI-тренером.
+
+    Возвращает (текст для модели, часть отпечатка). Отпечаток — тот же текст
+    без строк, которые меняет календарь, а не дневник («тренировок на этой
+    неделе», «дней с последней тренировки»): сами тренировки в нём и так есть,
+    а сводка, перестающая быть текущей каждую полночь, — это платный вызов на
+    каждое открытие."""
     signals = await client_signals(client, link, coach_id)
-    lines = [i18n.t("coach.ai.data.client", name=link["client_name"])]
-    lines.append(i18n.t("coach.ai.data.week", n=signals["workouts_this_week"]))
+    head = [i18n.t("coach.ai.data.client", name=link["client_name"])]
+    clock = [i18n.t("coach.ai.data.week", n=signals["workouts_this_week"])]
     if signals["days_since_last_workout"] is None:
-        lines.append(i18n.t("coach.ai.data.no_workouts"))
+        clock.append(i18n.t("coach.ai.data.no_workouts"))
     else:
-        lines.append(i18n.t("coach.ai.data.days_since", n=signals["days_since_last_workout"]))
+        clock.append(i18n.t("coach.ai.data.days_since", n=signals["days_since_last_workout"]))
+    data = [i18n.t("coach.ai.data.unit", unit=formatting.unit_label(client["unit"]))]
     for record in await recent_records(client):
-        lines.append(i18n.t("coach.ai.data.record", exercise=record["exercise"], best=record["text"]))
+        # «62.5×9» — тот же вид, что у подходов ниже: модель сверяет рекорд с
+        # тренировками, а не два разных формата.
+        data.append(i18n.t("coach.ai.data.record", exercise=record["exercise"], best=record["best_set"]))
     for program in await assigned_programs(coach_id, client["telegram_id"]):
-        lines.append(i18n.t(
+        data.append(i18n.t(
             "coach.ai.data.program", name=program["name"], done=program["done_days"],
             total=len(program["days"]),
         ))
-    workouts = await db.list_workouts(client["telegram_id"], limit=6)
-    contents = await db.list_workout_contents([w["id"] for w in workouts])
+    workouts = await db.list_workouts(client["telegram_id"], limit=SUMMARY_WORKOUTS)
+    sets_by_workout: dict[int, dict[int, tuple[str, list[str]]]] = {}
+    counts: dict[int, int] = {}
+    for row in await db.list_sets_for_workouts([w["id"] for w in workouts]):
+        wid = row["workout_id"]
+        counts[wid] = counts.get(wid, 0) + 1
+        by_exercise = sets_by_workout.setdefault(wid, {})
+        name, sets = by_exercise.setdefault(
+            row["exercise_id"], (sharing.shown_exercise_name(row["display_name"]), [])
+        )
+        sets.append(_set_text(row))
     for w in workouts:
-        names, set_count = contents.get(w["id"], ([], 0))
-        lines.append(i18n.t(
+        exercises = list(sets_by_workout.get(w["id"], {}).values())[:SUMMARY_EXERCISES_PER_WORKOUT]
+        data.append(i18n.t(
             "coach.ai.data.workout", date=w["started_at"][:10],
-            exercises=", ".join(shown_exercise_names(names[:6])),
-            n=set_count,
+            exercises="; ".join(
+                f"{name} {', '.join(sets[:SUMMARY_SETS_PER_EXERCISE])}" for name, sets in exercises
+            ),
+            n=counts.get(w["id"], 0),
         ))
-    return "\n".join(lines)
+    text = "\n".join(head + clock + data)
+    return text, "\n".join(head + data)
 
 
 async def _model_answer(coach_id: int, messages: list[dict[str, Any]]) -> str:
@@ -619,26 +669,59 @@ async def _model_answer(coach_id: int, messages: list[dict[str, Any]]) -> str:
     return (response.choices[0].message.content or "").strip()
 
 
-async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str, Any]:
-    """Сводка по всем клиентам («кого пора пнуть», рекорды, застои) или по
-    одному. Язык — тренера (выставлен запросом). Клиенты, чьи данные модели
-    отдавать нельзя (`ai_trainer._background_ai_allowed`), в данные не
-    попадают — их число уходит в `skipped_no_consent`."""
+async def _summary_inputs(
+    coach_id: int, client_id: Optional[int],
+) -> tuple[list[str], int, str]:
+    """Что уходит в сводку: (тексты атлетов для модели, сколько пропущено без
+    согласия на AI, отпечаток этих данных).
+
+    Отпечаток — sha256 от того, что сводка читает: каждый клиент (id, имя у
+    тренера, видимость, разрешён ли AI) и, у разрешённых, данные из брифа —
+    последние тренировки с подходами, рекорды, программы. Новый клиент, новая
+    тренировка, правка подхода, свежий рекорд, снятое согласие — другой
+    отпечаток, и сохранённая сводка больше не текущая. Язык в отпечаток не
+    входит: сводка на другом языке не показывается и так."""
     links = await db.list_coach_clients(coach_id)
     if client_id is not None:
         links = [link for link in links if link["client_id"] == client_id]
     briefs = []
     skipped = 0
+    parts: list[tuple[int, str]] = []
     for link in links:
         client = await db.get_user(link["client_id"])
+        head = json.dumps(
+            [link["client_id"], link["client_name"], visibility_json(link)], ensure_ascii=False
+        )
         if client is None:
+            parts.append((link["client_id"], head + "|gone"))
             continue
         if not await ai_trainer._background_ai_allowed(client):
             skipped += 1
+            parts.append((link["client_id"], head + "|no_ai"))
             continue
-        briefs.append(await _client_brief(coach_id, client, link))
+        text, stable = await _client_brief(coach_id, client, link)
+        briefs.append(text)
+        parts.append((link["client_id"], head + "|" + stable))
+    # Порядок клиентов на экране (по имени) отпечаток не меняет — только состав.
+    joined = "\n\n".join(part for _id, part in sorted(parts))
+    fingerprint = hashlib.sha256(joined.encode("utf-8")).hexdigest()
+    return briefs, skipped, fingerprint
+
+
+async def summary_fingerprint(coach_id: int, client_id: Optional[int] = None) -> str:
+    """Отпечаток данных сводки прямо сейчас (см. _summary_inputs) — без
+    вызова модели."""
+    return (await _summary_inputs(coach_id, client_id))[2]
+
+
+async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str, Any]:
+    """Сводка по всем клиентам («кого пора пнуть», рекорды, застои) или по
+    одному. Язык — тренера (выставлен запросом). Клиенты, чьи данные модели
+    отдавать нельзя (`ai_trainer._background_ai_allowed`), в данные не
+    попадают — их число уходит в `skipped_no_consent`."""
+    briefs, skipped, fingerprint = await _summary_inputs(coach_id, client_id)
     if not briefs:
-        return {"text": None, "clients": 0, "skipped_no_consent": skipped}
+        return {"text": None, "clients": 0, "skipped_no_consent": skipped, "stale": False}
     coach = await db.get_user(coach_id)
     today = (timeutil.user_today(coach) if coach is not None else dt.date.today()).isoformat()
     prompt_key = "coach.ai.system_one" if client_id is not None else "coach.ai.system_all"
@@ -649,25 +732,30 @@ async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str
     text = await _model_answer(coach_id, messages)
     await db.try_increment_ai_question_count(coach_id, config.AI_QUESTION_DAILY_LIMIT)
     text = text or i18n.t("coach.ai.empty")
-    # Оплаченную сводку запоминаем: открыть её ещё раз — бесплатно
-    # (saved_summary). Не легла (связку разорвали, пока модель думала) —
-    # отдаём как есть, только без даты.
-    row = await db.save_coach_summary(coach_id, client_id, i18n.get_lang(), text, len(briefs), skipped)
+    # Оплаченную сводку запоминаем вместе с отпечатком данных: открыть её ещё
+    # раз — бесплатно, пока данные те же (saved_summary). Не легла (связку
+    # разорвали, пока модель думала) — отдаём как есть, только без даты.
+    row = await db.save_coach_summary(
+        coach_id, client_id, i18n.get_lang(), text, len(briefs), skipped, fingerprint
+    )
     return {
         "text": text,
         "clients": len(briefs),
         "skipped_no_consent": skipped,
         "created_at": row["created_at"] if row is not None else None,
+        "stale": False,
     }
 
 
-def summary_json(row: Any) -> dict[str, Any]:
-    """Сохранённая сводка в той же форме, что ответ POST /coach/ai-summary."""
+def summary_json(row: Any, *, stale: bool = False) -> dict[str, Any]:
+    """Сохранённая сводка в той же форме, что ответ POST /coach/ai-summary.
+    `stale` — данные клиентов с тех пор поменялись: текст уже не про сегодня."""
     return {
         "text": row["text"],
         "clients": row["clients"],
         "skipped_no_consent": row["skipped_no_consent"],
         "created_at": row["created_at"],
+        "stale": stale,
     }
 
 
@@ -677,9 +765,15 @@ async def saved_summary(coach_id: int, client_id: Optional[int] = None) -> Optio
     Сводка, написанная на другом языке, чем текущий у тренера, не отдаётся
     вовсе (как «Итог недели» у weekly_digests): показать её значило бы
     заговорить с тренером на чужом языке, а перевести — снова платить модели.
-    Тренер видит «сводки нет» и кнопку собрать её заново."""
+    Тренер видит «сводки нет» и кнопку собрать её заново.
+
+    Отпечаток данных сейчас не совпал с сохранённым (новый клиент, тренировка,
+    рекорд, видимость; у сводки до отпечатков его нет вовсе) — сводка
+    отдаётся с `stale: True`: показывать её как текущую нельзя. Собрать
+    свежую — дело вызывающего (бот и приложение пробуют сами, упёрлись в
+    лимит — показывают старую с пометкой «устарела»)."""
     row = await db.get_coach_summary(coach_id, client_id)
     if row is None or row["lang"] != i18n.get_lang():
         return None
-    return summary_json(row)
-
+    current = await summary_fingerprint(coach_id, client_id)
+    return summary_json(row, stale=row["fingerprint"] != current)

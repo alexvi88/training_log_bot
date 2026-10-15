@@ -246,3 +246,145 @@ def test_plan_offer_event_keeps_only_action():
             "plan_offer", {"action": action, "text": "что ввёл человек", "screen": "x"}
         ) == {"action": action}
     assert product_metrics.clean_props("plan_offer", {}) == {}
+
+
+# --- пуши в сводке ----------------------------------------------------------------
+
+
+async def _tg_push(uid, category, stamp, channel="tg"):
+    await db.record_push(uid, category, "текст", stamp[:10], channel=channel)
+    await db.conn().execute(
+        "UPDATE pushes SET sent_at = ? WHERE id = (SELECT MAX(id) FROM pushes)", (stamp,)
+    )
+    await db.conn().commit()
+
+
+async def _ios_push(uid, category, stamp, ok=True):
+    await db.log_analytics_events([
+        (uid, "push_sent", product_metrics.props_json({"category": category, "ok": ok}), "ios", None, stamp)
+    ])
+
+
+async def _workout(uid, started, finished=None, source="manual"):
+    await db.conn().execute(
+        "INSERT INTO workouts (user_id, started_at, finished_at, status, source) VALUES (?, ?, ?, ?, ?)",
+        (uid, started, finished, "finished" if finished else "active", source),
+    )
+    await db.conn().commit()
+
+
+async def _push_day(monkeypatch):
+    """Синтетические сутки: 1 — Telegram, 2 — iOS (один баннер дошёл, один нет,
+    один тап), 3 — только отметка без телеграмной отправки; 900 — свой аккаунт
+    по обоим каналам. Первый тренируется через 3 часа после пуша."""
+    monkeypatch.setattr(config, "ADMIN_ID", 900)
+    monkeypatch.setattr(config, "TEST_USER_ID", None)
+    for uid in (1, 2, 3, 900):
+        await _user(uid, DAY - dt.timedelta(days=10))
+    d = DAY.isoformat()
+    await _tg_push(1, "skip_7", f"{d}T10:00:00")
+    await _tg_push(3, "release_x", f"{d}T10:00:00", channel=None)
+    await _ios_push(2, "skip_7", f"{d}T11:00:00")
+    await _ios_push(2, "plateau", f"{d}T12:00:00", ok=False)
+    await _event(2, "push_open", DAY, props={"category": "skip_7"})
+    await _workout(1, f"{d}T13:00:00", f"{d}T14:00:00")
+    # Импорт — история, а не ответ на пуш.
+    await _workout(2, f"{d}T15:00:00", f"{d}T16:00:00", source="import")
+    await _tg_push(900, "skip_7", f"{d}T10:00:00")
+    await _ios_push(900, "skip_7", f"{d}T10:00:00")
+    await _ios_push(900, "skip_7", f"{d}T10:00:00", ok=False)
+    await _event(900, "push_open", DAY, props={"category": "skip_7"})
+    await _workout(900, f"{d}T13:00:00", f"{d}T14:00:00")
+
+
+@pytest.mark.asyncio
+async def test_rollup_counts_pushes_by_channel_without_own_accounts(fresh_db, monkeypatch):
+    await _push_day(monkeypatch)
+    metrics = await product_metrics.rollup_day(DAY)
+    assert metrics["pushes_sent_tg"] == 1 and metrics["pushes_sent_ios"] == 1
+    assert metrics["push_failed_ios"] == 1
+    assert metrics["push_users"] == 2 and metrics["pushes_per_user"] == 1.0
+    assert metrics["push_ctr_ios"] == 1.0
+    assert metrics["pushes_sent:skip_7"] == 2 and metrics["push_opens:skip_7"] == 1
+    assert "pushes_sent:plateau" not in metrics and "pushes_sent:release_x" not in metrics
+    # Окно суток ещё открыто: доля пишется, только когда кончатся следующие.
+    assert "push_to_workout_24h" not in metrics
+    names, rows = await product_metrics.pivot()
+    assert "push_to_workout_24h" not in rows[0]
+
+    await product_metrics.rollup_day(DAY + dt.timedelta(days=1))
+    names, rows = await product_metrics.pivot()
+    by_day = {r["day"]: r for r in rows}
+    assert by_day[DAY.isoformat()]["push_to_workout_24h"] == 0.5
+
+    table = admin.format_metrics_table(rows[:1])
+    assert "skip_7" not in table
+    assert "📣 Пуши 09-01: 2 (TG 1 · iOS 1), 2 чел., CTR iOS 100%, не доставлено iOS 1" in table
+    csv_head = admin.metrics_csv(names, rows).decode().splitlines()[0].split(",")
+    assert "pushes_sent:skip_7" in csv_head and "push_opens:skip_7" in csv_head
+
+
+@pytest.mark.asyncio
+async def test_push_to_workout_window_is_24_hours_after_the_push(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    monkeypatch.setattr(config, "TEST_USER_ID", None)
+    for uid in (1, 2, 3):
+        await _user(uid, DAY)
+    d, nxt = DAY.isoformat(), (DAY + dt.timedelta(days=1)).isoformat()
+    for uid in (1, 2, 3):
+        await _tg_push(uid, "skip_7", f"{d}T22:00:00")
+    await _workout(1, f"{nxt}T21:00:00")  # на следующий день, но в окне
+    await _workout(2, f"{d}T08:00:00", f"{d}T09:00:00")  # до пуша
+    await _workout(3, f"{nxt}T23:00:00")  # позже 24 часов
+    assert await product_metrics.push_to_workout(DAY, set()) == (1, 3)
+
+
+@pytest.mark.asyncio
+async def test_catch_up_fills_push_to_workout_for_the_day_before_yesterday(fresh_db, monkeypatch):
+    await _push_day(monkeypatch)
+    await product_metrics.catch_up(DAY + dt.timedelta(days=2))
+    names, rows = await product_metrics.pivot()
+    by_day = {r["day"]: r for r in rows}
+    assert by_day[DAY.isoformat()]["push_to_workout_24h"] == 0.5
+    assert "push_to_workout_24h" not in by_day[(DAY + dt.timedelta(days=1)).isoformat()]
+
+
+@pytest.mark.asyncio
+async def test_receiving_a_push_is_not_activity(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    monkeypatch.setattr(config, "TEST_USER_ID", None)
+    await _user(1, DAY - dt.timedelta(days=3))
+    await _ios_push(1, "skip_7", f"{DAY.isoformat()}T10:00:00")
+    metrics = await product_metrics.rollup_day(DAY)
+    assert metrics["pushes_sent_ios"] == 1
+    assert metrics["active_users"] == 0 and metrics["active_ios"] == 0
+
+
+@pytest.mark.asyncio
+async def test_daily_admin_report_has_a_push_block(fresh_db, monkeypatch):
+    import admin_tasks
+
+    await _push_day(monkeypatch)
+    d = DAY + dt.timedelta(days=1)
+    await _tg_push(1, "plateau", f"{d.isoformat()}T10:00:00")
+    for stamp in ("T09:00:00", "T09:30:00"):
+        await _ios_push(2, "skip_7", d.isoformat() + stamp)
+    await _ios_push(2, "plateau", f"{d.isoformat()}T11:00:00")
+    await _event(2, "push_open", d, props={"category": "skip_7"})
+    await _tg_push(1, "rank_near", f"{d.isoformat()}T12:00:00")
+    await _tg_push(1, "digest", f"{d.isoformat()}T13:00:00")
+
+    text = await admin_tasks._build_push_report(d)
+    assert text.splitlines() == [
+        "",
+        "📣 Пуши",
+        "Отправлено: 6 (Telegram 3 · iOS 3)",
+        "Получили: 2 чел., 3.0 на человека",
+        "CTR iOS: 33% (1 из 3)",
+        "Потренировались за 24 ч после пуша (01.09): 50% (1 из 2)",
+        "  └ plateau: 2, CTR 0%",
+        "  └ skip_7: 2, CTR 50%",
+        "  └ digest: 1",
+    ]
+    empty = await admin_tasks._build_push_report(DAY + dt.timedelta(days=5))
+    assert empty.splitlines() == ["", "📣 Пуши", "Не уходили"]

@@ -15,6 +15,7 @@ import pytest
 import ai_limits
 import ai_trainer
 import api_v1
+import api_v1_coach
 import apns
 import coach_service
 import config
@@ -90,6 +91,48 @@ async def test_invite_preview_shows_coach_and_what_is_visible_before_consent(fre
     # Превью ничего не открывает: тренер атлета ещё не видит.
     assert (await coach.get("/coach/clients")).json()["clients"] == []
     assert (await coach.get(f"/coach/clients/{CLIENT}")).status_code == 404
+
+
+async def test_invite_preview_suggests_the_name_the_athlete_already_uses(fresh_db):
+    """Поле «Как тебя назвать тренеру» вписано заранее: имя из прошлой связки
+    главнее своего имени тренера, то — главнее имени из Telegram; нечем — null."""
+    coach = await _client(fresh_db, COACH)
+    athlete = await _client(fresh_db, CLIENT)
+    code = (await coach.post("/coach", json={"display_name": "Иван"})).json()["invite"]["code"]
+
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] is None
+    await fresh_db.set_user_first_name(CLIENT, "  Мария ")
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] == "Мария"
+    assert (await athlete.post("/coach", json={"display_name": "Тренер Маша"})).status_code == 200
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] == "Тренер Маша"
+
+    other = await _client(fresh_db, STRANGER)
+    other_code = (await other.post("/coach", json={"display_name": "Пётр"})).json()["invite"]["code"]
+    accepted = await athlete.post(f"/coach/invites/{other_code}/accept", json={"name": "Маша К."})
+    assert accepted.status_code == 201, accepted.text
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] == "Маша К."
+
+
+async def test_suggested_name_skips_what_accept_would_reject(fresh_db):
+    athlete = await _client(fresh_db, CLIENT)
+    await fresh_db.set_user_first_name(CLIENT, "\x07 \x08")
+    assert await api_v1_coach.suggested_client_name(CLIENT) is None
+    await fresh_db.set_user_first_name(CLIENT, "Я" * (coach_service.MAX_DISPLAY_NAME_LENGTH + 1))
+    assert await api_v1_coach.suggested_client_name(CLIENT) is None
+    await athlete.aclose()
+
+
+async def test_athlete_renames_themselves_and_the_coach_sees_the_new_name(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    patched = await athlete.patch(f"/coach-links/{COACH}", json={"name": "  Мария  Котова "})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["my_name"] == "Мария Котова"
+    assert patched.json()["visibility"] == {"bodyweight": False}
+    clients = (await coach.get("/coach/clients")).json()["clients"]
+    assert [c["name"] for c in clients] == ["Мария Котова"]
+    assert (await coach.get(f"/coach/clients/{CLIENT}")).json()["client"]["name"] == "Мария Котова"
+    empty = await athlete.patch(f"/coach-links/{COACH}", json={"name": "  "})
+    assert empty.status_code == 400
 
 
 async def test_accept_links_with_defaults_and_errors(fresh_db):
@@ -417,7 +460,7 @@ async def test_ai_summary_only_sends_clients_who_consented(fresh_db, fake_model)
     # нет, и модель не зовётся.
     await fresh_db.register_push_token(CLIENT, "ios", "a" * 64)
     result = (await coach.post("/coach/ai-summary", json={})).json()
-    assert result == {"text": None, "clients": 0, "skipped_no_consent": 1}
+    assert result == {"text": None, "clients": 0, "skipped_no_consent": 1, "stale": False}
     assert _summary_calls(fake_model) == []
 
     await athlete.patch("/settings", json={"ai_consent": True})
@@ -493,6 +536,40 @@ async def test_saved_summary_comes_back_free_until_the_link_breaks(fresh_db, fak
     assert (await athlete.delete(f"/coach-links/{COACH}")).status_code == 200
     cur = await db.conn().execute("SELECT COUNT(*) FROM coach_summaries")
     assert (await cur.fetchone())[0] == 0
+
+
+async def test_saved_summary_goes_stale_when_the_data_changes(fresh_db, fake_model):
+    """GET отдаёт сохранённую сводку с `stale`: те же данные — false и без
+    вызова модели; новый клиент или новая тренировка — true (текст прежний,
+    модель всё так же не зовётся: GET бесплатный); POST собирает свежую —
+    снова false."""
+    coach, athlete, _ = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    await _finished_workout(athlete, ex, 60)
+    made = (await coach.post("/coach/ai-summary", json={})).json()
+    assert made["stale"] is False
+    one = (await coach.post("/coach/ai-summary", json={"client_id": CLIENT})).json()
+    assert (await coach.get("/coach/ai-summary")).json()["summary"] == made
+    assert len(_summary_calls(fake_model)) == 2
+
+    # Новый клиент — сводка «по всем» устарела, по Маше — нет.
+    stranger = await _client(fresh_db, STRANGER)
+    code = (await coach.get("/coach")).json()["invite"]["code"]
+    assert (await stranger.post(f"/coach/invites/{code}/accept", json={"name": "Вика"})).status_code == 201
+    stale = (await coach.get("/coach/ai-summary")).json()["summary"]
+    assert stale == {**made, "stale": True}
+    assert (await coach.get(f"/coach/ai-summary?client_id={CLIENT}")).json()["summary"] == one
+
+    # Новая тренировка Маши — устарела и сводка по ней.
+    await _finished_workout(athlete, ex, 65)
+    assert (await coach.get(f"/coach/ai-summary?client_id={CLIENT}")).json()["summary"]["stale"] is True
+    assert len(_summary_calls(fake_model)) == 2
+
+    again = (await coach.post("/coach/ai-summary", json={})).json()
+    assert again["stale"] is False
+    assert "Вика" in _summary_calls(fake_model)[-1]["messages"][1]["content"]
+    assert (await coach.get("/coach/ai-summary")).json()["summary"]["stale"] is False
+    await stranger.aclose()
 
 
 async def test_saved_summary_expires_after_the_retention(fresh_db, fake_model):

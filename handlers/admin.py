@@ -787,7 +787,33 @@ def format_metrics_table(rows: list[dict]) -> str:
     text = "📈 <b>Метрики по дням</b> (без своих аккаунтов)\n<pre>" + escape("\n".join(lines)) + "</pre>"
     if retention:
         text += "\nУдержание, 4 нед. когорт: " + " · ".join(retention)
+    pushes = _metrics_push_line(rows)
+    if pushes:
+        text += "\n" + pushes
     return text
+
+
+def _metrics_push_line(rows: list[dict]) -> str:
+    """Итоги по пушам за последние сутки сводки одной строкой. Разбивка по
+    категориям (`pushes_sent:<кат>`) — только в CSV: в таблицу телефона
+    два десятка колонок не влезут."""
+    last = rows[-1]
+    tg = last.get("pushes_sent_tg") or 0
+    ios = last.get("pushes_sent_ios") or 0
+    failed = last.get("push_failed_ios") or 0
+    if not (tg or ios or failed):
+        return ""
+    parts = [f"{int(tg + ios)} (TG {int(tg)} · iOS {int(ios)})"]
+    if last.get("push_users"):
+        parts.append(f"{int(last['push_users'])} чел.")
+    if last.get("push_ctr_ios") is not None:
+        parts.append(f"CTR iOS {last['push_ctr_ios']:.0%}")
+    if failed:
+        parts.append(f"не доставлено iOS {int(failed)}")
+    workout = next((r for r in reversed(rows) if r.get("push_to_workout_24h") is not None), None)
+    if workout:
+        parts.append(f"трен. за 24 ч {workout['push_to_workout_24h']:.0%} ({workout['day'][5:]})")
+    return f"📣 Пуши {last['day'][5:]}: " + ", ".join(parts)
 
 
 def metrics_csv(names: list[str], rows: list[dict]) -> bytes:

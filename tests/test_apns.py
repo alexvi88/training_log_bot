@@ -254,3 +254,28 @@ async def test_dead_token_cleanup_does_not_delete_a_newer_token(monkeypatch, fre
     row = await cur.fetchone()
     assert row is not None, "the current, live token must not be deleted"
     assert row["device_token"] == "new-token"
+
+
+async def test_every_attempt_is_tracked_for_the_daily_summary(monkeypatch, fresh_db, user_id):
+    """push_sent — категория и принял ли Apple, на каждое устройство; ни текста,
+    ни токена. Мёртвый токен — тоже недоставленный пуш."""
+    _patch_client(monkeypatch, FakeResponse(200))
+    await apns.send_alert(user_id, "tok-1", "Секрет", "Текст", category="skip_7")
+    await fresh_db.register_push_token(user_id, "ios", "dead-token")
+    _patch_client(monkeypatch, FakeResponse(410, reason="Unregistered"))
+    await apns.send_alert(user_id, "dead-token", "Секрет", "Текст", category="support_thread:12")
+    cur = await fresh_db.conn().execute(
+        "SELECT props, platform FROM analytics_events WHERE event = 'push_sent' ORDER BY id"
+    )
+    rows = [tuple(r) for r in await cur.fetchall()]
+    assert rows == [
+        ('{"category":"skip_7","ok":true}', "ios"),
+        ('{"category":"support_thread","ok":false}', "ios"),
+    ]
+
+
+async def test_unconfigured_apns_tracks_nothing(monkeypatch, fresh_db, user_id):
+    monkeypatch.setattr(config, "APNS_KEY_P8", "")
+    await apns.send_alert(user_id, "tok", "T", "B", category="skip_7")
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM analytics_events")
+    assert (await cur.fetchone())[0] == 0

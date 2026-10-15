@@ -78,7 +78,7 @@ async def test_both_devices_get_the_push(fresh_db, user_id, monkeypatch):
     await db.register_push_token(user_id, "ios", "ipad")
     sent: list[tuple[str, str, str]] = []
 
-    async def fake_send_alert(uid, device_token, title, body, *, category=None, route=None):
+    async def fake_send_alert(uid, device_token, title, body, *, category=None, route=None, **_kw):
         sent.append((device_token, title, body))
         return True
 

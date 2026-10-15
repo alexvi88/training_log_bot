@@ -41,6 +41,7 @@ import jwt
 import config
 import db
 import ops_alerts
+import product_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,19 @@ async def _get_client() -> Optional[httpx.AsyncClient]:
     return _client
 
 
+async def _track_sent(user_id: int, category: Optional[str], ok: bool) -> None:
+    """Событие push_sent для суточной сводки (product_metrics): одна попытка
+    на одно устройство — категория и принял ли Apple (HTTP 200). Без текста
+    пуша и без device token. Пишется только когда запрос к Apple реально
+    ушёл: «APNs не настроен» — не попытка доставки."""
+    await product_metrics.track(
+        user_id,
+        product_metrics.PUSH_SENT_EVENT,
+        {"category": product_metrics.push_category(category), "ok": ok},
+        platform=product_metrics.PLATFORM_IOS,
+    )
+
+
 def _reason(response: httpx.Response) -> str:
     try:
         return str(response.json().get("reason", ""))
@@ -144,6 +158,8 @@ async def send_alert(
     *,
     category: Optional[str] = None,
     route: Optional[dict] = None,
+    inbox_id: Optional[int] = None,
+    badge: Optional[int] = None,
 ) -> bool:
     """Отправить один alert-пуш. Никогда не бросает исключение — падение
     APNs не должно ронять вызывающий код (тот же контракт, что у
@@ -166,6 +182,12 @@ async def send_alert(
     как есть. None — ключа нет вовсе, и приложение по тапу ведёт себя как
     до маршрутов (просто открывается), так что старые сборки его не
     замечают.
+
+    `inbox_id` — строка этого же пуша в «Уведомлениях» (db.inbox, inbox.py):
+    приложение по тапу отмечает её прочитанной. `badge` — число на иконке
+    приложения (`aps.badge`): сколько непрочитанных в «Уведомлениях» с этим
+    пушем. None — ключа нет, и число на иконке пуш не трогает. Оба ставит
+    inbox.deliver, а не вызывающий.
     """
     if not is_configured():
         return False
@@ -186,6 +208,10 @@ async def send_alert(
         headers["apns-collapse-id"] = category[:64]
 
     payload: dict = {"aps": {"alert": {"title": title, "body": body}}}
+    if badge is not None:
+        payload["aps"]["badge"] = max(0, int(badge))
+    if inbox_id is not None:
+        payload["inbox_id"] = int(inbox_id)
     if route:
         payload["route"] = route
     if category:
@@ -200,8 +226,10 @@ async def send_alert(
     except httpx.HTTPError:
         logger.exception("APNs: сетевая ошибка при отправке пуша пользователю %s", user_id)
         ops_alerts.record_apns_result(False)
+        await _track_sent(user_id, category, False)
         return False
 
+    await _track_sent(user_id, category, response.status_code == 200)
     if response.status_code == 200:
         ops_alerts.record_apns_result(True)
         return True

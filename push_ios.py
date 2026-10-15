@@ -79,7 +79,9 @@ ANNOUNCEMENT = "announcement"
 
 # Every category push_ios can produce a banner for: push_texts' own rotation
 # categories, plus AI_WEEKLY (aliased above) and ANNOUNCEMENT.
-CATEGORIES: tuple[str, ...] = push_texts._CATEGORIES + (push_texts.AI_WEEKLY, ANNOUNCEMENT)
+CATEGORIES: tuple[str, ...] = push_texts._CATEGORIES + (
+    push_texts.AI_WEEKLY, ANNOUNCEMENT, push_texts.FEEDBACK_ASK,
+)
 
 
 def _catalog_category(category: str) -> str:
@@ -248,7 +250,15 @@ ROUTE_SCREEN_BY_CATEGORY: dict[str, str] = {
     push_texts.RANK_NEAR: SCREEN_ACHIEVEMENTS,
     push_texts.WEEKLY_DIGEST: SCREEN_DASHBOARD,
     push_texts.AI_WEEKLY: SCREEN_DASHBOARD,
+    # «Как тебе дневник?» — переписка с поддержкой с открытым полем ввода
+    # (`topic`, см. ios_route). Старые сборки `topic` не знают и просто
+    # открывают переписку — тоже верное место.
+    push_texts.FEEDBACK_ASK: SCREEN_SUPPORT,
 }
+
+# Тема, с которой открывается переписка: приложение по ней ставит курсор в
+# поле ввода и показывает над ним вопрос тренера.
+SUPPORT_TOPIC_FEEDBACK = "feedback"
 
 
 # Категории, чей маршрут несёт неделю (`week` — её понедельник, YYYY-MM-DD):
@@ -288,6 +298,8 @@ def ios_route(
     route: dict = {"screen": screen}
     if week and category in _WEEK_ROUTE_CATEGORIES:
         route["week"] = week
+    if category == push_texts.FEEDBACK_ASK:
+        route["topic"] = SUPPORT_TOPIC_FEEDBACK
     return route
 
 
@@ -342,3 +354,12 @@ SCREEN_COACH_CLIENTS = "coach_clients"
 def coach_clients_route() -> dict:
     """Маршрут банера «новый клиент»: `{"screen": "coach_clients"}`."""
     return {"screen": SCREEN_COACH_CLIENTS}
+
+
+# Связка тренер ↔ атлет разорвана (api_v1_coach.revoke_my_coach /
+# remove_client и те же кнопки в боте, coach_notify.deliver_unlinked).
+# Тренеру — «клиент закрыл доступ», банер ведёт в «Мои клиенты», где неделю
+# стоит серая строка; атлету — «тренер больше не ведёт тебя», банер ведёт в
+# последнюю программу от этого тренера, если она у атлета есть.
+COACH_CLIENT_LEFT = "coach_client_left"
+COACH_UNLINKED = "coach_unlinked"

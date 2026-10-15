@@ -144,7 +144,7 @@ SYNONYMS = {
     # Название тренировки: по нему (вместе со временем начала) строки
     # делятся на сессии — две тренировки за день остаются двумя.
     "title": {"title", "workout name", "workout_name"},
-    "end": {"end_time"},
+    "end": {"end_time", "finished_at"},
     # Длительность сессии у Strong («1h 5m»): конец тренировки = начало + она.
     "workout_duration": {"duration"},
     # Кардио и упражнения на время: строки с дистанцией или секундами без
@@ -153,8 +153,10 @@ SYNONYMS = {
     "seconds": {"duration_seconds", "seconds"},
     # Заметки: к упражнению (Hevy exercise_notes, Strong Notes) и ко всей
     # тренировке (Hevy description, Strong Workout Notes).
-    "exercise_note": {"exercise_notes", "notes"},
-    "workout_note": {"description", "workout notes"},
+    # exercise_note/workout_note — колонки нашего же полного архива
+    # (full_export.py, workouts.csv): свой файл читается обратно без маппинга.
+    "exercise_note": {"exercise_notes", "notes", "exercise_note"},
+    "workout_note": {"description", "workout notes", "workout_note"},
     "superset": {"superset_id"},
 }
 # Единицы в скобках у заголовка — «Weight (kg)», «Weight (lbs)», «Distance (m)»:

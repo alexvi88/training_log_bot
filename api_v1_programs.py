@@ -517,6 +517,44 @@ async def reorder_program_day(request: Request) -> JSONResponse:
     return JSONResponse({"days": [_routine_list_json(d) for d in days]})
 
 
+# Больше id в одном списке порядка не бывает: дней и упражнений в дне
+# единицы, потолок — чтобы тело не превращалось в тысячу UPDATE.
+MAX_ORDER_IDS = 200
+
+
+def _order_ids(body: dict[str, Any], key: str) -> list[int]:
+    """Список id в новом порядке — тело перетаскивания в приложении. Пустой
+    список законен (нечего переставлять), чужие и удалённые id сервер молча
+    пропускает (db.arranged_ids): между жестом и запросом день мог уйти."""
+    raw = _require(body, key, list)
+    if len(raw) > MAX_ORDER_IDS:
+        raise ApiError(400, "bad_request", f"{key}: at most {MAX_ORDER_IDS} ids")
+    if not all(isinstance(item, int) and not isinstance(item, bool) for item in raw):
+        raise ApiError(400, "bad_request", f"{key} must be a list of int")
+    return raw
+
+
+async def set_program_day_order(request: Request) -> JSONResponse:
+    """Перетаскивание дней в приложении — сразу весь порядок, а не шаг
+    «выше/ниже»: жест кончается там, где отпустили, и повтор того же тела
+    (офлайн, оборванный ответ) даёт тот же итог. Дни, которых нет в списке,
+    остаются на своих местах (db.arranged_ids). «Следующий день» сервер
+    считает по этому порядку от последнего сделанного (db.next_program_day),
+    поэтому ответ — сразу и дни, и новый `next_day`."""
+    user_id = await _authed_user_id(request)
+    program_id = int(request.path_params["program_id"])
+    await _owned_program(program_id, user_id)
+    body = await _json_body(request)
+    routine_ids = _order_ids(body, "routine_ids")
+    await db.set_program_day_order(program_id, routine_ids)
+    days = await db.list_program_days_by_id(program_id)
+    next_day = await db.next_program_day(program_id)
+    return JSONResponse({
+        "days": [_routine_list_json(d) for d in days],
+        "next_day": _routine_list_json(next_day) if next_day is not None else None,
+    })
+
+
 # ---------- упражнения дня ----------
 
 async def add_routine_exercise(request: Request) -> JSONResponse:
@@ -607,6 +645,20 @@ async def reorder_routine_exercise(request: Request) -> JSONResponse:
     direction = _reorder_direction(body)
     await db.reorder_routine_exercise(item_id, direction)
     exercises = await db.list_routine_exercises(entry["routine_id"])
+    return JSONResponse({"exercises": [_routine_exercise_json(e) for e in exercises]})
+
+
+async def set_routine_exercise_order(request: Request) -> JSONResponse:
+    """Перетаскивание упражнений дня — весь порядок разом, как у дней
+    программы выше. Упражнения не из списка (и архивные, которых приложение
+    не видит) остаются на своих местах."""
+    user_id = await _authed_user_id(request)
+    routine_id = int(request.path_params["routine_id"])
+    await _owned_routine(routine_id, user_id)
+    body = await _json_body(request)
+    item_ids = _order_ids(body, "item_ids")
+    await db.set_routine_exercise_order(routine_id, item_ids)
+    exercises = await db.list_routine_exercises(routine_id)
     return JSONResponse({"exercises": [_routine_exercise_json(e) for e in exercises]})
 
 
@@ -725,6 +777,7 @@ routes = [
     Route("/programs/{program_id:int}/merge", merge_program, methods=["POST"]),
     Route("/programs/{program_id:int}/next-day", program_next_day, methods=["GET"]),
     Route("/programs/{program_id:int}/days", add_program_day, methods=["POST"]),
+    Route("/programs/{program_id:int}/days/order", set_program_day_order, methods=["POST"]),
     Route("/routines", list_routines, methods=["GET"]),
     Route("/routines", create_routine, methods=["POST"]),
     Route("/routines/{routine_id:int}", get_routine, methods=["GET"]),
@@ -733,6 +786,7 @@ routes = [
     Route("/routines/{routine_id:int}/attach", attach_routine, methods=["POST"]),
     Route("/routines/{routine_id:int}/reorder", reorder_program_day, methods=["POST"]),
     Route("/routines/{routine_id:int}/exercises", add_routine_exercise, methods=["POST"]),
+    Route("/routines/{routine_id:int}/exercises/order", set_routine_exercise_order, methods=["POST"]),
     Route("/routine-exercises/{item_id:int}", update_routine_exercise, methods=["PATCH"]),
     Route("/routine-exercises/{item_id:int}", delete_routine_exercise, methods=["DELETE"]),
     Route("/routine-exercises/{item_id:int}/reorder", reorder_routine_exercise, methods=["POST"]),

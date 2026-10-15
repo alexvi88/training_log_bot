@@ -514,7 +514,14 @@ async def coach_revoke(callback: CallbackQuery, state: FSMContext):
         return
     coach_id = args[0]
     profile = await db.get_coach_profile(coach_id)
-    removed = await db.delete_coach_link(coach_id, callback.from_user.id)
+    link = await db.get_coach_link(coach_id, callback.from_user.id)
+    removed = await db.delete_coach_link(coach_id, callback.from_user.id, by=db.COACH_UNLINK_BY_CLIENT)
+    if removed and link is not None:
+        # Тренеру — «клиент закрыл доступ», на его языке.
+        await coach_notify.deliver_unlinked(
+            coach_id, callback.from_user.id, by=db.COACH_UNLINK_BY_CLIENT,
+            client_name=link["client_name"], bot=callback.bot,
+        )
     await clear_state_keep_workout(state)
     text, kb = await _hub_view(callback.from_user.id)
     if removed:
@@ -668,14 +675,31 @@ async def _clients_with_signals(coach_id: int) -> list[tuple[Any, Any, dict[str,
     return out
 
 
+async def _unlinked_lines(coach_id: int) -> str:
+    """Серые строки «Маша больше не делится дневником · 14 окт» — кто сам
+    закрыл доступ за последнюю неделю (coach_service.recent_unlinks). Без
+    кнопок: открыть бывшего клиента нельзя."""
+    coach = await db.get_user(coach_id)
+    lines = []
+    for row in await coach_service.recent_unlinks(coach_id):
+        when = dt.datetime.fromisoformat(row["unlinked_at"])
+        day = timeutil.to_user_local(when, coach).date() if coach is not None else when.date()
+        today = timeutil.user_today(coach) if coach is not None else None
+        date = formatting.format_day_month_ru(day, today)
+        lines.append(f"<i>{i18n.t('coach.clients.unlinked_row', name=escape(row['name']), date=escape(date))}</i>")
+    return "\n".join(lines)
+
+
 async def _clients_view(coach_id: int, page: int) -> tuple[str, InlineKeyboardMarkup]:
     items = await _clients_with_signals(coach_id)
+    unlinked = await _unlinked_lines(coach_id)
     kb = InlineKeyboardBuilder()
     head = i18n.t("coach.clients.title")
     if not items:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.invite"), callback_data="coach:invite"))
         kb.row(*_back_row("coach:hub"))
-        return f"{head}\n\n{i18n.t('coach.clients.empty')}", kb.as_markup()
+        tail = f"\n\n{unlinked}" if unlinked else ""
+        return f"{head}\n\n{i18n.t('coach.clients.empty')}{tail}", kb.as_markup()
     pages = max(1, (len(items) + CLIENTS_PAGE_SIZE - 1) // CLIENTS_PAGE_SIZE)
     page = max(0, min(page, pages - 1))
     shown = items[page * CLIENTS_PAGE_SIZE:(page + 1) * CLIENTS_PAGE_SIZE]
@@ -684,6 +708,8 @@ async def _clients_view(coach_id: int, page: int) -> tuple[str, InlineKeyboardMa
         tags = signal_texts(signals) or [i18n.t("coach.signal.none")]
         blocks.append(f"<b>{escape(link['client_name'])}</b>\n{' · '.join(tags)}")
         kb.row(InlineKeyboardButton(text=link["client_name"], callback_data=f"coach:cl:{link['client_id']}"))
+    if unlinked:
+        blocks.append(unlinked)
     blocks.append(f"<i>{i18n.t('coach.clients.ai_hint')}</i>")
     nav = []
     if page > 0:
@@ -1562,7 +1588,13 @@ async def coach_remove(callback: CallbackQuery, state: FSMContext):
     link, _client = await _linked(callback, args[0])
     if link is None:
         return
-    await db.delete_coach_link(callback.from_user.id, args[0])
+    if await db.delete_coach_link(callback.from_user.id, args[0], by=db.COACH_UNLINK_BY_COACH):
+        # Атлету — «тренер больше не ведёт тебя», на его языке.
+        profile = await db.get_coach_profile(callback.from_user.id)
+        await coach_notify.deliver_unlinked(
+            callback.from_user.id, args[0], by=db.COACH_UNLINK_BY_COACH, client_name=link["client_name"],
+            coach_name=profile["display_name"] if profile is not None else None, bot=callback.bot,
+        )
     text, kb = await _clients_view(callback.from_user.id, 0)
     await _show(callback, f"{i18n.t('coach.removed', name=escape(link['client_name']))}\n\n{text}", kb)
     await callback.answer()
@@ -1573,10 +1605,13 @@ async def coach_remove(callback: CallbackQuery, state: FSMContext):
 
 def _summary_view(
     link: Any, result: dict[str, Any], *, saved_on: Optional[str] = None, client_id: Optional[int] = None,
+    stale: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Сводка сообщением: заголовок, текст, кто не вошёл. saved_on — дата
     сохранённой сводки: тогда под текстом строка «Сводка от …» и кнопка
-    «Обновить сводку» (платный вызов — только по ней)."""
+    «Обновить сводку» (платный вызов — только по ней). stale — данные с тех
+    пор поменялись, а свежую собрать не вышло (лимит, сбой): вместо «Сводка
+    от …» — «Сводка от … устарела» с той же кнопкой."""
     head = (
         i18n.t("coach.ai_summary.header_one", name=escape(link["client_name"])) if link is not None
         else i18n.t("coach.ai_summary.header_all")
@@ -1589,7 +1624,8 @@ def _summary_view(
     if result["text"] and result["skipped_no_consent"]:
         parts.append(f"<i>{i18n.t('coach.summary_skipped', n=result['skipped_no_consent'])}</i>")
     if saved_on is not None:
-        parts.append(f"<i>{i18n.t('coach.ai_summary.saved_on', date=escape(saved_on))}</i>")
+        key = "coach.ai_summary.stale" if stale else "coach.ai_summary.saved_on"
+        parts.append(f"<i>{i18n.t(key, date=escape(saved_on))}</i>")
     back_cb = f"coach:cl:{client_id}" if client_id is not None else "coach:clients:0"
     rows = []
     if saved_on is not None:
@@ -1606,10 +1642,16 @@ async def _ai_summary(
     """Сводка тренеру — по всем клиентам или по одному.
 
     Есть сохранённая (coach_service.saved_summary: та же пара, тот же язык,
-    не старше срока) и тренер не жал «Обновить» — показываем её с датой,
-    бесплатно. Иначе — тот же путь, что у REST: coach_service.ai_summary →
-    paid_call (лимит вопроса тренеру и цена в лог), та же бронь «один платный
-    ход за раз», что у чата с тренером в боте (handlers.ai_trainer._busy)."""
+    не старше срока), данные с тех пор не поменялись и тренер не жал
+    «Обновить» — показываем её с датой, бесплатно. Иначе — тот же путь, что у
+    REST: coach_service.ai_summary → paid_call (лимит вопроса тренеру и цена в
+    лог), та же бронь «один платный ход за раз», что у чата с тренером в боте
+    (handlers.ai_trainer._busy).
+
+    Данные поменялись (новый клиент, тренировка, рекорд — отпечаток не
+    совпал) — собираем свежую сами, без кнопки: старая уже неправда о
+    клиентах. Свежую собрать не вышло (лимит, сбой, таймаут) — показываем
+    старую, но с пометкой «устарела», а не как текущую."""
     from handlers import ai_trainer as ai_chat
 
     coach_id = callback.from_user.id
@@ -1620,16 +1662,30 @@ async def _ai_summary(
         link, _client = await _linked(callback, client_id)
         if link is None:
             return
+    stale = None
     if not refresh:
         saved = await coach_service.saved_summary(coach_id, client_id)
         if saved is not None:
             coach = await db.get_user(coach_id)
             saved_on = _local_day(saved["created_at"], coach) if coach is not None else saved["created_at"][:10]
-            text, kb = _summary_view(link, saved, saved_on=saved_on, client_id=client_id)
-            await callback.answer()
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
-            return
+            text, kb = _summary_view(link, saved, saved_on=saved_on, client_id=client_id, stale=saved["stale"])
+            if not saved["stale"]:
+                await callback.answer()
+                await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+                return
+            stale = (text, kb)
+
+    async def show_stale() -> bool:
+        if stale is None:
+            return False
+        await callback.message.answer(stale[0], parse_mode="HTML", reply_markup=stale[1])
+        return True
+
     if not ai_trainer.is_configured():
+        if stale is not None:
+            await callback.answer()
+            await show_stale()
+            return
         await callback.answer(i18n.t("ai.screen.not_configured"), show_alert=True)
         return
     if not busy_lock.try_claim(ai_chat._busy, coach_id):
@@ -1645,11 +1701,17 @@ async def _ai_summary(
                 coach_service.ai_summary(coach_id, client_id), timeout=config.AI_TOTAL_ANSWER_SECONDS
             )
         except ai_trainer.LimitBlocked as exc:
-            await ai_limits.reply(callback.message, exc.block, reply_markup=back_kb)
+            # Почему свежей нет — словами лимита (у своих аккаунтов — с
+            # «Понятно»); под ним старая сводка с пометкой «устарела».
+            await ai_limits.reply(
+                callback.message, exc.block, reply_markup=None if stale is not None else back_kb
+            )
+            await show_stale()
             return
         except Exception:
             logger.exception("coach: ai summary failed for %s", coach_id)
-            await callback.message.answer(i18n.t("ai.screen.answer_failed"), reply_markup=back_kb)
+            if not await show_stale():
+                await callback.message.answer(i18n.t("ai.screen.answer_failed"), reply_markup=back_kb)
             return
         finally:
             with suppress(Exception):
@@ -1689,16 +1751,31 @@ async def coach_ai_one_refresh(callback: CallbackQuery, state: FSMContext):
 
 
 async def athlete_comments_block(workout_id: int, user: Any) -> str:
-    """Блок «🧑‍🏫 Твой тренер» под карточкой своей тренировки в истории (пусто
-    — комментариев нет). Открыл — прочитал, как у GET /workouts/{id}/coach-comments."""
+    """Блок живого тренера под карточкой своей тренировки в истории (пусто
+    — комментариев нет). Открыл — прочитал, как у GET /workouts/{id}/coach-comments.
+
+    Тренер один — его имя в заголовке («🧑‍🏫 Марина, твой тренер»), чтобы блок
+    не путали с «🤖 Комментарий AI-тренера» над ним (аудит u7); так же у
+    приложения (`CoachCommentsSection`). Тренеров несколько — «Твои тренеры»
+    и имя у каждого комментария."""
     comments = await db.list_coach_comments(workout_id)
     if not comments:
         return ""
     await db.mark_coach_comments_read(workout_id, user["telegram_id"])
 
+    single = len({row["coach_name"] for row in comments}) == 1
+    if not single:
+        header = i18n.t("coach.card.header_many")
+    elif comments[0]["coach_name"]:
+        header = i18n.t("coach.card.header_named", name=escape(comments[0]["coach_name"]))
+    else:
+        header = i18n.t("coach.card.header")
+
     def render(row) -> str:
-        name = escape(_coach_name(row["coach_name"]))
         when = escape(_local_day(row["created_at"], user))
+        if single:
+            return f"<i>{when}</i>\n{escape(row['text'])}"
+        name = escape(_coach_name(row["coach_name"]))
         return f"<b>{name}</b> · <i>{when}</i>\n{escape(row['text'])}"
 
-    return "\n\n" + i18n.t("coach.card.header") + "\n" + "\n\n".join(_clip_comments(comments, render))
+    return "\n\n" + header + "\n" + "\n\n".join(_clip_comments(comments, render))
