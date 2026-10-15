@@ -9,6 +9,7 @@ AI_CONVERSATION_RETENTION_DAYS и сносится вместе с аккаун�
 
 import datetime as dt
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,6 +28,8 @@ from handlers import admin
 from handlers import ai_trainer as ai_chat
 
 pytestmark = pytest.mark.asyncio
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 ADMIN = 900
 ATHLETE = 111
@@ -391,3 +394,51 @@ async def test_export_without_turns_says_so(fresh_db, user_id, as_admin):
     await admin.admin_aichats_export(callback, state=MagicMock())
     callback.message.answer_document.assert_not_awaited()
     assert callback.answer.await_args.kwargs.get("show_alert") is True
+
+
+# ---------- вечный лог бота (ai_chat_messages): тот же срок и тот же снос ----------
+
+
+async def test_bot_transcript_retention_drops_only_old_messages(fresh_db, user_id):
+    await db.add_ai_chat_message(user_id, "user", "давний вопрос")
+    await db.add_ai_chat_message(user_id, "assistant", "давний ответ")
+    await db.add_ai_chat_message(user_id, "user", "свежий вопрос")
+    old = (dt.date.today() - dt.timedelta(days=config.AI_CONVERSATION_RETENTION_DAYS + 1)).isoformat()
+    await db.conn().execute(
+        "UPDATE ai_chat_messages SET created_at = ? WHERE content LIKE 'давний%'", (old + "T12:00:00",)
+    )
+    await db.conn().commit()
+
+    assert await db.prune_old_ai_chat_messages(config.AI_CONVERSATION_RETENTION_DAYS) == 2
+    assert [r["content"] for r in await db.get_ai_chat_history(user_id)] == ["свежий вопрос"]
+
+
+async def test_nightly_cleanup_runs_the_bot_transcript_retention(fresh_db, monkeypatch, tmp_path):
+    import admin_tasks
+
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    spy = AsyncMock(return_value=0)
+    monkeypatch.setattr(db, "prune_old_ai_chat_messages", spy)
+    await admin_tasks._run_retention_cleanup()
+    spy.assert_awaited_once_with(config.AI_CONVERSATION_RETENTION_DAYS)
+
+
+async def test_account_deletion_wipes_the_bot_transcript(fresh_db, user_id):
+    await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await db.add_ai_chat_message(user_id, "user", "мой вопрос")
+    await db.add_ai_chat_message(222, "user", "чужой вопрос")
+
+    await db.wipe_user_account(user_id)
+
+    assert list(await db.get_ai_chat_history(user_id)) == []
+    assert [r["content"] for r in await db.get_ai_chat_history(222)] == ["чужой вопрос"]
+
+
+async def test_policy_describes_both_logs_with_one_retention():
+    """Политика описывает журнал ходов и ленту переписки бота одной строкой
+    срока — и срок в ней тот же, что в config."""
+    days = str(config.AI_CONVERSATION_RETENTION_DAYS)
+    ru = (_ROOT / "legal" / "privacy.ru.html").read_text(encoding="utf-8")
+    en = (_ROOT / "legal" / "privacy.en.html").read_text(encoding="utf-8")
+    assert f"вместе с лентой переписки бота) — {days} дней" in ru
+    assert f"including the bot’s chat transcript) — {days} days" in en
