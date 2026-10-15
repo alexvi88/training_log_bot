@@ -230,3 +230,21 @@ async def test_one_failed_delivery_does_not_stop_the_rest_of_the_tick(fresh_db, 
     await eng._send_daily_pushes(bot)
 
     assert sorted(delivered) == sorted([user_id, other])
+
+
+async def test_push_remembers_its_message_so_a_button_tap_counts(fresh_db, user_id):
+    """id ушедшего сообщения ложится в pushes.tg_message_id — по нему нажатие
+    кнопки под пушем считается тапом (product_metrics.record_tg_push_tap)."""
+    import product_metrics
+
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(
+        return_value=SimpleNamespace(message_id=4242, photo=[SimpleNamespace(file_id="x")])
+    )
+    decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ! Третий день без зала.")
+    await engagement._deliver(bot, user_id, decision, _TODAY)
+
+    cur = await fresh_db.conn().execute("SELECT category, tg_message_id FROM pushes")
+    assert [tuple(r) for r in await cur.fetchall()] == [(push_texts.SKIP_3, 4242)]
+    assert await product_metrics.record_tg_push_tap(user_id, 4242) is True
+    assert await product_metrics.record_tg_push_tap(user_id, 4242) is False

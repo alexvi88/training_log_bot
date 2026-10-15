@@ -358,7 +358,12 @@ CREATE TABLE IF NOT EXISTS pushes (
     -- телеграмной отправки (app-only атлет, которому ушёл только APNs-баннер,
     -- или «этот анонс ему не нужен»). iOS-доставки сюда не пишутся — они
     -- событием push_sent (apns.send_alert, product_metrics).
-    channel TEXT
+    channel TEXT,
+    -- id сообщения пуша в чате с ботом (только channel='tg'): по нему нажатие
+    -- кнопки под пушем узнаётся как тап по пушу (product_metrics.record_tg_push_tap).
+    tg_message_id INTEGER,
+    -- первое нажатие кнопки под этим пушем; второе нажатие тапом не считается.
+    tapped_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
@@ -1983,6 +1988,13 @@ async def _migrate_schema() -> None:
             "UPDATE pushes SET channel = 'tg' WHERE channel IS NULL AND telegram_id IN "
             "(SELECT telegram_id FROM users WHERE telegram_linked = 1)"
         )
+    if "tg_message_id" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN tg_message_id INTEGER")
+    if "tapped_at" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN tapped_at TEXT")
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pushes_tg_message ON pushes (telegram_id, tg_message_id)"
+    )
     # has_announcement_push/count_announcement_recipients/list_announcement_recipients
     # all filter `pushes` by category alone (no telegram_id, no date), and the
     # table only grows — every announcement/report checks its own recipient
@@ -11223,17 +11235,20 @@ async def push_deliveries(day: str, exclude: set[int]) -> list[tuple]:
     return out
 
 
-async def push_open_categories(day: str, exclude: set[int]) -> list[Optional[str]]:
-    """Категория каждого тапа по пушу за сутки (событие push_open из приложения)."""
+async def push_open_categories(day: str, exclude: set[int]) -> list[tuple[str, Optional[str]]]:
+    """Каждый тап по пушу за сутки тапа — (platform, category). Событие
+    push_open: 'ios' — тап по баннеру (присылает приложение), 'tg' — первое
+    нажатие кнопки под пушем в Telegram (product_metrics.record_tg_push_tap)."""
     start, end = _day_bounds(day)
     skip = sorted(exclude) or [-1]
     marks = ",".join("?" * len(skip))
     cur = await conn().execute(
-        "SELECT json_extract(props, '$.category') FROM analytics_events WHERE event = 'push_open' "
+        "SELECT platform, json_extract(props, '$.category') FROM analytics_events "
+        "WHERE event = 'push_open' "
         f"AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})",
         (start, end, *skip),
     )
-    return [row[0] for row in await cur.fetchall()]
+    return [(row[0], row[1]) for row in await cur.fetchall()]
 
 
 async def workout_moments(user_ids: set[int], since: str, until: str) -> list[tuple[int, str]]:
@@ -13084,19 +13099,42 @@ async def record_push(
     sent_on: str,
     *,
     channel: Optional[str] = PUSH_CHANNEL_TG,
+    tg_message_id: Optional[int] = None,
 ) -> None:
     """Log a delivered push. `sent_on` is the recipient's own calendar date
     (YYYY-MM-DD) — see has_push_today. `channel` — 'tg', если сообщение в
     Telegram реально ушло; None — отметка без телеграмной отправки (app-only
     атлет, «анонс не нужен»): дедупу она нужна, а в счёт пушей Telegram в
-    сводке (product_metrics) не идёт."""
+    сводке (product_metrics) не идёт. `tg_message_id` — id ушедшего
+    сообщения: по нему кнопка под пушем считается тапом (claim_push_tap)."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on, channel) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (telegram_id, category, text, now_iso(), sent_on, channel),
+            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on, channel, tg_message_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (telegram_id, category, text, now_iso(), sent_on, channel, tg_message_id),
         )
         await conn().commit()
+
+
+async def claim_push_tap(telegram_id: int, message_id: int) -> Optional[str]:
+    """Нажатие кнопки под сообщением `message_id` в чате с ботом: если это
+    пуш, который ещё не нажимали, — отметить и вернуть его категорию. Иначе
+    None (не пуш, старый пуш без id сообщения или уже посчитанный тап)."""
+    cur = await conn().execute(
+        "SELECT id, category FROM pushes WHERE telegram_id = ? AND tg_message_id = ? "
+        "AND tapped_at IS NULL",
+        (telegram_id, message_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE pushes SET tapped_at = ? WHERE id = ? AND tapped_at IS NULL",
+            (now_iso(), row[0]),
+        )
+        await conn().commit()
+    return row[1] if cur.rowcount else None
 
 
 # ---------- «Уведомления» в приложении (таблица inbox, см. inbox.py) ----------

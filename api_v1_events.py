@@ -54,7 +54,9 @@ def event_time(value: Any, now: Optional[dt.datetime] = None) -> Optional[str]:
         return None
     if at.tzinfo is None:
         return None
-    at = at.astimezone().replace(tzinfo=None)
+    # В UTC, как db.now_iso и timeutil.utc_now, — не в пояс процесса: иначе
+    # при TZ≠UTC тап по пушу уезжал бы в чужие сутки сводки.
+    at = at.astimezone(dt.timezone.utc).replace(tzinfo=None)
     now = now or timeutil.utc_now()
     if at > now + _FUTURE_SKEW or at < now - dt.timedelta(days=MAX_AGE_DAYS):
         return None
