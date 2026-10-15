@@ -278,10 +278,11 @@ async def test_new_account_settings_report_auto_comments_off(fresh_db):
 
 
 @pytest.mark.asyncio
-async def test_live_db_keeps_existing_values_and_new_accounts_get_off(tmp_path):
+async def test_live_db_turns_existing_off_once_and_new_accounts_get_off(tmp_path):
     """Живая база: колонка уже есть со своим DEFAULT (ALTER TABLE в SQLite его
-    не меняет). Массовой миграции нет: у старых записей значение остаётся
-    каким было — и 1, и 0, — а новые получают 0 явной вставкой."""
+    не меняет). Одноразовая миграция v14 выключает автокомментарий у всех
+    существующих (решение владельца); кто включил снова — тому рестарт его не
+    выключает. Новые получают 0 явной вставкой."""
     import sqlite3
 
     import db
@@ -306,11 +307,18 @@ async def test_live_db_keeps_existing_values_and_new_accounts_get_off(tmp_path):
     db._write_lock = asyncio.Lock()
     await db.init_db(str(path))
     try:
-        assert (await db.get_user(444))["ai_comments_enabled"] == 1
+        assert (await db.get_user(444))["ai_comments_enabled"] == 0
         assert (await db.get_user(445))["ai_comments_enabled"] == 0
+        await db.update_user(444, ai_comments_enabled=1)
         # Повторный get_or_create_user у существующего не перезаписывает значение.
         assert (await db.get_or_create_user(444, "old"))["ai_comments_enabled"] == 1
         assert (await db.get_or_create_user(555, "new"))["ai_comments_enabled"] == 0
         assert (await db.create_app_only_user())["ai_comments_enabled"] == 0
+    finally:
+        await db.close_db()
+    # Рестарт: миграция уже прошла, включённое заново остаётся включённым.
+    await db.init_db(str(path))
+    try:
+        assert (await db.get_user(444))["ai_comments_enabled"] == 1
     finally:
         await db.close_db()
