@@ -463,17 +463,17 @@ OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "") or OPENAI_CHAT_MODEL
 # ступени; вызов длиннее порога только пишет предупреждение в лог
 # (ai_trainer._log_llm_cost) — тогда расчёт занижает.
 OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000"))
-# Главный цикл — high (решение владельца, 2026-10-15; до этого medium, ещё
-# раньше low — на low Luna смешивала подходы разного веса и сочиняла «застой»
-# по сырому списку). high дороже по выходу (размышления — в output_tokens, у
-# Luna это доли цента за ход) и отвечает заметно дольше; запас под
+# Главный цикл — medium (решение владельца, 2026-10-15). low: Luna смешивала
+# подходы разного веса и сочиняла «застой» по сырому списку. high пробовали в
+# тот же день: качество на прогоне сравнения не выросло, а тишина перед
+# программой выросла с ~51 до ~95 с, замена упражнения — с 12 до 73 с. Запас под
 # размышления — ai_trainer._reasoning_headroom. Цикл идёт через Responses API
 # (ai_trainer._responses_round), потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
 # с reasoning_effort (400 «Function tools with reasoning_effort are not
 # supported … use /v1/responses or set reasoning_effort to 'none'»). Тем же
 # значением рассуждает и живой поиск Luna (тоже Responses). Quick-вызовы без
 # инструментов остаются на chat/completions с none (см. выше).
-OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "high")
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
 # Суточный разбор лога действий для админа (ai_trainer.behaviour_digest) — на
 # старшей модели OpenAI, а не на модели тренера: вызов раз в сутки, без
