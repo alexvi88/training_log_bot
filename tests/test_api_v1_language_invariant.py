@@ -928,6 +928,9 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await a.call("POST", f"/coach/invites/{code}/accept", json={"name": text["client_name"]}, expect=201)
     await a.call("DELETE", "/coach-links/111", expect=200)
     await a.call("DELETE", "/coach-links/111", expect=404)
+    # Атлет сам закрыл доступ — у тренера серая строка `recently_unlinked`.
+    gone = (await w.call("GET", "/coach/clients", expect=200)).json()["recently_unlinked"]
+    assert [g["client_id"] for g in gone] == [222]
 
     w.walked |= a.walked
     w.violations += a.violations

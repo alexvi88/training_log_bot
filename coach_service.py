@@ -202,6 +202,19 @@ def visibility_json(link: Any) -> dict[str, Any]:
 # ---------- сигналы по атлету ----------
 
 
+async def recent_unlinks(coach_id: int) -> list[dict[str, Any]]:
+    """Кто из клиентов сам закрыл доступ за последние
+    config.COACH_UNLINK_SHOWN_DAYS дней — серые строки в «Моих клиентах»,
+    свежие выше. Тех, кого тренер убрал сам, здесь нет: он и так знает, а
+    кнопка «Убрать» уже ответила ему «Убрал из клиентов». Вернулся (повторное
+    «Разрешить») — строки тоже нет: он снова обычный клиент."""
+    rows = await db.list_recent_coach_unlinks(coach_id, config.COACH_UNLINK_SHOWN_DAYS)
+    return [
+        {"client_id": r["client_id"], "name": r["client_name"], "unlinked_at": r["unlinked_at"]}
+        for r in rows
+    ]
+
+
 async def client_signals(client: Any, link: Any, coach_id: int) -> dict[str, Any]:
     """Сигналы строки «Мои клиенты»: тренировался ли на этой неделе, сколько
     дней без зала, свежие рекорды, отстаёт ли от назначенной программы.
