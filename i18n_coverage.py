@@ -74,8 +74,8 @@ def discover_modules() -> list[str]:
 # англоязычный с килограммами раньше видел «кг» в тексте и на графике веса
 # тела (charts.render_metric_over_sessions).
 #
-# handlers/history.py, handlers/food_diary.py, handlers/csv_import.py,
-# handlers/sharing.py — история и прогресс, дневник питания, импорт CSV и
+# handlers/history.py, handlers/csv_import.py,
+# handlers/sharing.py — история и прогресс, импорт CSV и
 # шаринг программ/упражнений. Заодно найден и закрыт настоящий баг с языком:
 # handlers/csv_import.py._parse_row_date узнавал "дата ещё в будущем" по
 # русской подстроке в тексте исключения — на английском каталоге parser.py
@@ -122,7 +122,7 @@ def discover_modules() -> list[str]:
 # точкой отказа, как то, от чего защищает).
 #
 # ai_limits.py — тексты про исчерпанные квоты (QUESTION_LIMIT_TEXT,
-# _hard_stop_text, _video_text, _food_text) идут через каталог на оба языка.
+# _hard_stop_text, _video_text) идут через каталог на оба языка.
 # `QUESTION_LIMIT_TEXT` остаётся модульным атрибутом через `__getattr__`
 # (PEP 562) ради `handlers/ai_trainer.py` (его в этом проходе не трогаем),
 # который читает `ai_limits.QUESTION_LIMIT_TEXT` как готовую строку, — плоская
@@ -278,7 +278,6 @@ LOCALIZED: list[str] = [
     "handlers/edit_workout.py",
     "handlers/bodyweight.py",
     "handlers/history.py",
-    "handlers/food_diary.py",
     "handlers/csv_import.py",
     "handlers/sharing.py",
     "handlers/exercises.py",
@@ -627,8 +626,8 @@ NEVER_LOCALIZED: dict[str, str] = {
         "пользователь) и машинными кодами ошибок — своего текста не имеет"
     ),
     "api_v1_food.py": (
-        "REST-слой дневника еды: числа, даты и машинные коды ошибок; названия "
-        "блюд приходят от пользователя или от модели, а не из каталога строк"
+        "бывший дневник еды: все ручки отвечают 410 food_gone, человеческий "
+        "текст ошибки — из каталога (api.error.food_gone)"
     ),
     "exercise_photos.py": (
         "Хранение своих фото упражнений: имена файлов, путь на диске и "

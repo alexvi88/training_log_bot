@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
+import legacy_food
 import pytest
 
 import api_v1
@@ -79,7 +80,7 @@ async def _fill(user_id: int, tag: str) -> dict:
     pid = await db.create_program(user_id, f"Программа {tag}", description=f"о программе {tag}")
     rid = await db.create_routine(user_id, f"День {tag}", program_id=pid, day_order=0)
     await db.add_routine_exercise(rid, ex_id, 0, target="3×8")
-    await db.add_food_entry(user_id, "2026-05-01", f"гречка {tag}", calories=300, protein=10)
+    await legacy_food.insert_food_row(user_id, "2026-05-01", f"гречка {tag}", calories=300, protein=10)
     return {"workout": wid, "exercise": ex_id}
 
 
@@ -163,7 +164,7 @@ async def test_readme_speaks_the_athlete_language(fresh_db):
 
 async def test_formula_cells_are_escaped(fresh_db):
     await db.get_or_create_user(telegram_id=ME, username="me")
-    await db.add_food_entry(ME, "2026-05-01", "=HYPERLINK(\"x\")")
+    await legacy_food.insert_food_row(ME, "2026-05-01", "=HYPERLINK(\"x\")")
     files = _read((await full_export.build_archive_bytes(ME))[0])
     assert files["food.csv"][1][1].startswith("'=")
 

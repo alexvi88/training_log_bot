@@ -690,7 +690,7 @@ async def paid_call(
     (см. `warn_about_limit` в handlers/ai_trainer.py).
 
     Cost-событие пишется в `finally`, а не после успешной обработки ответа:
-    `analyze_food` кидает `ValueError` на битом JSON уже ПОСЛЕ того, как
+    разбор импорта кидает `ValueError` на битом JSON уже ПОСЛЕ того, как
     деньги потрачены, и без `finally` такой вызов остался бы невидим и в
     логе, и в дневном отчёте.
 
@@ -761,9 +761,9 @@ def _get_audio_client() -> AsyncOpenAI:
 # параметры запроса байт в байт (см. _model_kwargs) — его кэш не трогается.
 #
 # Не переключаются: живой поиск (xAI gRPC, GROK_SEARCH_MODEL — это инструмент
-# xAI), разбор видео (Novita), расшифровка голоса, еда (фото тарелки — свой
-# вызов), разбор импорта (strict-схемы на Luna не проверены, шаг
-# разовый) и суточный разбор лога для админа (без пользователя).
+# xAI), разбор видео (Novita), расшифровка голоса, разбор импорта (strict-схемы
+# на Luna не проверены, шаг разовый) и суточный разбор лога для админа (без
+# пользователя).
 
 _openai_chat_client: Optional[AsyncOpenAI] = None
 
@@ -1153,12 +1153,8 @@ get_progress_report, баланс и слабые места — get_balance_rep
 тела за период, тренд набора/похудения или сравнение с прошлым — вызови
 get_bodyweight_history, она отдаёт всю историю дневника веса, а не только последнюю запись.
 
-В боте есть и дневник питания — get_food_diary отдаёт, что человек ел последние дни,
-с КБЖУ по дням. Если разговор про еду, калории, белок, набор или сушку — сначала
-посмотри дневник, а не спрашивай «что ты ешь»: человек, возможно, уже всё записал.
-Самое ценное — связка с тренировками: если рабочие веса просели на фоне недобора
-калорий или белка, скажи об этом прямо. Дневник может быть и пустым — тогда так и
-скажи, что данных нет, и спроси.
+Дневника питания у тебя нет: что человек ест, ты не видишь. Спросили про еду,
+калории или белок — отвечай по существу и спроси, что нужно знать, не выдумывай.
 
 Норма белка и калорий считается от ВЕСА ТЕЛА. Спросили «сколько мне есть белка»,
 а веса в сводке нет (latest_bodyweight пустой) — всё равно отвечай: дай норму в
@@ -1388,7 +1384,7 @@ replaces_program не передавай, иначе затрёшь старую
 
 - Что откатывается — делаешь САМ и сразу говоришь, что сделал:
   rename_program, copy_program, rename_exercise, move_exercise_to_group,
-  create_exercise, log_bodyweight, log_food. Разрешения
+  create_exercise, log_bodyweight. Разрешения
   не спрашивай — но и молча не оставляй: под ответом появится кнопка отката,
   и о ней надо сказать одной короткой фразой («если что — отменишь кнопкой
   ниже»). Человек должен узнать о записи от тебя, а не наткнуться на неё потом.
@@ -1407,9 +1403,8 @@ replaces_program не передавай, иначе затрёшь старую
 replaces_program), а не «убери из списка упражнений» (archive_exercise /
 archive_exercises). Если из фразы не ясно — спроси, а не угадывай.
 
-Дневники ты не только читаешь: вес и еду, сказанные между делом («кстати, 78.4
-сегодня», «на обед была гречка с курицей»), записывай сразу, не заставляя
-человека идти в меню.
+Дневник веса ты не только читаешь: вес, сказанный между делом («кстати, 78.4
+сегодня»), записывай сразу, не заставляя человека идти в меню.
 
 Про сам бот люди тоже говорят тебе, а не в поддержку: «объём считает
 неправильно», «кнопка не работает», «сделай таймер отдыха», «неудобно листать
@@ -1630,9 +1625,9 @@ SEARCH_DECISION_SYSTEM_PROMPT = """\
 его тема.
 
 РЕШЕНИЕ 2 — DATA. Нужны ли тренеру ДАННЫЕ САМОГО ПОЛЬЗОВАТЕЛЯ из базы бота:
-его тренировки, подходы, веса, прогресс, рекорды, программы, вес тела, еда,
+его тренировки, подходы, веса, прогресс, рекорды, программы, вес тела,
 история переписки. Нужны и тогда, когда пользователь просит что-то СДЕЛАТЬ с
-его данными: составить или изменить программу, записать еду или вес,
+его данными: составить или изменить программу, записать вес,
 переименовать упражнение, поделиться карточкой.
 
 DATA=NO — только для вопросов об общих знаниях, где личная история вообще не
@@ -1938,13 +1933,6 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 целевого диапазона (low = мало, in_range = норм, high = многовато). Строки про
 рекорды нет — значит, рекордов нет, и про них молчи.
 
-Если человек вёл дневник питания, в сводке будет и еда: за сколько дней есть
-записи и средние калории с белком в день. Это то, чего не умеет ни одно
-приложение-трекер: свяжи еду с железом там, где связь реально видна (мало белка
-на фоне объёмной недели, недобор калорий при просевшем тоннаже). Строки про еду
-в сводке нет — значит, дневник пустой, и про питание тогда молчи, не выдумывай
-и не выпрашивай.
-
 Напиши короткий еженедельный дайджест-подведение итогов недели. Правила:
 - Начни ровно с фирменного приветствия НА ЯЗЫКЕ ОТВЕТА, с восклицательным знаком,
   без запятой внутри: «ПРИВЕТ АТЛЕТ!» по-русски или «HEY ATHLETE!» по-английски.
@@ -2039,9 +2027,6 @@ async def weekly_digest(user_id: int) -> Optional[str]:
             f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
             f"Объём по группам: {groups_line}."
         )
-        food_line = await _weekly_food_summary(user_id)
-        if food_line:
-            summary += "\n" + food_line
 
         backend = await chat_backend(user_id)
         try:
@@ -2095,7 +2080,7 @@ BEHAVIOUR_DIGEST_SYSTEM_PROMPT = """\
   ввод, который бот явно не понял, брошенные на середине мастера, нажатия по
   протухшим кнопкам.
 - Что сработало: путь, который человек прошёл до конца (записал тренировку,
-  сохранил программу, завёл еду).
+  сохранил программу, записал вес).
 - Разговоры с тренером: о чём спрашивали и получилось ли у тренера довести до
   действия.
 - 2-4 конкретные гипотезы «что чинить/менять» — каждая с опорой на конкретное
@@ -2334,113 +2319,6 @@ async def _batch_contents(batch_id: str) -> tuple[int, list[str]]:
     return count, [r["name"] for r in await cur.fetchall()]
 
 
-async def _weekly_food_summary(user_id: int) -> str:
-    """"Питание: записи за 5 дн. из 7, в среднем 2150 ккал и 118 г белка в день."
-    Empty string when the diary has nothing this week.
-
-    Averaged over the days actually logged, not over seven: a diary kept on five
-    days out of seven describes those five, and dividing by seven would invent a
-    deficit that isn't there. Days logged is reported alongside so the coach can
-    see how much the average is worth.
-    """
-    days = (await _food_diary(user_id, days=7))["days"]
-    with_calories = [d for d in days if d["calories"]]
-    if not with_calories:
-        return ""
-    avg_kcal = sum(d["calories"] for d in with_calories) / len(with_calories)
-    protein_days = [d for d in with_calories if d["protein"]]
-    parts = [f"записи за {len(with_calories)} дн. из 7", f"в среднем {avg_kcal:.0f} ккал"]
-    if protein_days:
-        avg_protein = sum(d["protein"] for d in protein_days) / len(protein_days)
-        parts.append(f"{avg_protein:.0f} г белка в день")
-    return "Питание: " + ", ".join(parts) + "."
-
-
-FOOD_ANALYSIS_SYSTEM_PROMPT = """\
-Ты — нутрициолог-помощник в Telegram-боте дневника питания. Тебе присылают, что
-человек съел: текстом, фотографией еды или фото с подписью. Твоя задача — понять,
-что это за приём пищи, и оценить его калорийность и БЖУ.
-
-Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и любого текста вокруг:
-{
-  "is_food": true или false,
-  "description": "короткое название приёма пищи, 1 строка",
-  "items": [
-    {"name": "продукт", "portion": "примерная порция, напр. \"150 г\"",
-     "calories": число или null, "protein": число (граммы) или null,
-     "fat": число (граммы) или null, "carbs": число (граммы) или null},
-    ...
-  ],
-  "calories": число или null,
-  "protein": число (граммы) или null,
-  "fat": число (граммы) или null,
-  "carbs": число (граммы) или null,
-  "comment": "одно короткое уточнение или пустая строка"
-}
-
-Правила:
-- is_food: false — если на фото или в тексте вообще нет еды (человек, пейзаж,
-  случайный предмет, бессмысленное сообщение и т.п.). В этом случае остальные
-  поля можно оставить пустыми/null, а в comment коротко объясни, что не так
-  («на фото человек, еды не видно»). Не пытайся притянуть что-то за уши только
-  чтобы заполнить description.
-- description — то, что человек увидит в дневнике: «Овсянка с бананом», «Куриная
-  грудка с рисом и салатом». Без калорий и граммов внутри — они в отдельных полях.
-- items — раскладка по продуктам, 1-6 пунктов, у КАЖДОГО своя порция и своё
-  КБЖУ. Если из текста порции неизвестны, предполагай обычную бытовую порцию
-  и не спрашивай разрешения.
-- Главное — правдоподобные БЖУ у каждого пункта: калорийность пересчитывается
-  из них по 4/4/9 уже после тебя, поэтому не подгоняй цифры друг под друга и не
-  бойся, что сумма не сойдётся — просто дай честную оценку белков, жиров и
-  углеводов для названной порции.
-- Цифры — оценка, а не точность до грамма: это нормально, оценивай смело. null
-  ставь, только если по фото/тексту вообще нельзя понять, что это за еда.
-- Если человек уже указал вес/калории — используй его цифры, не переоценивай.
-- comment — только если есть что важное сказать (например «порция на глаз, если
-  знаешь вес — поправь»). Иначе пустая строка. Без markdown.
-- description и comment — единственные текстовые поля здесь, и это то, что
-  ложится в дневник питания НАВСЕГДА: язык для них — тот же, что указан ниже
-  для языка ответа, а не русский по умолчанию. JSON-структура (ключи, true/
-  false, числа) от языка не зависит.
-"""
-
-
-# Используется вместо FOOD_ANALYSIS_SYSTEM_PROMPT, когда у пользователя выключен
-# подсчёт КБЖУ (users.food_macros_enabled = 0, см. handlers/food_diary.py) — тогда
-# для текста запись сохраняется вообще без модели, а модель зовётся только на
-# фото, просто чтобы превратить картинку в короткое текстовое описание.
-FOOD_DESCRIBE_SYSTEM_PROMPT = """\
-Ты помогаешь вести дневник питания. Тебе присылают фотографию еды, возможно с
-подписью. Пользователь сам решил не считать калории и БЖУ — не предлагай их и
-не упоминай, просто опиши, что это за приём пищи.
-
-Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и текста вокруг:
-{
-  "is_food": true или false,
-  "description": "короткое название приёма пищи, 1 строка",
-  "comment": "одно короткое уточнение или пустая строка"
-}
-
-Правила:
-- is_food: false — если на фото вообще нет еды (человек, пейзаж, случайный
-  предмет и т.п.). Тогда в comment коротко объясни, что не так, а description
-  оставь пустым.
-- description — одна строка, название и состав: «Чизбургер», «Овсянка с
-  бананом и мёдом». Если продуктов несколько — перечисли через запятую в одной
-  строке.
-- Порцию/вес указывай ПРЯМО В description, если она известна из подписи, текста
-  или правки пользователя — например «Протеин Whey — 30 г», «Куриная грудка —
-  200 г». Не выдумывай порцию, если её не называли и не видно по фото. Это
-  единственное поле, которое реально сохраняется в дневник — то, что не попало
-  в description, для записи как будто не существовало.
-- comment — только для чего-то ещё, что не влезло в description (не для
-  порции/веса — тем место в самом название). Иначе пустая строка.
-- description и comment — единственные текстовые поля здесь, и это то, что
-  ложится в дневник питания НАВСЕГДА: язык для них — тот же, что указан ниже
-  для языка ответа, а не русский по умолчанию.
-"""
-
-
 def _extract_json_object(text: str) -> dict[str, Any]:
     """Парсим JSON из ответа модели, переживая ```json-обёртку и текст вокруг.
 
@@ -2465,206 +2343,6 @@ def _as_number(value: Any) -> Optional[float]:
         if match:
             return float(match.group().replace(",", "."))
     return None
-
-
-# Потолки на одну позицию приёма пищи. Как MAX_WEIGHT/MAX_REPS в parser.py, это
-# отбраковка невозможного, а не спор с человеком: столько за раз не съедают.
-MAX_FOOD_KCAL = 10000.0
-MAX_FOOD_GRAMS = 2000.0
-
-
-def _as_macro(value: Any, limit: float) -> Optional[float]:
-    """Число КБЖУ из ответа модели — или None, если оно не бывает.
-
-    Отрицательные и запредельные значения раньше ехали дальше как достоверные:
-    галлюцинация или битый JSON с минусом давали карточку «Итого: -165 ккал ·
-    Б-10 · Ж-5 · У-20», такая же строка ложилась в дневник и утягивала в минус
-    итог за день. None здесь честнее нуля: он означает «не знаю», и вся цепочка
-    ниже (_atwater_kcal, _sum_field, экраны) уже умеет с ним обращаться, а ноль
-    выглядел бы измеренным.
-    """
-    number = _as_number(value)
-    if number is None or number < 0 or number > limit:
-        return None
-    return number
-
-
-# Коэффициенты Атуотера — по ним калорийность считают на этикетках: белки и
-# углеводы по 4 ккал/г, жиры 9 ккал/г.
-_KCAL_PER_GRAM = {"protein": 4.0, "fat": 9.0, "carbs": 4.0}
-
-
-def _atwater_kcal(macros: dict[str, Optional[float]]) -> Optional[float]:
-    """Калорийность из БЖУ, или None — если хоть одного макроса не хватает."""
-    if any(macros.get(k) is None for k in _KCAL_PER_GRAM):
-        return None
-    return sum(macros[k] * per_gram for k, per_gram in _KCAL_PER_GRAM.items())
-
-
-def _reconcile_macros(entry: dict[str, Any]) -> None:
-    """Привести КБЖУ одной строки к целым граммам и пересчитать из них ккал.
-
-    Модель выдаёт калорийность и БЖУ как две независимые догадки, поэтому они
-    сходятся лишь примерно (620 ккал против 592 по формуле — обычный разброс).
-    На экране это читается как ошибка: любой, кто перемножит граммы на 4/4/9,
-    увидит, что итог не бьётся. Считаем ккал из БЖУ сами — и именно из тех
-    целых граммов, которые показываем, иначе округление вывода (28.4 → «28»)
-    снова разведёт цифры. Строку без полного набора БЖУ не трогаем: там
-    пересчитывать не из чего, и калорийность модели остаётся как есть.
-    """
-    for key in _KCAL_PER_GRAM:
-        if entry.get(key) is not None:
-            entry[key] = float(round(entry[key]))
-    kcal = _atwater_kcal(entry)
-    if kcal is not None:
-        entry["calories"] = kcal
-
-
-def _sum_field(items: list[dict[str, Any]], field: str) -> Optional[float]:
-    known = [i[field] for i in items if i.get(field) is not None]
-    return sum(known) if known else None
-
-
-async def analyze_food(
-    user_id: int,
-    text: str = "",
-    image_data_url: Optional[str] = None,
-    previous: Optional[dict[str, Any]] = None,
-    correction: str = "",
-    with_macros: bool = True,
-    source: str = "bot",
-) -> dict[str, Any]:
-    """Что человек съел → структурированная оценка приёма пищи.
-
-    Обычный REST-вызов без инструментов: вопрос замкнут на присланные текст и
-    фото, лезть в тренировочные данные пользователя тут незачем. `previous` +
-    `correction` — второй заход после «✏️ Поправить»: модель получает свою
-    прошлую догадку и правку пользователя, поэтому правка «это не банан, а
-    груша, и порция 300 г» уточняет оценку, а не начинает её с нуля.
-
-    with_macros=False (users.food_macros_enabled выключен) переключает на
-    FOOD_DESCRIBE_SYSTEM_PROMPT — модель только называет, что на фото, без
-    калорий и БЖУ; возвращённый словарь при этом той же формы (calories/
-    protein/fat/carbs = None, items = []), чтобы вызывающему не пришлось
-    разветвляться по режиму.
-
-    Возвращаемый словарь всегда несёт "is_food": False, когда на фото/в тексте
-    вообще нет еды — вызывающий должен не предлагать сохранить такую догадку.
-
-    Кидает исключение при сетевой ошибке или неразборчивом ответе — вызывающий
-    решает, что показать пользователю.
-    """
-    client = _get_client()
-    parts = []
-    if text:
-        parts.append(f"Что съел: {text}")
-    if image_data_url:
-        parts.append("К сообщению приложено фото еды — оцени по нему.")
-    if previous:
-        parts.append(f"Твоя прошлая оценка: {json.dumps(previous, ensure_ascii=False)}")
-    if correction:
-        parts.append(f"Пользователь поправил: {correction}\nУчти правку и верни исправленную оценку.")
-    if not parts:
-        parts.append("Данных нет — верни description с пустой строкой.")
-
-    # kind=None: квота еды (KIND_FOOD) уже проверена вызывающим хендлером ДО
-    # этого вызова (handlers/food_diary.py) — там же решается, показывать ли
-    # отказ и звать ли модель вовсе. Повторная проверка тут была бы либо
-    # немой (preview уже показан выше), либо дублирующим отказом без адресата
-    # (тут нет ни message, ни клавиатуры, чтобы что-то ответить).
-    response = await paid_call(
-        user_id, None,
-        lambda: client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=700 if with_macros else 200,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            # Свой scope — FOOD_ANALYSIS_SYSTEM_PROMPT/FOOD_DESCRIBE_SYSTEM_PROMPT не
-            # похожи на шапку основного чата, под общим conv-id вытесняли бы её слот
-            # на каждый разбор еды (см. docstring _cache_headers).
-            extra_headers=_cache_headers(user_id, scope="food"),
-            messages=[
-                {
-                    # Оба вызывающих пути (handlers/food_diary.py и tool log_food
-                    # внутри ask()) синхронны относительно апдейта — middleware уже
-                    # выставил язык, отдельный поход в базу не нужен.
-                    "role": "system",
-                    "content": _with_language_tail(
-                        FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT
-                    ),
-                },
-                {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
-            ],
-        ),
-        source=source,
-    )
-    data = _extract_json_object(response.choices[0].message.content or "")
-    is_food = bool(data.get("is_food", True))
-
-    if not with_macros:
-        return {
-            "is_food": is_food,
-            "description": str(data.get("description") or "").strip(),
-            "items": [],
-            "calories": None,
-            "protein": None,
-            "fat": None,
-            "carbs": None,
-            "comment": str(data.get("comment") or "").strip(),
-        }
-
-    items = []
-    for raw in (data.get("items") or []):
-        if not isinstance(raw, dict):
-            continue
-        name = str(raw.get("name") or "").strip()
-        if not name:
-            continue
-        item = {
-            "name": name,
-            "portion": str(raw.get("portion") or "").strip(),
-            "calories": _as_macro(raw.get("calories"), MAX_FOOD_KCAL),
-            "protein": _as_macro(raw.get("protein"), MAX_FOOD_GRAMS),
-            "fat": _as_macro(raw.get("fat"), MAX_FOOD_GRAMS),
-            "carbs": _as_macro(raw.get("carbs"), MAX_FOOD_GRAMS),
-        }
-        _reconcile_macros(item)
-        items.append(item)
-
-    # Длинный список схлопываем в одну строку вместо того, чтобы обрезать: раньше
-    # тут стоял [:6], а итог ниже пересчитывается по оставшимся пунктам — и обед
-    # из десяти позиций молча худел на пару сотен килокалорий, при том что в
-    # названии приёма пропавшие блюда упоминались.
-    if len(items) > MAX_FOOD_ITEMS:
-        rest = items[MAX_FOOD_ITEMS:]
-        word = formatting.plural_ru(len(rest), ("позиция", "позиции", "позиций"))
-        items = items[:MAX_FOOD_ITEMS] + [
-            {
-                "name": f"и ещё {len(rest)} {word}",
-                "portion": "",
-                **{f: _sum_field(rest, f) for f in ("calories", "protein", "fat", "carbs")},
-            }
-        ]
-
-    estimate = {
-        "is_food": is_food,
-        "description": str(data.get("description") or "").strip(),
-        "items": items,
-        "calories": _as_number(data.get("calories")),
-        "protein": _as_number(data.get("protein")),
-        "fat": _as_number(data.get("fat")),
-        "carbs": _as_number(data.get("carbs")),
-        "comment": str(data.get("comment") or "").strip(),
-    }
-    if items:
-        # Итог — сумма раскладки, а не отдельная догадка модели: иначе строки и
-        # «Итого» на карточке живут своей жизнью. Граммы у пунктов уже целые, а
-        # формула линейна, так что сумма ккал по пунктам ровно равна ккал из
-        # суммы БЖУ — карточка сходится и по вертикали, и по формуле.
-        for field in ("calories", "protein", "fat", "carbs"):
-            estimate[field] = _sum_field(items, field)
-    else:
-        _reconcile_macros(estimate)
-    return estimate
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -2807,26 +2485,6 @@ TOOLS: list[dict[str, Any]] = [
                 "в один день — не ошибка, взвешивался несколько раз."
             ),
             "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_food_diary",
-            "description": (
-                "🍽 Дневник питания за последние дни: что ел, когда, КБЖУ каждой записи "
-                "с итогами по дню. Вызывай, когда речь про еду, калории, белок, набор "
-                "или сушку — не спрашивай «что ты ешь», если человек ведёт дневник, "
-                "просто посмотри. Полезен и вместе с тренировками: просевшие рабочие "
-                "веса на фоне недобора калорий или белка — связь, которую стоит назвать. "
-                "calories = null — не ошибка, а запись без подсчёта, текстовая заметка."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "По умолчанию 14"}
-                },
-            },
         },
     },
     {
@@ -3309,48 +2967,6 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["weight"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "log_food",
-            "description": (
-                "Записать съеденное в дневник питания за сегодня («запиши: овсянка с "
-                "бананом»). ДЕЛАЕТ СРАЗУ, под ответом появится кнопка отката — скажи, "
-                "что записал, и упомяни её. КБЖУ передавай только названные человеком: "
-                "если их нет, оценку посчитает тот же разборщик, что и на экране "
-                "дневника, — не подставляй свои цифры вместо него. Придёт "
-                "macros_estimated — скажи, что КБЖУ прикидочные и уточняются весом или "
-                "типом блюда. Фото еды идёт своим путём, этот инструмент — для текста."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string", "description": "Что съели, коротко"},
-                    "calories": {"type": "number"},
-                    "protein": {"type": "number"},
-                    "fat": {"type": "number"},
-                    "carbs": {"type": "number"},
-                },
-                "required": ["description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_food_entry",
-            "description": (
-                "Убрать одну запись из дневника питания. ДЕЛАЕТ СРАЗУ, под ответом "
-                "появится кнопка отката — скажи, что убрал, и упомяни её. entry_id — "
-                "точный id из get_food_diary, не выдумывай."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"entry_id": {"type": "integer"}},
-                "required": ["entry_id"],
             },
         },
     },
@@ -4404,44 +4020,6 @@ async def _bodyweight_history(user_id: int) -> dict[str, Any]:
     }
 
 
-async def _food_diary(user_id: int, days: int = 14) -> dict[str, Any]:
-    """Recent food-diary entries grouped by day, with each day's totals.
-
-    Days are grouped here rather than left to the model: the totals are the
-    part that gets reasoned about ("недобираешь белок"), and a model adding up
-    a flat list of entries itself is a needless chance to get them wrong.
-    """
-    days = max(1, min(days, 90))
-    since = (await _user_today(user_id) - dt.timedelta(days=days - 1)).isoformat()
-    rows = await db.list_recent_food_entries(user_id, since)
-
-    by_day: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        day = by_day.setdefault(
-            row["eaten_on"],
-            {"date": row["eaten_on"], "entries": [], "calories": 0.0,
-             "protein": 0.0, "fat": 0.0, "carbs": 0.0, "entries_without_macros": 0},
-        )
-        day["entries"].append({
-            # id — чтобы delete_food_entry мог сослаться на конкретную запись:
-            # без него убрать можно было только «последнюю», а её не всегда
-            # просят убрать.
-            "id": row["id"],
-            "description": row["description"],
-            "calories": row["calories"],
-            "protein": row["protein"],
-            "fat": row["fat"],
-            "carbs": row["carbs"],
-        })
-        if row["calories"] is None:
-            day["entries_without_macros"] += 1
-        for field in ("calories", "protein", "fat", "carbs"):
-            if row[field] is not None:
-                day[field] += row[field]
-
-    return {"days": list(by_day.values())}
-
-
 async def _full_chat_history(user_id: int) -> dict[str, Any]:
     rows = await db.get_ai_chat_history(user_id)
     return {
@@ -5426,7 +5004,7 @@ async def _archive_exercises(
     )
 
 
-# ---------- дневники: вес тела и еда ----------
+# ---------- дневник веса тела ----------
 
 
 async def _log_bodyweight(
@@ -5479,157 +5057,6 @@ async def _log_bodyweight(
     )
 
 
-# Дневник ждёт разбор до 90 секунд, но там человек смотрит на «разбираю...» и
-# больше ничего не делает. Здесь это один шаг внутри цикла инструментов, за
-# которым ждут ответа тренера, — поэтому лимит короче, а провал не фатален:
-# запись всё равно ляжет, просто без цифр, как было раньше.
-_FOOD_ESTIMATE_TIMEOUT = 30
-
-
-async def _estimate_missing_macros(
-    user_id: int, description: str, entry: dict[str, Any], *, source: str = "ai_chat"
-) -> bool:
-    """Досчитать КБЖУ по описанию тем же оценщиком, что и экран дневника.
-
-    True — цифры проставлены. False — оценщик не увидел еды, не уложился в
-    таймаут или упал; запись тогда идёт без КБЖУ, как и до этого.
-    """
-    if not is_configured():
-        return False
-    # asyncio.wait_for cancels the wrapped coroutine on timeout — if the model
-    # request had already reached the provider by then, cancellation stops us
-    # from ever reaching analyze_food's own _log_llm_cost call, so a real,
-    # billed call went unlogged. asyncio.shield keeps the call itself running
-    # in the background past the timeout: we stop waiting for its *result*,
-    # but it still finishes and logs its own cost when it does.
-    task = asyncio.ensure_future(analyze_food(user_id, text=description, source=source))
-    try:
-        estimate = await asyncio.wait_for(asyncio.shield(task), timeout=_FOOD_ESTIMATE_TIMEOUT)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "food estimate timed out for user %s — оставляю досчитывать в фоне, "
-            "cost-событие запишет сама (см. asyncio.shield)", user_id,
-        )
-        return False
-    except Exception:
-        logger.exception("food estimate failed for user %s", user_id)
-        return False
-    if not estimate.get("is_food"):
-        return False
-    limits = {"calories": MAX_FOOD_KCAL}
-    for key in ("calories", "protein", "fat", "carbs"):
-        entry[key] = _as_macro(estimate.get(key), limits.get(key, MAX_FOOD_GRAMS))
-    _reconcile_macros(entry)
-    return entry["calories"] is not None
-
-
-async def _log_food(
-    user_id: int, tool_input: dict[str, Any], *, source: str = "ai_chat"
-) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
-    """Записать съеденное — сразу, по той же причине, что и вес.
-
-    Если модель прислала КБЖУ, сверяем углеводы/белки/жиры с калориями тем же
-    _reconcile_macros, что и разбор фото, — чтобы дневник не расходился сам с
-    собой. Если не прислала — досчитываем тем же analyze_food, которым считает
-    экран дневника: раньше запись просто ложилась без цифр, и одно и то же
-    «хачапури» давало 865 ккал из дневника и пустоту из чата с тренером, молча
-    занижая итог дня. Оценщик там же и отказывается («поел», «асдфг»), так что
-    выдуманных калорий это не добавляет.
-    """
-    description = str(tool_input.get("description") or "").strip()
-    if not description:
-        return {"error": "нужно описание того, что съели"}, None
-    entry = {
-        "calories": _as_macro(tool_input.get("calories"), MAX_FOOD_KCAL),
-        "protein": _as_macro(tool_input.get("protein"), MAX_FOOD_GRAMS),
-        "fat": _as_macro(tool_input.get("fat"), MAX_FOOD_GRAMS),
-        "carbs": _as_macro(tool_input.get("carbs"), MAX_FOOD_GRAMS),
-    }
-    _reconcile_macros(entry)
-    user = await db.get_user(user_id)
-    estimated = False
-    if entry["calories"] is None and user["food_macros_enabled"]:
-        # Тот же платный вызов, что и у экрана дневника еды (analyze_food) —
-        # значит и та же квота: без этой проверки чат с тренером и MCP были
-        # единственными путями к analyze_food, вообще не считавшими расход.
-        block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
-        if block is None:
-            estimated = await _estimate_missing_macros(user_id, description, entry, source=source)
-            # Атомарный UPDATE ... WHERE count < limit, как и у экрана
-            # дневника (см. db.try_increment_ai_food_count) — этот путь уже
-            # защищён от гонки busy-замком чата тренера (ai_trainer._busy
-            # держит один платный ход на пользователя всегда), но счётчику не
-            # повредит та же вторая линия обороны.
-            await db.try_increment_ai_food_count(user_id, config.AI_FOOD_DAILY_LIMIT)
-        else:
-            logger.info("food macro estimate blocked (ai_chat/mcp) for user %s: %s", user_id, block.log)
-    eaten_on = timeutil.user_today(user).isoformat()
-    entry_id = await db.add_food_entry(
-        user_id, eaten_on, description[:MAX_FOOD_DESCRIPTION],
-        calories=entry["calories"], protein=entry["protein"],
-        fat=entry["fat"], carbs=entry["carbs"], source="ai_chat",
-    )
-    return (
-        {
-            "ok": True,
-            "logged": {"description": description, "date": eaten_on, **entry},
-            # Пусть модель скажет человеку, что цифры прикидочные: сам он их не
-            # называл, а в дневнике они выглядят как факт.
-            "macros_estimated": estimated,
-            "note": _UNDO_NOTE,
-        },
-        {
-            "label": i18n.t("ai.action.remove_food", description=formatting.shorten(description, 24)),
-            "undo": {"kind": "food", "id": entry_id},
-        },
-    )
-
-
-async def _delete_food_entry(
-    user_id: int, tool_input: dict[str, Any]
-) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
-    """Убрать запись из дневника питания — сразу, откат кнопкой возвращает её
-    целиком с теми же цифрами.
-
-    entry_id — точный id из get_food_diary (там он появился ровно для этого:
-    раньше убрать можно было только «последнюю» руками на экране 🍽 Дневник
-    еды, а тренер вообще не умел убирать чужие ошибки из дневника — ни свои
-    неверные оценки, ни то, что человек попросил стереть).
-    """
-    try:
-        entry_id = int(tool_input.get("entry_id"))
-    except (TypeError, ValueError):
-        return {"error": "entry_id должен быть числом — точным, из get_food_diary"}, None
-    entry = await db.get_food_entry(entry_id)
-    if entry is None or entry["telegram_id"] != user_id:
-        return {"error": "такой записи нет — возьми entry_id из get_food_diary"}, None
-    await db.delete_food_entry(entry_id)
-    return (
-        {
-            "ok": True,
-            "deleted": {"description": entry["description"], "date": entry["eaten_on"]},
-            "note": _UNDO_NOTE,
-        },
-        {
-            "label": i18n.t(
-                "ai.action.restore_food", description=formatting.shorten(entry["description"], 24)
-            ),
-            "undo": {
-                "kind": "food_restore",
-                "eaten_on": entry["eaten_on"],
-                "description": entry["description"],
-                "details": entry["details"],
-                "calories": entry["calories"],
-                "protein": entry["protein"],
-                "fat": entry["fat"],
-                "carbs": entry["carbs"],
-                "photo_file_id": entry["photo_file_id"],
-                "source": entry["source"],
-            },
-        },
-    )
-
-
 async def _delete_bodyweight_log(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
@@ -5664,15 +5091,6 @@ async def _delete_bodyweight_log(
             },
         },
     )
-
-
-# Длиннее в одну строку дневника всё равно не читается, а модель иногда
-# присылает туда целый абзац с рассуждением о пользе гречки.
-MAX_FOOD_DESCRIPTION = 200
-
-# Сколько блюд показываем построчно, прежде чем схлопнуть остаток в «и ещё N»:
-# карточка приёма пищи должна читаться с одного взгляда, а не быть простынёй.
-MAX_FOOD_ITEMS = 6
 
 
 # ---------- сравнение периодов ----------
@@ -6631,8 +6049,8 @@ _ACTION_TOOLS = {
 # Прежняя граница шла ровно по обратимости: необратимое — через кнопку,
 # обратимое — молча. Правило верное, но неполное: обратимость и возможность
 # откатить — разные вещи. Отменить записанный вес можно было только уйдя в
-# 🏋️ Вес и нажав там «отменить последнюю», еду — найдя строку в дневнике
-# питания, а старое имя после переименования надо было ещё и помнить. То есть
+# 🏋️ Вес и нажав там «отменить последнюю», а старое имя после переименования
+# надо было ещё и помнить. То есть
 # откат существовал везде, кроме того места, где человек узнавал о записи.
 #
 # Подтверждать всё подряд взамен нельзя: половину этих инструментов зовут по
@@ -6640,13 +6058,11 @@ _ACTION_TOOLS = {
 # запись остаётся мгновенной, а отменяется одним тапом там же, где произошла.
 _UNDOABLE_TOOLS = {
     "log_bodyweight": _log_bodyweight,
-    "log_food": _log_food,
     "create_exercise": _create_exercise,
     "rename_exercise": _rename_exercise,
     "move_exercise_to_group": _move_exercise,
     "rename_program": _rename_program,
     "copy_program": _copy_program,
-    "delete_food_entry": _delete_food_entry,
     "delete_bodyweight_log": _delete_bodyweight_log,
 }
 
@@ -6658,8 +6074,6 @@ async def execute_tool(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_questions: QuestionsCallback = None,
-    *,
-    source: str = "ai_chat",
 ) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -6681,8 +6095,6 @@ async def execute_tool(
         payload = {"catalog": _localized_catalog(i18n.get_lang())}
     elif name == "get_bodyweight_history":
         payload = await _bodyweight_history(user_id)
-    elif name == "get_food_diary":
-        payload = await _food_diary(user_id, int(tool_input.get("days") or 14))
     elif name == "get_full_chat_history":
         payload = await _full_chat_history(user_id)
     elif name == "get_saved_programs":
@@ -6716,10 +6128,7 @@ async def execute_tool(
         # одинаково — различаются они только тем, что кнопка означает: у
         # _ACTION_TOOLS она делает дело, у _UNDOABLE_TOOLS отменяет уже сделанное.
         tool = _ACTION_TOOLS.get(name) or _UNDOABLE_TOOLS[name]
-        if name == "log_food":
-            payload, action = await tool(user_id, tool_input, source=source)
-        else:
-            payload, action = await tool(user_id, tool_input)
+        payload, action = await tool(user_id, tool_input)
         if action is not None and on_action is not None:
             await on_action(action)
             # Запись веса — единственное действие тут, у которого есть свой

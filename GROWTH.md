@@ -85,7 +85,7 @@
 > • напоминаю о тренировке, когда начинаешь пропускать;
 > • отдаю карточку тренировки картинкой — забрать в сторис или в чат друзьям.
 >
-> Дневник еды, вес тела, история за всё время, экспорт — на месте.
+> Вес тела, история за всё время, экспорт — на месте.
 > Бесплатно.
 
 ### Английские версии — для англоязычных каталогов
@@ -124,7 +124,7 @@
 > • remind you about training when you start skipping;
 > • hand you the workout card as an image — for stories or for the group chat.
 >
-> Food diary, bodyweight, full history, export — all there. Free.
+> Bodyweight, full history, export — all there. Free.
 
 #### Пост для каталогов-архивов (@bots_archive и похожие)
 
@@ -136,7 +136,7 @@
 > Type "100 8" and the set is down — no forms, no dropdowns. It counts your tonnage,
 > records and estimated 1RM, charts your progress, builds a program around your
 > gym and goal, reviews your form from a video clip, and nudges you when you
-> start skipping. Food diary, bodyweight and full history included. Free.
+> start skipping. Bodyweight and full history included. Free.
 >
 > 🌐 Languages: English Russian
 >

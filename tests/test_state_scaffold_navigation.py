@@ -19,8 +19,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 
 import config
-from fsm import FeedbackFlow, FoodDiaryFlow, WorkoutFlow
-from handlers import feedback, food_diary, history, mcp_access, workout
+from fsm import FeedbackFlow, WorkoutFlow
+from handlers import feedback, history, mcp_access, workout
 
 # Каркас ровно того вида, что живёт в FSM посреди суперсета по программе: два
 # открытых упражнения, активное из них, остаток плана и начатая переписка с
@@ -87,37 +87,6 @@ def _callback(user_id: int, data: str):
     callback.data = data
     callback.answer = AsyncMock()
     return callback
-
-
-# ---------- дневник еды ----------
-
-
-async def test_food_diary_command_keeps_open_workout(fresh_db, user_id):
-    state = await _state_mid_workout(user_id)
-
-    await food_diary.cmd_food_diary(_message(user_id), state)
-
-    assert await state.get_state() == FoodDiaryFlow.viewing.state
-    await _assert_scaffold_survived(state)
-
-
-async def test_food_diary_menu_button_keeps_open_workout(fresh_db, user_id):
-    state = await _state_mid_workout(user_id)
-
-    await food_diary.menu_food_diary(_callback(user_id, "menu:food"), state)
-
-    await _assert_scaffold_survived(state)
-
-
-async def test_leaving_food_diary_to_the_menu_keeps_open_workout(fresh_db, user_id):
-    """«🏠 Меню» с экрана дня: меню собирает сам workout._show_main_menu, и каркас
-    он бережёт — а стоявший до него state.clear() успевал его снести."""
-    workout_id = await fresh_db.create_workout(user_id)
-    state = await _state_mid_workout(user_id, workout_id)
-
-    await food_diary.fd_menu(_callback(user_id, "fd:menu"), state)
-
-    await _assert_scaffold_survived(state, workout_id)
 
 
 # ---------- достижения ----------
@@ -197,7 +166,7 @@ async def test_command_out_of_feedback_keeps_open_workout(fresh_db, user_id):
 
 
 async def test_resume_after_the_detour_reopens_the_whole_superset(fresh_db, user_id):
-    """Сквозная проверка: записал в перерыве завтрак — и «Продолжить» вернуло оба
+    """Сквозная проверка: глянул в перерыве достижения — и «Продолжить» вернуло оба
     открытых упражнения, а не одно последнее из базы."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Руки")
@@ -223,7 +192,7 @@ async def test_resume_after_the_detour_reopens_the_whole_superset(fresh_db, user
         last_session_sets={triceps: [], biceps: []},
     )
 
-    await food_diary.cmd_food_diary(_message(user_id), state)
+    await history.menu_achievements(_callback(user_id, "menu:achievements"), state)
     await workout.resume_workout(_callback(user_id, "menu:resume_workout"), state)
 
     data = await state.get_data()

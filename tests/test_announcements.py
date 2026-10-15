@@ -1,4 +1,5 @@
 """Разовая релизная рассылка (announcements.py): сначала админу на проверку, потом всем."""
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -651,10 +652,13 @@ async def test_ai_actions_release_only_advertises_tools_that_actually_exist():
 
     write_tools = set(ai_trainer._ACTION_TOOLS) | set(ai_trainer._UNDOABLE_TOOLS)
     assert {
-        "log_bodyweight", "log_food", "create_exercise", "rename_exercise",
+        "log_bodyweight", "create_exercise", "rename_exercise",
         "move_exercise_to_group", "archive_exercise", "copy_program",
         "rename_program", "merge_programs", "delete_program", "share_program",
     } <= write_tools
+    # Дневника еды больше нет — и анонс не должен его обещать.
+    text = announcements.RELEASE_AI_TRAINER_ACTIONS.text.lower()
+    assert not re.search(r"\bеду\b|дневник еды|калори", text)
 
 
 # ---------- релиз приложения: закреп и пропуск тех, у кого оно уже стоит ----------

@@ -100,16 +100,6 @@ async def test_reading_stored_nan_progression_does_not_500(fresh_db, client_fact
 @pytest.mark.parametrize("field,value", [
     ("kcal", 1e308), ("kcal", 20001), ("protein", 1e308), ("fat", 2001), ("carbs", 1e9),
 ])
-async def test_food_entry_caps(fresh_db, client_factory, field, value):
-    client = await _client(fresh_db, client_factory)
-    resp = await client.post("/food", json={"name": "Плов", field: value})
-    assert resp.status_code == 400, resp.text
-
-
-async def test_food_entry_at_the_cap_is_fine(fresh_db, client_factory):
-    client = await _client(fresh_db, client_factory)
-    resp = await client.post("/food", json={"name": "Плов", "kcal": 20000, "protein": 2000})
-    assert resp.status_code == 201, resp.text
 
 
 # ---------- 7: гонка записи подхода и удаления/закрытия ----------

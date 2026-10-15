@@ -10,6 +10,7 @@ import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import legacy_food
 import pytest
 from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.filters import CommandObject
@@ -441,7 +442,7 @@ async def test_week_bars_scale_to_the_busiest_week_and_dot_for_empty():
 async def test_bodyweight_only_when_the_athlete_opened_it(fresh_db):
     await _linked(fresh_db, bw=True)
     await fresh_db.add_bodyweight_log(ATHLETE, 70.5)
-    await fresh_db.add_food_entry(ATHLETE, dt.date.today().isoformat(), "Гречка", calories=300)
+    await legacy_food.insert_food_row(ATHLETE, dt.date.today().isoformat(), "Гречка", calories=300)
     card = await _tap(COACH, f"coach:cl:{ATHLETE}")
     cbs = [cb for _t, cb in _buttons(_kb(card))]
     assert f"coach:bw:{ATHLETE}" in cbs

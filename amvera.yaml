@@ -26,7 +26,7 @@ run:
   #    SQLite; на несколько процессов такой замок не действует вовсе.
   #  - все in-memory busy-замки от двойного платежа за один и тот же AI-шаг
   #    (busy_lock.py — handlers/ai_trainer._busy, handlers/factcheck._busy,
-  #    handlers/food_diary._busy, api_v1_ai._busy, api_v1_food._busy): второй
+  #    api_v1_ai._busy, api_v1_feedback._busy): второй
   #    параллельный запрос того же пользователя, попавший на ДРУГОЙ инстанс,
   #    не увидит бронь первого и заплатит модели повторно.
   #  - ai_limits._cached (ai_limits.py) — кэш дневного расхода в памяти

@@ -1850,7 +1850,6 @@ def settings_keyboard(
     ai_comments_enabled: bool,
     progression_enabled: bool,
     tz_offset: int = 0,
-    food_macros_enabled: bool = True,
     show_extra_stats: bool = True,
     show_mcp: bool = False,
     lang: str = "ru",
@@ -1888,7 +1887,7 @@ def settings_keyboard(
         callback_data="settings:formula",
     )
 
-    # --- Как разговариваю: пять тумблеров ---
+    # --- Как разговариваю: тумблеры ---
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились
     # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
@@ -1914,10 +1913,6 @@ def settings_keyboard(
         i18n.t("btn.ai_comments_on") if ai_comments_enabled else i18n.t("btn.ai_comments_off")
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
-    macros_label = (
-        i18n.t("btn.macros_on") if food_macros_enabled else i18n.t("btn.macros_off")
-    )
-    b.button(text=macros_label, callback_data="settings:food_macros")
     # users.show_extra_stats has always gated the e1RM line on the finish card;
     # it just had no switch, so nobody could ever turn it off. «Подробно /
     # компактно» не говорило, что именно меняется — переименовано в то, что
@@ -2199,7 +2194,7 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
     return b.as_markup()
 
 
-# Сколько записей веса на страницу списка «✏️ Записи» — как история питания.
+# Сколько записей веса на страницу списка «✏️ Записи».
 BODYWEIGHT_LIST_PAGE_SIZE = 10
 
 
@@ -2229,68 +2224,6 @@ def bodyweight_list_keyboard(rows: Sequence, unit: str, page: int, has_next: boo
     return b.as_markup()
 
 
-# Сколько дней истории питания на страницу — как в истории тренировок.
-FOOD_HISTORY_PAGE_SIZE = 8
-
-
-def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -> InlineKeyboardMarkup:
-    """Экран одного дня дневника питания: удаление записей, шаг по дням, история.
-
-    Кнопка удаления на запись — по номеру («🗑 2»), потому что сами названия
-    («Куриная грудка с рисом и салатом») в лейбл не влезают, а нумерация уже
-    есть в тексте экрана.
-    """
-    b = InlineKeyboardBuilder()
-    if entry_ids:
-        b.row(
-            *[
-                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"fd:delask:{entry_id}")
-                for i, entry_id in enumerate(entry_ids, start=1)
-            ],
-            width=4,
-        )
-    prev_day = date - dt.timedelta(days=1)
-    nav = [InlineKeyboardButton(text=f"⬅️ {formatting.format_day_month_ru(prev_day, today=today)}",
-                                callback_data=f"fd:day:{prev_day.isoformat()}")]
-    if date < today:
-        next_day = date + dt.timedelta(days=1)
-        nav.append(
-            InlineKeyboardButton(
-                text=f"{formatting.format_day_month_ru(next_day, today=today)} ➡️",
-                callback_data=f"fd:day:{next_day.isoformat()}",
-            )
-        )
-    b.row(*nav)
-    if date != today:
-        b.row(InlineKeyboardButton(text=i18n.t("btn.today"), callback_data=f"fd:day:{today.isoformat()}"))
-    b.row(
-        InlineKeyboardButton(text=i18n.t("btn.history"), callback_data="fd:history:0"),
-        InlineKeyboardButton(text=i18n.t("btn.kcal_goal"), callback_data="fd:goal"),
-    )
-    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"))
-    return b.as_markup()
-
-
-def food_delete_confirm_keyboard(entry_id: int, back_date: dt.date) -> InlineKeyboardMarkup:
-    """"Удалить запись?" — back_date routes "Нет" back to that day's screen
-    (reuses fd:day:, the same callback the day-nav buttons already use)."""
-    return yes_no_keyboard(
-        yes_cb=f"fd:del:{entry_id}", no_cb=f"fd:day:{back_date.isoformat()}",
-        yes_text=i18n.t("btn.delete"), no_text=i18n.t("btn.cancel"),
-    )
-
-
-def food_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Под догадкой модели: подтвердить, поправить словами или выкинуть."""
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=i18n.t("btn.confirm_correct"), callback_data="fd:ok"))
-    b.row(
-        InlineKeyboardButton(text=i18n.t("btn.correct_it"), callback_data="fd:fix"),
-        InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="fd:cancel"),
-    )
-    return b.as_markup()
-
-
 def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:
     """Под предупреждением о лимите на своём аккаунте (см. ai_limits.preview_text).
 
@@ -2298,34 +2231,6 @@ def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:
     """
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text=i18n.t("btn.limit_ack"), callback_data=f"ail:ack:{kind}"))
-    return b.as_markup()
-
-
-def food_history_keyboard(
-    days: Sequence[dt.date], page: int, has_next: bool, today: dt.date | None = None
-) -> InlineKeyboardMarkup:
-    """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана.
-
-    Формат подписи — тот же, что у навигации по дням (`food_day_keyboard`):
-    «14 августа», год дописывается только если он не текущий. Раньше тут стоял
-    отдельный `%d.%m.%Y`, и в одном дневнике день читался то словом, то цифрами.
-    """
-    today = today or dt.date.today()
-    b = InlineKeyboardBuilder()
-    for d in days:
-        b.button(
-            text=formatting.format_day_month_ru(d, today=today), callback_data=f"fd:day:{d.isoformat()}"
-        )
-    b.adjust(2)
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"fd:history:{page - 1}"))
-    if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"fd:history:{page + 1}"))
-    if nav:
-        b.row(*nav)
-    b.row(InlineKeyboardButton(text=i18n.t("btn.to_today"), callback_data="fd:day:today"))
-    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"))
     return b.as_markup()
 
 
