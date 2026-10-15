@@ -247,17 +247,41 @@ async def test_spend_hard_stop_is_429_with_limit_text(fresh_db, model, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_new_accounts_have_comments_on(fresh_db):
+async def test_new_accounts_have_auto_comments_off(fresh_db):
+    """С 2026-10 автокомментарий — согласие, а не дефолт: новичок получает
+    комментарий по кнопке под итогами, а сам он приходит только тому, кто
+    включил тумблер. Оба места заведения аккаунта — бот и app-only."""
     tg = await fresh_db.get_or_create_user(telegram_id=333, username="new")
     app_only = await fresh_db.create_app_only_user(language_code="en")
-    assert tg["ai_comments_enabled"] == 1
-    assert app_only["ai_comments_enabled"] == 1
+    assert tg["ai_comments_enabled"] == 0
+    assert app_only["ai_comments_enabled"] == 0
 
 
 @pytest.mark.asyncio
-async def test_live_db_with_old_default_keeps_existing_and_turns_on_new(tmp_path):
-    """Живая база: колонка уже есть с DEFAULT 0, и SQLite его не поменяет.
-    Старые записи остаются как были, новые получают 1 явной вставкой."""
+async def test_new_account_settings_report_auto_comments_off(fresh_db):
+    """Тот же дефолт виден приложению полем `ai_comments_enabled` в /v1/settings,
+    и тумблер включает автокомментарий обратно."""
+    await fresh_db.get_or_create_user(telegram_id=334, username="fresh")
+    code = await fresh_db.issue_oauth_link_code(334, ttl_seconds=600, digits=8)
+    client = _client()
+    resp = await client.post("/auth/link", json={"code": code})
+    assert resp.status_code == 200, resp.text
+    client.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+
+    resp = await client.get("/settings")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ai_comments_enabled"] is False
+    resp = await client.patch("/settings", json={"ai_comments_enabled": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ai_comments_enabled"] is True
+    assert (await fresh_db.get_user(334))["ai_comments_enabled"] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_db_keeps_existing_values_and_new_accounts_get_off(tmp_path):
+    """Живая база: колонка уже есть со своим DEFAULT (ALTER TABLE в SQLite его
+    не меняет). Массовой миграции нет: у старых записей значение остаётся
+    каким было — и 1, и 0, — а новые получают 0 явной вставкой."""
     import sqlite3
 
     import db
@@ -266,11 +290,15 @@ async def test_live_db_with_old_default_keeps_existing_and_turns_on_new(tmp_path
     legacy = sqlite3.connect(path)
     legacy.executescript(
         db.SCHEMA.replace(
-            "ai_comments_enabled INTEGER NOT NULL DEFAULT 1", "ai_comments_enabled INTEGER NOT NULL DEFAULT 0"
+            "ai_comments_enabled INTEGER NOT NULL DEFAULT 0", "ai_comments_enabled INTEGER NOT NULL DEFAULT 1"
         )
     )
     legacy.execute(
         "INSERT INTO users (telegram_id, username, created_at) VALUES (444, 'old', '2025-01-01T00:00:00')"
+    )
+    legacy.execute(
+        "INSERT INTO users (telegram_id, username, created_at, ai_comments_enabled) "
+        "VALUES (445, 'old-off', '2025-01-01T00:00:00', 0)"
     )
     legacy.commit()
     legacy.close()
@@ -278,8 +306,11 @@ async def test_live_db_with_old_default_keeps_existing_and_turns_on_new(tmp_path
     db._write_lock = asyncio.Lock()
     await db.init_db(str(path))
     try:
-        assert (await db.get_user(444))["ai_comments_enabled"] == 0
-        assert (await db.get_or_create_user(555, "new"))["ai_comments_enabled"] == 1
-        assert (await db.create_app_only_user())["ai_comments_enabled"] == 1
+        assert (await db.get_user(444))["ai_comments_enabled"] == 1
+        assert (await db.get_user(445))["ai_comments_enabled"] == 0
+        # Повторный get_or_create_user у существующего не перезаписывает значение.
+        assert (await db.get_or_create_user(444, "old"))["ai_comments_enabled"] == 1
+        assert (await db.get_or_create_user(555, "new"))["ai_comments_enabled"] == 0
+        assert (await db.create_app_only_user())["ai_comments_enabled"] == 0
     finally:
         await db.close_db()

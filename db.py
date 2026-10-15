@@ -70,12 +70,17 @@ CREATE TABLE IF NOT EXISTS users (
     show_extra_stats INTEGER NOT NULL DEFAULT 1,
     pushes_enabled INTEGER NOT NULL DEFAULT 1,
     reply_keyboard_version INTEGER NOT NULL DEFAULT 0,
-    -- Комментарий тренера после каждой тренировки включён у новичка сразу:
-    -- выключенным его почти никто не находил. Живой базе этот DEFAULT уже не
-    -- поможет (колонка там есть с DEFAULT 0), поэтому новая запись пишет 1 явно
-    -- (get_or_create_user, create_app_only_user). Старым записям 0 не трогаем:
-    -- «ни разу не открывал настройку» и «сам выключил» в базе неотличимы.
-    ai_comments_enabled INTEGER NOT NULL DEFAULT 1,
+    -- «Присылать комментарий тренера сразу после тренировки» — согласие на
+    -- автоматический платный вызов модели после каждого финиша. С 2026-10
+    -- новичку он ВЫКЛЮЧЕН (решение владельца): комментарий по умолчанию — по
+    -- кнопке «🤖 Комментарий AI-тренера» под итогами, а кто хочет, чтобы он
+    -- приходил сам, включает тумблер в настройках. Новая запись всё равно пишет
+    -- 0 явно (get_or_create_user, create_app_only_user): у живой базы DEFAULT
+    -- колонки тот, с которым её когда-то добавили, — ALTER TABLE в SQLite его
+    -- не меняет. Старые записи не трогаем: у кого 1 — тот остаётся с
+    -- автокомментарием; «ни разу не открывал настройку» и «включил сам» в базе
+    -- неотличимы (отметки времени смены тумблера нет).
+    ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     -- Диапазон повторов для подсказки «Цель» (analytics.REP_RANGE_PRESETS).
     -- NULL у обоих — 5–12 по умолчанию; пишутся только парой.
@@ -1766,8 +1771,8 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN pushes_enabled INTEGER NOT NULL DEFAULT 1")
     if "ai_comments_enabled" not in user_cols:
         # База без колонки — значит, настройки ещё не было ни у кого, и
-        # «выключил сам» тут не бывает: дефолт тот же, что у новичка (см. схему).
-        await _conn.execute("ALTER TABLE users ADD COLUMN ai_comments_enabled INTEGER NOT NULL DEFAULT 1")
+        # «выбрал сам» тут не бывает: дефолт тот же, что у новичка (см. схему).
+        await _conn.execute("ALTER TABLE users ADD COLUMN ai_comments_enabled INTEGER NOT NULL DEFAULT 0")
     if "progression_hint_enabled" not in user_cols:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
@@ -2804,10 +2809,11 @@ async def get_or_create_user(
             "INSERT INTO users "
             "(telegram_id, username, created_at, unit, e1rm_formula, tz_offset, lang, "
             "ai_comments_enabled) "
-            # ai_comments_enabled = 1 явно, а не через DEFAULT колонки: в живой
-            # базе у неё остался DEFAULT 0 (ALTER TABLE в SQLite его не меняет),
-            # а новичку комментарий тренера включён сразу (см. схему).
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+            # ai_comments_enabled = 0 явно, а не через DEFAULT колонки: у живой
+            # базы DEFAULT тот, с которым колонку когда-то добавили (ALTER TABLE
+            # в SQLite его не меняет), а новичку автокомментарий выключен —
+            # комментарий по кнопке под итогами (см. схему).
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
             (
                 telegram_id,
                 username,
@@ -2968,8 +2974,8 @@ async def create_app_only_user(
             "INSERT INTO users "
             "(telegram_id, username, created_at, unit, e1rm_formula, tz_offset, lang, "
             "telegram_linked, ai_comments_enabled) "
-            # ai_comments_enabled = 1 — по той же причине, что в get_or_create_user.
-            "VALUES (?, NULL, ?, ?, ?, ?, ?, 0, 1)",
+            # ai_comments_enabled = 0 — по той же причине, что в get_or_create_user.
+            "VALUES (?, NULL, ?, ?, ?, ?, ?, 0, 0)",
             (
                 new_id,
                 now_iso(),
