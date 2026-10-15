@@ -223,13 +223,22 @@ async def test_global_search_cap_is_shared_between_people(user_id, monkeypatch, 
 # ---------- предупреждения на своих аккаунтах ----------
 
 
-async def test_own_account_sees_a_warning_instead_of_a_wall(user_id, monkeypatch):
+async def test_own_account_has_no_personal_quota(user_id, monkeypatch):
+    """Свои аккаунты личных квот не держат вовсе: в приложении экрана для
+    предупреждения нет, и админ упирался в настоящий отказ."""
     monkeypatch.setattr(config, "ADMIN_ID", user_id)
     monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
     _spend(monkeypatch, 0.0)
     await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
 
-    block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
+    assert await ai_limits.check(user_id, ai_limits.KIND_VOICE) is None
+
+
+async def test_own_account_sees_a_warning_on_the_soft_cap(user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", user_id)
+    _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD)
+
+    block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
     assert block is not None and block.preview
     # В предупреждении — ровно тот текст, который увидел бы обычный атлет.
     assert block.user_text in ai_limits.preview_text(block, 1.23)
@@ -237,60 +246,43 @@ async def test_own_account_sees_a_warning_instead_of_a_wall(user_id, monkeypatch
 
 
 async def test_own_account_preview_follows_the_acting_users_language(user_id, monkeypatch):
-    """QA-баг: предупреждение своим аккаунтам рендерилось жёстко по-русски,
-    даже когда язык атлета (в т.ч. TEST_USER_ID/ADMIN_ID) — английский, хотя
-    оно и задумано как симуляция того, что увидел бы обычный атлет (CLAUDE.md,
-    «Сколько это стоит»)."""
+    """QA-баг: предупреждение своим аккаунтам рендерилось жёстко по-русски."""
     monkeypatch.setattr(config, "ADMIN_ID", user_id)
-    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
-    _spend(monkeypatch, 1.23)
-    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+    _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD)
 
-    # check() и последующий показ предупреждения всегда идут в рамках ОДНОГО
-    # запроса, на языке которого и застывает block.user_text (см. ai_limits.py:
-    # `_user_text` через i18n.t) — как в проде, где язык уже выставлен
-    # мидлварью до хендлера. Поэтому блок пересоздаётся под каждый язык
-    # отдельно, а не переиспользуется между `use_lang`.
     with i18n.use_lang("ru"):
-        ru_block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
+        ru_block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
         assert ru_block is not None and ru_block.preview
         ru_text = ai_limits.preview_text(ru_block, 1.23)
     with i18n.use_lang("en"):
-        en_block = await ai_limits.check(user_id, ai_limits.KIND_VOICE)
+        en_block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
         assert en_block is not None and en_block.preview
         en_text = ai_limits.preview_text(en_block, 1.23)
 
     assert ru_text != en_text
     assert "СРАБОТАЛ ЛИМИТ" in ru_text and "Обычный атлет" in ru_text
     assert "LIMIT HIT" in en_text and "average athlete" in en_text
-    # Никакой кириллицы не протекает в английскую версию экрана.
     assert not i18n_coverage_module.has_cyrillic(en_text)
 
 
 async def test_ack_lets_the_day_continue(user_id, monkeypatch):
     monkeypatch.setattr(config, "TEST_USER_ID", user_id)
     monkeypatch.setattr(config, "ADMIN_ID", None)
-    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
-    _spend(monkeypatch, 0.0)
-    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
+    _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD)
 
-    assert (await ai_limits.check(user_id, ai_limits.KIND_VOICE)).preview
-    await ai_limits.record_ack(user_id, ai_limits.KIND_VOICE)
-    assert await ai_limits.check(user_id, ai_limits.KIND_VOICE) is None
+    assert (await ai_limits.check(user_id, ai_limits.KIND_VIDEO)).preview
+    await ai_limits.record_ack(user_id, ai_limits.KIND_VIDEO)
+    assert await ai_limits.check(user_id, ai_limits.KIND_VIDEO) is None
 
 
 async def test_ack_covers_only_its_own_kind(user_id, monkeypatch):
-    """Нажал «Понятно» на голосе — про видео это ничего не говорит."""
+    """Нажал «Понятно» на видео — про поиск это ничего не говорит."""
     monkeypatch.setattr(config, "ADMIN_ID", user_id)
-    monkeypatch.setattr(config, "AI_VOICE_DAILY_LIMIT", 1)
-    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 1)
-    _spend(monkeypatch, 0.0)
-    await dbmod.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
-    await dbmod.increment_ai_video_count(user_id)
+    _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD)
 
-    await ai_limits.record_ack(user_id, ai_limits.KIND_VOICE)
-    assert await ai_limits.check(user_id, ai_limits.KIND_VOICE) is None
-    assert (await ai_limits.check(user_id, ai_limits.KIND_VIDEO)).preview
+    await ai_limits.record_ack(user_id, ai_limits.KIND_VIDEO)
+    assert await ai_limits.check(user_id, ai_limits.KIND_VIDEO) is None
+    assert (await ai_limits.check(user_id, ai_limits.KIND_SEARCH)).preview
 
 
 async def test_strangers_never_get_the_warning(user_id, monkeypatch, free):

@@ -323,6 +323,14 @@ async def resets_at(user_id: int, kind: str) -> dt.datetime:
     return next_midnight - dt.timedelta(hours=offset)
 
 
+async def quota_exempt(user_id: int) -> bool:
+    """Личные суточные квоты не держит: свои аккаунты (ADMIN_ID, TEST_USER_ID) и
+    аккаунт прогонов. Своим раньше показывалось предупреждение с «Понятно» — но
+    только в боте: в приложении экрана для него нет, и админ упирался в настоящий
+    отказ. Потолки по деньгам (SOFT/HARD) держат все."""
+    return user_id in config.limit_preview_ids() or await db.is_walk_demo(user_id)
+
+
 async def check(user_id: int, kind: str) -> Optional[Block]:
     """Делаем этот шаг или нет. None — делаем.
 
@@ -360,12 +368,12 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
     else:
         log = f"{reason}: за сутки ~${await daily_spend_usd():.2f}"
 
-    if reason == kind and await db.is_walk_demo(user_id):
+    if reason == kind and await quota_exempt(user_id):
         # Аккаунт прогонов (скриншоты, сравнение моделей в ai-compare.yml):
         # один прогон — десятки вопросов подряд, и личная суточная квота
         # обрывала его на втором. Личные квоты он не держит; SOFT и HARD по
         # деньгам — держит, как все (reason тогда не равен kind).
-        logger.info("limit %s skipped: run account %s", kind, user_id)
+        logger.info("limit %s skipped: own or run account %s (%s)", kind, user_id, log)
         return None
     block = Block(kind=kind, log=log, user_text=_user_text(kind, reason))
     if reason == KIND_SPEND_HARD:
