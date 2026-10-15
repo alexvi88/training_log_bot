@@ -97,3 +97,17 @@ def test_an_offered_program_is_its_own_line(monkeypatch):
     )
 
     assert admin._activity_line(row).endswith("🗂 предложил программу: Верх/низ 3×")
+
+
+
+async def test_email_instead_of_id_when_no_username(fresh_db):
+    """Аккаунт только из приложения: ника нет — в ленте почта из входа, а не id."""
+    import keyboards
+    await fresh_db.get_or_create_user(telegram_id=-5, username=None)
+    await fresh_db.link_auth_identity(-5, "apple", "sub-5", email="lifter@example.com")
+    assert await fresh_db.get_user_email(-5) == "lifter@example.com"
+    rows = await fresh_db.list_users_with_event_counts(limit=50)
+    row = next(r for r in rows if r["telegram_id"] == -5)
+    assert keyboards.admin_user_label(row["username"], row["email"], row["telegram_id"]) == "lifter@example.com"
+    assert keyboards.admin_user_label("ivan", "x@y.z", 1) == "@ivan"
+    assert keyboards.admin_user_label(None, None, 7) == "7"

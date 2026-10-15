@@ -10746,7 +10746,8 @@ async def list_users_with_event_counts(limit: int = 10, offset: int = 0) -> list
     ответ на вопрос «как пользуются», и пропадать из списка он не должен.
     """
     cur = await conn().execute(
-        "SELECT u.telegram_id, u.username, COUNT(e.id) AS event_count, MAX(e.created_at) AS last_event_at "
+        "SELECT u.telegram_id, u.username, COUNT(e.id) AS event_count, MAX(e.created_at) AS last_event_at, "
+        "(SELECT i.email FROM auth_identities i WHERE i.user_id = u.telegram_id AND i.email IS NOT NULL ORDER BY i.created_at LIMIT 1) AS email "
         "FROM users u LEFT JOIN user_events e ON e.telegram_id = u.telegram_id "
         "GROUP BY u.telegram_id "
         "ORDER BY event_count DESC, u.telegram_id "
@@ -10754,6 +10755,18 @@ async def list_users_with_event_counts(limit: int = 10, offset: int = 0) -> list
         (limit, offset),
     )
     return await cur.fetchall()
+
+
+async def get_user_email(telegram_id: int) -> Optional[str]:
+    """Почта из входа (Apple отдаёт её только при первом входе) — для админских
+    экранов вместо голого id; None, если не знаем."""
+    cur = await conn().execute(
+        "SELECT email FROM auth_identities WHERE user_id = ? AND email IS NOT NULL "
+        "ORDER BY created_at LIMIT 1",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
 
 
 async def count_user_events(telegram_id: int) -> int:
@@ -10784,7 +10797,7 @@ async def list_all_events(limit: int = 30, offset: int = 0) -> list[aiosqlite.Ro
     """Действия всех пользователей вперемешку, свежие сверху."""
     cur = await conn().execute(
         "SELECT e.id, e.telegram_id, u.username, e.kind, e.content, e.payload, e.source, "
-        "e.created_at "
+        "e.created_at, (SELECT i.email FROM auth_identities i WHERE i.user_id = e.telegram_id AND i.email IS NOT NULL ORDER BY i.created_at LIMIT 1) AS email "
         "FROM user_events e LEFT JOIN users u ON u.telegram_id = e.telegram_id "
         "ORDER BY e.id DESC LIMIT ? OFFSET ?",
         (limit, offset),

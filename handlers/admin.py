@@ -460,7 +460,9 @@ def _activity_line_all(row) -> str:
     """Та же строка, что и в ленте одного пользователя, но с автором — общая
     лента иначе нечитаема — и в HTML, чтобы автора можно было выделить жирным."""
     at = admin_time(row["created_at"])
-    who = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
+    who = keyboards.admin_user_label(
+        row["username"], row["email"] if "email" in row.keys() else None, row["telegram_id"]
+    )
     return (
         f"{at.strftime('%d.%m %H:%M')} {_activity_source(row)} {_activity_marker(row['kind'])} "
         f"{escape(_activity_content(row))} — <b>{escape(who)}</b>"
@@ -491,7 +493,9 @@ async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target
     )
     has_next = (page + 1) * ACTIVITY_PAGE_SIZE < total
 
-    who = f"@{user['username']}" if user and user["username"] else str(target_user_id)
+    who = keyboards.admin_user_label(
+        user["username"] if user else None, await db.get_user_email(target_user_id), target_user_id
+    )
     if rows:
         header = f"👀 {who} — {total} действий, свежие сверху:"
         text = header + "\n\n" + "\n".join(_activity_line(row) for row in rows)
