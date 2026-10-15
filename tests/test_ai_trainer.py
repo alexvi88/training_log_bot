@@ -233,7 +233,7 @@ async def test_recent_workouts_lists_sets(fresh_db, user_id):
     )
 
     assert len(payload["workouts"]) == 2
-    latest = payload["workouts"][0]
+    latest = payload["workouts"][-1]  # старые первыми
     assert latest["date"] == "2026-01-03"
     assert latest["exercises"][0] == {"name": "Жим лёжа", "sets": ["103x8"], "note": None}
 
@@ -399,7 +399,7 @@ async def test_full_workout_history_is_not_capped_at_ten(fresh_db, user_id):
 
     assert len(recent["workouts"]) == 5  # default limit, unaffected by this change
     assert len(full["workouts"]) == 12
-    assert full["workouts"][-1]["date"] == "2026-01-01"  # oldest last, same ordering as list_recent_workouts
+    assert full["workouts"][0]["date"] == "2026-01-01"  # oldest first, same ordering as list_recent_workouts
 
 
 async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id, monkeypatch):
@@ -2272,6 +2272,7 @@ async def test_exercise_progress_never_compares_reps_across_weights(
     assert all(row["change"] != "down" for row in payload["same_weight_reps"])
 
     stall = payload["stall"]
+    assert stall["verdict"] == "progressing" and stall["stalled"] is False
     assert "reps at 77 kg: 6→7" in stall["why"]
     assert "12→7" not in json.dumps(payload, ensure_ascii=False)
     assert stall["top_weight_since"] == "2026-09-18"
@@ -2296,6 +2297,9 @@ async def test_stalled_lifts_reports_reps_on_the_top_weight_only(fresh_db, user_
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
 
     (lift,) = payload["lifts"]
+    assert lift["verdict"] == "progressing"
+    assert lift["weight_raised_from"] == 73
+    assert "reps at 77 kg: 6→7" in lift["why"]
     assert lift["reps_at_top_weight"] == "6→7"
     assert lift["top_weight_since"] == "2026-09-18"
     assert lift["sessions_at_top_weight"] == 2

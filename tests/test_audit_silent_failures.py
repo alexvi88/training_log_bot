@@ -35,7 +35,9 @@ async def test_one_failing_prune_does_not_stop_the_others(fresh_db, tmp_path, mo
         "prune_old_cost_events", "prune_old_user_events", "prune_old_funnel_events",
         "prune_old_analytics_events", "prune_old_diagnostics", "prune_old_behaviour_digests",
         "prune_old_weekly_digests", "prune_old_import_batches", "prune_old_exercise_merges",
-        "prune_old_limit_acks", "prune_old_ai_usage", "prune_old_ai_conversations", "prune_old_pushes",
+        "prune_old_limit_acks", "prune_old_ai_usage", "prune_old_ai_conversations", "prune_old_ai_turn_log",
+        "prune_old_ai_chat_messages",
+        "prune_old_pushes",
         "delete_shared_items_older_than",
     ]
     for name in names:
