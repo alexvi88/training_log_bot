@@ -118,17 +118,23 @@ async def get_visits(request: Request) -> Any:
     # Тренировка, ждущая окна «Вернуть», для столбиков «по месяцам» уже
     # удалена — см. common.query_excluded_workouts; эхо — как у /dashboard.
     excluded = common.query_excluded_workouts(request)
-    user = await db.get_user(user_id)
+    return JSONResponse(await visits_payload(await db.get_user(user_id), excluded))
+
+
+async def visits_payload(user: Any, excluded: tuple[int, ...] = ()) -> dict[str, Any]:
+    """Тренировки по дням за 53 недели — одна сборка на свою историю и на
+    историю клиента у тренера (`GET /coach/clients/{id}/visits`): карточка
+    «Тренировки по месяцам» у обоих одна."""
     today = timeutil.user_today(user)
     since = (today - dt.timedelta(days=VISITS_DAYS - 1)).isoformat()
     days: dict[str, int] = {}
-    for d in await db.list_finished_workout_dates(user_id, exclude_workout_ids=excluded):
+    for d in await db.list_finished_workout_dates(user["telegram_id"], exclude_workout_ids=excluded):
         if d >= since:
             days[d] = days.get(d, 0) + 1
     payload: dict[str, Any] = {"today": today.isoformat(), "days": days}
     if excluded:
         payload["excluded_workout_ids"] = list(excluded)
-    return JSONResponse(payload)
+    return payload
 
 
 # ---------- экспорт CSV ----------

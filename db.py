@@ -6388,7 +6388,8 @@ async def list_trained_exercises(
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
-        "SELECT e.id, e.display_name, e.original_name, COUNT(DISTINCT w.id) AS sessions, "
+        "SELECT e.id, e.display_name, e.original_name, e.media_from, e.primary_group_id, "
+        "       COUNT(DISTINCT w.id) AS sessions, "
         "       COUNT(s.id) AS sets_count, MAX(w.started_at) AS last_at, "
         f"      MAX({day}) AS last_day "
         "FROM sets s "

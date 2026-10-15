@@ -43,10 +43,13 @@ import ai_limits
 import ai_trainer
 import analytics
 import config
+import dashboard_data
 import db
+import exercise_media
 import formatting
 import i18n
 import progress_data
+import seed_data
 import timeutil
 from handlers import sharing
 
@@ -474,9 +477,23 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
                 **summary,
             })
 
+    # Рост e1RM — тот же блок и тот же расчёт, что у атлета наверху его
+    # «Прогресса» (dashboard_data.lift_growth): тренер видит клиента тем же
+    # экраном. Пустые плитки и заголовок — роста не видно (мало истории).
+    growth_tiles, growth_title = await dashboard_data.lift_growth(
+        client_id, client, dates, today, shown_name=sharing.shown_exercise_name
+    )
     return {
         "unit": client["unit"],
         **activity,
+        "growth": {
+            "title": growth_title,
+            "note": formatting.MENU_LIFTS_NOTE,
+            "tiles": [
+                {"exercise": exercise, "growth": growth, "detail": detail, "exercise_id": exercise_id}
+                for exercise, growth, detail, exercise_id in growth_tiles
+            ],
+        },
         "lifts": lifts,
         "records": records,
         "recent_records": await recent_records(client, PROGRESS_RECORD_DAYS, running=True),
@@ -498,14 +515,42 @@ async def client_exercises(client: Any) -> list[dict[str, Any]]:
     (`shown_exercise_names`). Идентичность — `exercise_id`, по нему и
     открывается прогресс."""
     rows = await db.list_trained_exercises(client["telegram_id"], tz_offset=timeutil.offset_hours(client))
-    return [
-        {
+    groups = {g["id"]: g for g in await db.list_muscle_groups(client["telegram_id"])}
+    items = []
+    for row in rows:
+        group = groups.get(row["primary_group_id"])
+        items.append({
             "exercise_id": row["id"],
             "exercise": sharing.shown_exercise_name(row["display_name"]),
             "sessions": row["sessions"],
             "last_workout_at": row["last_day"],
-        }
-        for row in rows
+            # Строка списка — тем же видом, что «Все упражнения» в «Прогрессе»
+            # атлета: первый кадр каталога (публичный URL, как `thumb` у
+            # GET /exercises) и группа на языке тренера. Своё фото атлета —
+            # приватные байты за его токеном, тренеру не уходит.
+            "thumb": exercise_media.thumb_url_for(row),
+            "group_id": group["id"] if group is not None else None,
+            "group": shown_group_name(group) if group is not None else None,
+        })
+    return items
+
+
+def shown_group_name(group: Any) -> str:
+    """Группа мышц глазами тренера: встроенная — на языке тренера (в базе она
+    навсегда русская), своя группа атлета — как есть."""
+    return seed_data.localized_muscle_group_name(group["name"], i18n.get_lang())
+
+
+async def client_exercise_groups(client: Any, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Плитки групп над «Всеми упражнениями» клиента — только группы, где у
+    него есть упражнение с подходами (как в «Прогрессе» атлета: плитка,
+    ведущая в «пусто», ничего не показывает). Порядок — как у атлета на
+    его плитках: самые используемые первыми."""
+    used = {item["group_id"] for item in items if item["group_id"] is not None}
+    return [
+        {"id": g["id"], "name": shown_group_name(g), "emoji": g["emoji"]}
+        for g in await db.list_muscle_groups(client["telegram_id"], order_by_usage=True)
+        if g["id"] in used
     ]
 
 

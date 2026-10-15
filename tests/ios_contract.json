@@ -999,6 +999,11 @@
     "exercises": {
      "type": "[CoachClientExercises.Item]",
      "optional": false
+    },
+    "groups": {
+     "type": "[MuscleGroup]",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1020,6 +1025,21 @@
     "lastWorkoutAt": {
      "type": "String",
      "optional": true
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "groupId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "group": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1082,6 +1102,11 @@
     "recentRecordDays": {
      "type": "Int",
      "optional": false
+    },
+    "growth": {
+     "type": "Dashboard.Lifts",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4560,6 +4585,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.coachClientVisits",
+   "method": "GET",
+   "path": "/coach/clients/{}/visits",
+   "root": "WorkoutVisits",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.coachClientWorkouts",
    "method": "GET",
    "path": "/coach/clients/{}/workouts",
@@ -5309,5 +5341,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "e23d5107e0a0f6af3262d2bbd23dec39351a581e"
+ "_ios_commit": "4204e286365a7b11aedf12735cafa6d02d9dd9ca"
 }
