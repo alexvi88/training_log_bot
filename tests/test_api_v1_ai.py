@@ -259,6 +259,24 @@ async def test_ask_returns_model_answer_and_charges_quota(fresh_db, client_facto
 
 
 @pytest.mark.asyncio
+async def test_ask_answer_stays_markdown_with_headings(fresh_db, client_factory, monkeypatch):
+    """Приложение рисует markdown-заголовки само: уровень rich-заголовка и <b>
+    — только у Telegram-рендера (formatting), /v1 отдаёт ответ как есть."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    answer = "Вступление.\n\n## 📈 Растёт:\n\n**Жим лёжа** +5 кг"
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return answer
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/ai/ask", json={"question": "Как мой прогресс?"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["answer"] == answer
+
+
+@pytest.mark.asyncio
 async def test_ask_does_not_charge_quota_on_provider_failure(fresh_db, client_factory, monkeypatch):
     """Сорвавшийся у провайдера запрос не должен стоить человеку вопроса —
     тот же приём, что в handlers/ai_trainer.py и api_v1_food.parse_food."""
