@@ -924,7 +924,7 @@ async def _screen_coach_athlete_side(db, user_id: int) -> str:
     # Программа от тренера — атлету; «новый клиент» — тренеру.
     body, kb = await coach_notify.telegram_program_message(await db.get_user(athlete), "Coach Alex", "Push Pull", 1)
     out += [body, _kb_texts(kb)]
-    body, kb = await coach_notify.telegram_new_client_message(await db.get_user(user_id), "Sam")
+    body, kb = await coach_notify.telegram_new_client_message(await db.get_user(user_id), "Sam", 42)
     out += [body, _kb_texts(kb)]
     out += [
         coach._validated_name("")[1], coach._validated_name("x" * 99)[1],
