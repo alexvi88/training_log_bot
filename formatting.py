@@ -1074,45 +1074,113 @@ def markdown_tables_to_lines(text: str) -> str:
     return "\n".join(out)
 
 
-def markdown_headings_to_bold(text: str) -> str:
-    """«## Заголовок» → жирная строка отдельным абзацем.
+_MD_BARE_HASHES_RE = re.compile(r"^#{1,6}[ \t]*$")
+_MD_FENCE_RE = re.compile(r"^[ \t]*```")
 
-    Настоящий заголовок Telegram рисует по-статейному — крупным кеглем и с
-    широкими полями сверху и снизу, — и строка «Твои цифры» посреди ответа в
-    чате читается как разрыв, а не как подзаголовок. Rich-сообщение мы шлём
-    ради таблиц, а не ради вёрстки статьи.
+# Уровень, которым заголовок уходит в rich-сообщение: Telegram рисует
+# заголовок блоком InputRichBlockSectionHeading с size 1–6, где 1 — самый
+# крупный, 6 — самый мелкий. Модель пишет «#»/«##»/«###» как придётся, а в
+# чате нужен подзаголовок, а не заголовок статьи, — поэтому любой уровень
+# сводится к одному, самому мелкому.
+RICH_HEADING_LEVEL = 6
 
-    Пустая строка вокруг — не косметика, а условие: «## Заголовок» отбивается
-    сам, потому что это блок, а «**Заголовок**» без пустой строки — просто
-    жирный кусок соседнего абзаца, и заголовок слипается с текстом намертво.
-    Добавляем ровно там, где её нет: где модель отбила заголовок сама, второй
-    пустой строки не появится.
+
+def has_markdown_heading(text: str) -> bool:
+    """Есть ли в ответе markdown-заголовок «# …» (вне блока кода)."""
+    in_fence = False
+    for line in text.split("\n"):
+        if _MD_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence and _MD_HEADING_RE.match(line):
+            return True
+    return False
+
+
+def markdown_headings_for_rich(text: str) -> str:
+    """Markdown ответа для rich-сообщения: заголовки — настоящими заголовками.
+
+    Telegram сам разбирает markdown rich-сообщения и рисует «# …» блоком
+    заголовка. Жирная строка вместо него (как в обычном сообщении) терялась
+    среди жирных названий упражнений, и у длинного ответа пропадала структура.
+    Любой «#»…«######» переписывается в RICH_HEADING_LEVEL — подзаголовок, а
+    не статья. Перед заголовком — ровно одна пустая строка (кроме начала
+    ответа): без неё markdown склеил бы его с предыдущим абзацем. Строки внутри
+    блока кода («# комментарий») не трогаются.
     """
     out: list[str] = []
-    blank_before_next = False
+    in_fence = False
     for line in text.split("\n"):
+        if _MD_FENCE_RE.match(line):
+            in_fence = not in_fence
+        heading = None if in_fence else _MD_HEADING_RE.match(line)
+        if heading:
+            title = heading.group(1).strip()
+            if not title:
+                continue
+            while out and not out[-1].strip():
+                out.pop()
+            if out:
+                out.append("")
+            out.append(f"{'#' * RICH_HEADING_LEVEL} {title}")
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def markdown_headings_to_bold(text: str, *, partial: bool = False) -> str:
+    """«## Заголовок» → «**Заголовок**» отдельной строкой — для путей без
+    rich-сообщения (обычный HTML: ответ без rich-поддержки, черновик
+    стриминга, комментарии и сводки): заголовков у обычного сообщения нет, и
+    решётки доехали бы до пользователя как есть. Где rich есть, заголовок
+    уходит настоящим — см. markdown_headings_for_rich.
+
+    Отбивка: перед заголовком ровно одна пустая строка (кроме самого начала
+    ответа — там ни одной), после — ни одной: заголовок прижат к своему
+    разделу, а не висит между двумя. Где модель отбила сама — лишние пустые
+    строки схлопываются, где не отбила — добавляется одна.
+
+    Жирная строка посреди текста («**жим** вырос») заголовком не считается и не
+    трогается: только строки с «#».
+
+    partial=True — текст ещё стримится (черновик): последняя строка может быть
+    недописанной. Голые «##» без текста не показываем, иначе в черновике
+    мелькнут решётки; недописанный заголовок сразу жирный и дальше только
+    дописывается.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    after_heading = False
+    last = len(lines) - 1
+    for i, line in enumerate(lines):
+        if partial and i == last and _MD_BARE_HASHES_RE.match(line):
+            break
         heading = _MD_HEADING_RE.match(line)
         if heading:
-            if out and out[-1].strip():
-                out.append("")
             # Внутренние «**» из текста заголовка убираем: строка и так станет
             # жирной целиком, а лишняя пара разрывает разметку. Модель пишет
             # «### Разбор **становая тяга**» — обёртка давала
             # «**Разбор **становая тяга****», парсер склеивал первую пару
             # «**Разбор **» в жирное, и хвост «****» уезжал пользователю
             # текстом. Ровно эти четыре звёздочки и торчали в ответе.
-            out.append(f"**{heading.group(1).strip().replace('**', '')}**")
-            blank_before_next = True
-            continue
-        if blank_before_next:
-            blank_before_next = False
-            if line.strip():
+            title = heading.group(1).replace("**", "").strip()
+            if not title:
+                continue
+            while out and not out[-1].strip():
+                out.pop()
+            if out:
                 out.append("")
+            out.append(f"**{title}**")
+            after_heading = True
+            continue
+        if after_heading and not line.strip():
+            continue
+        after_heading = False
         out.append(line)
     return "\n".join(out)
 
 
-def ai_markdown_to_html(text: str) -> str:
+def ai_markdown_to_html(text: str, *, partial: bool = False) -> str:
     """Ответ модели (markdown) → HTML для обычного сообщения Telegram.
 
     Фолбэк-путь: там, где сервер и клиент умеют rich-сообщения, тот же ответ
@@ -1134,10 +1202,13 @@ def ai_markdown_to_html(text: str) -> str:
 
     Списки не трогаем: «- тяга 260» и «1. присед» читаются как список и без
     всякой разметки — а вот всё остальное выше без разбора доезжало бы сырым.
+
+    partial=True — для черновика стриминга: текст оборван на полуслове (см.
+    markdown_headings_to_bold).
     """
     text = markdown_tables_to_lines(text)
     text = _MD_DIVIDER_RE.sub(DIVIDER, text)
-    text = markdown_headings_to_bold(text)
+    text = markdown_headings_to_bold(text, partial=partial)
     parts = []
     pos = 0
     for m in _MD_MARKUP_RE.finditer(text):
