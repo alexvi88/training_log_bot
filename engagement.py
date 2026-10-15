@@ -986,6 +986,24 @@ def should_send_feedback_now(tz_offset: int, hour: int) -> bool:
     return local_hour >= hour
 
 
+def is_feedback_backlog(first_finished_at: Optional[dt.datetime], last_asked_at: Optional[dt.datetime]) -> bool:
+    """Тренировался до запуска пуша и ещё не спрошен — первый вопрос уходит с
+    config.FEEDBACK_PUSH_LAUNCH_UTC в любой не тихий час, а не вечером."""
+    launch = config.FEEDBACK_PUSH_LAUNCH_UTC
+    return (
+        launch is not None and last_asked_at is None
+        and first_finished_at is not None and first_finished_at < launch
+    )
+
+
+def should_send_feedback_backlog_now(tz_offset: int) -> bool:
+    """Окно первого вопроса тем, кто тренировался до запуска: любой не тихий
+    час по местному; без пояса — безопасный час UTC (он же 12:00 по Москве)."""
+    if not tz_is_known(tz_offset):
+        return _utc_now().hour >= UNKNOWN_TZ_SEND_HOUR_UTC and not is_quiet_hour(_local_now(3).hour)
+    return not is_quiet_hour(_local_now(tz_offset).hour)
+
+
 def _is_feedback_excluded(telegram_id: int) -> bool:
     return telegram_id in REVIEW_ACCOUNT_IDS or (
         config.ADMIN_ID is not None and telegram_id == config.ADMIN_ID
@@ -998,16 +1016,23 @@ async def _send_feedback_pushes(hour: int) -> None:
     if not apns.is_configured():
         return
     now = _utc_now()
+    launch = config.FEEDBACK_PUSH_LAUNCH_UTC
+    if launch is not None and now < launch:
+        return
     for row in await db.list_feedback_push_candidates():
         telegram_id = row["telegram_id"]
         if _is_feedback_excluded(telegram_id):
             continue
         tz_offset = row["tz_offset"]
-        if not should_send_feedback_now(tz_offset, hour):
-            continue
         last_asked_at = _parse_utc(row["feedback_push_at"])
+        first_finished_at = _parse_utc(row["first_finished_at"])
+        if is_feedback_backlog(first_finished_at, last_asked_at):
+            if not should_send_feedback_backlog_now(tz_offset):
+                continue
+        elif not should_send_feedback_now(tz_offset, hour):
+            continue
         if not feedback_push_due(
-            now, _parse_utc(row["first_finished_at"]), _parse_utc(row["last_finished_at"]), last_asked_at,
+            now, first_finished_at, _parse_utc(row["last_finished_at"]), last_asked_at,
         ):
             continue
         local_date = _local_now(tz_offset).date()

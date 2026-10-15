@@ -49,6 +49,8 @@ def _setup(monkeypatch):
     monkeypatch.setattr(config, "ENGAGEMENT_HOUR", 19)
     monkeypatch.setattr(config, "ADMIN_ID", 999)
     monkeypatch.setattr(apns, "is_configured", lambda: True)
+    # Метка запуска — отдельные тесты ниже; остальным она не мешает.
+    monkeypatch.setattr(config, "FEEDBACK_PUSH_LAUNCH_UTC", None)
 
 
 @pytest.fixture
@@ -412,3 +414,45 @@ async def test_support_message_after_the_push_is_counted_once(fresh_db, monkeypa
     assert events == [{"user_id": uid, "props": {"after": "under_1h"}, "platform": "ios"}]
     # Текст человека в событие не попадает.
     assert "таймера" not in json.dumps(events, ensure_ascii=False)
+
+
+# ---------- запуск: тем, кто тренировался до него, — с 12:00 по Москве ----------
+
+LAUNCH = dt.datetime(2026, 10, 15, 9, 0)
+
+
+async def test_nothing_before_launch_then_backlog_at_noon_msk(fresh_db, monkeypatch, sent):
+    db = fresh_db
+    monkeypatch.setattr(config, "FEEDBACK_PUSH_LAUNCH_UTC", LAUNCH)
+    await _athlete(db)
+    await _workout(db, USER, LAUNCH - dt.timedelta(days=3))
+    # Вечер накануне, обычное окно 19:00 местного — но до запуска ничего.
+    await _run(monkeypatch, LAUNCH - dt.timedelta(hours=14))
+    assert sent == []
+    # 12:00 по Москве в день запуска — вопрос уходит, не дожидаясь вечера.
+    await _run(monkeypatch, LAUNCH)
+    assert len(sent) == 1
+
+
+async def test_backlog_respects_quiet_hours(fresh_db, monkeypatch, sent):
+    db = fresh_db
+    monkeypatch.setattr(config, "FEEDBACK_PUSH_LAUNCH_UTC", LAUNCH)
+    # UTC-7: в 09:00 UTC там 02:00 — спит; дождётся утра.
+    await _athlete(db, tz=-7)
+    await _workout(db, USER, LAUNCH - dt.timedelta(days=3))
+    await _run(monkeypatch, LAUNCH)
+    assert sent == []
+    await _run(monkeypatch, LAUNCH + dt.timedelta(hours=8))
+    assert len(sent) == 1
+
+
+async def test_newcomer_after_launch_keeps_evening_window(fresh_db, monkeypatch, sent):
+    db = fresh_db
+    monkeypatch.setattr(config, "FEEDBACK_PUSH_LAUNCH_UTC", LAUNCH)
+    await _athlete(db)
+    first = LAUNCH + dt.timedelta(hours=1)
+    await _workout(db, USER, first)
+    await _run(monkeypatch, first + DELAY + dt.timedelta(minutes=1))  # 16:01 МСК — рано
+    assert sent == []
+    await _run(monkeypatch, dt.datetime(2026, 10, 15, 16, 0))  # 19:00 МСК
+    assert len(sent) == 1
