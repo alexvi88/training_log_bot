@@ -357,7 +357,12 @@ CREATE TABLE IF NOT EXISTS pushes (
     -- телеграмной отправки (app-only атлет, которому ушёл только APNs-баннер,
     -- или «этот анонс ему не нужен»). iOS-доставки сюда не пишутся — они
     -- событием push_sent (apns.send_alert, product_metrics).
-    channel TEXT
+    channel TEXT,
+    -- id сообщения пуша в чате с ботом (только channel='tg'): по нему нажатие
+    -- кнопки под пушем узнаётся как тап по пушу (product_metrics.record_tg_push_tap).
+    tg_message_id INTEGER,
+    -- первое нажатие кнопки под этим пушем; второе нажатие тапом не считается.
+    tapped_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
@@ -593,12 +598,11 @@ CREATE TABLE IF NOT EXISTS bodyweight_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
 
--- Дневник питания (см. handlers/food_diary.py). eaten_on — календарная дата
--- пользователя, к которой относится еда (она же ключ подневной группировки),
--- а не момент ввода: запись за прошлую дату заносится тем же путём.
--- Макросы/калории — оценка модели, поэтому все они nullable: запись без цифр
--- (модель не смогла или пользователь ввёл текстом без деталей) всё равно
--- имеет смысл как строка «что съел».
+-- Дневник питания — бывший: функцию убрали целиком (бот, приложение, тренер,
+-- MCP), в таблицу больше никто не пишет. Таблица и старые строки остаются:
+-- миграции здесь только добавляют, записи уезжают в полную выгрузку
+-- (full_export, food.csv) и стираются «Удалить аккаунт» вместе со всем
+-- остальным. eaten_on — календарная дата пользователя, макросы nullable.
 CREATE TABLE IF NOT EXISTS food_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -1811,8 +1815,8 @@ async def _migrate_schema() -> None:
             "UPDATE users SET source = 'legacy' WHERE source IS NULL"
         )
     if "food_macros_enabled" not in user_cols:
-        # 1 = model estimates КБЖУ for food-diary entries (current default);
-        # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.
+        # Тумблер «КБЖУ» бывшего дневника еды. Дневника больше нет, колонку
+        # никто не читает и не пишет; осталась, потому что миграции только добавляют.
         await _conn.execute("ALTER TABLE users ADD COLUMN food_macros_enabled INTEGER NOT NULL DEFAULT 1")
     if "e1rm_hint_seen" in user_cols:
         # Counted showings of the e1RM footnote, back when it faded out after a
@@ -1863,9 +1867,8 @@ async def _migrate_schema() -> None:
         # угаданный язык нельзя.
         await _conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'")
     if "kcal_goal" not in user_cols:
-        # Дневная цель по калориям для дневника питания (handlers/food_diary.py) —
-        # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
-        # просто не показывается, а не подставляет угаданное число.
+        # Дневная цель по калориям бывшего дневника еды — больше не читается и
+        # не пишется; колонка осталась, потому что миграции только добавляют.
         await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
     if "ai_consent_at" not in user_cols:
         # NULL всем существующим: согласие в приложении ещё никто не давал —
@@ -1984,6 +1987,13 @@ async def _migrate_schema() -> None:
             "UPDATE pushes SET channel = 'tg' WHERE channel IS NULL AND telegram_id IN "
             "(SELECT telegram_id FROM users WHERE telegram_linked = 1)"
         )
+    if "tg_message_id" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN tg_message_id INTEGER")
+    if "tapped_at" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN tapped_at TEXT")
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pushes_tg_message ON pushes (telegram_id, tg_message_id)"
+    )
     # has_announcement_push/count_announcement_recipients/list_announcement_recipients
     # all filter `pushes` by category alone (no telegram_id, no date), and the
     # table only grows — every announcement/report checks its own recipient
@@ -3119,18 +3129,6 @@ async def _relocalize_catalog_targets(
             await conn().commit()
         changed += 1
     return changed
-
-
-async def set_kcal_goal(telegram_id: int, goal: Optional[int]) -> None:
-    """Дневная цель по калориям для дневника питания (кнопка «🎯 Цель ккал» и
-    ai_trainer.save_athlete_profile). None снимает цель — экран дня перестаёт
-    показывать строку «Цель N · осталось M»."""
-    async with _write_lock:
-        await conn().execute(
-            "UPDATE users SET kcal_goal = ? WHERE telegram_id = ?",
-            (goal, telegram_id),
-        )
-        await conn().commit()
 
 
 # Подзапрос «сколько тренировок человек закрыл и когда последнюю» — общий для
@@ -6116,15 +6114,6 @@ async def count_bodyweight_logs(user_id: int) -> int:
     return (await cur.fetchone())["c"]
 
 
-async def list_food_entry_dates(telegram_id: int) -> list[str]:
-    """Все дни, в которые есть хоть одна запись еды, — для «Недели учёта»."""
-    cur = await conn().execute(
-        "SELECT DISTINCT eaten_on FROM food_entries WHERE telegram_id = ? ORDER BY eaten_on",
-        (telegram_id,),
-    )
-    return [r["eaten_on"] for r in await cur.fetchall()]
-
-
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
     achievements.
@@ -8145,7 +8134,7 @@ async def auth_identity_tokens_for_user(user_id: int, provider: str) -> list[dic
 #   workouts (+ blocks/sets через них) — тренировки и подходы, в т.ч. начатая;
 #   exercises, muscle_groups — свои упражнения и группы (уникальность имени на
 #     владельца: две стороны с упражнениями слить простым UPDATE нельзя);
-#   bodyweight_logs — вес тела; food_entries — дневник еды;
+#   bodyweight_logs — вес тела; food_entries — старые записи бывшего дневника еды;
 #   programs, routines — программы и дни (уникальность имени программы);
 #   ai_conversation_turns, ai_chat_messages — разговор с тренером;
 #   achievements — заработанные звания (UNIQUE (user_id, code));
@@ -11203,17 +11192,20 @@ async def push_deliveries(day: str, exclude: set[int]) -> list[tuple]:
     return out
 
 
-async def push_open_categories(day: str, exclude: set[int]) -> list[Optional[str]]:
-    """Категория каждого тапа по пушу за сутки (событие push_open из приложения)."""
+async def push_open_categories(day: str, exclude: set[int]) -> list[tuple[str, Optional[str]]]:
+    """Каждый тап по пушу за сутки тапа — (platform, category). Событие
+    push_open: 'ios' — тап по баннеру (присылает приложение), 'tg' — первое
+    нажатие кнопки под пушем в Telegram (product_metrics.record_tg_push_tap)."""
     start, end = _day_bounds(day)
     skip = sorted(exclude) or [-1]
     marks = ",".join("?" * len(skip))
     cur = await conn().execute(
-        "SELECT json_extract(props, '$.category') FROM analytics_events WHERE event = 'push_open' "
+        "SELECT platform, json_extract(props, '$.category') FROM analytics_events "
+        "WHERE event = 'push_open' "
         f"AND created_at >= ? AND created_at < ? AND user_id NOT IN ({marks})",
         (start, end, *skip),
     )
-    return [row[0] for row in await cur.fetchall()]
+    return [(row[0], row[1]) for row in await cur.fetchall()]
 
 
 async def workout_moments(user_ids: set[int], since: str, until: str) -> list[tuple[int, str]]:
@@ -12630,7 +12622,7 @@ async def get_ai_undo_actions(telegram_id: int, turn_id: int) -> list[dict[str, 
 
 
 def _ai_undo_kind(payload: dict[str, Any]) -> str:
-    """Что именно откатывает кнопка (`bodyweight`, `food`, …, `batch`) — отдаётся
+    """Что именно откатывает кнопка (`bodyweight`, `exercise_new`, …, `batch`) — отдаётся
     клиенту рядом с подписью. Подпись у всех одна («↩️ Отменить»), а
     приложению надо знать, запись ли это веса: бот под ней ставит ещё и
     «⚖️ Дневник веса» (ai_trainer._execute_tool), и без типа повторить это
@@ -12833,101 +12825,6 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
         )
         await conn().commit()
 
-
-# ---------- food diary ----------
-
-
-async def add_food_entry(
-    telegram_id: int,
-    eaten_on: str,
-    description: str,
-    details: Optional[str] = None,
-    calories: Optional[float] = None,
-    protein: Optional[float] = None,
-    fat: Optional[float] = None,
-    carbs: Optional[float] = None,
-    photo_file_id: Optional[str] = None,
-    source: str = "text",
-) -> int:
-    async with _write_lock:
-        cur = await conn().execute(
-            "INSERT INTO food_entries (telegram_id, eaten_on, description, details, calories, "
-            "protein, fat, carbs, photo_file_id, source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                telegram_id, eaten_on, description, details, calories,
-                protein, fat, carbs, photo_file_id, source, now_iso(),
-            ),
-        )
-        await conn().commit()
-        return cur.lastrowid
-
-
-async def list_food_entries(telegram_id: int, eaten_on: str) -> list[aiosqlite.Row]:
-    """One day's entries, in the order they were added."""
-    cur = await conn().execute(
-        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on = ? ORDER BY id",
-        (telegram_id, eaten_on),
-    )
-    return await cur.fetchall()
-
-
-async def list_recent_food_entries(telegram_id: int, since: str, limit: int = 200) -> list[aiosqlite.Row]:
-    """Food entries from `since` (YYYY-MM-DD) onward, oldest first.
-
-    For the AI trainer, which reasons over a stretch of days rather than one
-    screen's worth: without it the coach advises on nutrition while blind to
-    the diary sitting in the same database.
-    """
-    cur = await conn().execute(
-        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on >= ? "
-        "ORDER BY eaten_on, id LIMIT ?",
-        (telegram_id, since, limit),
-    )
-    return await cur.fetchall()
-
-
-async def get_food_entry(entry_id: int) -> Optional[aiosqlite.Row]:
-    cur = await conn().execute("SELECT * FROM food_entries WHERE id = ?", (entry_id,))
-    return await cur.fetchone()
-
-
-async def delete_food_entry(entry_id: int) -> None:
-    async with _write_lock:
-        await conn().execute("DELETE FROM food_entries WHERE id = ?", (entry_id,))
-        await conn().commit()
-
-
-async def list_food_days(
-    telegram_id: int, limit: int = 8, offset: int = 0
-) -> list[aiosqlite.Row]:
-    """Days that have entries, newest first, with per-day totals and the list of
-    what was eaten (as newline-joined descriptions) — the history list.
-
-    Aggregated in SQL rather than by loading every entry per day separately —
-    the history screen shows a handful of days at a time, but a year of
-    logging is thousands of rows. The inner subquery orders by id before the
-    GROUP BY so GROUP_CONCAT collects each day's descriptions in the order
-    they were logged, not an arbitrary one.
-    """
-    cur = await conn().execute(
-        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
-        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs, "
-        "GROUP_CONCAT(description, char(10)) AS descriptions "
-        "FROM (SELECT * FROM food_entries WHERE telegram_id = ? ORDER BY id) "
-        "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
-        (telegram_id, limit, offset),
-    )
-    return await cur.fetchall()
-
-
-async def count_food_days(telegram_id: int) -> int:
-    cur = await conn().execute(
-        "SELECT COUNT(DISTINCT eaten_on) FROM food_entries WHERE telegram_id = ?",
-        (telegram_id,),
-    )
-    (count,) = await cur.fetchone()
-    return count
 
 
 _WEIGHT_GRID = 0.05
@@ -13159,19 +13056,42 @@ async def record_push(
     sent_on: str,
     *,
     channel: Optional[str] = PUSH_CHANNEL_TG,
+    tg_message_id: Optional[int] = None,
 ) -> None:
     """Log a delivered push. `sent_on` is the recipient's own calendar date
     (YYYY-MM-DD) — see has_push_today. `channel` — 'tg', если сообщение в
     Telegram реально ушло; None — отметка без телеграмной отправки (app-only
     атлет, «анонс не нужен»): дедупу она нужна, а в счёт пушей Telegram в
-    сводке (product_metrics) не идёт."""
+    сводке (product_metrics) не идёт. `tg_message_id` — id ушедшего
+    сообщения: по нему кнопка под пушем считается тапом (claim_push_tap)."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on, channel) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (telegram_id, category, text, now_iso(), sent_on, channel),
+            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on, channel, tg_message_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (telegram_id, category, text, now_iso(), sent_on, channel, tg_message_id),
         )
         await conn().commit()
+
+
+async def claim_push_tap(telegram_id: int, message_id: int) -> Optional[str]:
+    """Нажатие кнопки под сообщением `message_id` в чате с ботом: если это
+    пуш, который ещё не нажимали, — отметить и вернуть его категорию. Иначе
+    None (не пуш, старый пуш без id сообщения или уже посчитанный тап)."""
+    cur = await conn().execute(
+        "SELECT id, category FROM pushes WHERE telegram_id = ? AND tg_message_id = ? "
+        "AND tapped_at IS NULL",
+        (telegram_id, message_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE pushes SET tapped_at = ? WHERE id = ? AND tapped_at IS NULL",
+            (now_iso(), row[0]),
+        )
+        await conn().commit()
+    return row[1] if cur.rowcount else None
 
 
 # ---------- «Уведомления» в приложении (таблица inbox, см. inbox.py) ----------

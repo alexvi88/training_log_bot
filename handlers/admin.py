@@ -1042,13 +1042,19 @@ def _metrics_push_line(rows: list[dict]) -> str:
     tg = last.get("pushes_sent_tg") or 0
     ios = last.get("pushes_sent_ios") or 0
     failed = last.get("push_failed_ios") or 0
-    if not (tg or ios or failed):
+    taps_ios = int(last.get("push_opens_ios") or 0)
+    taps_tg = int(last.get("push_opens_tg") or 0)
+    # Тапы — в сутки тапа: в день без отправок по вчерашним пушам они бывают.
+    if not (tg or ios or failed or taps_ios or taps_tg):
         return ""
     parts = [f"{int(tg + ios)} (TG {int(tg)} · iOS {int(ios)})"]
     if last.get("push_users"):
         parts.append(f"{int(last['push_users'])} чел.")
+    parts.append(f"тапов {taps_ios + taps_tg} (TG {taps_tg} · iOS {taps_ios})")
     if last.get("push_ctr_ios") is not None:
         parts.append(f"CTR iOS {last['push_ctr_ios']:.0%}")
+    if last.get("push_ctr_tg") is not None:
+        parts.append(f"CTR TG {last['push_ctr_tg']:.0%}")
     if failed:
         parts.append(f"не доставлено iOS {int(failed)}")
     workout = next((r for r in reversed(rows) if r.get("push_to_workout_24h") is not None), None)

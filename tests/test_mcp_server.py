@@ -13,7 +13,6 @@ import pytest
 
 import ai_trainer
 import mcp_server
-import timeutil
 
 
 @asynccontextmanager
@@ -115,7 +114,7 @@ def _headers(token: str | None, host: str = "training-log.example.com") -> dict[
 def test_whitelist_contains_only_real_tools():
     """Белый список сверяется с инструментами AI-тренера: опечатка в имени —
     это молча не работающий инструмент, а лишнее имя — дыра наружу."""
-    declared = {t["function"]["name"] for t in ai_trainer.TOOLS} | ai_trainer.MCP_ONLY_TOOLS
+    declared = {t["function"]["name"] for t in ai_trainer.TOOLS}
     assert declared >= mcp_server.EXPOSED_TOOLS
     assert declared >= mcp_server.WRITE_TOOLS
     # Пишущее наружу уходит только из ai_trainer._UNDOABLE_TOOLS (делает
@@ -131,6 +130,33 @@ async def test_server_exposes_exactly_the_whitelist():
     assert {t.name for t in tools} == set(mcp_server.EXPOSED_TOOLS)
     # Пустых описаний быть не должно: по ним клиент выбирает инструмент.
     assert all((t.description or "").strip() for t in tools)
+
+
+async def test_no_food_tools_over_mcp():
+    """Дневника еды больше нет — ни читать, ни писать его снаружи нечего."""
+    server = mcp_server.build_server()
+    tools = await server.list_tools()
+    assert not any("food" in t.name for t in tools)
+    assert not any("food" in name for name in mcp_server.EXPOSED_TOOLS)
+    assert all("food" not in (t.description or "").lower() for t in tools)
+    assert "food" not in (server.instructions or "").lower()
+
+
+async def test_food_tool_call_over_the_wire_is_refused(fresh_db, user_id):
+    """Клиент со старой схемой инструментов зовёт log_food — записи нет."""
+    token = await fresh_db.issue_mcp_token(user_id)
+
+    async with _running(mcp_server.build_app()) as post:
+        status, _, body = await post(
+            _rpc("tools/call", {"name": "log_food", "arguments": {"description": "овсянка"}}),
+            _headers(token),
+        )
+
+    assert status == 200
+    result = json.loads(body)
+    assert "error" in result or result["result"].get("isError")
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM food_entries")
+    assert (await cur.fetchone())[0] == 0
 
 
 # ---------- по проводу ----------
@@ -173,27 +199,6 @@ async def test_log_bodyweight_writes_and_hides_the_undo_button_note(fresh_db, us
     assert "в самом боте" in text
     logs = await fresh_db.list_bodyweight_logs(user_id)
     assert [log["weight"] for log in logs] == [78.4]
-
-
-async def test_log_food_writes_a_diary_entry(fresh_db, user_id):
-    token = await fresh_db.issue_mcp_token(user_id)
-
-    async with _running(mcp_server.build_app()) as post:
-        status, _, body = await post(
-            _rpc(
-                "tools/call",
-                {"name": "log_food", "arguments": {"description": "овсянка с бананом"}},
-            ),
-            _headers(token),
-        )
-
-    assert status == 200
-    text = json.loads(body)["result"]["content"][0]["text"]
-    assert "кнопка отката" not in text
-    assert "в самом боте" in text
-    today = timeutil.user_today(await fresh_db.get_user(user_id)).isoformat()
-    entries = await fresh_db.list_food_entries(user_id, today)
-    assert [e["description"] for e in entries] == ["овсянка с бананом"]
 
 
 async def test_a_tool_argument_called_name_does_not_collide_with_the_tool_name(
@@ -263,26 +268,6 @@ async def test_copy_program_writes_a_duplicate(fresh_db, user_id):
     assert "кнопка отката" not in text
     names = sorted(p["program_name"] for p in await fresh_db.list_programs(user_id))
     assert names == ["PPL", "PPL (2)"]
-
-
-async def test_delete_food_entry_removes_it(fresh_db, user_id):
-    """Живой запрос, который завёл этот раунд правок: «удали эту запись» из
-    Claude Desktop упиралось в «у меня нет инструмента на удаление»."""
-    entry_id = await fresh_db.add_food_entry(
-        user_id, eaten_on="2026-08-08", description="Ritter Sport, 5 литров"
-    )
-    token = await fresh_db.issue_mcp_token(user_id)
-
-    async with _running(mcp_server.build_app()) as post:
-        status, _, body = await post(
-            _rpc("tools/call", {"name": "delete_food_entry", "arguments": {"entry_id": entry_id}}),
-            _headers(token),
-        )
-
-    assert status == 200
-    text = json.loads(body)["result"]["content"][0]["text"]
-    assert "кнопка отката" not in text
-    assert await fresh_db.get_food_entry(entry_id) is None
 
 
 async def test_delete_bodyweight_log_removes_it(fresh_db, user_id):

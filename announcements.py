@@ -175,8 +175,8 @@ RELEASE_AI_TRAINER_ACTIONS = Announcement(
     key="release_ai_trainer_actions",
     text=(
         "ПРИВЕТ АТЛЕТ! Теперь умею не только отвечать — умею и делать сам.\n\n"
-        "⚖️ <b>Пишу вес и еду.</b> «Вешу 78.4» — ляжет в дневник веса. «Занеси: "
-        "овсянка с бананом» — в дневник еды, калории посчитаю сам, если не назвал.\n\n"
+        "⚖️ <b>Пишу вес.</b> «Вешу 78.4» — ляжет в дневник веса, «вчера было 78.9» — "
+        "запишу задним числом.\n\n"
         "⚙️ <b>Завожу и правлю упражнения.</b> «Заведи упражнение...», «перенеси "
         "жим в ГРУДЬ», «переименуй становую в сумо», «убери приседания из списка».\n\n"
         "🗂 <b>Управляю программами.</b> «Скопируй Верх/низ», «объедини две ...», "
@@ -347,8 +347,10 @@ async def _send_apns_announcement(
     )
 
 
-async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
-    """Одна отправка, с одной повторной попыткой, если Telegram просит подождать."""
+async def _send_one(bot: Bot, telegram_id: int, ann: Announcement):
+    """Одна отправка, с одной повторной попыткой, если Telegram просит подождать.
+    Возвращает ушедшее сообщение — его id идёт в `pushes.tg_message_id`, чтобы
+    нажатие кнопки под анонсом считалось тапом по пушу."""
     kb = keyboards.announcement_keyboard(ann.buttons)
     photo = ann._file_id[0] if ann._file_id else _photo(ann)
     if photo is None:
@@ -374,6 +376,7 @@ async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
         ann._file_id.append(message.photo[-1].file_id)
     if ann.pin:
         await _pin(bot, telegram_id, message, ann)
+    return message
 
 
 async def _pin(bot: Bot, telegram_id: int, message, ann: Announcement) -> None:
@@ -504,7 +507,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
             await db.record_push(telegram_id, ann.key, ann.text, today, channel=None)
             continue
         try:
-            await _send_one(bot, telegram_id, ann)
+            message = await _send_one(bot, telegram_id, ann)
         except TelegramForbiddenError:
             # Человек заблокировал бота. Гасим тумблер, как это делает
             # ежедневный пуш, — иначе он остаётся в пуле каждой следующей
@@ -518,7 +521,10 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
             logger.exception("Announcement %s failed for user %s", ann.key, telegram_id)
             continue
         sent += 1
-        await db.record_push(telegram_id, ann.key, ann.text, today)
+        await db.record_push(
+            telegram_id, ann.key, ann.text, today,
+            tg_message_id=getattr(message, "message_id", None),
+        )
         # Дошло в Telegram — и во «Уведомления» приложения, если оно у
         # человека есть: одна строка, без второго баннера. Только после
         # доставки: несостоявшаяся попытка повторится на следующем старте и

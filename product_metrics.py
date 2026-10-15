@@ -18,7 +18,10 @@
   «Как тебе дневник?» (engagement), `feedback_push_replied` (`after`
   under_1h|under_24h|later) — первая реплика в поддержку за неделю после него
   (api_v1_support); открытие этого пуша — обычный `push_open` с
-  `category=feedback_ask`;
+  `category=feedback_ask`; `push_open` с platform `tg` — первое нажатие
+  кнопки под пушем в Telegram (`record_tg_push_tap`: сообщение пуша узнаётся
+  по `pushes.tg_message_id`, повторные нажатия под тем же пушем не в счёт;
+  прочтение без нажатия сервер не видит и не считает);
 - приложение присылает `POST /v1/events` (`api_v1_events`): открытие и уход в
   фон с длиной сессии, просмотр экрана, тап по пушу — то, чего сервер не видит:
   GET'ы в ленту не пишутся, а тап по баннеру до сервера не доходит вовсе.
@@ -34,12 +37,18 @@
 `pushes.channel`) и `pushes_sent_ios` (Apple принял баннер — серверное событие
 `push_sent` из `apns.send_alert`, по одному на устройство), `push_failed_ios`
 (Apple не принял, мёртвые токены тоже). `push_users` — разных людей с хотя бы
-одной доставкой, `pushes_per_user` — (tg + ios) / push_users. `push_ctr_ios` —
-тапы `push_open` / доставленные iOS (тап в Telegram до сервера не доходит).
-`push_to_workout_24h` — доля получивших пуш, кто начал или закончил
+одной доставкой, `pushes_per_user` — (tg + ios) / push_users.
+
+Тапы — `push_open` обоих каналов: `push_opens` (всего), `push_opens_ios`
+(баннер), `push_opens_tg` (кнопка под пушем). Тап считается в сутки ТАПА, а
+не отправки: вчерашний пуш, нажатый сегодня, — сегодняшний тап. Поэтому
+`push_ctr` (все тапы / все доставки), `push_ctr_ios` и `push_ctr_tg` — тапы
+суток к доставкам тех же суток, приближение, а не доля конкретных пушей; у
+Telegram в знаменателе и пуши без кнопки-колбэка (анонс со ссылкой), их тап
+не виден. `push_to_workout_24h` — доля получивших пуш, кто начал или закончил
 тренировку в 24 часа после него; пишется на сутки позже, когда окно закрыто.
-По категориям — `pushes_sent:<категория>` и `push_opens:<категория>` (только в
-CSV). Сводку пушей за вчера утренний отчёт админу (`admin_tasks`) показывает
+По категориям — `pushes_sent:<категория>` и `push_opens:<категория>` (тапы
+обоих каналов; только в CSV). Сводку пушей за вчера утренний отчёт админу (`admin_tasks`) показывает
 тем же расчётом (`push_stats`). Свои аккаунты (`config.limit_preview_ids`) в сводку не входят:
 владелец, гоняющий бота руками, — это не рост.
 
@@ -71,6 +80,9 @@ PLATFORM_IOS = "ios"
 # Серверное событие: баннер APNs ушёл на одно устройство (apns.send_alert),
 # props category и ok (принял ли Apple). Приложение его не присылает.
 PUSH_SENT_EVENT = "push_sent"
+# Тап по пушу: из приложения (platform ios, CLIENT_EVENTS) и первое нажатие
+# кнопки под пушем в Telegram (platform tg, record_tg_push_tap).
+PUSH_OPEN_EVENT = "push_open"
 # Категория, не похожая на машинный токен, — в общий ящик, а не в отдельный ряд.
 OTHER_CATEGORY = "other"
 
@@ -80,7 +92,7 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "app_open": frozenset(),
     "app_background": frozenset({"seconds"}),
     "screen_view": frozenset({"screen"}),
-    "push_open": frozenset({"category"}),
+    PUSH_OPEN_EVENT: frozenset({"category"}),
     # Экран «Итог недели» (GET /v1/weekly-summary): откуда открыли — source
     # push|card — и какой был вердикт (kind из weekly_summary.KINDS). По паре
     # видно, сколько открывают из воскресного пуша и в какой вердикт
@@ -178,6 +190,24 @@ async def track(
         logger.exception("product_metrics: не записал событие %s", event)
 
 
+async def record_tg_push_tap(user_id: int, message_id: Optional[int]) -> bool:
+    """Нажатие кнопки под сообщением в чате с ботом (activity_log). Если это
+    сообщение — пуш (`pushes.tg_message_id`) и под ним ещё не нажимали,
+    пишется `push_open` с категорией пуша и platform `tg`. True — тап
+    посчитан. Не бросает, как и `track`."""
+    if not isinstance(message_id, int) or isinstance(message_id, bool):
+        return False
+    try:
+        category = await db.claim_push_tap(user_id, message_id)
+    except Exception:
+        logger.exception("product_metrics: не проверил тап по пушу %s", user_id)
+        return False
+    if category is None:
+        return False
+    await track(user_id, PUSH_OPEN_EVENT, {"category": push_category(category)}, platform=PLATFORM_TG)
+    return True
+
+
 # --- суточная сводка ------------------------------------------------------------
 
 
@@ -219,34 +249,50 @@ def _moment(value: Optional[str]) -> Optional[dt.datetime]:
 
 async def push_stats(day: dt.date, own: set[int]) -> dict[str, Any]:
     """Пуши суток без своих аккаунтов — и для сводки, и для утреннего отчёта
-    админу (admin_tasks). `categories` — {категория: {sent, ios, opens}}:
-    sent — доставлено по обоим каналам, ios — из них на iOS, opens — тапы."""
+    админу (admin_tasks). `categories` — {категория: {sent, ios, opens,
+    opens_ios, opens_tg}}: sent — доставлено по обоим каналам, ios — из них
+    на iOS, opens — тапы обоих каналов (по суткам тапа, см. докстринг модуля)."""
     rows = await db.push_deliveries(_day(day), own)
     sent_tg = sent_ios = failed_ios = 0
     users: set[int] = set()
     categories: dict[str, dict[str, int]] = {}
+
+    def bucket(category: Any) -> dict[str, int]:
+        return categories.setdefault(
+            push_category(category),
+            {"sent": 0, "ios": 0, "opens": 0, "opens_ios": 0, "opens_tg": 0},
+        )
+
     for uid, channel, category, _, ok in rows:
         if not ok:
             failed_ios += 1
             continue
         users.add(uid)
-        cat = categories.setdefault(push_category(category), {"sent": 0, "ios": 0, "opens": 0})
+        cat = bucket(category)
         cat["sent"] += 1
         if channel == PLATFORM_IOS:
             sent_ios += 1
             cat["ios"] += 1
         else:
             sent_tg += 1
-    opens = await db.push_open_categories(_day(day), own)
-    for category in opens:
-        cat = categories.setdefault(push_category(category), {"sent": 0, "ios": 0, "opens": 0})
+    opens_ios = opens_tg = 0
+    for platform, category in await db.push_open_categories(_day(day), own):
+        cat = bucket(category)
         cat["opens"] += 1
+        if platform == PLATFORM_TG:
+            opens_tg += 1
+            cat["opens_tg"] += 1
+        else:
+            opens_ios += 1
+            cat["opens_ios"] += 1
     return {
         "sent_tg": sent_tg,
         "sent_ios": sent_ios,
         "failed_ios": failed_ios,
         "users": len(users),
-        "opens": len(opens),
+        "opens": opens_ios + opens_tg,
+        "opens_ios": opens_ios,
+        "opens_tg": opens_tg,
         "categories": categories,
     }
 
@@ -260,11 +306,17 @@ def push_metrics(stats: dict[str, Any]) -> dict[str, float]:
         "pushes_sent_ios": stats["sent_ios"],
         "push_failed_ios": stats["failed_ios"],
         "push_users": stats["users"],
+        "push_opens_ios": stats["opens_ios"],
+        "push_opens_tg": stats["opens_tg"],
     }
     if stats["users"]:
         out["pushes_per_user"] = round(total / stats["users"], 2)
+    if total:
+        out["push_ctr"] = round(stats["opens"] / total, 4)
     if stats["sent_ios"]:
-        out["push_ctr_ios"] = round(stats["opens"] / stats["sent_ios"], 4)
+        out["push_ctr_ios"] = round(stats["opens_ios"] / stats["sent_ios"], 4)
+    if stats["sent_tg"]:
+        out["push_ctr_tg"] = round(stats["opens_tg"] / stats["sent_tg"], 4)
     for category, counts in stats["categories"].items():
         out[f"pushes_sent:{category}"] = counts["sent"]
         out[f"push_opens:{category}"] = counts["opens"]

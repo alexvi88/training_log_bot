@@ -1,4 +1,5 @@
 """Разовая релизная рассылка (announcements.py): сначала админу на проверку, потом всем."""
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -369,6 +370,22 @@ async def test_reaches_everyone_once(fresh_db):
     assert [chat_id for chat_id, _ in bot.sent] == [1, 2, 3]
 
 
+async def test_announcement_remembers_its_message_for_button_taps(fresh_db):
+    """Кнопка под анонсом — тоже тап по пушу: id сообщения в pushes."""
+    await _users(fresh_db, 1)
+
+    class NumberedBot(FakeBot):
+        async def _record(self, chat_id, text):
+            await super()._record(chat_id, text)
+            return SimpleNamespace(photo=None, message_id=100 + chat_id)
+
+    await announcements.send_announcement(NumberedBot(), _announcement())
+    cur = await fresh_db.conn().execute(
+        "SELECT telegram_id, tg_message_id FROM pushes WHERE category = 'test_release'"
+    )
+    assert [tuple(r) for r in await cur.fetchall()] == [(1, 101)]
+
+
 async def test_second_run_sends_nothing(fresh_db):
     await _users(fresh_db, 1, 2)
     ann = _announcement()
@@ -651,10 +668,13 @@ async def test_ai_actions_release_only_advertises_tools_that_actually_exist():
 
     write_tools = set(ai_trainer._ACTION_TOOLS) | set(ai_trainer._UNDOABLE_TOOLS)
     assert {
-        "log_bodyweight", "log_food", "create_exercise", "rename_exercise",
+        "log_bodyweight", "create_exercise", "rename_exercise",
         "move_exercise_to_group", "archive_exercise", "copy_program",
         "rename_program", "merge_programs", "delete_program", "share_program",
     } <= write_tools
+    # Дневника еды больше нет — и анонс не должен его обещать.
+    text = announcements.RELEASE_AI_TRAINER_ACTIONS.text.lower()
+    assert not re.search(r"\bеду\b|дневник еды|калори", text)
 
 
 # ---------- релиз приложения: закреп и пропуск тех, у кого оно уже стоит ----------

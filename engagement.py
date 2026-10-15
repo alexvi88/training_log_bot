@@ -689,7 +689,10 @@ async def _deliver(
         return
     if _push_image_file_id is None:
         _push_image_file_id = message.photo[-1].file_id
-    await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+    await db.record_push(
+        telegram_id, decision.category, decision.text, local_date.isoformat(),
+        tg_message_id=getattr(message, "message_id", None),
+    )
     if show_tz_hint:
         await db.mark_tz_push_hint_shown(telegram_id)
 

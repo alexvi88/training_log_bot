@@ -48,7 +48,6 @@ async def aggregate_context(user_id: int) -> achievements.AchievementContext:
     tz_offset = int(user["tz_offset"]) if user else 0
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     extremes = await db.achievement_extremes(user_id, tz_offset=tz_offset)
-    food_days = [dt.date.fromisoformat(d) for d in await db.list_food_entry_dates(user_id)]
     return achievements.AchievementContext(
         total_workouts=await db.count_workouts(user_id),
         lifetime_tonnage_kg=formatting.to_kg(
@@ -71,7 +70,6 @@ async def aggregate_context(user_id: int) -> achievements.AchievementContext:
         all_weekdays_covered=len({d.weekday() for d in dates}) == 7,
         has_dec31=any((d.month, d.day) == (12, 31) for d in dates),
         bodyweight_logs=await db.count_bodyweight_logs(user_id),
-        food_diary_best_run=achievements.longest_daily_run(food_days),
     )
 
 
@@ -180,7 +178,6 @@ async def earned_dates(user_id: int, codes) -> dict[str, str]:
         "SELECT logged_at FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at", (user_id,)
     )
     bw_logs = [r["logged_at"] for r in await cur.fetchall()]
-    food_days = sorted(dt.date.fromisoformat(d) for d in await db.list_food_entry_dates(user_id))
 
     found: dict[str, str] = {}
     dates: list[dt.date] = []
@@ -233,9 +230,6 @@ async def earned_dates(user_id: int, codes) -> dict[str, str]:
             all_weekdays_covered=len({d.weekday() for d in dates}) == 7,
             has_dec31=any((d.month, d.day) == (12, 31) for d in dates),
             bodyweight_logs=sum(1 for t in bw_logs if t <= stamp),
-            food_diary_best_run=achievements.longest_daily_run(
-                [d for d in food_days if d <= local.date()]
-            ),
             workout_start_hour=local.hour,
             workout_date=local.date(),
             workout_duration_seconds=duration,

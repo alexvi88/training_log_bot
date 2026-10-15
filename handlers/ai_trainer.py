@@ -1976,7 +1976,7 @@ def _try_claim_busy(user_id: int) -> bool:
     requests raced through the gap.
 
     The actual check-and-reserve now lives in `busy_lock.try_claim` — the
-    REST layer (`/v1`, api_v1_ai.py/api_v1_food.py) has the exact same gap
+    REST layer (`/v1`, api_v1_ai.py/api_v1_feedback.py) has the exact same gap
     for its own paid calls and needs the exact same one-process primitive.
     `_busy` stays a plain module-level `set[int]` here on purpose (not a
     wrapper object): tests reach into it directly (`ai_trainer._busy.add(...)`,

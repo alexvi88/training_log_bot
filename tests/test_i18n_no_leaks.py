@@ -249,7 +249,6 @@ async def _screen_settings_keyboard(db, user_id: int) -> str:
         ai_comments_enabled=True,
         progression_enabled=True,
         tz_offset=0,
-        food_macros_enabled=True,
         show_extra_stats=True,
         show_mcp=False,
         lang="en",
@@ -301,14 +300,6 @@ async def _screen_programs(db, user_id: int) -> str:
         routines=[{"id": 2, "name": "Full body"}],
         has_workouts=True,
     )
-    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
-
-
-async def _screen_food_diary(db, user_id: int) -> str:
-    """Экран одного дня дневника питания (keyboards.food_day_keyboard) — с
-    записями, чтобы кнопки удаления и переход в историю тоже попали в проверку."""
-    today = dt.date(2026, 8, 17)
-    kb = keyboards.food_day_keyboard(today, entry_ids=[1, 2], today=today)
     return "\n".join(button.text for row in kb.inline_keyboard for button in row)
 
 
@@ -438,12 +429,6 @@ async def _screen_bodyweight(db, user_id: int) -> str:
     пустое состояние переведено отдельным ключом и тоже стоит проверить."""
     logs = [{"weight": 82.5, "logged_at": "2026-08-10T08:00:00"}]
     return formatting.build_bodyweight_screen(logs)
-
-
-async def _screen_food_history(db, user_id: int) -> str:
-    """Вкладка истории питания (formatting.build_food_history_list)."""
-    day = formatting.FoodDayView(date=dt.date(2026, 8, 10), entries=2, calories=1800.0)
-    return formatting.build_food_history_list([day])
 
 
 async def _screen_workout_onboarding(db, user_id: int) -> str:
@@ -1110,7 +1095,6 @@ SCREENS: list[tuple[str, object]] = [
     ("main_menu", _screen_main_menu),
     ("exercise_picker", _screen_exercise_picker),
     ("programs", _screen_programs),
-    ("food_diary", _screen_food_diary),
     ("history_list", _screen_history_list),
     ("history_list_empty", _screen_history_list_empty),
     ("history_calendar", _screen_history_calendar),
@@ -1121,7 +1105,6 @@ SCREENS: list[tuple[str, object]] = [
     ("hall_of_fame", _screen_hall_of_fame),
     ("progress_screen", _screen_progress_screen),
     ("bodyweight_screen", _screen_bodyweight),
-    ("food_history", _screen_food_history),
     ("history_item_card", _screen_history_item_card),
     ("workout_onboarding", _screen_workout_onboarding),
     ("workout_help", _screen_workout_help),

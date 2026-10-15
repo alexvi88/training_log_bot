@@ -38,7 +38,7 @@ _authed_user_id = common.authed_user_id
 
 # ---------- владение (см. одноимённые помощники в api_v1_programs.py —
 # не переиспользуются оттуда намеренно: у каждого REST-домена свой набор
-# проверок, как и в api_v1_food.py с его _owned_entry) ----------
+# проверок) ----------
 
 async def _owned_program(program_id: int, user_id: int):
     program = await db.get_program(program_id)

@@ -39,7 +39,7 @@ async def test_every_catalog_code_is_reachable():
         max_session_sets=40, max_session_tonnage_kg=9_000, max_session_exercises=12,
         has_superset=True, max_bodyweight_reps=30, early_workouts=20,
         has_weekend_pair=True, all_weekdays_covered=True, has_dec31=True,
-        bodyweight_logs=50, food_diary_best_run=10,
+        bodyweight_logs=50,
         workout_start_hour=6, workout_date=dt.date(2026, 1, 1),
         workout_duration_seconds=3 * 3600,
     )
@@ -62,14 +62,6 @@ async def test_weekend_pair_means_same_weekend_not_any_two_days():
     sat, sun = dt.date(2026, 8, 1), dt.date(2026, 8, 2)
     assert achievements.weekend_pair_exists([sat, sun])
     assert not achievements.weekend_pair_exists([sat, sun + dt.timedelta(weeks=1)])
-
-
-async def test_food_run_counts_consecutive_days_only():
-    days = [dt.date(2026, 8, d) for d in (1, 2, 3, 4, 5, 6, 7)]
-    assert achievements.longest_daily_run(days) == 7
-    with_gap = days[:3] + days[4:]
-    assert achievements.longest_daily_run(with_gap) < 7
-    assert "food7" in earned_codes(_ctx(food_diary_best_run=7))
 
 
 # ---------- интеграция с БД и resync ----------
@@ -232,20 +224,6 @@ async def test_session_tonnage_threshold_is_in_kilograms(fresh_db, user_id):
     added, _ = await achievement_sync.resync(user_id)
 
     assert "session5t" not in added
-
-
-async def test_food_diary_run_awards_and_survives_resync(fresh_db, user_id):
-    db = fresh_db
-    await _workout(db, user_id, sets=[(50.0, 5)])
-    for i in range(7):
-        await db.add_food_entry(
-            user_id, eaten_on=(dt.date(2026, 8, 1) + dt.timedelta(days=i)).isoformat(),
-            description="приём",
-        )
-
-    added, _ = await achievement_sync.resync(user_id)
-
-    assert "food7" in added
 
 
 async def test_bodyweight_log_count_awards(fresh_db, user_id):

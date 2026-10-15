@@ -50,7 +50,6 @@ async def show_settings(
         user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]),
         bool(user["ai_comments_enabled"]), bool(user["progression_hint_enabled"]),
         tz_offset=user["tz_offset"],
-        food_macros_enabled=bool(user["food_macros_enabled"]),
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
         lang=user["lang"],

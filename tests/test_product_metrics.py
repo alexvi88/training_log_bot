@@ -287,6 +287,8 @@ async def _push_day(monkeypatch):
     await _ios_push(2, "skip_7", f"{d}T11:00:00")
     await _ios_push(2, "plateau", f"{d}T12:00:00", ok=False)
     await _event(2, "push_open", DAY, props={"category": "skip_7"})
+    # Нажатие кнопки под пушем в Telegram (record_tg_push_tap).
+    await _event(1, "push_open", DAY, platform="tg", props={"category": "skip_7"})
     await _workout(1, f"{d}T13:00:00", f"{d}T14:00:00")
     # Импорт — история, а не ответ на пуш.
     await _workout(2, f"{d}T15:00:00", f"{d}T16:00:00", source="import")
@@ -294,6 +296,7 @@ async def _push_day(monkeypatch):
     await _ios_push(900, "skip_7", f"{d}T10:00:00")
     await _ios_push(900, "skip_7", f"{d}T10:00:00", ok=False)
     await _event(900, "push_open", DAY, props={"category": "skip_7"})
+    await _event(900, "push_open", DAY, platform="tg", props={"category": "skip_7"})
     await _workout(900, f"{d}T13:00:00", f"{d}T14:00:00")
 
 
@@ -304,8 +307,12 @@ async def test_rollup_counts_pushes_by_channel_without_own_accounts(fresh_db, mo
     assert metrics["pushes_sent_tg"] == 1 and metrics["pushes_sent_ios"] == 1
     assert metrics["push_failed_ios"] == 1
     assert metrics["push_users"] == 2 and metrics["pushes_per_user"] == 1.0
-    assert metrics["push_ctr_ios"] == 1.0
-    assert metrics["pushes_sent:skip_7"] == 2 and metrics["push_opens:skip_7"] == 1
+    assert metrics["push_ctr_ios"] == 1.0 and metrics["push_ctr_tg"] == 1.0
+    assert metrics["push_ctr"] == 1.0
+    # Тапы — хранимая метрика суток: всего и по каналам, свои аккаунты не в счёт.
+    assert metrics["push_opens"] == 2
+    assert metrics["push_opens_ios"] == 1 and metrics["push_opens_tg"] == 1
+    assert metrics["pushes_sent:skip_7"] == 2 and metrics["push_opens:skip_7"] == 2
     assert "pushes_sent:plateau" not in metrics and "pushes_sent:release_x" not in metrics
     # Окно суток ещё открыто: доля пишется, только когда кончатся следующие.
     assert "push_to_workout_24h" not in metrics
@@ -319,7 +326,10 @@ async def test_rollup_counts_pushes_by_channel_without_own_accounts(fresh_db, mo
 
     table = admin.format_metrics_table(rows[:1])
     assert "skip_7" not in table
-    assert "📣 Пуши 09-01: 2 (TG 1 · iOS 1), 2 чел., CTR iOS 100%, не доставлено iOS 1" in table
+    assert (
+        "📣 Пуши 09-01: 2 (TG 1 · iOS 1), 2 чел., тапов 2 (TG 1 · iOS 1), "
+        "CTR iOS 100%, CTR TG 100%, не доставлено iOS 1" in table
+    )
     csv_head = admin.metrics_csv(names, rows).decode().splitlines()[0].split(",")
     assert "pushes_sent:skip_7" in csv_head and "push_opens:skip_7" in csv_head
 
@@ -373,6 +383,7 @@ async def test_daily_admin_report_has_a_push_block(fresh_db, monkeypatch):
     await _event(2, "push_open", d, props={"category": "skip_7"})
     await _tg_push(1, "rank_near", f"{d.isoformat()}T12:00:00")
     await _tg_push(1, "digest", f"{d.isoformat()}T13:00:00")
+    await _event(1, "push_open", d, platform="tg", props={"category": "rank_near"})
 
     text = await admin_tasks._build_push_report(d)
     assert text.splitlines() == [
@@ -380,11 +391,129 @@ async def test_daily_admin_report_has_a_push_block(fresh_db, monkeypatch):
         "📣 Пуши",
         "Отправлено: 6 (Telegram 3 · iOS 3)",
         "Получили: 2 чел., 3.0 на человека",
-        "CTR iOS: 33% (1 из 3)",
+        "Тапы: 2 (iOS 1 · Telegram 1), CTR iOS 33% · Telegram 33%",
         "Потренировались за 24 ч после пуша (01.09): 50% (1 из 2)",
-        "  └ plateau: 2, CTR 0%",
-        "  └ skip_7: 2, CTR 50%",
-        "  └ digest: 1",
+        "  └ skip_7: отправлено 2 · тапов 1, CTR 50%",
+        "  └ plateau: отправлено 2 · тапов 0, CTR 0%",
+        "  └ rank_near: отправлено 1 · тапов 1, CTR 100%",
     ]
     empty = await admin_tasks._build_push_report(DAY + dt.timedelta(days=5))
-    assert empty.splitlines() == ["", "📣 Пуши", "Не уходили"]
+    assert empty.splitlines() == ["", "📣 Пуши", "Не уходили", "Тапы: 0 (iOS 0 · Telegram 0)"]
+
+
+@pytest.mark.asyncio
+async def test_daily_report_counts_taps_on_the_tap_day_even_without_sends(fresh_db, monkeypatch):
+    """Тап считается в сутки тапа: вчерашний пуш, открытый сегодня, — строка
+    «Тапы» сегодня, хотя пушей в эти сутки не уходило."""
+    import admin_tasks
+
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    monkeypatch.setattr(config, "TEST_USER_ID", None)
+    await _user(1, DAY - dt.timedelta(days=3))
+    await _user(2, DAY - dt.timedelta(days=3))
+    await _tg_push(1, "skip_7", f"{DAY.isoformat()}T22:00:00")
+    nxt = DAY + dt.timedelta(days=1)
+    await _event(1, "push_open", nxt, platform="tg", props={"category": "skip_7"})
+    await _event(2, "push_open", nxt, props={"category": "plateau"})
+
+    text = await admin_tasks._build_push_report(nxt)
+    assert text.splitlines() == [
+        "",
+        "📣 Пуши",
+        "Не уходили",
+        "Тапы: 2 (iOS 1 · Telegram 1)",
+        "Потренировались за 24 ч после пуша (01.09): 0% (0 из 1)",
+        "  └ plateau: отправлено 0 · тапов 1",
+        "  └ skip_7: отправлено 0 · тапов 1",
+    ]
+    metrics = await product_metrics.rollup_day(nxt)
+    assert metrics["push_opens"] == 2
+    assert metrics["push_opens_tg"] == 1 and metrics["push_opens_ios"] == 1
+    # Знаменателя нет — доли не пишутся вовсе, а не «0%».
+    assert "push_ctr" not in metrics and "push_ctr_tg" not in metrics
+    _, rows = await product_metrics.pivot()
+    line = admin._metrics_push_line([r for r in rows if r["day"] == nxt.isoformat()])
+    assert line == "📣 Пуши 09-02: 0 (TG 0 · iOS 0), тапов 2 (TG 1 · iOS 1)"
+
+
+# --- тап по кнопке под пушем в Telegram --------------------------------------------
+
+
+def _push_button_tap(uid: int, message_id, data: str = "push:start_workout"):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from aiogram.types import CallbackQuery
+
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=uid, username="u", language_code=None)
+    callback.message = SimpleNamespace(
+        message_id=message_id, chat=SimpleNamespace(id=uid), reply_markup=None
+    )
+    callback.data = data
+    return callback
+
+
+@pytest.mark.asyncio
+async def test_button_under_a_telegram_push_is_one_tap_with_its_category(fresh_db, monkeypatch):
+    import activity_log
+
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    monkeypatch.setattr(config, "TEST_USER_ID", None)
+    await _user(1, DAY - dt.timedelta(days=3))
+    await db.record_push(1, "streak_at_risk", "текст", DAY.isoformat(), tg_message_id=55)
+    # Старый пуш (до tg_message_id) и отметка без телеграмной отправки.
+    await db.record_push(1, "skip_7", "текст", DAY.isoformat())
+    await db.record_push(1, "release_x", "текст", DAY.isoformat(), channel=None)
+
+    async def handled(event, data):
+        return "ok"
+
+    middleware = activity_log.LogCallbackQueries()
+    await middleware(handled, _push_button_tap(1, 55), {})
+    # Второе нажатие под тем же пушем (например, «пояс» после «Начать») — не тап.
+    await middleware(handled, _push_button_tap(1, 55, data="settings:tz"), {})
+    # Кнопка под обычным экраном бота — не тап по пушу.
+    await middleware(handled, _push_button_tap(1, 77, data="wo:finish"), {})
+    # Чужой человек с тем же id сообщения — не его пуш.
+    await middleware(handled, _push_button_tap(2, 55), {})
+
+    taps = [e for e in await _events(1) if e[0] == "push_open"]
+    assert taps == [("push_open", '{"category":"streak_at_risk"}', "tg", None)]
+    assert not [e for e in await _events(2) if e[0] == "push_open"]
+    cur = await db.conn().execute("SELECT category FROM pushes WHERE tapped_at IS NOT NULL")
+    assert [r[0] for r in await cur.fetchall()] == ["streak_at_risk"]
+
+
+@pytest.mark.asyncio
+async def test_tap_check_never_breaks_the_button(fresh_db, monkeypatch):
+    """Сбой базы на проверке тапа — не повод сорвать нажатие кнопки."""
+    async def boom(*args):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(db, "claim_push_tap", boom)
+    assert await product_metrics.record_tg_push_tap(1, 55) is False
+    # Не id сообщения (MagicMock, None) — даже не спрашиваем базу.
+    assert await product_metrics.record_tg_push_tap(1, None) is False
+    assert await product_metrics.record_tg_push_tap(1, "55") is False
+
+
+def test_event_time_is_utc_whatever_the_process_zone():
+    """Время тапа с телефона — в UTC, как created_at у всего остального: при
+    TZ≠UTC тап иначе уезжал в чужие сутки сводки."""
+    import os
+    import time
+
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Moscow"
+    time.tzset()
+    try:
+        now = dt.datetime(2026, 9, 1, 12, 0)
+        assert api_v1_events.event_time("2026-09-01T10:00:00Z", now) == "2026-09-01T10:00:00"
+        assert api_v1_events.event_time("2026-09-01T13:00:00+03:00", now) == "2026-09-01T10:00:00"
+    finally:
+        if old is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old
+        time.tzset()

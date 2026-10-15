@@ -2167,7 +2167,7 @@ async def list_workouts(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     # common.query_int, а не голый int(): «?limit=abc» из кривой ссылки
     # роняло список тренировок пятисоткой вместо внятного 400 — остальные
-    # списки (/workouts/search, /food/days) давно разбирают параметры им.
+    # списки (/workouts/search) давно разбирают параметры им.
     limit = common.query_int(request, "limit", 20, minimum=1, maximum=100)
     offset = common.query_int(request, "offset", 0, minimum=0)
     workouts = await db.list_workouts(user_id, limit=limit, offset=offset, status="finished")

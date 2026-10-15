@@ -641,7 +641,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("PATCH", f"/bodyweight/{bw['id']}", json={"weight": 81}, expect=200)
     await w.call("DELETE", f"/bodyweight/{bw['id']}", expect=200)
     await w.call("DELETE", f"/bodyweight/{bw['id']}", expect=404)
-    # Дневника еды в приложении больше нет: каждая ручка — 410 с текстом
+    # Дневника еды больше нет нигде: каждая ручка — 410 с текстом
     # на языке атлета (api.error.food_gone), его и проверяет обходчик.
     await w.call("POST", "/food", json={"name": text["food"], "kcal": 300}, expect=410)
     await w.call("GET", "/food", expect=410)

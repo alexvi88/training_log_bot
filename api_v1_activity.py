@@ -60,8 +60,6 @@ ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("DELETE", "/workouts/{workout_id}/exercises/{exercise_id}/last-set"): "удалил подход",
     ("DELETE", "/workouts/{workout_id}/sets/{set_id}"): "удалил подход",
     ("POST", "/workouts/{workout_id}/finish"): "закончил тренировку",
-    ("POST", "/food"): "добавил еду",
-    ("POST", "/food/parse"): "распознал еду",
     ("POST", "/ai/ask"): "спросил тренера",
     ("POST", "/workouts/backfill"): "начал занесение задним числом",
     ("PATCH", "/workouts/{workout_id}/date"): "перенёс дату тренировки",

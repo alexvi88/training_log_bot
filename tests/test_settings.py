@@ -311,10 +311,10 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     import keyboards
 
     on_kb = keyboards.settings_keyboard(
-        "kg", "epley", True, True, True, food_macros_enabled=True, show_extra_stats=True
+        "kg", "epley", True, True, True, show_extra_stats=True
     )
     off_kb = keyboards.settings_keyboard(
-        "kg", "epley", False, False, False, food_macros_enabled=False, show_extra_stats=False
+        "kg", "epley", False, False, False, show_extra_stats=False
     )
     on_texts = [b.text for row in on_kb.inline_keyboard for b in row]
     off_texts = [b.text for row in off_kb.inline_keyboard for b in row]

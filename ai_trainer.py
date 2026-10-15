@@ -1242,9 +1242,8 @@ replaces_program не передавай, иначе затрёшь старую
 replaces_program), а не «убери из списка упражнений» (archive_exercise /
 archive_exercises). Если из фразы не ясно — спроси, а не угадывай.
 
-Дневники ты не только читаешь: вес и еду, сказанные между делом («кстати, 78.4
-сегодня», «на обед была гречка с курицей»), записывай сразу, не заставляя
-человека идти в меню.
+Дневник веса ты не только читаешь: вес, сказанный между делом («кстати, 78.4
+сегодня»), записывай сразу, не заставляя человека идти в меню.
 
 Про сам бот люди тоже говорят тебе, а не в поддержку: «объём считает
 неправильно», «кнопка не работает», «сделай таймер отдыха», «неудобно листать
@@ -1465,9 +1464,9 @@ SEARCH_DECISION_SYSTEM_PROMPT = """\
 его тема.
 
 РЕШЕНИЕ 2 — DATA. Нужны ли тренеру ДАННЫЕ САМОГО ПОЛЬЗОВАТЕЛЯ из базы бота:
-его тренировки, подходы, веса, прогресс, рекорды, программы, вес тела, еда,
+его тренировки, подходы, веса, прогресс, рекорды, программы, вес тела,
 история переписки. Нужны и тогда, когда пользователь просит что-то СДЕЛАТЬ с
-его данными: составить или изменить программу, записать еду или вес,
+его данными: составить или изменить программу, записать вес,
 переименовать упражнение, поделиться карточкой.
 
 DATA=NO — только для вопросов об общих знаниях, где личная история вообще не
@@ -1919,7 +1918,7 @@ BEHAVIOUR_DIGEST_SYSTEM_PROMPT = """\
   ввод, который бот явно не понял, брошенные на середине мастера, нажатия по
   протухшим кнопкам.
 - Что сработало: путь, который человек прошёл до конца (записал тренировку,
-  сохранил программу, завёл еду).
+  сохранил программу, записал вес).
 - Разговоры с тренером: о чём спрашивали и получилось ли у тренера довести до
   действия.
 - 2-4 конкретные гипотезы «что чинить/менять» — каждая с опорой на конкретное
@@ -1945,6 +1944,58 @@ BEHAVIOUR_DIGEST_SYSTEM_PROMPT = """\
 """
 
 
+_BEHAVIOUR_DIGEST_MAX_TOKENS = 1200
+
+
+def _luna_digest_request() -> tuple[AsyncOpenAI, dict[str, Any]]:
+    """Запасной путь разбора — модель тренера (Luna), когда старшая модель не
+    ответила."""
+    backend = luna_backend()
+    return backend.client, _model_kwargs(backend, None, max_tokens=_BEHAVIOUR_DIGEST_MAX_TOKENS, quick=True)
+
+
+def _openai_digest_request(*, with_effort: bool = True) -> tuple[AsyncOpenAI, dict[str, Any]]:
+    """Старшая модель OpenAI (config.OPENAI_ADMIN_DIGEST_MODEL), chat/completions
+    без инструментов. Размышления у OpenAI съедают тот же max_completion_tokens —
+    отсюда запас сверху. with_effort=False — повтор без reasoning_effort, когда
+    модель прямо сказала, что параметр не поддерживает."""
+    effort = config.OPENAI_ADMIN_DIGEST_REASONING_EFFORT
+    kwargs: dict[str, Any] = {
+        "model": config.OPENAI_ADMIN_DIGEST_MODEL,
+        "max_completion_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS + _reasoning_headroom(effort),
+    }
+    if with_effort:
+        kwargs["extra_body"] = {"reasoning_effort": effort}
+    return _get_client(), kwargs
+
+
+def _says_reasoning_effort_unsupported(exc: BaseException) -> bool:
+    """Ошибка прямо называет reasoning_effort неподдерживаемым — только тогда
+    есть смысл один раз повторить без него. Остальное — сразу запасной путь."""
+    msg = str(exc).lower()
+    return "reasoning_effort" in msg and any(
+        w in msg for w in ("not supported", "unsupported", "does not support", "not support")
+    )
+
+
+async def _digest_attempt(
+    request: tuple[AsyncOpenAI, dict[str, Any]], messages: list[dict[str, Any]]
+) -> Optional[str]:
+    """Один платный вызов разбора: текст или None на пустом ответе. Исключения — наверх."""
+    client, kwargs = request
+    response = await paid_call(
+        None, None,
+        # Без conv-id и ключа кэша: вызов раз в сутки, кэшу входа нечего тут
+        # ловить, а чужой слот занимать незачем.
+        lambda: client.chat.completions.create(**kwargs, messages=messages),
+        model=kwargs["model"],
+        messages=messages,
+        source="admin",
+    )
+    text = (response.choices[0].message.content or "").strip()
+    return text or None
+
+
 async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Optional[str]:
     """Разбор суточного лога действий для админа — или None, если не вышло.
 
@@ -1961,32 +2012,45 @@ async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Option
     и может исчерпать за день, — раз в сутки на весь бот (как недельный
     дайджест, см. paid_call).
     """
-    if not is_configured():
-        return None
     # Суточный разбор для админа — платный вызов без квоты: на HARD-стопе молчит.
     if await ai_limits.hard_stop_block() is not None:
         return None
-    backend = luna_backend()
+    messages = [
+        {"role": "system", "content": BEHAVIOUR_DIGEST_SYSTEM_PROMPT},
+        *([{"role": "user", "content": memory}] if memory else []),
+        {"role": "user", "content": summary},
+    ]
+    if not is_configured():
+        return None
+    # Старшая модель OpenAI живым вызовом не проверена — поэтому падение или
+    # пустой ответ не роняют разбор дня, а отдают его модели тренера (Luna).
+    # Повтор без reasoning_effort — ровно один и только когда ошибка прямо
+    # называет этот параметр неподдерживаемым.
+    model = config.OPENAI_ADMIN_DIGEST_MODEL
     try:
-        response = await paid_call(
-            None, None,
-            lambda: backend.client.chat.completions.create(
-                # Без ключа кэша: вызов раз в сутки, кэшу входа нечего тут
-                # ловить, а чужой слот занимать незачем.
-                **_model_kwargs(backend, None, max_tokens=1200, quick=True),
-                messages=[
-                    {"role": "system", "content": BEHAVIOUR_DIGEST_SYSTEM_PROMPT},
-                    *([{"role": "user", "content": memory}] if memory else []),
-                    {"role": "user", "content": summary},
-                ],
-            ),
-            source="admin",
+        try:
+            text = await _digest_attempt(_openai_digest_request(), messages)
+        except Exception as exc:
+            if not _says_reasoning_effort_unsupported(exc):
+                raise
+            logger.warning(
+                "Admin behaviour digest on %s: reasoning_effort unsupported (%s: %s) — retrying without it",
+                model, type(exc).__name__, exc,
+            )
+            text = await _digest_attempt(_openai_digest_request(with_effort=False), messages)
+        if text:
+            return text
+        logger.warning("Admin behaviour digest on %s: empty answer — falling back to %s", model, config.OPENAI_CHAT_MODEL)
+    except Exception as exc:
+        logger.warning(
+            "Admin behaviour digest on %s failed (%s: %s) — falling back to %s",
+            model, type(exc).__name__, exc, config.OPENAI_CHAT_MODEL, exc_info=True,
         )
+    try:
+        return await _digest_attempt(_luna_digest_request(), messages)
     except Exception:
         logger.exception("Admin behaviour digest generation failed")
         return None
-    text = (response.choices[0].message.content or "").strip()
-    return text or None
 
 
 IMPORT_OVERVIEW_SYSTEM_PROMPT = """\
@@ -2180,65 +2244,6 @@ def _as_number(value: Any) -> Optional[float]:
         if match:
             return float(match.group().replace(",", "."))
     return None
-
-
-# Потолки на одну позицию приёма пищи. Как MAX_WEIGHT/MAX_REPS в parser.py, это
-# отбраковка невозможного, а не спор с человеком: столько за раз не съедают.
-MAX_FOOD_KCAL = 10000.0
-MAX_FOOD_GRAMS = 2000.0
-
-
-def _as_macro(value: Any, limit: float) -> Optional[float]:
-    """Число КБЖУ из ответа модели — или None, если оно не бывает.
-
-    Отрицательные и запредельные значения раньше ехали дальше как достоверные:
-    галлюцинация или битый JSON с минусом давали карточку «Итого: -165 ккал ·
-    Б-10 · Ж-5 · У-20», такая же строка ложилась в дневник и утягивала в минус
-    итог за день. None здесь честнее нуля: он означает «не знаю», и вся цепочка
-    ниже (_atwater_kcal, _sum_field, экраны) уже умеет с ним обращаться, а ноль
-    выглядел бы измеренным.
-    """
-    number = _as_number(value)
-    if number is None or number < 0 or number > limit:
-        return None
-    return number
-
-
-# Коэффициенты Атуотера — по ним калорийность считают на этикетках: белки и
-# углеводы по 4 ккал/г, жиры 9 ккал/г.
-_KCAL_PER_GRAM = {"protein": 4.0, "fat": 9.0, "carbs": 4.0}
-
-
-def _atwater_kcal(macros: dict[str, Optional[float]]) -> Optional[float]:
-    """Калорийность из БЖУ, или None — если хоть одного макроса не хватает."""
-    if any(macros.get(k) is None for k in _KCAL_PER_GRAM):
-        return None
-    return sum(macros[k] * per_gram for k, per_gram in _KCAL_PER_GRAM.items())
-
-
-def _reconcile_macros(entry: dict[str, Any]) -> None:
-    """Привести КБЖУ одной строки к целым граммам и пересчитать из них ккал.
-
-    Модель выдаёт калорийность и БЖУ как две независимые догадки, поэтому они
-    сходятся лишь примерно (620 ккал против 592 по формуле — обычный разброс).
-    На экране это читается как ошибка: любой, кто перемножит граммы на 4/4/9,
-    увидит, что итог не бьётся. Считаем ккал из БЖУ сами — и именно из тех
-    целых граммов, которые показываем, иначе округление вывода (28.4 → «28»)
-    снова разведёт цифры. Строку без полного набора БЖУ не трогаем: там
-    пересчитывать не из чего, и калорийность модели остаётся как есть.
-    """
-    for key in _KCAL_PER_GRAM:
-        if entry.get(key) is not None:
-            entry[key] = float(round(entry[key]))
-    kcal = _atwater_kcal(entry)
-    if kcal is not None:
-        entry["calories"] = kcal
-
-
-# Инструменты дневника еды, которых у тренера больше нет (AI-разбор еды выпилен,
-# записи еды модели не уходят), но которые execute_tool по-прежнему исполняет
-# для MCP: там человек сам подключает свой клиент к своему дневнику.
-MCP_ONLY_TOOLS = frozenset({"get_food_diary", "log_food", "delete_food_entry"})
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -3914,44 +3919,6 @@ async def _bodyweight_history(user_id: int) -> dict[str, Any]:
     }
 
 
-async def _food_diary(user_id: int, days: int = 14) -> dict[str, Any]:
-    """Recent food-diary entries grouped by day, with each day's totals.
-
-    Days are grouped here rather than left to the model: the totals are the
-    part that gets reasoned about ("недобираешь белок"), and a model adding up
-    a flat list of entries itself is a needless chance to get them wrong.
-    """
-    days = max(1, min(days, 90))
-    since = (await _user_today(user_id) - dt.timedelta(days=days - 1)).isoformat()
-    rows = await db.list_recent_food_entries(user_id, since)
-
-    by_day: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        day = by_day.setdefault(
-            row["eaten_on"],
-            {"date": row["eaten_on"], "entries": [], "calories": 0.0,
-             "protein": 0.0, "fat": 0.0, "carbs": 0.0, "entries_without_macros": 0},
-        )
-        day["entries"].append({
-            # id — чтобы delete_food_entry мог сослаться на конкретную запись:
-            # без него убрать можно было только «последнюю», а её не всегда
-            # просят убрать.
-            "id": row["id"],
-            "description": row["description"],
-            "calories": row["calories"],
-            "protein": row["protein"],
-            "fat": row["fat"],
-            "carbs": row["carbs"],
-        })
-        if row["calories"] is None:
-            day["entries_without_macros"] += 1
-        for field in ("calories", "protein", "fat", "carbs"):
-            if row[field] is not None:
-                day[field] += row[field]
-
-    return {"days": list(by_day.values())}
-
-
 async def _full_chat_history(user_id: int) -> dict[str, Any]:
     rows = await db.get_ai_chat_history(user_id)
     return {
@@ -4936,7 +4903,7 @@ async def _archive_exercises(
     )
 
 
-# ---------- дневники: вес тела и еда ----------
+# ---------- дневник веса тела ----------
 
 
 async def _log_bodyweight(
@@ -4989,92 +4956,6 @@ async def _log_bodyweight(
     )
 
 
-async def _log_food(
-    user_id: int, tool_input: dict[str, Any], *, source: str = "ai_chat"
-) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
-    """Записать съеденное — сразу, по той же причине, что и вес.
-
-    Зовёт его только MCP (mcp_server.log_food): у тренера в боте инструментов
-    про еду больше нет — AI-разбор еды выпилен целиком, и записи дневника
-    модели не уходят. КБЖУ — только те, что прислал клиент; присланные
-    сверяются между собой _reconcile_macros. Своей оценки (раньше —
-    analyze_food на модели) больше нет: без цифр запись ложится без цифр.
-    """
-    description = str(tool_input.get("description") or "").strip()
-    if not description:
-        return {"error": "нужно описание того, что съели"}, None
-    entry = {
-        "calories": _as_macro(tool_input.get("calories"), MAX_FOOD_KCAL),
-        "protein": _as_macro(tool_input.get("protein"), MAX_FOOD_GRAMS),
-        "fat": _as_macro(tool_input.get("fat"), MAX_FOOD_GRAMS),
-        "carbs": _as_macro(tool_input.get("carbs"), MAX_FOOD_GRAMS),
-    }
-    _reconcile_macros(entry)
-    user = await db.get_user(user_id)
-    eaten_on = timeutil.user_today(user).isoformat()
-    entry_id = await db.add_food_entry(
-        user_id, eaten_on, description[:MAX_FOOD_DESCRIPTION],
-        calories=entry["calories"], protein=entry["protein"],
-        fat=entry["fat"], carbs=entry["carbs"], source="ai_chat",
-    )
-    return (
-        {
-            "ok": True,
-            "logged": {"description": description, "date": eaten_on, **entry},
-            "note": _UNDO_NOTE,
-        },
-        {
-            "label": i18n.t("ai.action.remove_food", description=formatting.shorten(description, 24)),
-            "undo": {"kind": "food", "id": entry_id},
-        },
-    )
-
-
-async def _delete_food_entry(
-    user_id: int, tool_input: dict[str, Any]
-) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
-    """Убрать запись из дневника питания — сразу, откат кнопкой возвращает её
-    целиком с теми же цифрами.
-
-    entry_id — точный id из get_food_diary (там он появился ровно для этого:
-    раньше убрать можно было только «последнюю» руками на экране 🍽 Дневник
-    еды, а тренер вообще не умел убирать чужие ошибки из дневника — ни свои
-    неверные оценки, ни то, что человек попросил стереть).
-    """
-    try:
-        entry_id = int(tool_input.get("entry_id"))
-    except (TypeError, ValueError):
-        return {"error": "entry_id должен быть числом — точным, из get_food_diary"}, None
-    entry = await db.get_food_entry(entry_id)
-    if entry is None or entry["telegram_id"] != user_id:
-        return {"error": "такой записи нет — возьми entry_id из get_food_diary"}, None
-    await db.delete_food_entry(entry_id)
-    return (
-        {
-            "ok": True,
-            "deleted": {"description": entry["description"], "date": entry["eaten_on"]},
-            "note": _UNDO_NOTE,
-        },
-        {
-            "label": i18n.t(
-                "ai.action.restore_food", description=formatting.shorten(entry["description"], 24)
-            ),
-            "undo": {
-                "kind": "food_restore",
-                "eaten_on": entry["eaten_on"],
-                "description": entry["description"],
-                "details": entry["details"],
-                "calories": entry["calories"],
-                "protein": entry["protein"],
-                "fat": entry["fat"],
-                "carbs": entry["carbs"],
-                "photo_file_id": entry["photo_file_id"],
-                "source": entry["source"],
-            },
-        },
-    )
-
-
 async def _delete_bodyweight_log(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
@@ -5110,10 +4991,6 @@ async def _delete_bodyweight_log(
         },
     )
 
-
-# Длиннее в одну строку дневника всё равно не читается, а модель иногда
-# присылает туда целый абзац с рассуждением о пользе гречки.
-MAX_FOOD_DESCRIPTION = 200
 
 # ---------- сравнение периодов ----------
 
@@ -6071,8 +5948,8 @@ _ACTION_TOOLS = {
 # Прежняя граница шла ровно по обратимости: необратимое — через кнопку,
 # обратимое — молча. Правило верное, но неполное: обратимость и возможность
 # откатить — разные вещи. Отменить записанный вес можно было только уйдя в
-# 🏋️ Вес и нажав там «отменить последнюю», еду — найдя строку в дневнике
-# питания, а старое имя после переименования надо было ещё и помнить. То есть
+# 🏋️ Вес и нажав там «отменить последнюю», а старое имя после переименования
+# надо было ещё и помнить. То есть
 # откат существовал везде, кроме того места, где человек узнавал о записи.
 #
 # Подтверждать всё подряд взамен нельзя: половину этих инструментов зовут по
@@ -6080,13 +5957,11 @@ _ACTION_TOOLS = {
 # запись остаётся мгновенной, а отменяется одним тапом там же, где произошла.
 _UNDOABLE_TOOLS = {
     "log_bodyweight": _log_bodyweight,
-    "log_food": _log_food,
     "create_exercise": _create_exercise,
     "rename_exercise": _rename_exercise,
     "move_exercise_to_group": _move_exercise,
     "rename_program": _rename_program,
     "copy_program": _copy_program,
-    "delete_food_entry": _delete_food_entry,
     "delete_bodyweight_log": _delete_bodyweight_log,
 }
 
@@ -6098,8 +5973,6 @@ async def execute_tool(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_questions: QuestionsCallback = None,
-    *,
-    source: str = "ai_chat",
 ) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -6121,8 +5994,6 @@ async def execute_tool(
         payload = {"catalog": _localized_catalog(i18n.get_lang())}
     elif name == "get_bodyweight_history":
         payload = await _bodyweight_history(user_id)
-    elif name == "get_food_diary":
-        payload = await _food_diary(user_id, int(tool_input.get("days") or 14))
     elif name == "get_full_chat_history":
         payload = await _full_chat_history(user_id)
     elif name == "get_saved_programs":
@@ -6156,10 +6027,7 @@ async def execute_tool(
         # одинаково — различаются они только тем, что кнопка означает: у
         # _ACTION_TOOLS она делает дело, у _UNDOABLE_TOOLS отменяет уже сделанное.
         tool = _ACTION_TOOLS.get(name) or _UNDOABLE_TOOLS[name]
-        if name == "log_food":
-            payload, action = await tool(user_id, tool_input, source=source)
-        else:
-            payload, action = await tool(user_id, tool_input)
+        payload, action = await tool(user_id, tool_input)
         if action is not None and on_action is not None:
             await on_action(action)
             # Запись веса — единственное действие тут, у которого есть свой

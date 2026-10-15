@@ -198,12 +198,6 @@ AI_SAVED_PROGRAMS_LIMIT = 50
 # можно переименовать обратно.
 MAX_PROGRAM_NAME_LENGTH = 48
 
-# Разумные границы дневной цели по калориям («🎯 Цель ккал» и REST
-# POST /food/goal) — просто чтобы не записать в базу опечатку («22000» вместо
-# «2200»), а не диетологический лимит. Общие для бота и API, чтобы не разъехались.
-KCAL_GOAL_MIN = 500
-KCAL_GOAL_MAX = 10000
-
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
 # PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
 # to silence the daily job entirely without touching per-user opt-outs.
@@ -391,6 +385,14 @@ OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000
 # инструментов остаются на chat/completions с none (см. выше).
 OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
+# Суточный разбор лога действий для админа (ai_trainer.behaviour_digest) — на
+# старшей модели OpenAI, а не на модели тренера: вызов раз в сутки, без
+# пользователя и без инструментов, поэтому chat/completions с reasoning_effort.
+# medium — анализ, а не быстрый шаг. Ошибка или пустой ответ — разбор пишет
+# модель тренера (Luna) с предупреждением в логе, а не пропадает молча. Сменил id — допиши
+# его строку в LLM_PRICES_USD_PER_1K и CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL.
+OPENAI_ADMIN_DIGEST_MODEL = os.getenv("OPENAI_ADMIN_DIGEST_MODEL", "gpt-6.1-sol")
+OPENAI_ADMIN_DIGEST_REASONING_EFFORT = os.getenv("OPENAI_ADMIN_DIGEST_REASONING_EFFORT", "medium")
 
 
 # --- Разбор техники по видео (Novita, Qwen3-VL — см. video_analysis.py) ------
@@ -656,6 +658,12 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     # Картинки на входе (фото в вопросе) OpenAI считает входными токенами —
     # они уже в prompt_tokens, отдельной ставки нет.
     "gpt-6-luna": (0.0001, 0.0005),
+    # OpenAI GPT-6.1 Sol — суточный разбор лога для админа
+    # (OPENAI_ADMIN_DIGEST_MODEL). Официальный прайс OpenAI, Standard, short
+    # context, за 1M: вход $2.00, кэшированный вход $0.10 (доля 0.05 — см.
+    # CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL), запись в кэш $2.50 (как у Luna —
+    # отдельного числа в usage нет, считается по ставке входа), выход $10.00.
+    "gpt-6.1-sol": (0.002, 0.01),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():
@@ -694,6 +702,8 @@ CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER",
 # Правится без кода: CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL_JSON='{"gpt-6-luna": 0.1}'.
 CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL: dict[str, float] = {
     "gpt-6-luna": 0.1,
+    # GPT-6.1 Sol: $0.10 кэшированного при $2.00 обычного входа.
+    "gpt-6.1-sol": 0.05,
 }
 try:
     for _model, _mult in json.loads(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL_JSON", "{}")).items():
@@ -706,7 +716,8 @@ except (TypeError, ValueError, AttributeError, json.JSONDecodeError):
 # записи) — нет, там это отдельный тип. Прибавь их сверху для OpenAI — и каждое
 # размышление Luna посчиталось бы дважды.
 REASONING_INCLUDED_IN_COMPLETION: set[str] = {
-    "gpt-6-luna", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL, OPENAI_VISION_MODEL,
+    "gpt-6-luna", "gpt-6.1-sol", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL, OPENAI_VISION_MODEL,
+    OPENAI_ADMIN_DIGEST_MODEL,
 }
 
 

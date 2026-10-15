@@ -1133,57 +1133,37 @@ async def test_audio_client_disables_sdk_retries(monkeypatch):
     assert captured["max_retries"] == 0
 
 
-async def test_food_diary_tool_groups_entries_by_day_with_totals(fresh_db, user_id):
-    """The coach advised on nutrition while blind to the diary in the same
-    database. Totals are summed here rather than left to the model: they're the
-    part that gets reasoned about ("недобираешь белок")."""
-    import datetime as dt
-
-    import ai_trainer as module
-    import db as dbmod
-
-    today = dt.date.today().isoformat()
-    await dbmod.add_food_entry(
-        user_id, eaten_on=today, description="Овсянка", calories=350, protein=12, fat=7, carbs=60
-    )
-    await dbmod.add_food_entry(
-        user_id, eaten_on=today, description="Курица с рисом", calories=650, protein=55, fat=12, carbs=70
-    )
-
-    payload = await module._food_diary(user_id, days=7)
-
-    assert len(payload["days"]) == 1
-    day = payload["days"][0]
-    assert day["date"] == today
-    assert day["calories"] == 1000
-    assert day["protein"] == 67
-    assert [e["description"] for e in day["entries"]] == ["Овсянка", "Курица с рисом"]
-
-
-async def test_food_diary_tool_marks_entries_saved_without_macros(fresh_db, user_id):
-    """Users can turn КБЖУ off — those entries are text-only, not broken."""
-    import datetime as dt
-
-    import ai_trainer as module
-    import db as dbmod
-
-    today = dt.date.today().isoformat()
-    await dbmod.add_food_entry(user_id, eaten_on=today, description="Шаурма у дома")
-
-    payload = await module._food_diary(user_id, days=7)
-
-    day = payload["days"][0]
-    assert day["entries_without_macros"] == 1
-    assert day["entries"][0]["calories"] is None
-
-
 async def test_no_food_tools_are_offered_to_the_model():
     """AI-разбор еды выпилен: тренер дневник питания не видит и не пишет —
     записи еды модели не уходят (iOS-лист согласия их тоже не называет)."""
     names = {t["function"]["name"] for t in ai_trainer.TOOLS}
     assert not names & {"get_food_diary", "log_food", "delete_food_entry"}
+    assert not any("food" in name for name in names)
+    for tool in ai_trainer.TOOLS:
+        assert "food" not in tool["function"]["description"].lower()
     assert "get_food_diary" not in ai_trainer.SYSTEM_PROMPT
     assert "питани" not in ai_trainer.WEEKLY_DIGEST_SYSTEM_PROMPT
+    # Исполнителей тоже нет — ни у тренера, ни «только для MCP».
+    assert not hasattr(ai_trainer, "MCP_ONLY_TOOLS")
+    for name in ("_food_diary", "_log_food", "_delete_food_entry", "analyze_food"):
+        assert not hasattr(ai_trainer, name), name
+
+
+async def test_food_tool_call_from_the_model_is_not_executed(fresh_db, user_id):
+    """Модель может выдумать старое имя из памяти — исполнять нечего, и в
+    food_entries ничего не ложится."""
+    raw = await ai_trainer.execute_tool(user_id, "log_food", {"description": "Овсянка"})
+    assert "error" in json.loads(raw)
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM food_entries")
+    assert (await cur.fetchone())[0] == 0
+
+
+async def test_coach_can_still_answer_nutrition_questions_without_a_diary():
+    """Дневника нет, но совет по питанию — остаётся: «сколько белка» тренер
+    считает от веса тела."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Дневника питания у тебя нет" in prompt
+    assert "Норма белка и калорий считается от ВЕСА ТЕЛА" in prompt
 
 
 # ---------- 5.5: get_program_adherence ----------
