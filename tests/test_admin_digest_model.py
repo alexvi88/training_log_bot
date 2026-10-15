@@ -83,3 +83,83 @@ async def test_digest_silent_when_nothing_configured(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "OPENAI_API_KEY", "")
     monkeypatch.setattr(config, "XAI_API_KEY", "")
     assert await ai_trainer.behaviour_digest("сводка") is None
+
+
+def _ok(text: str = "Разбор."):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+        usage=SimpleNamespace(prompt_tokens=15_000, completion_tokens=3_000),
+    )
+
+
+def _wire(monkeypatch, openai_create: AsyncMock):
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "XAI_API_KEY", "xai-test")
+    monkeypatch.setattr(config, "OPENAI_ADMIN_DIGEST_MODEL", "gpt-6.1-sol")
+    openai_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=openai_create)))
+    grok_client, grok_create = _fake_client("Разбор прежним бэкендом.")
+    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: openai_client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: grok_client)
+    return grok_create
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("boom 500"), "empty"])
+async def test_openai_failure_or_empty_falls_back(fresh_db, monkeypatch, caplog, failure):
+    """Любая ошибка или пустой ответ — разбор дня пишет прежний бэкенд, без
+    повтора на OpenAI; ошибка в логе с типом и текстом."""
+    create = AsyncMock(side_effect=failure) if failure != "empty" else AsyncMock(return_value=_ok("  "))
+    grok_create = _wire(monkeypatch, create)
+
+    with caplog.at_level("WARNING", logger=ai_trainer.logger.name):
+        text = await ai_trainer.behaviour_digest("сводка")
+
+    assert text == "Разбор прежним бэкендом."
+    assert create.await_count == 1
+    assert grok_create.call_args.kwargs["model"] == config.GROK_MODEL
+    log = "\n".join(r.getMessage() for r in caplog.records)
+    if failure == "empty":
+        assert "empty answer" in log
+        assert await _cost_models() == [("gpt-6.1-sol", "admin"), (config.GROK_MODEL, "admin")]
+    else:
+        assert "RuntimeError: boom 500" in log
+        assert await _cost_models() == [(config.GROK_MODEL, "admin")]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_reasoning_effort_retried_once_without_it(fresh_db, monkeypatch, caplog):
+    err = RuntimeError("Error code: 400 - Unsupported parameter: 'reasoning_effort' is not supported with this model.")
+    create = AsyncMock(side_effect=[err, _ok("Разбор без effort.")])
+    grok_create = _wire(monkeypatch, create)
+
+    with caplog.at_level("WARNING", logger=ai_trainer.logger.name):
+        text = await ai_trainer.behaviour_digest("сводка")
+
+    assert text == "Разбор без effort."
+    assert create.await_count == 2
+    assert "extra_body" in create.await_args_list[0].kwargs
+    retry = create.await_args_list[1].kwargs
+    assert retry["model"] == "gpt-6.1-sol" and "extra_body" not in retry
+    grok_create.assert_not_called()
+    assert "retrying without it" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_unsupported_reasoning_effort_retry_failure_falls_back(fresh_db, monkeypatch):
+    err = RuntimeError("reasoning_effort does not support value 'medium'")
+    create = AsyncMock(side_effect=[err, RuntimeError("still broken")])
+    grok_create = _wire(monkeypatch, create)
+
+    assert await ai_trainer.behaviour_digest("сводка") == "Разбор прежним бэкендом."
+    assert create.await_count == 2
+    grok_create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_other_400_is_not_retried_on_openai(fresh_db, monkeypatch):
+    create = AsyncMock(side_effect=RuntimeError("Error code: 400 - max_completion_tokens too large"))
+    grok_create = _wire(monkeypatch, create)
+
+    assert await ai_trainer.behaviour_digest("сводка") == "Разбор прежним бэкендом."
+    assert create.await_count == 1
+    grok_create.assert_awaited_once()

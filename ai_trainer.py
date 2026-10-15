@@ -763,7 +763,7 @@ def _get_audio_client() -> AsyncOpenAI:
 # Не переключаются: живой поиск (xAI gRPC, GROK_SEARCH_MODEL — это инструмент
 # xAI), разбор видео (Novita), расшифровка голоса и разбор импорта (strict-схемы
 # на Luna не проверены, шаг разовый). Суточный разбор лога для админа — своей
-# моделью OpenAI (config.OPENAI_ADMIN_DIGEST_MODEL, _behaviour_digest_request).
+# моделью OpenAI (config.OPENAI_ADMIN_DIGEST_MODEL, behaviour_digest).
 
 _openai_chat_client: Optional[AsyncOpenAI] = None
 
@@ -2109,30 +2109,55 @@ BEHAVIOUR_DIGEST_SYSTEM_PROMPT = """\
 _BEHAVIOUR_DIGEST_MAX_TOKENS = 1200
 
 
-def _behaviour_digest_request() -> Optional[tuple[AsyncOpenAI, dict[str, Any]]]:
-    """Клиент и параметры суточного разбора: старшая модель OpenAI
-    (config.OPENAI_ADMIN_DIGEST_MODEL), а без OPENAI_API_KEY — прежний бэкенд с
-    предупреждением, чтобы разбор не пропал молча. None — не настроено ничего.
-
-    Без инструментов, поэтому chat/completions принимает reasoning_effort (400
-    бывает только на инструментах вместе с ним, см. _responses_round). Размышления
-    у OpenAI съедают тот же max_completion_tokens — отсюда запас сверху.
-    """
-    if config.OPENAI_API_KEY:
-        effort = config.OPENAI_ADMIN_DIGEST_REASONING_EFFORT
-        return _get_openai_chat_client(), {
-            "model": config.OPENAI_ADMIN_DIGEST_MODEL,
-            "max_completion_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS + _reasoning_headroom(effort),
-            "extra_body": {"reasoning_effort": effort},
-        }
-    if not is_configured():
-        return None
-    logger.warning("OPENAI_API_KEY is not set — admin behaviour digest falls back to %s", config.GROK_MODEL)
+def _grok_digest_request() -> tuple[AsyncOpenAI, dict[str, Any]]:
+    """Прежний бэкенд разбора — запасной путь, когда OpenAI нет или он не ответил."""
     return _get_client(), {
         "model": config.GROK_MODEL,
         "max_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS,
         "extra_body": {"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
     }
+
+
+def _openai_digest_request(*, with_effort: bool = True) -> tuple[AsyncOpenAI, dict[str, Any]]:
+    """Старшая модель OpenAI (config.OPENAI_ADMIN_DIGEST_MODEL), chat/completions
+    без инструментов. Размышления у OpenAI съедают тот же max_completion_tokens —
+    отсюда запас сверху. with_effort=False — повтор без reasoning_effort, когда
+    модель прямо сказала, что параметр не поддерживает."""
+    effort = config.OPENAI_ADMIN_DIGEST_REASONING_EFFORT
+    kwargs: dict[str, Any] = {
+        "model": config.OPENAI_ADMIN_DIGEST_MODEL,
+        "max_completion_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS + _reasoning_headroom(effort),
+    }
+    if with_effort:
+        kwargs["extra_body"] = {"reasoning_effort": effort}
+    return _get_openai_chat_client(), kwargs
+
+
+def _says_reasoning_effort_unsupported(exc: BaseException) -> bool:
+    """Ошибка прямо называет reasoning_effort неподдерживаемым — только тогда
+    есть смысл один раз повторить без него. Остальное — сразу запасной путь."""
+    msg = str(exc).lower()
+    return "reasoning_effort" in msg and any(
+        w in msg for w in ("not supported", "unsupported", "does not support", "not support")
+    )
+
+
+async def _digest_attempt(
+    request: tuple[AsyncOpenAI, dict[str, Any]], messages: list[dict[str, Any]]
+) -> Optional[str]:
+    """Один платный вызов разбора: текст или None на пустом ответе. Исключения — наверх."""
+    client, kwargs = request
+    response = await paid_call(
+        None, None,
+        # Без conv-id и ключа кэша: вызов раз в сутки, кэшу входа нечего тут
+        # ловить, а чужой слот занимать незачем.
+        lambda: client.chat.completions.create(**kwargs, messages=messages),
+        model=kwargs["model"],
+        messages=messages,
+        source="admin",
+    )
+    text = (response.choices[0].message.content or "").strip()
+    return text or None
 
 
 async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Optional[str]:
@@ -2154,31 +2179,45 @@ async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Option
     # Суточный разбор для админа — платный вызов без квоты: на HARD-стопе молчит.
     if await ai_limits.hard_stop_block() is not None:
         return None
-    request = _behaviour_digest_request()
-    if request is None:
+    messages = [
+        {"role": "system", "content": BEHAVIOUR_DIGEST_SYSTEM_PROMPT},
+        *([{"role": "user", "content": memory}] if memory else []),
+        {"role": "user", "content": summary},
+    ]
+    # Старшая модель OpenAI живым вызовом не проверена — поэтому падение или
+    # пустой ответ не роняют разбор дня, а отдают его прежнему бэкенду. Повтор
+    # без reasoning_effort — ровно один и только когда ошибка прямо называет
+    # этот параметр неподдерживаемым.
+    if config.OPENAI_API_KEY:
+        model = config.OPENAI_ADMIN_DIGEST_MODEL
+        try:
+            try:
+                text = await _digest_attempt(_openai_digest_request(), messages)
+            except Exception as exc:
+                if not _says_reasoning_effort_unsupported(exc):
+                    raise
+                logger.warning(
+                    "Admin behaviour digest on %s: reasoning_effort unsupported (%s: %s) — retrying without it",
+                    model, type(exc).__name__, exc,
+                )
+                text = await _digest_attempt(_openai_digest_request(with_effort=False), messages)
+            if text:
+                return text
+            logger.warning("Admin behaviour digest on %s: empty answer — falling back to %s", model, config.GROK_MODEL)
+        except Exception as exc:
+            logger.warning(
+                "Admin behaviour digest on %s failed (%s: %s) — falling back to %s",
+                model, type(exc).__name__, exc, config.GROK_MODEL, exc_info=True,
+            )
+    elif is_configured():
+        logger.warning("OPENAI_API_KEY is not set — admin behaviour digest falls back to %s", config.GROK_MODEL)
+    if not is_configured():
         return None
-    client, kwargs = request
     try:
-        response = await paid_call(
-            None, None,
-            lambda: client.chat.completions.create(
-                **kwargs,
-                # Без conv-id и ключа кэша: вызов раз в сутки, кэшу входа нечего
-                # тут ловить, а чужой слот занимать незачем.
-                messages=[
-                    {"role": "system", "content": BEHAVIOUR_DIGEST_SYSTEM_PROMPT},
-                    *([{"role": "user", "content": memory}] if memory else []),
-                    {"role": "user", "content": summary},
-                ],
-            ),
-            model=kwargs["model"],
-            source="admin",
-        )
+        return await _digest_attempt(_grok_digest_request(), messages)
     except Exception:
         logger.exception("Admin behaviour digest generation failed")
         return None
-    text = (response.choices[0].message.content or "").strip()
-    return text or None
 
 
 IMPORT_OVERVIEW_SYSTEM_PROMPT = """\
