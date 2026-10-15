@@ -174,43 +174,307 @@ def _light_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _trim_wire_history(
-    history: list[dict[str, Any]], max_chars: int
-) -> list[dict[str, Any]]:
-    """Обрезать историю с начала, не сломав структуру запроса.
+# ---------- окно истории: обрезка ступенькой и сводка выброшенного ----------
+#
+# История разговора уезжает модели целиком (см. ask, on_wire), а кэш входа у
+# обоих провайдеров живёт только на НЕИЗМЕННОМ префиксе. Раньше её резали
+# впритык к config.AI_WIRE_HISTORY_MAX_CHARS: выкидывали самые старые ходы ровно
+# до влезания. История после этого стояла у самого лимита, следующий ход снова
+# его переступал — и обрезка, а с ней промах по всему запросу, повторялась на
+# КАЖДОМ вопросе. Прод: Grok 66214 токенов, из кэша 384 — $0.135 за ответ вместо
+# ~$0.02.
+#
+# Теперь режем ступенькой. Пока история ниже верхнего порога
+# (AI_WIRE_HISTORY_MAX_CHARS), её не трогает никто, и каждый ход ДОПИСЫВАЕТ к
+# тому, что уже в кэше. Переступила — режем сразу до нижнего
+# (AI_WIRE_HISTORY_TRIM_TO_CHARS, ~57% верхнего): платим одним промахом, зато
+# следующие несколько ходов снова идут по кэшу.
+#
+# Точку среза отдельно хранить не нужно: окно — это и есть сохранённая
+# история. Её снимок пишет вызывающая сторона (бот — ai_history в FSM-файле,
+# /v1 — ai_conversation_turns.wire_json), и следующий ход начинается ровно с
+# того же начала, пока снова не упрётся в верхний порог.
+#
+# Выброшенное не пропадает молча: дешёвый вызов (quick, без инструментов)
+# сжимает его в заметку на 600–1200 символов — травмы, цели, договорённости, что
+# обещал тренер, — и она встаёт первым сообщением окна. Заметка не меняется до
+# следующего среза, иначе это снова промах. Следующий срез сжимает
+# «старая заметка + новый выброшенный кусок» в одну.
 
-    Резать где попало нельзя: сообщение role="tool" без своего
-    assistant(tool_calls) выше — невалидный запрос, и API отвергнет его целиком.
-    Поэтому режем ТОЛЬКО по границам, где следующее сообщение — user: там
-    начинается новый ход, и всё, что от него идёт, самодостаточно.
+# Ключ, которым помечена заметка в истории. Провайдерам он не уходит:
+# _wire_messages снимает его для grok, _responses_input собирает элементы Luna
+# только из role/content.
+HISTORY_SUMMARY_KEY = "history_summary"
 
-    Любая обрезка ломает префикс и стоит одного промаха кэша, поэтому она редкая:
-    порог держим высоким (config.AI_WIRE_HISTORY_MAX_CHARS).
+# Заметка — системное сообщение: это контекст для тренера, а не его реплика, и
+# так её принимают оба провайдера в середине разговора (так же едут наблюдения
+# по видео). Заголовок — фиксированный, без даты и прочего меняющегося.
+_HISTORY_SUMMARY_HEADER = (
+    "Заметка о начале этого разговора: ранние сообщения убраны из контекста, "
+    "вместо них — эта выжимка. Цифры дневника бери инструментами, как обычно."
+)
+
+HISTORY_SUMMARY_SYSTEM_PROMPT = """\
+Ты ведёшь рабочие заметки AI-тренера из Telegram-бота дневника силовых
+тренировок. Начало длинного разговора тренера с атлетом сейчас уберут из
+контекста, и дальше тренер будет видеть вместо него только твою заметку.
+Собери её из прошлой заметки (если она есть) и выброшенного куска переписки.
+
+Сохрани то, чего нет в дневнике тренировок и что нельзя достать заново:
+- травмы, боли, ограничения, самочувствие;
+- цели и сроки, предпочтения: оборудование, дни, время, что нравится, что нет;
+- решения по программе и упражнениям, о которых договорились, и почему;
+- что тренер обещал или предложил сделать дальше, о чём атлет просил;
+- вопросы, которые остались открытыми.
+
+Не переписывай цифры дневника (подходы, веса, объём) — тренер возьмёт их
+инструментами. Не выдумывай: только то, что прямо есть в прошлой заметке или в
+переписке. Если что-то позже отменили или поменяли — оставь только итог.
+
+Формат: короткие пункты через «- », без заголовков и markdown, без обращений,
+600–1200 символов и никак не длиннее 1200. Нечего сохранять — один пункт
+о том, о чём говорили.
+"""
+
+# Сколько символов одной реплики показываем сводке и сколько всего. Результаты
+# инструментов не показываем вовсе: это данные дневника, их тренер достанет
+# заново, а по объёму они — бо́льшая часть истории.
+_SUMMARY_MESSAGE_MAX_CHARS = 2000
+_SUMMARY_TOOL_ARGS_MAX_CHARS = 400
+_SUMMARY_INPUT_MAX_CHARS = 60000
+# Жёсткий потолок на заметку: модель попросили не длиннее 1200, но окно не
+# должно зависеть от того, послушалась ли она.
+_SUMMARY_MAX_CHARS = 1500
+
+
+def _is_history_summary(message: dict[str, Any]) -> bool:
+    return bool(message.get(HISTORY_SUMMARY_KEY))
+
+
+def _history_summary_message(text: str) -> dict[str, Any]:
+    return {"role": "system", "content": f"{_HISTORY_SUMMARY_HEADER}\n{text}", HISTORY_SUMMARY_KEY: True}
+
+
+def _history_summary_text(message: dict[str, Any]) -> str:
+    """Текст заметки без заголовка — для следующего сжатия."""
+    content = message.get("content") or ""
+    if content.startswith(_HISTORY_SUMMARY_HEADER):
+        content = content[len(_HISTORY_SUMMARY_HEADER):]
+    return content.strip()
+
+
+def _message_wire_chars(backend: Optional["ChatBackend"], message: dict[str, Any]) -> int:
+    """Сколько символов это сообщение займёт в запросе к ЭТОМУ бэкенду.
+
+    Luna получает не chat-форму, а элементы Responses (_responses_input): сырой
+    output хода с зашифрованным рассуждением ВМЕСТО текста ответа. Grok — chat-
+    форму без полей Luna. Мерить сохранённый словарь целиком значило бы считать
+    ход Luna дважды (текст и его же копию в output) и резать раньше, чем надо.
     """
-    def size(msgs: list[dict[str, Any]]) -> int:
-        return len(json.dumps(msgs, ensure_ascii=False))
+    if backend is not None and backend.is_openai:
+        payload: Any = _responses_input([message])
+    else:
+        payload = {k: v for k, v in message.items() if k not in (OPENAI_OUTPUT_KEY, HISTORY_SUMMARY_KEY)}
+    return len(json.dumps(payload, ensure_ascii=False)) + 1
 
-    if size(history) <= max_chars:
-        return history
-    # Границы ходов — индексы user-сообщений, кроме нулевого: срезать до самого
-    # начала бессмысленно, это уже пустая история.
-    starts = [i for i, m in enumerate(history) if m.get("role") == "user" and i > 0]
+
+def _turn_starts(history: list[dict[str, Any]]) -> list[int]:
+    """Индексы, с которых можно начать окно, не сломав запрос.
+
+    Начало хода — вопрос атлета (role=user) вместе с системными вставками прямо
+    перед ним (наблюдения по видео, находки поиска едут перед вопросом своего
+    хода). Внутри хода резать нельзя: tool без своего assistant(tool_calls) —
+    у xAI и OpenAI это ошибка всего запроса, а у Luna рассуждение едет в том же
+    assistant-сообщении, что и вызов (OPENAI_OUTPUT_KEY), и от него не отрывается.
+    На всякий случай проверяем и явно: каждый tool в окне должен иметь свой
+    вызов в том же окне. Нулевой индекс не берём — срез с самого начала ничего не
+    выбрасывает.
+    """
+    starts: list[int] = []
+    for i, m in enumerate(history):
+        if m.get("role") != "user":
+            continue
+        j = i
+        while j > 0 and history[j - 1].get("role") == "system" and not _is_history_summary(history[j - 1]):
+            j -= 1
+        if j > 0 and _self_contained(history[j:]):
+            starts.append(j)
+    return starts
+
+
+def _self_contained(messages: list[dict[str, Any]]) -> bool:
+    called: set[str] = set()
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            called.add(tc.get("id") or "")
+        if m.get("role") == "tool" and (m.get("tool_call_id") or "") not in called:
+            return False
+    return True
+
+
+def _plan_step_trim(
+    history: list[dict[str, Any]],
+    backend: Optional["ChatBackend"],
+    upper: int,
+    lower: int,
+) -> Optional[tuple[Optional[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]]:
+    """Нужен ли срез — и если да, (старая заметка, выбрасываемое, остающееся).
+
+    None — окно не трогаем: оно ниже верхнего порога (или резать негде — один
+    огромный ход). Остающееся — самый длинный хвост из целых ходов, который
+    влезает в нижний порог; не влезает даже последний ход — остаётся он один:
+    резать внутрь хода нельзя, а пустая история потеряла бы разговор совсем.
+    """
+    sizes = [_message_wire_chars(backend, m) for m in history]
+    if sum(sizes) + 2 <= upper:
+        return None
+    old_summary = history[0] if history and _is_history_summary(history[0]) else None
+    body = history[1:] if old_summary is not None else history
+    body_sizes = sizes[1:] if old_summary is not None else sizes
+    starts = _turn_starts(body)
+    if not starts:
+        logger.warning(
+            "AI trainer history: даже один ход больше лимита (%s символов), резать негде",
+            sum(body_sizes),
+        )
+        return None
+    cut = starts[-1]
     for start in starts:
-        candidate = history[start:]
-        if size(candidate) <= max_chars:
-            logger.info(
-                "AI trainer wire history trimmed: %s сообщений → %s (лимит %s символов)",
-                len(history), len(candidate), max_chars,
+        if sum(body_sizes[start:]) + 2 <= lower:
+            cut = start
+            break
+    return old_summary, body[:cut], body[cut:]
+
+
+def _summary_transcript(messages: list[dict[str, Any]]) -> str:
+    """Выброшенный кусок — текстом для сводки: реплики и вызовы, без данных."""
+
+    def clip(text: str, limit: int) -> str:
+        text = text.strip()
+        return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+    lines: list[str] = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, list):
+            text = " ".join(
+                p.get("text") or "" for p in content if isinstance(p, dict) and p.get("type") == "text"
             )
-            return candidate
-    # Даже последний ход не влезает — оставляем его одного: обрезать внутрь хода
-    # нельзя, а отдать пустую историю значит потерять контекст разговора совсем.
-    last = history[starts[-1]:] if starts else history
-    logger.warning(
-        "AI trainer wire history: даже последний ход больше лимита (%s символов), оставляю как есть",
-        size(last),
+        else:
+            text = content or ""
+        if role == "user" and text.strip():
+            lines.append(f"Атлет: {clip(text, _SUMMARY_MESSAGE_MAX_CHARS)}")
+        elif role == "assistant":
+            if text.strip():
+                lines.append(f"Тренер: {clip(text, _SUMMARY_MESSAGE_MAX_CHARS)}")
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                lines.append(
+                    f"[тренер вызвал {fn.get('name') or '?'}: "
+                    f"{clip(fn.get('arguments') or '{}', _SUMMARY_TOOL_ARGS_MAX_CHARS)}]"
+                )
+        elif role == "system" and text.strip() and not _is_history_summary(m):
+            lines.append(f"[контекст хода: {clip(text, _SUMMARY_MESSAGE_MAX_CHARS)}]")
+    transcript = "\n".join(lines)
+    if len(transcript) > _SUMMARY_INPUT_MAX_CHARS:
+        # Свежее важнее: давнее уже частично в прошлой заметке.
+        transcript = "…\n" + transcript[-_SUMMARY_INPUT_MAX_CHARS:]
+    return transcript
+
+
+def _clip_summary(text: str) -> str:
+    text = text.strip()
+    if len(text) <= _SUMMARY_MAX_CHARS:
+        return text
+    cut = text[:_SUMMARY_MAX_CHARS]
+    newline = cut.rfind("\n")
+    return (cut[:newline] if newline > _SUMMARY_MAX_CHARS // 2 else cut).rstrip()
+
+
+async def _summarize_dropped(
+    user_id: Optional[int],
+    backend: "ChatBackend",
+    previous: Optional[str],
+    dropped: list[dict[str, Any]],
+) -> Optional[str]:
+    """Сжать «прошлая заметка + выброшенный кусок» в новую заметку, или None.
+
+    Текущая модель атлета, quick-глубина, без инструментов, свой слот кэша
+    (scope) — чтобы не вытеснять разговор. Платный вызов — через paid_call: цена
+    в лог, оборванный таймаутом — оценкой. Личной квоты у шага нет (вопрос уже
+    списан этим ходом), поэтому kind=None, а HARD-стоп по деньгам проверяем сами,
+    как у других системных шагов. Любой сбой — None: срез всё равно состоится,
+    ответ атлету из-за заметки не ждёт.
+    """
+    transcript = _summary_transcript(dropped)
+    if not transcript and not previous:
+        return None
+    if await ai_limits.hard_stop_block() is not None:
+        logger.warning("AI trainer history summary skipped for user %s: HARD-стоп по деньгам", user_id)
+        return None
+    parts = []
+    if previous:
+        parts.append(f"Прошлая заметка:\n{previous}")
+    parts.append(f"Выброшенный кусок переписки:\n{transcript or '—'}")
+    messages = [
+        {"role": "system", "content": _with_language_tail(HISTORY_SUMMARY_SYSTEM_PROMPT)},
+        {"role": "user", "content": "\n\n".join(parts)},
+    ]
+    try:
+        response = await asyncio.wait_for(
+            paid_call(
+                user_id, None,
+                lambda: backend.client.chat.completions.create(
+                    **_model_kwargs(backend, user_id, max_tokens=700, quick=True, scope="history_summary"),
+                    messages=messages,
+                ),
+                model=backend.model,
+                messages=messages,
+            ),
+            timeout=config.AI_HISTORY_SUMMARY_TIMEOUT_SECONDS,
+        )
+        text = _clip_summary(response.choices[0].message.content or "")
+    except Exception:
+        logger.warning("AI trainer history summary failed for user %s, trimming without it", user_id, exc_info=True)
+        return None
+    return text or None
+
+
+async def _step_trimmed_history(
+    user_id: Optional[int],
+    history: list[dict[str, Any]],
+    backend: Optional["ChatBackend"],
+) -> list[dict[str, Any]]:
+    """Окно истории для этого хода: та же история, пока она ниже верхнего
+    порога (тем же объектом — префикс не трогаем), или срез ступенькой с
+    заметкой о выброшенном (см. комментарий над HISTORY_SUMMARY_KEY)."""
+    plan = _plan_step_trim(
+        history, backend, config.AI_WIRE_HISTORY_MAX_CHARS, config.AI_WIRE_HISTORY_TRIM_TO_CHARS,
     )
-    return last
+    if plan is None:
+        return history
+    old_summary, dropped, kept = plan
+    previous = _history_summary_text(old_summary) if old_summary is not None else None
+    summary = (
+        await _summarize_dropped(user_id, backend, previous, dropped) if backend is not None else None
+    )
+    if summary:
+        head = [_history_summary_message(summary)]
+    elif old_summary is not None:
+        # Новую заметку собрать не вышло — старая всё равно правда о ещё более
+        # раннем куске, выбрасывать её незачем.
+        head = [old_summary]
+    else:
+        head = []
+    window = head + kept
+    logger.info(
+        "AI trainer history step-trim %s→%s, summary %s chars (user %s, %s→%s символов)",
+        len(history), len(window), len(summary or ""), user_id,
+        sum(_message_wire_chars(backend, m) for m in history),
+        sum(_message_wire_chars(backend, m) for m in window),
+    )
+    return window
 
 
 async def _log_server_tool_calls(user_id: Optional[int], response: Any) -> None:
@@ -633,15 +897,19 @@ def _wire_messages(backend: ChatBackend, messages: list[dict[str, Any]]) -> list
     (Главный цикл Luna сюда не ходит — он собирает input Responses API сам,
     _responses_input; это для quick-вызовов на chat/completions.)
     """
+    # Пометка заметки о начале разговора (HISTORY_SUMMARY_KEY) — наша, не
+    # провайдера: не уходит никому.
     if not backend.is_openai:
         # Сырые элементы Responses API (OPENAI_OUTPUT_KEY) — поле Luna-хода:
         # атлет переключился обратно на grok — снимаем. В истории без Luna-ходов
-        # список уходит тем же объектом, как всегда.
-        if not any(OPENAI_OUTPUT_KEY in m for m in messages):
+        # и без заметки список уходит тем же объектом, как всегда.
+        private = (OPENAI_OUTPUT_KEY, HISTORY_SUMMARY_KEY)
+        if not any(key in m for m in messages for key in private):
             return messages
-        return [{k: v for k, v in m.items() if k != OPENAI_OUTPUT_KEY} for m in messages]
+        return [{k: v for k, v in m.items() if k not in private} for m in messages]
+    private = ("reasoning_content", HISTORY_SUMMARY_KEY)
     return [
-        {k: v for k, v in m.items() if k != "reasoning_content"} if "reasoning_content" in m else m
+        {k: v for k, v in m.items() if k not in private} if any(key in m for key in private) else m
         for m in messages
     ]
 
@@ -7099,6 +7367,9 @@ async def _ask_plain(
 ) -> str:
     # Один бэкенд на весь ход: все раунды и объяснение программы — им (см. ask).
     client = backend if backend is not None else await chat_backend(user_id)
+    # Окно истории — до сборки запроса: ниже верхнего порога это та же история
+    # тем же объектом, выше — срез ступенькой с заметкой (см. HISTORY_SUMMARY_KEY).
+    history = await _step_trimmed_history(user_id, history, client)
     # Шапка запроса: общий системный промпт и — в режиме «программа атлету» —
     # заметка режима вторым системным сообщением. В историю (on_wire) шапка не
     # входит: она собирается заново на каждом ходе и байт-в-байт одинакова
@@ -7253,7 +7524,9 @@ async def _ask_plain(
             for m in wire:
                 if m.get("role") == "user" and not isinstance(m.get("content"), str):
                     m["content"] = question_with_date
-        await on_wire(_trim_wire_history(wire, config.AI_WIRE_HISTORY_MAX_CHARS))
+        # Окно уже нарезано в начале хода (_step_trimmed_history): здесь
+        # сохраняем ровно то, что уехало, — следующий ход допишет к нему.
+        await on_wire(wire)
 
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
 
