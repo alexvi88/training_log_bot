@@ -472,7 +472,7 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 # Живой поиск для Luna-аккаунтов — Responses API со встроенным web_search (у xAI
 # свой gRPC-путь, GROK_SEARCH_MODEL). По умолчанию та же модель, что отвечает.
 OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "") or OPENAI_CHAT_MODEL
-# Главный ответ с инструментами — low, как у grok (GROK_REASONING_EFFORT).
+# Главный ответ с инструментами — medium (у grok — GROK_REASONING_EFFORT, low).
 # Быстрые шаги (гейт, комментарий, дайджест, разбор поста, сводка тренера) —
 # none: в отличие от xAI, OpenAI это значение принимает, а размышления у OpenAI
 # съедают тот же max_completion_tokens, что и ответ, — на наших потолках в
@@ -483,13 +483,16 @@ OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "") or OPENAI_CHAT_MODEL
 # ступени; вызов длиннее порога только пишет предупреждение в лог
 # (ai_trainer._log_llm_cost) — тогда расчёт занижает.
 OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000"))
-# Главный цикл — low: он идёт через Responses API (ai_trainer._responses_round),
-# потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
+# Главный цикл — medium (решение владельца, 2026-10): на low Luna смешивала
+# подходы разного веса и сочиняла «застой» по сырому списку. medium дороже по
+# выходу (размышления — в output_tokens) и отвечает дольше; запас под
+# размышления — ai_trainer._reasoning_headroom. Цикл идёт через Responses API
+# (ai_trainer._responses_round), потому что в /v1/chat/completions gpt-6-luna не принимает инструменты вместе
 # с reasoning_effort (400 «Function tools with reasoning_effort are not
 # supported … use /v1/responses or set reasoning_effort to 'none'»). Тем же
 # значением рассуждает и живой поиск Luna (тоже Responses). Quick-вызовы без
 # инструментов остаются на chat/completions с none (см. выше).
-OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low")
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
 
 # Короткие токены выбора модели тренера (users.ai_model). Первый — по умолчанию.

@@ -514,3 +514,128 @@ def test_bodyweight_exercise_is_judged_by_reps_alone():
 
     assert verdict.kind == "double_progression"
     assert verdict.weeks_weight_flat is None
+
+
+# ---------- факты для тренера: повторы на одном весе, тренд, прибавка ----------
+
+_FACTS_TODAY = dt.date(2026, 10, 15)
+
+
+def _dated(sessions):
+    return [
+        SessionStats(i + 1, f"{day}T10:00:00", [SetRow(w, r) for w, r in sets])
+        for i, (day, sets) in enumerate(sessions)
+    ]
+
+
+_CURLS = _dated([
+    ("2026-08-26", [(73, 9), (73, 10)]),
+    ("2026-08-30", [(73, 11)]),
+    ("2026-09-18", [(77, 6), (73, 12)]),
+    ("2026-10-08", [(77, 7)]),
+])
+
+
+def test_reps_at_the_top_weight_ignore_heavier_rep_sets_on_a_lighter_weight():
+    """«77×6, 73×12» в одной сессии: повторы на 77 — шесть, а не двенадцать."""
+    verdict = analytics.classify_stall(_CURLS, _FACTS_TODAY)
+
+    assert (verdict.reps_at_top_first, verdict.reps_at_top_last) == (6, 7)
+    assert verdict.weight_since == "2026-09-18"
+    assert verdict.sessions_at_top_weight == 2
+    # Между первым и последним появлением 77, а не до сегодня.
+    assert verdict.weeks_weight_flat == 2.9
+
+
+def test_same_weight_reps_split_by_weight():
+    rows = {r["weight"]: r for r in analytics.same_weight_reps(_CURLS)}
+
+    assert rows[77] == {"weight": 77, "reps": [["2026-09-18", 6], ["2026-10-08", 7]],
+                        "change": "up"}
+    assert rows[73]["reps"] == [["2026-08-26", 10], ["2026-08-30", 11], ["2026-09-18", 12]]
+    assert [r["weight"] for r in analytics.same_weight_reps(_CURLS)] == [77, 73]
+
+
+def test_same_weight_reps_reports_a_real_drop_on_one_weight():
+    rows = analytics.same_weight_reps(_dated([
+        ("2026-09-01", [(100, 8)]), ("2026-09-08", [(100, 6)]),
+    ]))
+
+    assert rows == [{"weight": 100, "reps": [["2026-09-01", 8], ["2026-09-08", 6]],
+                     "change": "down"}]
+
+
+def test_same_weight_reps_skip_warmups_and_one_off_weights():
+    """Разминка на 50% не рабочий вес; вес, бывший один раз, сравнивать не с чем."""
+    rows = analytics.same_weight_reps(_dated([
+        ("2026-09-01", [(50, 10), (100, 5)]),
+        ("2026-09-08", [(50, 10), (105, 5)]),
+        ("2026-09-15", [(50, 10), (110, 5)]),
+    ]))
+
+    assert rows == []
+
+
+def test_facts_on_a_single_session():
+    facts = analytics.progress_facts(
+        _dated([("2026-10-08", [(77, 7)])]), _FACTS_TODAY, "kg", recent=10)
+
+    assert facts["same_weight_reps"] == []
+    assert facts["weight_increase"] is None
+    assert facts["stall"]["stalled"] is None
+    assert "1 sessions" in facts["stall"]["why"]
+    assert facts["e1rm_trend"]["slope_per_week"] is None
+    assert facts["e1rm_trend"]["four_weeks_ago"] is None
+
+
+def test_weight_changing_every_session_has_no_same_weight_pairs_but_a_trend():
+    sessions = _dated([
+        ("2026-09-10", [(100, 5)]), ("2026-09-17", [(102.5, 5)]),
+        ("2026-09-24", [(105, 5)]), ("2026-10-01", [(107.5, 5)]),
+        ("2026-10-08", [(110, 5)]),
+    ])
+    facts = analytics.progress_facts(sessions, _FACTS_TODAY, "kg", recent=10)
+
+    assert facts["same_weight_reps"] == []
+    assert facts["weight_increase"]["date"] == "2026-10-08"
+    assert facts["weight_increase"]["step"] == 2.5
+    assert facts["e1rm_trend"]["slope_per_week"] > analytics.STALL_SLOPE_EPS
+    assert facts["e1rm_trend"]["change_vs_four_weeks_ago"] > 0
+    assert facts["stall"]["stalled"] is False
+    assert facts["stall"]["verdict"] == "growing"
+
+
+def test_e1rm_trend_compares_with_the_session_four_weeks_back():
+    trend = analytics.e1rm_trend(_CURLS, _FACTS_TODAY)
+
+    assert trend["latest"] == ["2026-10-08", 95.0]
+    assert trend["four_weeks_ago"] == ["2026-08-30", 99.8]
+    assert trend["change_vs_four_weeks_ago"] == -4.8
+    assert trend["sessions_in_window"] == 4
+
+
+def test_flat_weight_and_reps_reads_as_a_stall_with_the_date():
+    sessions = _dated([(d, [(100, 8)]) for d in
+                       ("2026-09-10", "2026-09-17", "2026-09-24", "2026-10-01", "2026-10-08")])
+    facts = analytics.progress_facts(sessions, _FACTS_TODAY, "kg", recent=10)
+
+    assert facts["stall"]["stalled"] is True
+    assert facts["stall"]["verdict"] == "dead_end"
+    assert facts["stall"]["top_weight_since"] == "2026-09-10"
+    assert facts["same_weight_reps"][0]["change"] == "flat"
+    assert facts["weight_increase"] is None
+
+
+def test_bodyweight_exercise_facts_are_reps_only():
+    sessions = _dated([(d, [(0, r)]) for d, r in
+                       (("2026-09-17", 20), ("2026-09-24", 22),
+                        ("2026-10-01", 25), ("2026-10-08", 28))])
+    facts = analytics.progress_facts(sessions, _FACTS_TODAY, "kg", recent=10)
+
+    assert facts["e1rm_trend"] is None
+    assert facts["weight_increase"] is None
+    assert facts["same_weight_reps"][0]["weight"] == 0
+    assert facts["same_weight_reps"][0]["change"] == "up"
+    assert facts["stall"]["verdict"] == "double_progression"
+    assert facts["stall"]["top_weight_since"] is None
+    assert "bodyweight" in facts["stall"]["why"]
