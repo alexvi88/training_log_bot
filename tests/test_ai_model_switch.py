@@ -291,6 +291,30 @@ async def test_workout_comment_uses_luna_and_logs_its_model(fresh_db, own_accoun
     assert (await db.get_llm_cost_breakdown(_today()))["gpt-6-luna"]["calls"] == 1
 
 
+PHOTO = "data:image/png;base64,iVBORw0KGgo="
+
+
+async def test_fact_check_with_photo_follows_chosen_model(fresh_db, own_accounts, monkeypatch):
+    """Разбор поста с картинкой — той же моделью, что выбрана в профиле: у своего
+    аккаунта на Luna фото уезжает в OpenAI, у чужого — как всегда в grok."""
+    await _users(fresh_db)
+    await db.set_user_ai_model(OWN, "luna")
+    calls: list = []
+    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: _fake_client("luna", calls))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _fake_client("grok", calls))
+
+    await ai_trainer.fact_check_post(OWN, "Пост", PHOTO)
+    await ai_trainer.fact_check_post(STRANGER, "Пост", PHOTO)
+    (own_label, own_kwargs), (stranger_label, stranger_kwargs) = calls
+    assert own_label == "luna" and own_kwargs["model"] == "gpt-6-luna"
+    assert stranger_label == "grok" and stranger_kwargs["model"] == config.GROK_MODEL
+    for kwargs in (own_kwargs, stranger_kwargs):
+        image = kwargs["messages"][-1]["content"][1]
+        assert image == {"type": "image_url", "image_url": {"url": PHOTO}}
+    llm = await db.get_llm_cost_breakdown(_today())
+    assert llm["gpt-6-luna"]["calls"] == 1 and llm[config.GROK_MODEL]["calls"] == 1
+
+
 # ---------- цена ----------
 
 
