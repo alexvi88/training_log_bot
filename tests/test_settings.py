@@ -323,8 +323,10 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     assert "🎯 Подсказки прогрессии: молчу" in off_texts
     assert "🔔 Пуши: шлю" in on_texts
     assert "🔕 Пуши: молчу" in off_texts
-    assert "🤖 Комментарии AI-тренера: комментирую" in on_texts
-    assert "🤖 Комментарии AI-тренера: молчу" in off_texts
+    # Выключенный автокомментарий — не «молчу»: комментарий есть, но по кнопке
+    # под итогами. Включённый — приходит сам сразу после тренировки.
+    assert "🤖 Комментарий тренера: присылаю сразу" in on_texts
+    assert "🤖 Комментарий тренера: пишу по кнопке" in off_texts
     # «КБЖУ: считаю» ушёл вместе с AI-разбором еды — считать больше нечем.
     assert not any("КБЖУ" in t for t in on_texts + off_texts)
     # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
@@ -452,3 +454,32 @@ async def test_profile_screen_listens_to_what_you_type(fresh_db, user_id):
     # Дальше человек уже в разговоре: следующая реплика не должна упереться
     # в «Не понял».
     assert await state.get_state() == AITrainerFlow.chatting.state
+
+
+async def test_ai_comments_toggle_starts_off_and_says_what_changed(fresh_db, user_id):
+    """Новичку автокомментарий выключен: кнопка говорит «по кнопке». Тап
+    включает «присылаю сразу», и всплывашка объясняет, что теперь комментарий
+    придёт сам сразу после тренировки; обратный тап — что он по кнопке."""
+    import i18n
+
+    db = fresh_db
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, "menu:settings")
+    await settings.show_settings(callback, state)
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert i18n.t_in("ru", "btn.ai_comments_off") in labels
+
+    callback = _make_callback(user_id, "settings:ai_comments")
+    await settings.settings_ai_comments(callback, state)
+    assert (await db.get_user(user_id))["ai_comments_enabled"] == 1
+    callback.answer.assert_awaited_with(i18n.t_in("ru", "settings.ai_comments.toast_on"), show_alert=False)
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert i18n.t_in("ru", "btn.ai_comments_on") in labels
+
+    callback = _make_callback(user_id, "settings:ai_comments")
+    await settings.settings_ai_comments(callback, state)
+    assert (await db.get_user(user_id))["ai_comments_enabled"] == 0
+    callback.answer.assert_awaited_with(i18n.t_in("ru", "settings.ai_comments.toast_off"), show_alert=False)

@@ -214,19 +214,6 @@
     }
    }
   },
-  "AIModelChoiceResponse": {
-   "file": "TrainingLog/Features/Settings/AIModelChoice.swift",
-   "fields": {
-    "aiModel": {
-     "type": "String",
-     "optional": false
-    },
-    "aiModelOptions": {
-     "type": "[String]",
-     "optional": false
-    }
-   }
-  },
   "AIPendingState": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -241,6 +228,11 @@
     "actions": {
      "type": "[AIUndoAction]",
      "optional": true
+    },
+    "turnInFlight": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -2945,16 +2937,6 @@
      "type": "Int",
      "optional": true,
      "default": true
-    },
-    "aiModel": {
-     "type": "String",
-     "optional": true,
-     "default": true
-    },
-    "aiModelOptions": {
-     "type": "[String]",
-     "optional": true,
-     "default": true
     }
    }
   },
@@ -4375,13 +4357,6 @@
    "nullable": false
   },
   {
-   "swift": "APIClient.setAIModel",
-   "method": "PATCH",
-   "path": "/ai/model",
-   "root": "AIModelChoiceResponse",
-   "nullable": false
-  },
-  {
    "swift": "APIClient.aiPending",
    "method": "GET",
    "path": "/ai/pending",
@@ -4400,13 +4375,6 @@
    "method": "POST",
    "path": "/ai/program/train",
    "root": "AITrainResult",
-   "nullable": false
-  },
-  {
-   "swift": "APIClient.answerSetupQuestion",
-   "method": "POST",
-   "path": "/ai/questions/answer",
-   "root": "AIAnswer",
    "nullable": false
   },
   {
@@ -5341,5 +5309,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "4204e286365a7b11aedf12735cafa6d02d9dd9ca"
+ "_ios_commit": "076f05311d6191585c2a064f43d3b79b5838db53"
 }

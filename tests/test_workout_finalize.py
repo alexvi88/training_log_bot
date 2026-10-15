@@ -235,6 +235,64 @@ async def test_ai_comment_placeholder_is_cleared_on_failure(fresh_db, user_id, m
     assert "Разбираю тренировку" not in last_text
 
 
+async def test_new_athlete_gets_comment_button_not_auto_comment(fresh_db, user_id, monkeypatch):
+    """Новичку автокомментарий выключен (users.ai_comments_enabled по умолчанию 0):
+    финиш не зовёт модель и не обещает «Разбираю тренировку…», а под карточкой
+    стоит кнопка «🤖 Комментарий AI-тренера» — комментарий по запросу."""
+    db = fresh_db
+    assert (await db.get_user(user_id))["ai_comments_enabled"] == 0
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    workout_id = await db.create_workout(user_id)
+    await _log_bench_set(db, workout_id, bench, 100, 5)
+
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    model = AsyncMock(return_value="не должен прийти")
+    monkeypatch.setattr(workout.ai_trainer, "comment_on_workout", model)
+
+    bot = _make_bot()
+    state = await _make_state(user_id, workout_id=workout_id)
+    callback = _make_callback(user_id, bot)
+
+    await workout._finalize_workout(callback, state, note=None)
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    await asyncio.gather(*pending)
+
+    kwargs = bot.edit_message_text.await_args_list[0].kwargs
+    assert "Разбираю тренировку" not in kwargs["text"]
+    callbacks = [
+        btn.callback_data for row in kwargs["reply_markup"].inline_keyboard for btn in row
+    ]
+    assert f"ai:comment:{workout_id}" in callbacks
+    model.assert_not_awaited()
+    assert (await db.get_workout(workout_id))["ai_comment"] is None
+
+
+async def test_auto_comment_on_hides_the_button(fresh_db, user_id, monkeypatch):
+    """Включил «присылать сразу» — комментарий пишется сам, и кнопки нет."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    workout_id = await db.create_workout(user_id)
+    await _log_bench_set(db, workout_id, bench, 100, 5)
+    await db.update_user(user_id, ai_comments_enabled=1)
+
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(workout.ai_trainer, "comment_on_workout", AsyncMock(return_value="Хорошо"))
+
+    bot = _make_bot()
+    state = await _make_state(user_id, workout_id=workout_id)
+    callback = _make_callback(user_id, bot)
+
+    await workout._finalize_workout(callback, state, note=None)
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    await asyncio.gather(*pending)
+
+    kb = bot.edit_message_text.await_args_list[0].kwargs["reply_markup"]
+    callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert f"ai:comment:{workout_id}" not in callbacks
+
+
 async def test_background_tasks_are_kept_referenced_until_they_finish(fresh_db, user_id):
     """The event loop holds only weak references to running tasks, so a
     fire-and-forget create_task() can be collected mid-flight — the record
