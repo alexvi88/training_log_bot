@@ -792,7 +792,7 @@ async def test_comment_button_refuses_a_double_tap(fresh_db, user_id, monkeypatc
 
         await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
 
-        callback.answer.assert_awaited_once_with("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        callback.answer.assert_awaited_once_with("Секунду, ещё думаю над прошлым запросом. Повтори через минуту", show_alert=True)
         assert (await dbmod.get_workout(workout_id))["ai_comment"] is None
     finally:
         ai_trainer._busy.discard(user_id)
@@ -1363,7 +1363,7 @@ async def test_ai_build_program_releases_busy_on_a_stale_callback(fresh_db, user
     `_busy` — a stale-button tap ("query is too old", a real TelegramBadRequest)
     made that answer raise, and the finally releasing `_busy` never ran. That
     locked the user out of the AI trainer (every message/photo/voice answered
-    "ещё думаю над прошлым вопросом") for the rest of the process's life."""
+    "ещё думаю над прошлым запросом") for the rest of the process's life."""
     from aiogram.exceptions import TelegramBadRequest
 
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
