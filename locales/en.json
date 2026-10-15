@@ -2559,7 +2559,7 @@
   "coach.ai_chat.exited": "↩️ Back in your conversation — write and we'll pick up where we left off.",
   "coach.ai_chat.assign_btn": "🧑‍🏫 Assign to {name}",
   "coach.ai_chat.saved_assign": "Assign it with the button below and {name} gets it in their programs.",
-  "coach.ai_chat.proposed_note": "The program is shown to the coach as a button under your answer. It's NOT saved yet and hasn't gone to the athlete: say it's waiting for confirmation under the message, and that after \"Grab\" it can be assigned to the athlete right away. weekly_sets_by_group and weekly_sets_by_target are for your own check; don't name volume numbers in your answer, they're shown under the program.",
+  "coach.ai_chat.proposed_note": "The program is shown to the coach as a button under your answer. It's NOT saved yet and hasn't gone to the athlete: say it's waiting for confirmation under the message, and that once the coach saves it, it can be assigned to the athlete right away. weekly_sets_by_group and weekly_sets_by_target are for your own check; don't name volume numbers in your answer, they're shown under the program.",
   "coach.ai_chat.setup_goal": "What does the athlete want out of training?",
   "coach.ai_chat.setup_fresh.days.question": "How many days a week can the athlete train?",
   "coach.ai_chat.setup_fresh.time.question": "How long does the athlete have for one workout?",
