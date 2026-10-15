@@ -36,9 +36,10 @@ LIFT_CANDIDATES = 12
 
 # Фигура «ТЫ» в сцене зала приложения растёт по группам мышц от настоящего
 # объёма: среднее число рабочих подходов в неделю за последние BODY_VOLUME_WEEKS
-# недель. Шесть, а не одна: фигура — накопленное, а не «что было на этой
-# неделе», и пропущенная неделя не должна сдувать её за ночь.
-BODY_VOLUME_WEEKS = 6
+# недель. Восемь, а не одна: фигура — накопленное, а не «что было на этой
+# неделе», и пропущенная неделя не должна сдувать её за ночь. Те же восемь
+# недель — у подходов по группам на карточке «ТЫ», которой делятся (`body_sets`).
+BODY_VOLUME_WEEKS = 8
 # Группы фигуры — машинные ключи встроенных групп (seed_data.muscle_group_slug),
 # в этом порядке и всегда все семь. «Другое» и свои группы атлета в фигуру не
 # идут: у них нет части тела.
@@ -72,6 +73,8 @@ class MenuDashboard:
     lifts_note: str = ""
     #: (ключ группы, подходов в неделю) по BODY_VOLUME_GROUPS — см. body_volume
     body_volume: tuple[tuple[str, float], ...] = ()
+    #: (ключ группы, подходов всего) за те же BODY_VOLUME_WEEKS недель
+    body_sets: tuple[tuple[str, int], ...] = ()
 
 
 async def collect(
@@ -138,6 +141,7 @@ async def collect(
     rank = analytics.rank_for(len(dates), tonnage_kg, per_week)
     gap = analytics.rank_gap(rank, len(dates), tonnage_kg, per_week)
     next_rank = analytics.next_rank(rank) if gap else None
+    sets = await body_sets(user_id, today, tz_offset=tz, exclude_workout_ids=excluded)
     return MenuDashboard(
         headline=formatting.menu_headline(dashboard),
         rank_name=rank.name,
@@ -153,27 +157,25 @@ async def collect(
         lift_tiles=lift_tiles,
         lifts_title=lifts_title,
         lifts_note=formatting.MENU_LIFTS_NOTE,
-        body_volume=await body_volume(
-            user_id, today, tz_offset=tz, exclude_workout_ids=excluded
-        ),
+        body_volume=volume_per_week(sets),
+        body_sets=sets,
     )
 
 
-async def body_volume(
+async def body_sets(
     user_id: int,
     today: dt.date,
     *,
     tz_offset: Optional[int] = None,
     exclude_workout_ids: Iterable[int] = (),
-) -> tuple[tuple[str, float], ...]:
-    """Среднее число рабочих подходов в неделю по семи группам фигуры за
-    последние BODY_VOLUME_WEEKS недель (по сегодня включительно), с одним
-    знаком после запятой.
+) -> tuple[tuple[str, int], ...]:
+    """Рабочих подходов по семи группам фигуры за последние BODY_VOLUME_WEEKS
+    недель (по сегодня включительно).
 
     Тот же счёт подходов, что у панели «ОБЪЁМ ЗА 7 ДНЕЙ» (db.weekly_volume_by_group
-    по exercises.primary_group_id), только окно длиннее и поделено на недели —
-    иначе фигура и панель под ней говорили бы о разных подходах. Группа без
-    подходов — 0.0, а не пропуск: ключи всегда все семь."""
+    по exercises.primary_group_id), только окно длиннее — иначе фигура и
+    панель под ней говорили бы о разных подходах. Группа без подходов — 0, а
+    не пропуск: ключи всегда все семь."""
     start = today - dt.timedelta(days=BODY_VOLUME_WEEKS * 7 - 1)
     counts = await db.weekly_volume_by_group(
         user_id, start.isoformat(), today.isoformat(), tz_offset=tz_offset,
@@ -184,10 +186,13 @@ async def body_volume(
         slug = seed_data.muscle_group_slug(group["name"])
         if slug in BODY_VOLUME_GROUPS:
             sets_by_slug[slug] = sets_by_slug.get(slug, 0) + counts.get(group["id"], 0)
-    return tuple(
-        (slug, round(sets_by_slug.get(slug, 0) / BODY_VOLUME_WEEKS, 1))
-        for slug in BODY_VOLUME_GROUPS
-    )
+    return tuple((slug, sets_by_slug.get(slug, 0)) for slug in BODY_VOLUME_GROUPS)
+
+
+def volume_per_week(sets: tuple[tuple[str, int], ...]) -> tuple[tuple[str, float], ...]:
+    """Подходы за окно → в среднем в неделю, с одним знаком после запятой:
+    по ним растёт фигура «ТЫ»."""
+    return tuple((slug, round(count / BODY_VOLUME_WEEKS, 1)) for slug, count in sets)
 
 
 async def lift_growth(
