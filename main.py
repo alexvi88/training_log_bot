@@ -112,8 +112,31 @@ class SetUserLanguageMiddleware(BaseMiddleware):
                 logger.exception("SetUserLanguageMiddleware: не удалось прочитать пользователя %s", user.id)
                 row = None
             lang = row["lang"] if row is not None else i18n.normalize(user.language_code)
+            await _remember_first_name(user, row)
         i18n.set_lang(lang)
         return await handler(event, data)
+
+
+async def _remember_first_name(user, row) -> None:
+    """Имя из профиля Telegram — в users.first_name, если оно поменялось.
+    Строка уже прочитана для языка, так что сравнение бесплатное, а запись
+    случается раз на смену имени. Им вписывается имя на приглашении тренера
+    в приложении (api_v1_coach.suggested_client_name). Сбой записи апдейт не
+    роняет: имя — подсказка, не данные дневника."""
+    if row is None:
+        return
+    try:
+        stored = row["first_name"]
+    except (IndexError, KeyError):
+        # Подменённая строка в тестах без колонки — молчим.
+        return
+    first_name = (getattr(user, "first_name", None) or "").strip()[:64] or None
+    if first_name is None or stored == first_name:
+        return
+    try:
+        await db.set_user_first_name(user.id, first_name)
+    except Exception:
+        logger.exception("SetUserLanguageMiddleware: failed to store first_name for %s", user.id)
 
 
 class IgnoreStaleCallbackMiddleware(BaseMiddleware):

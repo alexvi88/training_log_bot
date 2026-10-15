@@ -15,6 +15,7 @@ import pytest
 import ai_limits
 import ai_trainer
 import api_v1
+import api_v1_coach
 import apns
 import coach_service
 import config
@@ -90,6 +91,48 @@ async def test_invite_preview_shows_coach_and_what_is_visible_before_consent(fre
     # Превью ничего не открывает: тренер атлета ещё не видит.
     assert (await coach.get("/coach/clients")).json()["clients"] == []
     assert (await coach.get(f"/coach/clients/{CLIENT}")).status_code == 404
+
+
+async def test_invite_preview_suggests_the_name_the_athlete_already_uses(fresh_db):
+    """Поле «Как тебя назвать тренеру» вписано заранее: имя из прошлой связки
+    главнее своего имени тренера, то — главнее имени из Telegram; нечем — null."""
+    coach = await _client(fresh_db, COACH)
+    athlete = await _client(fresh_db, CLIENT)
+    code = (await coach.post("/coach", json={"display_name": "Иван"})).json()["invite"]["code"]
+
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] is None
+    await fresh_db.set_user_first_name(CLIENT, "  Мария ")
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] == "Мария"
+    assert (await athlete.post("/coach", json={"display_name": "Тренер Маша"})).status_code == 200
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] == "Тренер Маша"
+
+    other = await _client(fresh_db, STRANGER)
+    other_code = (await other.post("/coach", json={"display_name": "Пётр"})).json()["invite"]["code"]
+    accepted = await athlete.post(f"/coach/invites/{other_code}/accept", json={"name": "Маша К."})
+    assert accepted.status_code == 201, accepted.text
+    assert (await athlete.get(f"/coach/invites/{code}")).json()["suggested_name"] == "Маша К."
+
+
+async def test_suggested_name_skips_what_accept_would_reject(fresh_db):
+    athlete = await _client(fresh_db, CLIENT)
+    await fresh_db.set_user_first_name(CLIENT, "\x07 \x08")
+    assert await api_v1_coach.suggested_client_name(CLIENT) is None
+    await fresh_db.set_user_first_name(CLIENT, "Я" * (coach_service.MAX_DISPLAY_NAME_LENGTH + 1))
+    assert await api_v1_coach.suggested_client_name(CLIENT) is None
+    await athlete.aclose()
+
+
+async def test_athlete_renames_themselves_and_the_coach_sees_the_new_name(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    patched = await athlete.patch(f"/coach-links/{COACH}", json={"name": "  Мария  Котова "})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["my_name"] == "Мария Котова"
+    assert patched.json()["visibility"] == {"bodyweight": False}
+    clients = (await coach.get("/coach/clients")).json()["clients"]
+    assert [c["name"] for c in clients] == ["Мария Котова"]
+    assert (await coach.get(f"/coach/clients/{CLIENT}")).json()["client"]["name"] == "Мария Котова"
+    empty = await athlete.patch(f"/coach-links/{COACH}", json={"name": "  "})
+    assert empty.status_code == 400
 
 
 async def test_accept_links_with_defaults_and_errors(fresh_db):

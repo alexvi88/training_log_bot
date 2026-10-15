@@ -133,3 +133,26 @@ async def test_second_start_does_not_overwrite_chosen_language(fresh_db, user_id
 
     user = await fresh_db.get_user(user_id)
     assert user["lang"] == "ru"
+
+
+async def test_middleware_remembers_telegram_first_name(fresh_db, user_id):
+    """Имя из профиля Telegram оседает в users.first_name — им приложение
+    вписывает имя на приглашении тренера (api_v1_coach.suggested_client_name)."""
+    message = _make_message(user_id)
+    message.from_user.first_name = " Маша "
+    handler = AsyncMock(return_value="handled")
+    middleware = SetUserLanguageMiddleware()
+
+    await middleware(handler, message, {})
+    assert (await fresh_db.get_user(user_id))["first_name"] == "Маша"
+
+    message.from_user.first_name = "Мария"
+    await middleware(handler, message, {})
+    assert (await fresh_db.get_user(user_id))["first_name"] == "Мария"
+
+
+async def test_middleware_does_not_create_user_for_first_name(fresh_db):
+    message = _make_message(999998)
+    message.from_user.first_name = "Маша"
+    await SetUserLanguageMiddleware()(AsyncMock(), message, {})
+    assert await fresh_db.get_user(999998) is None
