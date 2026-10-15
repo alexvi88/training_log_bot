@@ -579,9 +579,14 @@ async def chat_backend(user_id: Optional[int]) -> ChatBackend:
 
 # Запас под размышления у OpenAI: там они расходуют тот же
 # max_completion_tokens, что и ответ, и на 2048 токенов главного ответа
-# размышление на low могло бы оставить ответ обрезанным. На effort=none не
-# добавляем — размышлять нечем.
+# размышление могло бы оставить ответ обрезанным. На effort=none не добавляем —
+# размышлять нечем; medium думает заметно дольше low, и запаса ему нужно больше.
 _OPENAI_REASONING_HEADROOM = 2048
+_OPENAI_REASONING_HEADROOM_BY_EFFORT = {"none": 0, "medium": 4096, "high": 8192, "xhigh": 8192}
+
+
+def _reasoning_headroom(effort: str) -> int:
+    return _OPENAI_REASONING_HEADROOM_BY_EFFORT.get(effort, _OPENAI_REASONING_HEADROOM)
 
 
 def _model_kwargs(
@@ -607,7 +612,7 @@ def _model_kwargs(
         extra: dict[str, Any] = {"reasoning_effort": effort}
         if scope is not None and user_id is not None:
             extra["prompt_cache_key"] = f"{scope}-{user_id}"
-        budget = max_tokens + (0 if effort == "none" else _OPENAI_REASONING_HEADROOM)
+        budget = max_tokens + _reasoning_headroom(effort)
         return {"model": backend.model, "max_completion_tokens": budget, "extra_body": extra}
     kwargs: dict[str, Any] = {
         "model": backend.model,
@@ -828,6 +833,11 @@ SYSTEM_PROMPT = """\
 не выдумывай цифры. Если данных мало или нет, честно скажи об этом. Это же
 касается настроек профиля: единицы измерения (кг/lb), часовой пояс, формула
 e1RM — бери их из get_training_overview, а не угадывай или предполагай.
+
+О застое, тренде и «упали/выросли повторы» говори только по полям same_weight_reps,
+e1rm_trend и stall (get_exercise_progress) или по get_stalled_lifts. Не сравнивай
+повторы на разном весе как одно и то же: 73×12 и 77×7 — это не «повторы упали с 12
+до 7».
 
 Если пользователь спрашивает про «сегодняшнюю», «текущую» или «эту» тренировку —
 сначала вызови get_active_workout. Если он вернул тренировку, она ЕЩЁ НЕ
@@ -2481,7 +2491,7 @@ TOOLS: list[dict[str, Any]] = [
             "description": (
                 "История одного упражнения: группа мышц (muscle_group), последние сессии "
                 "(дата, подходы, лучший подход, e1RM, тоннаж, note — заметка за ту "
-                "тренировку, null если не оставлял), личные рекорды и тренд e1RM. "
+                "тренировку, null если не оставлял), рекорды и факты тренда/застоя. "
                 "Название — точный display_name из get_training_overview."
             ),
             "parameters": {
@@ -4028,15 +4038,13 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
     for s in sessions:
         s.formula = user["e1rm_formula"]
     records = analytics.compute_personal_records(sessions)
-    points = [
-        (dt.datetime.fromisoformat(s.started_at), s.top_e1rm) for s in sessions
-    ]
-    trend = analytics.linear_trend(points)
     notes_by_workout = await db.list_workout_notes_for_exercise(ex["id"])
     group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
     return {
         "exercise": ex["display_name"],
         "muscle_group": _shown_group(group["name"]) if group else None,
+        # Веса и e1RM — в единицах атлета, как их и хранит база.
+        "unit": user["unit"],
         "total_sessions": len(sessions),
         "sessions": [
             {
@@ -4054,7 +4062,12 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
             "best_e1rm_set": f"{records.best_e1rm_weight:g}x{records.best_e1rm_reps}",
             "max_session_tonnage": round(records.max_session_tonnage, 1),
         },
-        "e1rm_trend_per_week": round(trend.slope_per_week, 2) if trend else None,
+        # Застой, тренд и «повторы упали/выросли» — посчитанные кодом факты
+        # (analytics.progress_facts): по сырому списку подходов модель путала
+        # повторы на разных весах. Промпт велит судить только по ним.
+        **analytics.progress_facts(
+            sessions, timeutil.user_today(user), user["unit"], recent=PROGRESS_SESSIONS_LIMIT
+        ),
     }
 
 
@@ -5403,6 +5416,9 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
             "e1rm_slope_per_week": verdict.e1rm_slope_per_week,
             "top_weight": verdict.top_weight,
             "weeks_weight_flat": verdict.weeks_weight_flat,
+            "top_weight_since": verdict.weight_since,
+            "sessions_at_top_weight": verdict.sessions_at_top_weight,
+            # Повторы только подходов НА рабочем весе (analytics.best_reps_at).
             "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",
             "ready_to_add_weight": verdict.ready_to_add_weight,
             "avg_top_rpe": verdict.avg_top_rpe,
@@ -6837,7 +6853,7 @@ def _responses_body(
         "model": backend.model,
         "input": _responses_input(messages),
         # Размышления едят тот же бюджет, что и ответ (см. _model_kwargs).
-        "max_output_tokens": 2048 + (0 if effort == "none" else _OPENAI_REASONING_HEADROOM),
+        "max_output_tokens": 2048 + _reasoning_headroom(effort),
         "reasoning": {"effort": effort},
         "store": False,
         "include": ["reasoning.encrypted_content"],
@@ -7716,7 +7732,7 @@ async def _openai_web_search_findings(
         ],
         "tools": [{"type": "web_search"}],
         # Размышления у OpenAI едят тот же бюджет, что и ответ (см. _model_kwargs).
-        "max_output_tokens": 1024 + _OPENAI_REASONING_HEADROOM,
+        "max_output_tokens": 1024 + _reasoning_headroom(config.OPENAI_REASONING_EFFORT),
         "reasoning": {"effort": config.OPENAI_REASONING_EFFORT},
         "prompt_cache_key": f"search-{user_id}",
         "store": False,
