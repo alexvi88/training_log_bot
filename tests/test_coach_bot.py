@@ -1113,6 +1113,47 @@ async def test_summary_data_carries_set_weights_in_set_format(fresh_db, fake_mod
     assert 'never "we"' in system
 
 
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("key", ["coach.ai.system_all", "coach.ai.system_one"])
+async def test_summary_prompt_rules(lang, key):
+    """Промпт сводки тренера держит правила, на которых сводка спотыкалась:
+    без разговоров о своих входных данных («I see no assigned program data»,
+    «No fresh records listed»), без пола по имени («She trained…»), без
+    противоречия «те же веса… значит, сдвинулось» — короткий вывод
+    (растёт, застой, пропадает) и один следующий шаг тренеру. Опора на данные
+    и голос «я, не мы» остаются."""
+    with i18n.use_lang(lang):
+        system = i18n.t(key)
+    rules = {
+        "ru": [
+            "никаких «мы»", "62.5×9",
+            "растёт", "застой", "пропадает",            # три вывода
+            "по датам, а не подходы внутри одной тренировки",
+            "то и другое разом не пиши",                # без противоречий
+            "один конкретный шаг для тренера",
+            "Не рассказывай о своих данных", "молча пропусти",
+            "Не угадывай пол по имени", "никаких «он» и «она»",
+            "не выдумывай",
+        ],
+        "en": [
+            'never "we"', "62.5×9",
+            "progressing", "stalled", "away",
+            "across dates, not the sets inside one workout",
+            "never say both",
+            "one concrete",
+            "Don't talk about your inputs", "skip it silently",
+            "Don't guess gender from a name", 'no "he" or "she"',
+            "never make it up",
+        ],
+    }[lang]
+    for rule in rules:
+        assert rule in system, rule
+    if key == "coach.ai.system_one":
+        assert ("2–4" in system), "разбор по одному атлету — 2–4 строки"
+    else:
+        assert ("одна короткая строка" if lang == "ru" else "one short line per athlete") in system
+
+
 # ---------- язык ----------
 
 
