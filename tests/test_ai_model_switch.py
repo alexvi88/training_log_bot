@@ -74,7 +74,7 @@ async def test_own_account_switches_both_ways(fresh_db, own_accounts):
     backend = await ai_trainer.chat_backend(OWN)
     assert backend.name == "luna"
     assert backend.model == config.OPENAI_CHAT_MODEL == "gpt-6-luna"
-    assert backend.effort == "low" and backend.quick_effort == "none"
+    assert backend.effort == "none" and backend.quick_effort == "none"
     await db.set_user_ai_model(OWN, "grok")
     # grok хранится как NULL — «по умолчанию».
     assert await db.get_user_ai_model(OWN) is None
@@ -155,8 +155,8 @@ def test_luna_request_params(monkeypatch):
     main = ai_trainer._model_kwargs(backend, 5, max_tokens=2048, quick=False, scope="trainer")
     assert main["model"] == "gpt-6-luna"
     assert "max_tokens" not in main and "extra_headers" not in main
-    assert main["max_completion_tokens"] == 2048 + ai_trainer._OPENAI_REASONING_HEADROOM
-    assert main["extra_body"] == {"reasoning_effort": "low", "prompt_cache_key": "trainer-5"}
+    assert main["max_completion_tokens"] == 2048  # effort none — запаса на размышления нет
+    assert main["extra_body"] == {"reasoning_effort": "none", "prompt_cache_key": "trainer-5"}
     quick = ai_trainer._model_kwargs(backend, 5, max_tokens=700, quick=True, scope="workout_comment")
     assert quick["max_completion_tokens"] == 700
     assert quick["extra_body"]["reasoning_effort"] == "none"
