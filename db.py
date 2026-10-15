@@ -2844,14 +2844,20 @@ async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
 
 
 async def is_walk_demo(telegram_id: int) -> bool:
-    """Аккаунт прогона скриншотов (WALK_DEMO_USERNAME, вход по паролю). Демо
+    """Аккаунт прогонов владельца, вход по паролю: прогон скриншотов
+    (WALK_DEMO_USERNAME) или новичок (config.newbie_demo_username()). Демо
     App Review (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
     if not config.WALK_DEMO_USERNAME:
         return False
+    names = [config.WALK_DEMO_USERNAME.strip()]
+    newbie = config.newbie_demo_username()
+    if newbie:
+        names.append(newbie)
+    marks = ", ".join("?" for _ in names)
     cur = await conn().execute(
         "SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'review_demo' "
-        "AND provider_user_id = ?",
-        (telegram_id, config.WALK_DEMO_USERNAME),
+        f"AND provider_user_id IN ({marks})",
+        (telegram_id, *names),
     )
     return await cur.fetchone() is not None
 

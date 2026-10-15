@@ -296,3 +296,107 @@ async def test_password_and_login_tolerate_copy_paste_whitespace(fresh_db):
         "/auth/password", json={"username": f"  {USERNAME}\n", "password": f" {PASSWORD}\r\n"}
     )
     assert resp.status_code == 200, resp.text
+
+
+# ---------- новичок: WALK_DEMO_USERNAME + "-new", без истории ----------
+
+NEWBIE_USERNAME = WALK_USERNAME + "-new"
+
+
+@pytest.fixture
+def walk_pair(monkeypatch):
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", WALK_USERNAME)
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", WALK_PASSWORD)
+
+
+async def _newbie_login(client, **extra):
+    return await client.post(
+        "/auth/password", json={"username": NEWBIE_USERNAME, "password": WALK_PASSWORD, **extra}
+    )
+
+
+@pytest.mark.asyncio
+async def test_newbie_is_separate_empty_and_quota_exempt(fresh_db, walk_pair):
+    """Новичок — свой аккаунт с паролем прогона скриншотов, пустой, как после
+    первого Sign in with Apple, и квоты его не держат, как и прогон."""
+    import ai_limits
+
+    client = _client()
+    reviewer = await _login(client)
+    walk = await client.post("/auth/password", json={"username": WALK_USERNAME, "password": WALK_PASSWORD})
+    newbie = await _newbie_login(client)
+    assert newbie.status_code == 200, newbie.text
+    ids = {reviewer.json()["user_id"], walk.json()["user_id"], newbie.json()["user_id"]}
+    assert len(ids) == 3
+    newbie_id = newbie.json()["user_id"]
+    assert newbie_id < 0  # app-only
+    assert await fresh_db.count_workouts(newbie_id) == 0
+    assert await fresh_db.count_workouts(newbie_id, "active") == 0
+    assert await fresh_db.resolve_auth_identity(review_demo.PROVIDER, NEWBIE_USERNAME) == newbie_id
+
+    assert await fresh_db.is_walk_demo(newbie_id)
+    assert await ai_limits.quota_exempt(newbie_id)
+    assert not await fresh_db.is_walk_demo(reviewer.json()["user_id"])
+
+    again = await _newbie_login(client)
+    assert again.json()["user_id"] == newbie_id
+    assert await fresh_db.count_workouts(newbie_id) == 0
+
+    # пароль ревьюера к логину новичка не подходит
+    crossed = await client.post("/auth/password", json={"username": NEWBIE_USERNAME, "password": PASSWORD})
+    assert crossed.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_newbie_does_not_exist_without_walk_pair(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", WALK_USERNAME)
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
+    assert config.newbie_demo_username() == ""
+    client = _client()
+    resp = await client.post("/auth/password", json={"username": NEWBIE_USERNAME, "password": ""})
+    assert resp.status_code == 401
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", WALK_PASSWORD)
+    resp = await client.post("/auth/password", json={"username": "-new", "password": WALK_PASSWORD})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_newbie_reset_through_account_delete_endpoint(fresh_db, walk_pair):
+    """Сброс перед прогоном — обычный DELETE /v1/account?confirm=delete;
+    следующий вход заводит новичка заново и снова пустым."""
+    client = _client()
+    first = await _newbie_login(client)
+    first_id = first.json()["user_id"]
+    # что-то, что прогон оставил после себя
+    await fresh_db.create_finished_workout(first_id, "2026-01-01T10:00:00", "2026-01-01T11:00:00")
+    client.headers["Authorization"] = f"Bearer {first.json()['token']}"
+    deleted = await client.delete("/account", params={"confirm": "delete"})
+    assert deleted.status_code == 200, deleted.text
+    assert await fresh_db.get_user(first_id) is None
+    assert await fresh_db.resolve_auth_identity(review_demo.PROVIDER, NEWBIE_USERNAME) is None
+
+    del client.headers["Authorization"]
+    second = await _newbie_login(client)
+    assert second.status_code == 200
+    second_id = second.json()["user_id"]
+    # синтетический id app-only может переиспользоваться — важно, что аккаунт
+    # заведён заново и пуст
+    assert await fresh_db.get_user(second_id) is not None
+    assert await fresh_db.count_workouts(second_id) == 0
+    assert await fresh_db.is_walk_demo(second_id)
+
+
+@pytest.mark.asyncio
+async def test_newbie_is_not_mirrored_to_admin(fresh_db, walk_pair):
+    """Зеркало review_watch узнаёт ревьюера только по его логину — новичок
+    (как и прогон скриншотов) в личку админу не уходит."""
+    import review_watch
+
+    review_watch.reset()
+    client = _client()
+    reviewer = (await _login(client)).json()["user_id"]
+    newbie = (await _newbie_login(client)).json()["user_id"]
+    review_watch.invalidate_cache()
+    assert await review_watch._reviewer_user_id() == reviewer != newbie
+    review_watch.reset()

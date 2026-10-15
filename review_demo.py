@@ -4,9 +4,10 @@
 Зачем: Beta App Review отклонил сборку по Guideline 2.1(a) — ревьюеру нужен
 логин и пароль от аккаунта, в котором уже есть данные. Sign in with Apple
 заводит пустой аккаунт, а код из Telegram ревьюеру взять негде. Обычным
-пользователям вход по паролю не нужен и не предлагается: учёток две, обе из
-секретов окружения — ревьюера (config.REVIEW_DEMO_*) и прогона скриншотов
-(config.WALK_DEMO_*), — и без них ручки нет вовсе.
+пользователям вход по паролю не нужен и не предлагается: учётки — из секретов
+окружения: ревьюера (config.REVIEW_DEMO_*), прогона скриншотов
+(config.WALK_DEMO_*) и новичка (config.newbie_demo_username(), пароль прогона
+скриншотов, без истории), — и без них ручки нет вовсе.
 
 Аккаунт — обычный app-only (db.create_app_only_user, отрицательный
 синтетический telegram_id), а стабильность между входами держит та же таблица,
@@ -158,7 +159,14 @@ async def ensure_demo_user(lang: Optional[str] = None, username: Optional[str] =
             await db.link_auth_identity(user_id, PROVIDER, username)
         elif lang:
             await db.set_user_lang(user_id, i18n.normalize(lang))
-        if await db.count_workouts(user_id) == 0 and await db.count_workouts(user_id, "active") == 0:
+        # Новичок (config.newbie_demo_username) остаётся пустым: на нём
+        # проверяют первый вход, пустые экраны и первую тренировку.
+        is_newbie = username == config.newbie_demo_username()
+        if (
+            not is_newbie
+            and await db.count_workouts(user_id) == 0
+            and await db.count_workouts(user_id, "active") == 0
+        ):
             await seed_history(user_id)
     # Аккаунт мог только что пересоздаться (ревьюер удалил прежний): id в кэше
     # зеркала для админа (review_watch) больше не верен.

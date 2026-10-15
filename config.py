@@ -1058,6 +1058,23 @@ REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
 WALK_DEMO_USERNAME = os.getenv("WALK_DEMO_USERNAME", "")
 WALK_DEMO_PASSWORD = os.getenv("WALK_DEMO_PASSWORD", "")
 
+# Третий демо-аккаунт — «новичок» для прогона первого входа (режим newbie в
+# screenshots.yml): логин WALK_DEMO_USERNAME + NEWBIE_DEMO_SUFFIX, пароль тот же,
+# что у WALK_DEMO_PASSWORD, — своих секретов нет, и без пары WALK_DEMO_* его нет
+# тоже. В отличие от прогона скриншотов, аккаунт НЕ заполняется историей:
+# пустой app-only, как после первого Sign in with Apple. Сброс — обычный
+# DELETE /v1/account: следующий вход заведёт его заново пустым.
+NEWBIE_DEMO_SUFFIX = "-new"
+
+
+def newbie_demo_username() -> str:
+    """Логин аккаунта-новичка или пустая строка, если пара WALK_DEMO_* не
+    задана. Функция, а не константа: тесты подменяют WALK_DEMO_* на лету."""
+    user = WALK_DEMO_USERNAME.strip()
+    if not user or not WALK_DEMO_PASSWORD.strip():
+        return ""
+    return user + NEWBIE_DEMO_SUFFIX
+
 # Зеркало действий ревьюера админу в личку (review_watch.py): каждое действие
 # демо-аккаунта App Review приходит в Telegram ADMIN_ID. Работает, только если
 # задан ADMIN_ID и логин REVIEW_DEMO_USERNAME; выключатель — на случай, если
@@ -1092,9 +1109,14 @@ APPLE_SIWA_TEAM_ID = os.getenv("APPLE_SIWA_TEAM_ID", "").strip()
 
 
 def demo_accounts() -> list[tuple[str, str]]:
-    """Заданные пары логин/пароль демо-аккаунтов: App Review и прогона
-    скриншотов. Пара с пустой половиной не считается."""
-    pairs = ((REVIEW_DEMO_USERNAME, REVIEW_DEMO_PASSWORD), (WALK_DEMO_USERNAME, WALK_DEMO_PASSWORD))
+    """Заданные пары логин/пароль демо-аккаунтов: App Review, прогона
+    скриншотов и новичка (тот же пароль, что у прогона скриншотов). Пара с
+    пустой половиной не считается."""
+    pairs = (
+        (REVIEW_DEMO_USERNAME, REVIEW_DEMO_PASSWORD),
+        (WALK_DEMO_USERNAME, WALK_DEMO_PASSWORD),
+        (newbie_demo_username(), WALK_DEMO_PASSWORD),
+    )
     return [(user, pw) for user, pw in pairs if user and pw]
 
 
