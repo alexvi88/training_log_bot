@@ -2,8 +2,8 @@
 `POST /workouts/{id}/sets/voice` (подход голосом).
 
 Провайдер транскрипции нигде не вызывается по-настоящему: `ai_trainer.transcribe_voice`
-подменяется целиком — тем же приёмом, что `ai_trainer.ask`/`analyze_food` в
-tests/test_api_v1_ai.py и tests/test_api_v1_food.py, — потому что она и есть
+подменяется целиком — тем же приёмом, что `ai_trainer.ask` в
+tests/test_api_v1_ai.py, — потому что она и есть
 общая точка входа, которую делят бот и оба этих маршрута (см. api_v1_voice.py).
 Гоняется через httpx поверх ASGI, без сокета, с настоящей проверкой Bearer-токена.
 """
