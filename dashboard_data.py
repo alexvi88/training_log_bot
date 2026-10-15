@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import analytics
 import db
@@ -115,6 +115,56 @@ async def collect(
     )
     dashboard = analytics.compute_dashboard(dates, today)
 
+    lift_tiles, lifts_title = await lift_growth(
+        user_id, user, dates, today, exclude_workout_ids=excluded
+    )
+
+    agg = await db.hall_of_fame_aggregates(user_id, exclude_workout_ids=excluded)
+    tonnage_kg = formatting.to_kg(agg["tonnage"], user["unit"])
+    per_week = analytics.workouts_per_week(dates, today)
+    rank = analytics.rank_for(len(dates), tonnage_kg, per_week)
+    gap = analytics.rank_gap(rank, len(dates), tonnage_kg, per_week)
+    next_rank = analytics.next_rank(rank) if gap else None
+    return MenuDashboard(
+        headline=formatting.menu_headline(dashboard),
+        rank_name=rank.name,
+        rank_level=rank.level,
+        rank_emoji=rank.emoji,
+        rank_gap_text=formatting.format_rank_gap(gap, user["unit"]) if gap else None,
+        rank_next_name=next_rank.name if next_rank else None,
+        tiles=formatting.menu_tiles(
+            dashboard, tonnage, records, user["unit"], total_workouts=len(dates)
+        ),
+        volume_title=volume_title,
+        volume_rows=volume_rows,
+        lift_tiles=lift_tiles,
+        lifts_title=lifts_title,
+        lifts_note=formatting.MENU_LIFTS_NOTE,
+    )
+
+
+async def lift_growth(
+    user_id: int,
+    user: Any,
+    dates: list[dt.date],
+    today: dt.date,
+    *,
+    exclude_workout_ids: Iterable[int] = (),
+    shown_name: Callable[[str], str] = lambda name: name,
+) -> tuple[list[tuple], str]:
+    """Плитки роста e1RM и их заголовок («РОСТ E1RM ЗА 8 НЕДЕЛЬ») — блок
+    «Прогресса» атлета под разбором тренера. Один расчёт на сводку атлета
+    (`collect`) и на «Прогресс клиента» у тренера (coach_service.client_progress):
+    приложение рисует оба одним видом, и цифры не должны разъезжаться.
+
+    `dates` — местные дни законченных тренировок (от них зависит, хватает ли
+    истории на восемь недель), `shown_name` — как показать имя упражнения:
+    тренеру каталожное — на его языке. Роста нет — `([], "")`."""
+    if not dates:
+        return [], ""
+    excluded = tuple(exclude_workout_ids)
+    tz = timeutil.offset_hours(user)
+    formula = user["e1rm_formula"]
     # Движения — самые частые за окно, по числу тренировок. Не «базовые»: типа
     # движения в базе нет, и выбирать жим/присед/тягу пришлось бы по каталожным
     # именам, а у человека со своими названиями список оказался бы пустым.
@@ -132,31 +182,9 @@ async def collect(
             user_id, row["id"], lift_start.isoformat(), formula, tz_offset=tz,
             exclude_workout_ids=excluded,
         )
-        growth.append((row["display_name"], before_max, window_max, row["id"]))
-
-    agg = await db.hall_of_fame_aggregates(user_id, exclude_workout_ids=excluded)
-    tonnage_kg = formatting.to_kg(agg["tonnage"], user["unit"])
-    per_week = analytics.workouts_per_week(dates, today)
-    rank = analytics.rank_for(len(dates), tonnage_kg, per_week)
-    gap = analytics.rank_gap(rank, len(dates), tonnage_kg, per_week)
-    next_rank = analytics.next_rank(rank) if gap else None
-    lift_tiles = formatting.menu_lift_tiles(growth, user["unit"])
-    return MenuDashboard(
-        headline=formatting.menu_headline(dashboard),
-        rank_name=rank.name,
-        rank_level=rank.level,
-        rank_emoji=rank.emoji,
-        rank_gap_text=formatting.format_rank_gap(gap, user["unit"]) if gap else None,
-        rank_next_name=next_rank.name if next_rank else None,
-        tiles=formatting.menu_tiles(
-            dashboard, tonnage, records, user["unit"], total_workouts=len(dates)
-        ),
-        volume_title=volume_title,
-        volume_rows=volume_rows,
-        lift_tiles=lift_tiles,
-        lifts_title=formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "",
-        lifts_note=formatting.MENU_LIFTS_NOTE,
-    )
+        growth.append((shown_name(row["display_name"]), before_max, window_max, row["id"]))
+    tiles = formatting.menu_lift_tiles(growth, user["unit"])
+    return tiles, formatting.menu_lifts_title(lift_window_weeks) if tiles else ""
 
 
 async def rank_promotion(user_id: int, user) -> "analytics.Rank | None":

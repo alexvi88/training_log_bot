@@ -784,10 +784,110 @@ async def test_client_exercises_lists_trained_ones_frequent_and_fresh_first(fres
     assert data["unit"] == "kg"
     assert [e["exercise_id"] for e in data["exercises"]] == [squat, row, curl]
     first = data["exercises"][0]
+    squat_row = await fresh_db.get_exercise(squat)
     assert first == {
         "exercise_id": squat, "exercise": "Присед", "sessions": 2,
         "last_workout_at": timeutil.user_today(await fresh_db.get_user(CLIENT)).isoformat(),
+        "thumb": None,
+        "group_id": squat_row["primary_group_id"],
+        "group": first["group"],
     }
+    # Плитки групп — только те, где у атлета есть упражнение с подходами.
+    used = {e["group_id"] for e in data["exercises"]} - {None}
+    assert {g["id"] for g in data["groups"]} == used
+    assert all(set(g) == {"id", "name", "emoji"} for g in data["groups"])
+
+
+async def test_client_exercises_rows_look_like_the_athletes_progress_list(fresh_db):
+    """Строка «Всех упражнений» клиента — того же вида, что в «Прогрессе»
+    атлета: кадр каталога тем же URL, что `thumb` у его GET /exercises, и
+    группа — тем же именем, что его плитка, только на языке тренера."""
+    coach, athlete, _ = await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    ex = await _exercise(athlete, "Жим штанги лёжа")
+    await _finished_workout(athlete, ex, 60)
+
+    mine = next(e for e in (await athlete.get("/exercises")).json() if e["id"] == ex)
+    data = (await coach.get(f"/coach/clients/{CLIENT}/exercises")).json()
+    [row] = data["exercises"]
+    assert row["thumb"] == mine["thumb"]
+    assert row["group_id"] == mine["primary_group_id"]
+    [group] = data["groups"]
+    assert group["id"] == mine["primary_group_id"]
+    assert row["group"] == group["name"]
+    assert not any("Ѐ" <= ch <= "ӿ" for ch in str(data))
+    # Тот же атлет — та же плитка, что у него самого, на его языке.
+    athlete_groups = {g["id"]: g["name"] for g in (await athlete.get("/muscle-groups")).json()}
+    await fresh_db.set_user_lang(COACH, "ru")
+    ru = (await coach.get(f"/coach/clients/{CLIENT}/exercises")).json()
+    assert ru["groups"][0]["name"] == athlete_groups[group["id"]]
+
+
+async def test_client_progress_growth_is_the_athletes_dashboard_block(fresh_db):
+    """Рост e1RM наверху «Прогресса клиента» — тот же блок и те же числа, что
+    атлет видит наверху своего «Прогресса» (`lifts` у /dashboard)."""
+    coach, athlete, _ = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    today = dt.date.today()
+    await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=70)).isoformat())
+    await _finished_workout(athlete, ex, 65, date=(today - dt.timedelta(days=20)).isoformat())
+    await _finished_workout(athlete, ex, 70, date=(today - dt.timedelta(days=5)).isoformat())
+
+    mine = (await athlete.get("/dashboard")).json()["lifts"]
+    growth = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]
+    assert mine["tiles"], mine
+    assert growth == mine
+    [tile] = growth["tiles"]
+    assert tile["exercise_id"] == ex and tile["growth"].startswith("+")
+
+
+async def test_client_progress_growth_names_in_the_coachs_language(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    await fresh_db.set_user_lang(COACH, "en")
+    ex = await _exercise(athlete, "Жим штанги лёжа")
+    today = dt.date.today()
+    await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=70)).isoformat())
+    await _finished_workout(athlete, ex, 65, date=(today - dt.timedelta(days=20)).isoformat())
+    await _finished_workout(athlete, ex, 70, date=(today - dt.timedelta(days=5)).isoformat())
+    growth = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]
+    [tile] = growth["tiles"]
+    assert tile["exercise"] == "BARBELL BENCH PRESS"
+    assert not any("Ѐ" <= ch <= "ӿ" for ch in str(growth))
+
+
+async def test_client_progress_growth_empty_without_history(fresh_db):
+    coach, athlete, _ = await _linked(fresh_db)
+    assert (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]["tiles"] == []
+    ex = await _exercise(athlete, "Жим")
+    await _finished_workout(athlete, ex, 60)
+    growth = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]
+    assert growth["tiles"] == [] and growth["title"] == ""
+
+
+# ---------- тренировки клиента по месяцам ----------
+
+
+async def test_client_visits_are_the_athletes_own_months(fresh_db):
+    coach, athlete, code = await _linked(fresh_db)
+    ex = await _exercise(athlete, "Жим")
+    today = dt.date.today()
+    await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=40)).isoformat())
+    await _finished_workout(athlete, ex, 65)
+    # Идущая тренировка — не история.
+    await athlete.post("/workouts/active", json={})
+
+    theirs = await coach.get(f"/coach/clients/{CLIENT}/visits")
+    assert theirs.status_code == 200, theirs.text
+    assert theirs.json() == (await athlete.get("/workouts/visits")).json()
+    assert sum(theirs.json()["days"].values()) == 2
+
+    stranger = await _client(fresh_db, STRANGER)
+    await stranger.post("/coach", json={"display_name": "Чужой"})
+    resp = await stranger.get(f"/coach/clients/{CLIENT}/visits")
+    assert resp.status_code == 404 and resp.json()["error"] == "not_linked"
+    assert (await athlete.get(f"/coach/clients/{COACH}/visits")).status_code == 404
+    assert (await athlete.delete(f"/coach-links/{COACH}")).status_code == 200
+    assert (await coach.get(f"/coach/clients/{CLIENT}/visits")).status_code == 404
 
 
 async def test_client_exercise_progress_is_the_athletes_own_screen(fresh_db):

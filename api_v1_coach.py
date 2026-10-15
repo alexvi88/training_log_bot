@@ -5,7 +5,7 @@
 - тренер: `/coach` (стать тренером, имя, код приглашения), `/coach/clients…`
   (список с сигналами, дневник атлета только на чтение, прогресс — недели,
   движения и рекорды, «Все упражнения» и прогресс любого из них тем же
-  ответом, что у атлета, назначить программу,
+  ответом, что у атлета, тренировки по дням для «Тренировок по месяцам», назначить программу,
   комментарий к тренировке, убрать клиента; кто сам закрыл доступ за неделю —
   `recently_unlinked` в списке), `/coach/ai-summary` (POST —
   собрать сводку, GET — последняя сохранённая);
@@ -32,6 +32,7 @@ from starlette.routing import Route
 import ai_trainer
 import api_v1_ai
 import api_v1_common as common
+import api_v1_history
 import api_v1_progress
 import coach_notify
 import coach_service
@@ -230,10 +231,23 @@ async def client_exercises(request: Request) -> JSONResponse:
     Чужой или бывший клиент, сам атлет со своим id — 404 `not_linked`."""
     user_id = await common.authed_user_id(request)
     _, client = await _linked_client(user_id, _client_id(request))
+    items = await coach_service.client_exercises(client)
     return JSONResponse({
         "unit": client["unit"],
-        "exercises": await coach_service.client_exercises(client),
+        "exercises": items,
+        # Плитки групп над списком — как в «Прогрессе» атлета.
+        "groups": await coach_service.client_exercise_groups(client, items),
     })
+
+
+async def client_visits(request: Request) -> JSONResponse:
+    """Тренировки клиента по дням за 53 недели — карточка «Тренировки по
+    месяцам» над его историей у тренера, та же форма, что `GET
+    /workouts/visits` у атлета (api_v1_history.visits_payload). Чужой или
+    бывший клиент — 404 `not_linked`."""
+    user_id = await common.authed_user_id(request)
+    _, client = await _linked_client(user_id, _client_id(request))
+    return JSONResponse(await api_v1_history.visits_payload(client))
 
 
 async def client_exercise_progress(request: Request) -> JSONResponse:
@@ -567,6 +581,7 @@ routes = [
     Route("/coach/clients/{client_id:user_id}", get_client, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}", remove_client, methods=["DELETE"]),
     Route("/coach/clients/{client_id:user_id}/workouts", client_workouts, methods=["GET"]),
+    Route("/coach/clients/{client_id:user_id}/visits", client_visits, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}/progress", client_progress, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}/workouts/{workout_id:int}", client_workout, methods=["GET"]),
     Route("/coach/clients/{client_id:user_id}/exercises", client_exercises, methods=["GET"]),
