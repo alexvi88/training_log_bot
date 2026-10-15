@@ -313,6 +313,8 @@ async def test_bot_turn_passes_the_athlete_and_marks_the_answer(fresh_db, monkey
     assert setup["questions"][0]["question"] == goal_question
     # В вечный лог переписки тренера разговор про атлета не пишется.
     assert list(await db.get_ai_chat_history(COACH)) == []
+    # И в журнал для /aichats тоже: он под id тренера пережил бы доступ атлета.
+    assert await db.count_ai_turn_log(COACH) == 0
 
 
 async def test_bot_turn_refuses_when_the_athlete_closed_the_diary(fresh_db, monkeypatch):
