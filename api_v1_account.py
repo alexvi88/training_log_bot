@@ -101,7 +101,17 @@ def _settings_json(user) -> dict[str, Any]:
         # приложение, не нашедшее поля (старый сервер), строку настроек прячет.
         "rep_range_min": rep_min,
         "rep_range_max": rep_max,
+        # Пол атлета: "male" | "female" | null (не выбран). Ставит только сам
+        # человек — онбординг и строка «Пол» в настройках приложения, кнопка
+        # в боте; по нему тренер выбирает род в обращении и нормы, приложение
+        # рисует фигуру «ТЫ». null никто не угадывает.
+        "gender": _gender(user),
     }
+
+
+def _gender(user) -> Optional[str]:
+    value = user["gender"]
+    return value if value in db.GENDERS else None
 
 
 async def get_settings(request: Request) -> JSONResponse:
@@ -140,6 +150,10 @@ def _profile_json(user) -> dict[str, Any]:
         "goal": user["goal"],
         "equipment": _equipment_list(user),
         "limitations": user["limitations"],
+        # Не память тренера, а та же настройка, что `gender` в /v1/settings:
+        # тренер знает её так же, поэтому она видна и здесь. Меняется
+        # PATCH /v1/settings, DELETE /v1/profile её не трогает.
+        "gender": _gender(user),
     }
 
 
@@ -330,6 +344,17 @@ async def update_settings(request: Request) -> JSONResponse:
         if not isinstance(new_consent, bool):
             raise ApiError(400, "bad_request", "ai_consent must be bool")
 
+    # Пол: "male" | "female" | null (снять выбор). Ключ отсутствует — не
+    # трогаем; любое другое значение — 400 `invalid_gender`.
+    set_gender = "gender" in body
+    new_gender: Optional[str] = None
+    if set_gender:
+        new_gender = body["gender"]
+        if new_gender is not None and new_gender not in db.GENDERS:
+            raise ApiError(
+                400, "invalid_gender", "gender must be \"male\", \"female\" or null"
+            )
+
     # Односторонний флаг: `true` ставит, `false` молча игнорируем (повтор
     # старого запроса или гонка двух телефонов не должны его снимать).
     new_lock_screen_used: Optional[bool] = None
@@ -382,6 +407,8 @@ async def update_settings(request: Request) -> JSONResponse:
         plain_updates["lock_screen_used"] = 1
     if plain_updates:
         await db.update_user(user_id, **plain_updates)
+    if set_gender and new_gender != user["gender"]:
+        await db.set_user_gender(user_id, new_gender)
     if new_tz is not None and new_tz != user["tz_offset"]:
         # Дни считаются по местному времени (db.list_finished_workout_dates) —
         # сдвиг пояса может подвинуть тренировку в соседние сутки и поменять

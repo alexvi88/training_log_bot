@@ -185,8 +185,9 @@ async def test_profile_screen_marks_what_is_still_unknown(fresh_db, user_id):
     # Считаем прочерки-значения, а не все тире в тексте — во вводной фразе
     # экрана своё.
     empty = [line for line in seen["text"].split("\n") if line.endswith("</b> —")]
-    # Четыре, а не пять: дни в неделю тренер больше не запоминает.
-    assert len(empty) == 4
+    # Четыре поля памяти (дни в неделю тренер больше не запоминает) и пол,
+    # пока атлет его не выбрал.
+    assert len(empty) == 5
     assert "Ограничения" in seen["text"]
     # Пустое состояние зовёт, а не констатирует (см. TONE_OF_VOICE.md).
     assert "AI-тренер" in seen["text"]
@@ -235,26 +236,28 @@ async def test_settings_keyboard_groups_into_three_blocks():
     # Профиль: единицы+пояс, язык+формула — парами по 2, короткие подписи.
     assert rows[0] == ["settings:unit", "settings:tz"]
     assert rows[1] == ["settings:lang", "settings:formula"]
+    # Пол — пятой кнопкой блока, отдельной строкой.
+    assert rows[2] == ["settings:gender:menu"]
     # Как разговариваю: тумблеры, по одному в ряд (КБЖУ ушёл вместе с AI-разбором еды) — длинные подписи;
     # диапазон повторов — сразу под подсказками прогрессии.
-    assert rows[2] == ["settings:progression"]
-    assert rows[3] == ["settings:rep_range"]
-    assert rows[4] == ["settings:pushes"]
-    assert rows[5] == ["settings:ai_comments"]
-    assert rows[6] == ["settings:card_detail"]
+    assert rows[3] == ["settings:progression"]
+    assert rows[4] == ["settings:rep_range"]
+    assert rows[5] == ["settings:pushes"]
+    assert rows[6] == ["settings:ai_comments"]
+    assert rows[7] == ["settings:card_detail"]
     # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
-    assert rows[7] == ["settings:profile"]
-    assert rows[8] == ["settings:export"]
-    assert rows[9] == ["settings:import"]
-    assert rows[10] == ["settings:mcp"]
-    assert rows[11] == ["feedback:open"]
+    assert rows[8] == ["settings:profile"]
+    assert rows[9] == ["settings:export"]
+    assert rows[10] == ["settings:import"]
+    assert rows[11] == ["settings:mcp"]
+    assert rows[12] == ["feedback:open"]
     # Сервис для тренеров — кто видит твой дневник (handlers/coach.py).
-    assert rows[12] == ["coach:hub"]
-    assert rows[13] == ["invite:show"]
+    assert rows[13] == ["coach:hub"]
+    assert rows[14] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[14] == ["settings:delete"]
-    assert rows[15] == ["settings:back"]
+    assert rows[15] == ["settings:delete"]
+    assert rows[16] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():

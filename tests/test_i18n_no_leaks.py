@@ -552,6 +552,28 @@ async def _screen_settings_profile(db, user_id: int) -> str:
     return callback.message.answer.await_args.args[0]
 
 
+async def _screen_settings_gender(db, user_id: int) -> str:
+    """Экран «Пол» (handlers.settings.settings_gender) с выбранным полом,
+    его кнопки, алерт после выбора и строка пола на «Что я про тебя знаю»."""
+    from handlers import settings
+
+    await db.set_user_gender(user_id, "female")
+    callback = _make_fake_callback(user_id, "settings:gender:profile")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await settings.settings_gender(callback, state)
+    text = callback.message.answer.await_args.args[0]
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    buttons = "\n".join(button.text for row in kb.inline_keyboard for button in row)
+
+    set_cb = _make_fake_callback(user_id, "settings:gset:none:profile")
+    await settings.settings_gender_set(set_cb, state)
+    alert = set_cb.answer.await_args_list[0].args[0]
+    profile = set_cb.message.answer.await_args.args[0]
+    profile_kb = set_cb.message.answer.await_args.kwargs["reply_markup"]
+    profile_buttons = "\n".join(b.text for row in profile_kb.inline_keyboard for b in row)
+    return "\n".join((text, buttons, alert, profile, profile_buttons))
+
+
 async def _screen_mcp_access_disabled(db, user_id: int) -> str:
     """Экран /mcp без публичного адреса (handlers.mcp_access._show,
     config.mcp_available() == False в тестовом окружении) — тот самый экран,
@@ -1116,6 +1138,7 @@ SCREENS: list[tuple[str, object]] = [
     ("routine_source_empty", _screen_routine_source_empty),
     ("catalog_program_card", _screen_catalog_program_card),
     ("settings_profile", _screen_settings_profile),
+    ("settings_gender", _screen_settings_gender),
     ("mcp_access_disabled", _screen_mcp_access_disabled),
     ("community_intro", _screen_community_intro),
     ("donate_screen", _screen_donate),

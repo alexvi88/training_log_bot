@@ -107,6 +107,9 @@ MACHINE_KEYS = {
     # Маршрут пуша и строки «Уведомлений» (push_ios.ios_route): экран и неделя
     # — машинные значения, имя упражнения в нём — показываемое и проверяется.
     "screen", "week",
+    # Пол атлета в /v1/settings и /v1/profile — перечисление male/female/null,
+    # подпись «Мужской»/«Male» рисует приложение.
+    "gender",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -527,6 +530,9 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("PATCH", "/settings", json={"rep_range_min": 7, "rep_range_max": 9}, expect=400)
     await w.call("PATCH", "/settings", json={"lock_screen_used": True}, expect=200)
     await w.call("PATCH", "/settings", json={"lock_screen_used": "yes"}, expect=400)
+    await w.call("PATCH", "/settings", json={"gender": "female"}, expect=200)
+    await w.call("PATCH", "/settings", json={"gender": "other"}, expect=400)
+    await w.call("PATCH", "/settings", json={"gender": None}, expect=200)
     await w.call("GET", "/profile", expect=200)
     await w.call("POST", "/push/register", json={"device_token": "abc"}, expect=201)
     await w.call("DELETE", "/push/register", expect=200)

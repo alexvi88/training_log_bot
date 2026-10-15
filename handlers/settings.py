@@ -55,6 +55,7 @@ async def show_settings(
         lang=user["lang"],
         show_feedback=config.feedback_available(),
         rep_range=analytics.user_rep_range(user),
+        gender=user["gender"],
     )
     # Заголовки блоков говорят самим текстом экрана — жирной строкой перед
     # каждой группой кнопок, в том же порядке, в каком идут кнопки ниже (см.
@@ -125,10 +126,17 @@ def _profile_lines(user) -> list[str]:
     чего тренер про тебя ещё НЕ знает — отсутствующая строка читалась бы как
     «такого поля нет», а не «пусто».
     """
-    return [
+    lines = [
         f"<b>{label}:</b> {escape(str(value)) if value else '—'}"
         for label, value in profile_rows(user)
     ]
+    # Пол — не память тренера, а настройка (users.gender), но знает её тренер
+    # ровно так же, поэтому и видна она здесь. Не выбран — прочерк, как у
+    # остальных: видно, чего тренер про тебя не знает.
+    gender = user["gender"]
+    shown = keyboards.gender_value_text(gender) if gender in db.GENDERS else "—"
+    lines.append(f"<b>{i18n.t('settings.profile.field.gender')}:</b> {shown}")
+    return lines
 
 
 @router.callback_query(F.data == "settings:profile")
@@ -155,7 +163,8 @@ async def settings_profile(callback: CallbackQuery, state: FSMContext):
         + f"\n\n{tail}"
     )
     await ui.safe_edit(
-        callback, text, reply_markup=keyboards.profile_keyboard(), parse_mode="HTML"
+        callback, text, reply_markup=keyboards.profile_keyboard(user["gender"]),
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -213,6 +222,40 @@ async def settings_profile_clear(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer(i18n.t("settings.profile.clear_alert"))
     await settings_profile(callback, state)
+
+
+@router.callback_query(F.data.in_({"settings:gender:menu", "settings:gender:profile"}))
+async def settings_gender(callback: CallbackQuery, state: FSMContext):
+    """Экран «Пол»: Мужской / Женский / Не выбран. Открывается и из настроек,
+    и из «Что я про тебя знаю» — поле одно (users.gender), и «Назад» ведёт
+    туда, откуда пришли."""
+    source = callback.data.rsplit(":", 1)[1]
+    user = await db.get_user(callback.from_user.id)
+    await ui.safe_edit(
+        callback,
+        i18n.t("settings.gender.screen"),
+        reply_markup=keyboards.gender_keyboard(user["gender"], source),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("settings:gset:"))
+async def settings_gender_set(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    choice = parts[2] if len(parts) > 2 else ""
+    source = parts[3] if len(parts) > 3 else "menu"
+    if choice not in keyboards.GENDER_CHOICES:
+        await callback.answer()
+        return
+    gender = None if choice == "none" else choice
+    await db.set_user_gender(callback.from_user.id, gender)
+    alert = i18n.t(f"settings.gender.saved.{choice}")
+    if source == "profile":
+        await callback.answer(alert)
+        await settings_profile(callback, state)
+    else:
+        await show_settings(callback, state, alert=alert, show_alert=False)
 
 
 @router.callback_query(F.data == "settings:unit")
