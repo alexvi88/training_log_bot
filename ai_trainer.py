@@ -1796,10 +1796,8 @@ async def _background_ai_allowed(user) -> bool:
     где клиент — приложение: аккаунт без Telegram (Apple ID), аккаунт с iOS-токеном
     пушей, или включён config.AI_CONSENT_REQUIRED. Чисто телеграмный атлет листа
     согласия не видит — бот AI не запирает, и дайджест ему идёт как раньше.
-    Устаревшее согласие (до config.AI_CONSENT_VALID_FROM) — не согласие:
-    app-атлету молчим, пока не подтвердит заново; телеграмному — как всегда.
     """
-    if db.ai_consent_valid(user):
+    if user["ai_consent_at"]:
         return True
     if config.AI_CONSENT_REQUIRED or not user["telegram_linked"]:
         return False

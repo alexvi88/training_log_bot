@@ -1337,28 +1337,6 @@ def now_iso() -> str:
     return _utc_now().isoformat(timespec="seconds")
 
 
-def ai_consent_valid(user: Any) -> bool:
-    """Действующее согласие на передачу данных AI (App Store 5.1.2(i)) — одна
-    проверка на весь сервис: метка users.ai_consent_at есть И она не старше
-    config.AI_CONSENT_VALID_FROM (смена получателя — xAI → OpenAI — обнуляет
-    прежние согласия, человека спрашивают заново). Битая метка — не согласие."""
-    if user is None:
-        return False
-    raw = user["ai_consent_at"]
-    if not raw:
-        return False
-    valid_from = config.AI_CONSENT_VALID_FROM
-    if valid_from is None:
-        return True
-    try:
-        given = dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if given.tzinfo is not None:
-        given = given.astimezone(dt.timezone.utc).replace(tzinfo=None)
-    return given >= valid_from
-
-
 # ---------- сутки по часам пользователя ----------
 #
 # started_at/created_at пишутся по часам сервера, а сервер живёт по UTC. Экраны
