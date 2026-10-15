@@ -458,13 +458,10 @@ async def test_ack_does_not_skip_hard_stop(fresh_db, user_id, hard_stop, monkeyp
     assert block.log.startswith("spend_hard")
 
 
-async def test_ack_still_skips_ordinary_quota_for_own_accounts(fresh_db, user_id, monkeypatch):
+async def test_own_accounts_skip_ordinary_quota(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "limit_preview_ids", lambda: {user_id})
     monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 1)
     await db.increment_ai_video_count(user_id)
-    first = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
-    assert first is not None and first.preview
-    await ai_limits.record_ack(user_id, ai_limits.KIND_VIDEO)
     assert await ai_limits.check(user_id, ai_limits.KIND_VIDEO) is None
 
 

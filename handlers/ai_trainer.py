@@ -2352,7 +2352,7 @@ async def _handle_question(
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
-    show_quota = 0 < left <= _QUOTA_WARN_AT
+    show_quota = 0 < left <= _QUOTA_WARN_AT and not await ai_limits.quota_exempt(user_id)
     quota_text = i18n.t("ai.screen.quota_left", left=left) if show_quota else ""
     quota_html = f"\n\n<i>{quota_text}</i>" if show_quota else ""
     quota_md = f"\n\n_{quota_text}_" if show_quota else ""

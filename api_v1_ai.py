@@ -310,14 +310,15 @@ async def _limits_json(user_id: int) -> dict[str, Any]:
     любой Block значит «заблокировано», без preview-исключения.
     """
     used = await db.get_ai_question_count_today(user_id)
-    limit = config.AI_QUESTION_DAILY_LIMIT
+    # Свои аккаунты и аккаунт прогонов квоты не держат — и счётчика не видят.
+    limit = 0 if await ai_limits.quota_exempt(user_id) else config.AI_QUESTION_DAILY_LIMIT
     remaining = max(0, limit - used) if limit > 0 else None
     block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
     # Когда упрёмся в отказ — говорим про тот вид, что отказал (деньги идут по UTC,
     # вопросы по суткам атлета); иначе — про окно вопросов.
     reset = await ai_limits.resets_at(user_id, block.kind if block is not None else ai_limits.KIND_QUESTION)
     video_used = await db.get_ai_video_count_today(user_id)
-    video_limit = config.AI_VIDEO_DAILY_LIMIT
+    video_limit = 0 if await ai_limits.quota_exempt(user_id) else config.AI_VIDEO_DAILY_LIMIT
     # Сутки квоты — календарные у самого атлета (db._quota_day), поэтому и
     # сброс — его ближайшая полночь, пересчитанная в UTC.
     offset = await db.user_tz_offset(user_id)
