@@ -1747,6 +1747,16 @@
      "type": "Bool",
      "optional": true,
      "default": true
+    },
+    "sessions": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "lastWorkoutAt": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5309,5 +5319,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "076f05311d6191585c2a064f43d3b79b5838db53"
+ "_ios_commit": "ec703f20da98fdc793c1d1893a21d270fa6947bc"
 }
