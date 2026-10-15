@@ -1036,7 +1036,7 @@ async def test_pending_empty_when_nothing_hangs(fresh_db, client_factory, monkey
 
     resp = await client.get("/ai/pending")
     assert resp.status_code == 200
-    assert resp.json() == {"program": None, "questions": None, "actions": [], "turn_in_flight": False}
+    assert resp.json() == {"program": None, "questions": None, "actions": []}
 
 
 @pytest.mark.asyncio
@@ -1103,7 +1103,7 @@ async def test_pending_is_private_per_user(fresh_db, client_factory, monkeypatch
     assert resp_a.json()["program"] is not None
 
     resp_b = await client_b.get("/ai/pending")
-    assert resp_b.json() == {"program": None, "questions": None, "actions": [], "turn_in_flight": False}
+    assert resp_b.json() == {"program": None, "questions": None, "actions": []}
 
 
 # ---------- фото к вопросу (POST /ai/ask, image_data_url) ----------

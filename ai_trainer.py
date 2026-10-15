@@ -60,15 +60,6 @@ logger = logging.getLogger(__name__)
 # Сколько раундов tool-calls разрешаем за один вопрос, чтобы цикл не завис.
 MAX_TOOL_ROUNDS = 6
 
-# Сколько показанных черновиков программы может собрать один ход: первый и
-# одна поправка по подсказкам (объём, описание, пропавшие дни). Живой прогон
-# (тренер собирал программу клиенту): модель трижды подряд звала
-# propose_program, каждый раз получая в ответ «вызови ещё раз», — полторы
-# минуты хода и ~$0.07, а запрос приложения за это время обрывался. Второй
-# показанный черновик — окончательный (см. _final_proposal_content), третий
-# вызов не исполняется (_PROPOSAL_LIMIT_REACHED).
-MAX_PROGRAM_PROPOSALS_PER_TURN = 2
-
 # Сколько последних сессий отдаём модели в get_exercise_progress.
 PROGRESS_SESSIONS_LIMIT = 10
 
@@ -6797,8 +6788,6 @@ async def _ask_plain(
     stale_fragments: list[str] = []
     pending_fragments: list[str] = []
     proposed_program = False
-    # Показанные черновики программы за ход (см. MAX_PROGRAM_PROPOSALS_PER_TURN).
-    shown_proposals = 0
     last_round_tools = with_tools
     for _ in range(MAX_TOOL_ROUNDS + 1):
         # with_tools=False — гейт решил, что данные пользователя вопросу не нужны
@@ -6842,10 +6831,6 @@ async def _ask_plain(
             }
         )
         for tc in tool_calls:
-            if tc.function.name == "propose_program" and shown_proposals >= MAX_PROGRAM_PROPOSALS_PER_TURN:
-                logger.info("AI trainer: propose_program over the per-turn cap for user %s", user_id)
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": _PROPOSAL_LIMIT_REACHED})
-                continue
             try:
                 args = json.loads(tc.function.arguments or "{}")
                 if subject is not None:
@@ -6862,10 +6847,6 @@ async def _ask_plain(
                 tool_content = json.dumps(
                     {"error": "tool failed, answer from what you already have"}
                 )
-            if tc.function.name == "propose_program" and _proposal_shown(tool_content):
-                shown_proposals += 1
-                if shown_proposals >= MAX_PROGRAM_PROPOSALS_PER_TURN:
-                    tool_content = _final_proposal_content(tool_content)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_content})
     else:
         # Раунды с инструментами исчерпаны (см. MAX_TOOL_ROUNDS), а модель на
@@ -6931,51 +6912,6 @@ _EXPLAIN_FINAL_PROGRAM = (
     "стоит, ориентиры стартовых весов — и что сделать дальше: программа ждёт "
     "подтверждения под сообщением. Промежуточные реплики про правки не повторяй."
 )
-
-
-# Поля ответа propose_program, которые зовут модель пересобрать черновик ещё
-# раз. На последнем разрешённом черновике (MAX_PROGRAM_PROPOSALS_PER_TURN) их
-# нет: сам разбор (volume_check, dropped_days) остаётся — модель может сказать
-# о нём атлету словами, — а приглашения повторить нет.
-_REPROPOSE_NUDGES = ("volume_check_note", "description_missing", "dropped_days_note")
-
-_FINAL_PROPOSAL_NOTE = (
-    "Это окончательный черновик этого хода: propose_program больше не вызывай. "
-    "Если в разборе выше что-то осталось неидеальным — скажи атлету словами, "
-    "что поправишь по его просьбе следующим сообщением."
-)
-
-_PROPOSAL_LIMIT_REACHED = json.dumps(
-    {
-        "saved": False,
-        "shown_to_user": False,
-        "error": (
-            "Черновиков в этом ходе уже достаточно — этот вызов не исполнен, под "
-            "сообщением остаётся черновик из прошлого вызова. propose_program больше "
-            "не вызывай: ответь атлету по показанному черновику."
-        ),
-    },
-    ensure_ascii=False,
-)
-
-
-def _proposal_shown(tool_content: str) -> bool:
-    """Показал ли вызов propose_program черновик атлету."""
-    try:
-        payload = json.loads(tool_content)
-    except (TypeError, ValueError):
-        return False
-    return isinstance(payload, dict) and payload.get("shown_to_user") is True
-
-
-def _final_proposal_content(tool_content: str) -> str:
-    """Ответ propose_program на последнем разрешённом черновике хода: без
-    приглашений пересобрать (`_REPROPOSE_NUDGES`) и с прямым «больше не зови»."""
-    payload = json.loads(tool_content)
-    for key in _REPROPOSE_NUDGES:
-        payload.pop(key, None)
-    payload["final"] = _FINAL_PROPOSAL_NOTE
-    return json.dumps(payload, ensure_ascii=False)
 
 
 def _without_stale_fragments(text: str, fragments: list[str]) -> str:

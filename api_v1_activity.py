@@ -147,6 +147,16 @@ def _number(value) -> str:
     return str(value)
 
 
+# Мини-игры между подходами — названиями, как на экране игр в приложении
+# (RestGames.swift). Лента админская и русская; незнакомая игра — её кодом.
+_GAME_TITLES = {
+    "catch": "Не урони",
+    "weigh": "Собери вес",
+    "sort": "Разложи по стойкам",
+    "runner": "Собака бежит",
+}
+
+
 async def describe_detail(body: dict, path_params: dict) -> str:
     """Подробности действия одной строкой: «Жим лёжа · 100×8», «Присед · «100 8»».
 
@@ -173,6 +183,12 @@ async def describe_detail(body: dict, path_params: dict) -> str:
         parts.append(line)
     elif weight is not None:
         parts.append(_number(weight))
+    game = body.get("game")
+    if isinstance(game, str) and game:
+        title = _GAME_TITLES.get(game, game)
+        score = body.get("score")
+        has_score = isinstance(score, (int, float)) and not isinstance(score, bool)
+        parts.append(f"«{title}» — {_number(score)}" if has_score else f"«{title}»")
     for key in _TEXT_FIELDS:
         value = body.get(key)
         if isinstance(value, str) and value.strip():
