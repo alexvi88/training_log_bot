@@ -2239,6 +2239,15 @@ async def _handle_question(
     setup_questions: list[dict] = []
 
     async def collect_questions(questions: list[dict]) -> None:
+        # Ядро опросника ставим сразу, в том же списке: ответ инструмента модели
+        # (ai_trainer.sync_setup_payload) обязан перечислить ровно заданное.
+        # _deliver_setup зовёт то же ещё раз — повтор ничего не меняет.
+        data = await state.get_data()
+        stored = data.get("ai_setup")
+        questions[:] = (await _questions_with_core(
+            user_id, questions, stored if isinstance(stored, dict) else {},
+            for_client=bool(data.get("ai_client")),
+        ))[0]
         # Новый опросник за тот же ход затирает предыдущий — как и черновик
         # программы: показать человеку два опросника подряд нельзя.
         setup_questions.clear()
@@ -2600,8 +2609,9 @@ async def _close_setup_question(bot, chat_id: int, setup: dict, tail: str) -> No
 _setup_answers_text = ai_setup_flow.setup_answers_text
 
 
-# Постановка вопроса о цели первым — общая с REST `/v1` (ai_setup_flow.questions_with_goal).
-_questions_with_goal = ai_setup_flow.questions_with_goal
+# Ядро опросника (цель, дни, время, место, опыт, травмы) первым — общее с REST
+# `/v1` (ai_setup_flow.questions_with_core).
+_questions_with_core = ai_setup_flow.questions_with_core
 
 
 async def _deliver_setup(
@@ -2681,9 +2691,9 @@ async def _deliver_setup(
         await _close_setup_question(
             message.bot, message.chat.id, previous, i18n.t("ai.screen.setup_cancelled")
         )
-    # Программа атлету — вопрос про цель атлета, и профиль тренера тут ни при чём.
+    # Программа атлету — вопросы про атлета, и профиль тренера тут ни при чём.
     goal_kwargs = {"for_client": True} if data.get("ai_client") else {}
-    questions, goal_asked = await _questions_with_goal(user_id, questions, previous, **goal_kwargs)
+    questions, goal_asked = await _questions_with_core(user_id, questions, previous, **goal_kwargs)
     await state.update_data(
         ai_setup={
             "questions": questions,

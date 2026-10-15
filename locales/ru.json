@@ -2294,6 +2294,7 @@
   "ai.screen.setup_fresh.injuries.choice_back": "Спина",
   "ai.screen.setup_fresh.injuries.choice_knees": "Колени",
   "ai.screen.setup_fresh.injuries.choice_shoulders": "Плечи",
+  "ai.screen.setup_core.as_before": "Как раньше: {value}",
   "ai.tool_status.get_training_overview.1": "📋 смотрю общую картину по тренировкам...",
   "ai.tool_status.get_training_overview.2": "🗺️ окидываю взглядом всю картину тренировок...",
   "ai.tool_status.get_training_overview.3": "📊 собираю сводку по твоим тренировкам...",
