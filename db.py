@@ -2077,6 +2077,12 @@ async def close_db() -> None:
         _conn = None
 
 
+def is_open() -> bool:
+    """База открыта. False — до init_db() или уже после close_db() на остановке
+    процесса (деплой): тогда запись «вдогонку» от оборванного вызова писать некуда."""
+    return _conn is not None
+
+
 def conn() -> aiosqlite.Connection:
     assert _conn is not None, "DB not initialized — call init_db() first"
     return _conn
