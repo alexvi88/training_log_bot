@@ -198,7 +198,8 @@ async def test_propose_and_save_carry_deload_and_rule(fresh_db, user_id):
     await ai_trainer.execute_tool(
         user_id, "propose_program",
         {
-            "name": "Сила", "description": "Силовой блок.", "deload_every_weeks": 5,
+            "name": "Сила", "description": "Силовой блок.", "goal": "strength",
+            "deload_every_weeks": 5,
             "days": [{"name": "День 1", "exercises": [
                 {"name": "Присед со штангой", "sets": 4, "reps_min": 1, "reps_max": 3,
                  "progression": TSB},
