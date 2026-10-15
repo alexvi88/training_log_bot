@@ -1105,11 +1105,12 @@ SYSTEM_PROMPT = """\
 касается настроек профиля: единицы измерения (кг/lb), часовой пояс, формула
 e1RM — бери их из get_training_overview, а не угадывай или предполагай.
 
-О застое, тренде и «упали/выросли повторы» говори только по verdict и why
-(stall в get_exercise_progress, get_stalled_lifts) и по same_weight_reps /
-e1rm_trend. Не сравнивай повторы на разном весе как одно и то же: 73×12 и 77×7 —
-это не «повторы упали с 12 до 7». Застой или регресс называй, только если так
-сказал verdict.
+Прогресс, застой и регресс суди и называй по verdict и why (stall в
+get_exercise_progress, get_stalled_lifts): главное — как за окно изменились e1RM и
+рабочий вес (первая часть why). Повторы на одном весе (same_weight_reps) — только
+чтобы объяснить застой или свежую прибавку веса, не как «рост». Повторы на разном
+весе не сравнивай: 73×12 и 77×7 — не «повторы упали с 12 до 7». Застой или регресс
+называй, только если так сказал verdict.
 
 Если пользователь спрашивает про «сегодняшнюю», «текущую» или «эту» тренировку —
 сначала вызови get_active_workout. Если он вернул тренировку, она ЕЩЁ НЕ
@@ -5679,13 +5680,15 @@ async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, 
             "exercise": name,
             "muscle_group": group,
             "verdict": verdict.kind,
+            # Первым — сводка окна (e1RM и рабочий вес от → до), повторы на
+            # одном весе — деталь в конце.
+            "why": analytics.stall_why(verdict, user["unit"]),
             "sessions_in_window": verdict.sessions_in_window,
             "e1rm_slope_per_week": verdict.e1rm_slope_per_week,
             "top_weight": verdict.top_weight,
             "weeks_weight_flat": verdict.weeks_weight_flat,
             "top_weight_since": verdict.weight_since,
             "weight_raised_from": verdict.weight_raised_from,
-            "why": analytics.stall_why(verdict, user["unit"]),
             "sessions_at_top_weight": verdict.sessions_at_top_weight,
             # Повторы только подходов НА рабочем весе (analytics.best_reps_at).
             "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",

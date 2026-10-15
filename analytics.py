@@ -1227,6 +1227,13 @@ class StallVerdict:
     # называл оба факта, а не один удобный.
     e1rm_peak: Optional[tuple[str, float, int, float]] = None
     e1rm_latest: Optional[tuple[str, float, int, float]] = None
+    # Первая точка окна — начало главного факта «e1RM и рабочий вес от → до».
+    e1rm_first: Optional[tuple[str, float, int, float]] = None
+    # Рабочий вес первой сессии окна (у последней — top_weight).
+    first_top_weight: float = 0.0
+    # Для веса тела — лучшие повторы первой и последней сессии окна.
+    reps_window: Optional[tuple[str, int, str, int]] = None
+    window_weeks: int = STALL_WINDOW_WEEKS
     # Одиночные лёгкие сессии окна, не взятые в расчёт: (дата, "20×8, ...").
     light_sessions: list[tuple[str, str]] = field(default_factory=list)
 
@@ -1382,6 +1389,14 @@ def classify_stall(
         e1rm_peak=max(marks, key=lambda m: m[3]) if marks else None,
         e1rm_latest=marks[-1] if marks else None,
         light_sessions=skipped,
+        e1rm_first=marks[0] if marks else None,
+        first_top_weight=_session_top_weight(window[0]),
+        window_weeks=window_weeks,
+        reps_window=(
+            (window[0].started_at[:10], window[0].max_reps_in_set,
+             window[-1].started_at[:10], window[-1].max_reps_in_set)
+            if bodyweight_only else None
+        ),
     )
 
 
@@ -1525,20 +1540,33 @@ def stall_facts(sessions: list[SessionStats], today: dt.date, unit: str) -> dict
 def stall_why(v: StallVerdict, unit: str) -> str:
     """Строка фактов к вердикту — одна на get_exercise_progress и
     get_stalled_lifts: модель пересказывает её, а не выводит сама."""
-    parts = [f"{v.sessions_in_window} sessions in {STALL_WINDOW_WEEKS} weeks"]
+    parts: list[str] = []
+    # Главный факт — первым: как изменились e1RM и рабочий вес за окно. Повторы
+    # на одном весе дальше — только деталь к застою или свежей прибавке.
+    if v.e1rm_first is not None and v.e1rm_latest is not None:
+        f, last = v.e1rm_first, v.e1rm_latest
+        pct = f" ({(last[3] - f[3]) / f[3] * 100:+.0f}%)" if f[3] > 0 else ""
+        parts.append(
+            f"{f[0]}→{last[0]}: best e1RM {f[3]:g}→{last[3]:g} {unit}{pct}, "
+            f"top weight {_fmt(v.first_top_weight)}→{_fmt(v.top_weight)} {unit}"
+        )
+    elif v.reps_window is not None:
+        d0, r0, d1, r1 = v.reps_window
+        parts.append(f"{d0}→{d1}: bodyweight, best reps {r0}→{r1}")
+    parts.append(f"{v.sessions_in_window} sessions in {v.window_weeks} weeks")
     if v.e1rm_slope_per_week is not None:
         what = "best reps" if v.weight_since is None else "best e1RM"
         per = "" if v.weight_since is None else f" {unit}"
         parts.append(
             f"{what} slope {v.e1rm_slope_per_week:+g}{per}/week ({v.slope_pct_per_week:+g}%/week)"
         )
-    if v.e1rm_peak is not None and v.e1rm_latest is not None:
+    if (
+        v.e1rm_peak is not None and v.e1rm_latest is not None
+        and v.e1rm_peak not in (v.e1rm_latest, v.e1rm_first)
+    ):
         def _mark(m: tuple[str, float, int, float]) -> str:
             return f"{m[3]:g} ({_fmt(m[1])}×{m[2]}, {m[0]})"
-        if v.e1rm_peak == v.e1rm_latest:
-            parts.append(f"best e1RM in window is the latest: {_mark(v.e1rm_latest)}")
-        else:
-            parts.append(f"best e1RM {_mark(v.e1rm_peak)} → latest {_mark(v.e1rm_latest)}")
+        parts.append(f"peak e1RM {_mark(v.e1rm_peak)} → latest {_mark(v.e1rm_latest)}")
     if v.weight_raised_from is not None:
         parts.append(
             f"weight raised {_fmt(v.weight_raised_from)}→{_fmt(v.top_weight)} {unit} "
@@ -1546,14 +1574,12 @@ def stall_why(v: StallVerdict, unit: str) -> str:
         )
     if v.weight_since is not None:
         parts.append(
-            f"top weight {_fmt(v.top_weight)} {unit} since {v.weight_since} "
+            f"detail: top weight {_fmt(v.top_weight)} {unit} since {v.weight_since} "
             f"({v.weeks_weight_flat:g} weeks, {v.sessions_at_top_weight} sessions on it)"
         )
         parts.append(
             f"reps at {_fmt(v.top_weight)} {unit}: {v.reps_at_top_first}→{v.reps_at_top_last}"
         )
-    else:
-        parts.append(f"bodyweight, best reps {v.reps_at_top_first}→{v.reps_at_top_last}")
     for day, sets in v.light_sessions:
         parts.append(f"{day}: only {sets} — looks like warm-up or not fully logged, left out of trend")
     return "; ".join(parts)
@@ -1565,9 +1591,11 @@ def progress_facts(
     """Все четыре факта для get_exercise_progress. `recent` — сколько
     последних сессий смотрит same_weight_reps: ровно те, что модель видит
     списком, чтобы даты в фактах совпадали с датами в истории."""
+    # Порядок — по важности: вердикт со сводкой окна (e1RM и вес от → до)
+    # первым, повторы на одном весе — последней деталью.
     return {
-        "same_weight_reps": same_weight_reps(sessions[-recent:]),
-        "e1rm_trend": e1rm_trend(sessions, today),
         "stall": stall_facts(sessions, today, unit),
+        "e1rm_trend": e1rm_trend(sessions, today),
         "weight_increase": weight_increase(sessions, today),
+        "same_weight_reps": same_weight_reps(sessions[-recent:]),
     }
