@@ -1694,10 +1694,31 @@ def admin_ai_dialogs_back_keyboard(page: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def row_value(row, key: str):
+    """Поле строки БД или dict; None, если такого поля нет (sqlite3.Row
+    `in` проверяет значения, а не ключи — поэтому через исключение)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def admin_user_label(username: Optional[str], email: Optional[str], telegram_id: int) -> str:
+    """Как назвать пользователя в админских экранах: @ник, иначе почта из входа
+    (у аккаунтов только из приложения ника нет), иначе id."""
+    if username:
+        return f"@{username}"
+    if email:
+        return email
+    return str(telegram_id)
+
+
 def admin_activity_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for u in users:
-        name = f"@{u['username']}" if u["username"] else str(u["telegram_id"])
+        name = admin_user_label(
+            u["username"], row_value(u, "email"), u["telegram_id"]
+        )
         b.button(text=f"{name} ({u['event_count']})", callback_data=f"admin:acu:{u['telegram_id']}")
     nav = []
     if page > 0:
