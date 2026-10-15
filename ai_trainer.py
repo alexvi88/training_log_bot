@@ -1,27 +1,26 @@
 """AI-тренер: ответы на вопросы пользователя с доступом к его данным в БД.
 
-Grok (xAI) ходит через OpenAI-совместимый endpoint — тот же стек и те же env
-переменные (XAI_API_KEY / GROK_MODEL / GROK_BASE_URL), что и в fun_bot, так что
-один ключ обслуживает оба бота. Модель получает read-only инструменты
+Модель одна — OpenAI GPT-6 Luna (config.OPENAI_CHAT_MODEL), ключ
+OPENAI_API_KEY, тот же, что у расшифровки голоса. Модель получает инструменты
 (function calling) поверх данных пользователя, каждый из которых замкнут на
 user_id текущего пользователя на уровне executor'а, поэтому модель физически
 не может прочитать чужие данные.
 
-Пока у пользователя не исчерпана дневная квота (config.AI_SEARCH_DAILY_LIMIT),
-перед основным ответом дешёвый гейт-классификатор на config.GROK_MODEL (см.
-ask/_gate_verdict) решает, нужен ли вопросу живой поиск; и только если
-нужен — поднимается отдельный шаг через xAI's gRPC "Agent Tools" SDK на
-multi-agent-модели (config.GROK_SEARCH_MODEL) с web_search/x_search, без наших
-DB-инструментов. Инструменты приходится разводить по разным вызовам:
-смешивание client-side function tools (наши DB-инструменты) с multi-agent
-моделью в одном запросе требует xAI beta access, которого у аккаунта нет —
-а чисто server-side-only поиск под это ограничение не попадает (так же как в
-fun_bot, см. его grok.py, где нет своих function tools вовсе). Реальное
-использование поиска считается по citations/server_side_tool_usage в ответе,
-а не по факту, что инструмент был просто предложен; если поиск не нужен или
-шаг не удался (сеть, rate limit и т.п.), основной ответ просто идёт без
-найденного контекста. Основной ответ всегда — обычный REST-вызов с полным
-набором DB-инструментов, плюс находки поиска сверху, если они есть.
+Главный цикл с инструментами идёт через Responses API (_responses_round): в
+/v1/chat/completions gpt-6-luna не принимает инструменты вместе с рассуждением.
+Короткие вызовы без инструментов (гейт, комментарий к тренировке, дайджест,
+разбор поста, сводка импорта, сопоставление названий) — chat/completions
+(_model_kwargs, effort config.OPENAI_QUICK_REASONING_EFFORT), там, где ответ
+машинный, — со строгой JSON-схемой (structured outputs).
+
+Живой поиск — отдельный шаг перед основным ответом: Responses API со встроенным
+web_search (_openai_web_search_findings), без наших DB-инструментов. Поднимается
+он только по гейту и пока не исчерпаны квоты (ai_limits); не нужен или не удался —
+основной ответ идёт без найденного. Поиска по X больше нет.
+
+Фото в вопросе смотрит config.OPENAI_VISION_MODEL (по умолчанию та же Luna) —
+одна точка, vision_backend(). Видео разбирает отдельная модель
+(video_analysis.py, Novita), говорит про него тренер.
 """
 
 import asyncio
@@ -36,13 +35,6 @@ from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
 from openai import APITimeoutError, AsyncOpenAI, AsyncStream
-from xai_sdk import AsyncClient as AsyncXAIClient
-from xai_sdk.chat import assistant as xai_assistant
-from xai_sdk.chat import image as xai_image
-from xai_sdk.chat import system as xai_system
-from xai_sdk.chat import user as xai_user
-from xai_sdk.tools import web_search as xai_web_search
-from xai_sdk.tools import x_search as xai_x_search
 
 import ai_limits
 import analytics
@@ -205,13 +197,13 @@ def _light_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # следующего среза, иначе это снова промах. Следующий срез сжимает
 # «старая заметка + новый выброшенный кусок» в одну.
 
-# Ключ, которым помечена заметка в истории. Провайдерам он не уходит:
-# _wire_messages снимает его для grok, _responses_input собирает элементы Luna
-# только из role/content.
+# Ключ, которым помечена заметка в истории. Провайдеру он не уходит:
+# _wire_messages снимает его для chat-вызовов, _responses_input собирает
+# элементы только из role/content.
 HISTORY_SUMMARY_KEY = "history_summary"
 
 # Заметка — системное сообщение: это контекст для тренера, а не его реплика, и
-# так её принимают оба провайдера в середине разговора (так же едут наблюдения
+# так её принимает модель в середине разговора (так же едут наблюдения
 # по видео). Заголовок — фиксированный, без даты и прочего меняющегося.
 _HISTORY_SUMMARY_HEADER = (
     "Заметка о начале этого разговора: ранние сообщения убраны из контекста, "
@@ -268,17 +260,15 @@ def _history_summary_text(message: dict[str, Any]) -> str:
 
 
 def _message_wire_chars(backend: Optional["ChatBackend"], message: dict[str, Any]) -> int:
-    """Сколько символов это сообщение займёт в запросе к ЭТОМУ бэкенду.
+    """Сколько символов это сообщение займёт в запросе главного цикла.
 
     Luna получает не chat-форму, а элементы Responses (_responses_input): сырой
-    output хода с зашифрованным рассуждением ВМЕСТО текста ответа. Grok — chat-
-    форму без полей Luna. Мерить сохранённый словарь целиком значило бы считать
-    ход Luna дважды (текст и его же копию в output) и резать раньше, чем надо.
+    output хода с зашифрованным рассуждением ВМЕСТО текста ответа. Мерить
+    сохранённый словарь целиком значило бы считать ход дважды (текст и его же
+    копию в output) и резать раньше, чем надо. backend остался в подписи ради
+    мест вызова: модель одна.
     """
-    if backend is not None and backend.is_openai:
-        payload: Any = _responses_input([message])
-    else:
-        payload = {k: v for k, v in message.items() if k not in (OPENAI_OUTPUT_KEY, HISTORY_SUMMARY_KEY)}
+    payload: Any = _responses_input([message])
     return len(json.dumps(payload, ensure_ascii=False)) + 1
 
 
@@ -288,7 +278,7 @@ def _turn_starts(history: list[dict[str, Any]]) -> list[int]:
     Начало хода — вопрос атлета (role=user) вместе с системными вставками прямо
     перед ним (наблюдения по видео, находки поиска едут перед вопросом своего
     хода). Внутри хода резать нельзя: tool без своего assistant(tool_calls) —
-    у xAI и OpenAI это ошибка всего запроса, а у Luna рассуждение едет в том же
+    у OpenAI это ошибка всего запроса, а у Luna рассуждение едет в том же
     assistant-сообщении, что и вызов (OPENAI_OUTPUT_KEY), и от него не отрывается.
     На всякий случай проверяем и явно: каждый tool в окне должен иметь свой
     вызов в том же окне. Нулевой индекс не берём — срез с самого начала ничего не
@@ -481,44 +471,6 @@ async def _step_trimmed_history(
     return window
 
 
-async def _log_server_tool_calls(user_id: Optional[int], response: Any) -> None:
-    """Вызовы серверных инструментов xAI — отдельная строка счёта, помимо токенов.
-
-    web_search и x_search стоят $5 за 1000 вызовов СВЕРХ токенов, и в usage по
-    токенам их нет вовсе. В консоли за неделю это было видно как «Web searches:
-    136 calls — $0.68», то есть 15% текстового счёта, полностью невидимые у нас.
-
-    Считаем по response.server_side_tool_usage: SDK отдаёт Counter по списку
-    использованных инструментов, то есть настоящее число вызовов, а не «был или
-    не был». Пишем по строке на вызов — так дневной отчёт считает их простым
-    COUNT, как расшифровки голосовых, и новая колонка не нужна.
-    """
-    usage = getattr(response, "server_side_tool_usage", None) or {}
-    for tool_name, calls in usage.items():
-        for _ in range(max(0, int(calls))):
-            try:
-                await db.log_cost_event(user_id, "server_tool", model=tool_name)
-            except Exception:
-                logger.exception("failed to log server tool cost event")
-
-
-def _reasoning_of(message_or_delta: Any) -> str:
-    """reasoning_content из ответа xAI, если он там есть.
-
-    Поле нестандартное для OpenAI-схемы, поэтому SDK кладёт его в model_extra, а
-    не в атрибут — читаем оба места. Нужно оно не для показа (пользователю
-    размышления не идут), а для КЭША: по документации xAI отсутствие
-    reasoning_content в отправленной назад истории — причина промахов номер один
-    у ризонинговых моделей, а промах по нашей шапке в одиннадцать тысяч токенов
-    стоит вчетверо дороже попадания.
-    """
-    direct = getattr(message_or_delta, "reasoning_content", None)
-    if direct:
-        return direct
-    extra = getattr(message_or_delta, "model_extra", None) or {}
-    return extra.get("reasoning_content") or ""
-
-
 def _estimate_tokens_from_text(text: str) -> int:
     """Грубая прикидка токенов, когда провайдер их не прислал (см. _completion_round).
 
@@ -544,15 +496,13 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, sourc
     """
     prompt_tokens = usage.prompt_tokens if usage else 0
     completion_tokens = usage.completion_tokens if usage else 0
-    # Сколько входа приехало из кэша, если провайдер это сообщает: у xAI совпавший
-    # префикс (system + схемы инструментов, около десяти тысяч токенов — см.
-    # _cache_headers) стоит сильно дешевле полной ставки. Строку с ценой печатает
-    # db.log_cost_event — там сходятся все платные вызовы.
+    # Сколько входа приехало из кэша: у OpenAI совпавший префикс (system + схемы
+    # инструментов — см. _cache_key) стоит 10% полной ставки. Размышления у
+    # OpenAI уже внутри completion_tokens (config.REASONING_INCLUDED_IN_COMPLETION).
+    # Поля читаем защитно и из запасных мест: так же сюда пишут разбор видео и
+    # usage, собранный из Responses API (_responses_usage). Строку с ценой
+    # печатает db.log_cost_event — там сходятся все платные вызовы.
     details = getattr(usage, "prompt_tokens_details", None)
-    # У xAI кэш и размышления лежат в разных полях usage, и какие из них приезжают
-    # через OpenAI-совместимый эндпоинт — вопрос открытый, поэтому читаем и те, и
-    # другие защитно, из обоих возможных мест (SamplingUsage в gRPC зовёт их
-    # cached_prompt_text_tokens и reasoning_tokens).
     out_details = getattr(usage, "completion_tokens_details", None)
     cached = (
         getattr(details, "cached_tokens", None)
@@ -612,14 +562,13 @@ async def _log_aborted_call(
     prompt_tokens: Optional[int] = None,
     completion_tokens: int = 0,
     server_tool_calls: int = 0,
-    server_tool_name: str = "web_search",
+    server_tool_name: str = config.OPENAI_WEB_SEARCH_TOOL,
     source: str = "bot",
 ) -> None:
     """Оценка цены вызова, оборванного таймаутом/отменой: токены промпта по длине
     запроса (~4 символа на токен, как у стрима), выход — не считаем.
 
-    server_tool_name — имя инструмента в cost_events: "web_search" у xAI,
-    config.OPENAI_WEB_SEARCH_TOOL у OpenAI (ставки разные)."""
+    server_tool_name — имя инструмента в cost_events (config.OPENAI_WEB_SEARCH_TOOL)."""
     if prompt_tokens is None:
         prompt_tokens = (
             _estimate_tokens_from_messages(messages) if messages else _ABORT_FALLBACK_PROMPT_TOKENS
@@ -664,7 +613,7 @@ async def paid_call(
     kind: Optional[str],
     coro_factory: Callable[[], Awaitable[Any]],
     *,
-    model: str = config.GROK_MODEL,
+    model: str = config.OPENAI_CHAT_MODEL,
     source: str = "bot",
     on_block: Optional[Callable[[ai_limits.Block], Awaitable[None]]] = None,
     messages: Optional[list[dict[str, Any]]] = None,
@@ -725,15 +674,16 @@ async def paid_call(
 
 
 def is_configured() -> bool:
-    return bool(config.XAI_API_KEY)
+    return bool(config.OPENAI_API_KEY)
 
 
 def _get_client() -> AsyncOpenAI:
+    """Единственный клиент текстовых вызовов тренера — OpenAI (Luna)."""
     global _client
     if _client is None:
         _client = AsyncOpenAI(
-            api_key=config.XAI_API_KEY,
-            base_url=config.GROK_BASE_URL,
+            api_key=config.OPENAI_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
             timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
             # SDK's default (2 retries) silently re-fires a paid completion on
             # timeout/5xx — up to three billed generations for one user tap.
@@ -761,33 +711,6 @@ def _get_audio_client() -> AsyncOpenAI:
     return _audio_client
 
 
-# --- Какой моделью отвечает тренер (grok по умолчанию, Luna — своим) ----------
-#
-# Проба OpenAI GPT-6 Luna вместо grok на текстовых вызовах тренера — только
-# для своих аккаунтов (config.ai_model_switch_ids), переключатель в профиле
-# (users.ai_model). Обычный атлет идёт ровно прежним путём: тот же клиент, те же
-# параметры запроса байт в байт (см. _model_kwargs) — его кэш не трогается.
-#
-# Не переключаются: живой поиск (xAI gRPC, GROK_SEARCH_MODEL — это инструмент
-# xAI), разбор видео (Novita), расшифровка голоса и разбор импорта (strict-схемы
-# на Luna не проверены, шаг разовый). Суточный разбор лога для админа — своей
-# моделью OpenAI (config.OPENAI_ADMIN_DIGEST_MODEL, behaviour_digest).
-
-_openai_chat_client: Optional[AsyncOpenAI] = None
-
-
-def _get_openai_chat_client() -> AsyncOpenAI:
-    global _openai_chat_client
-    if _openai_chat_client is None:
-        _openai_chat_client = AsyncOpenAI(
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
-            timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
-            max_retries=0,  # same reasoning as _get_client — no silent paid retries
-        )
-    return _openai_chat_client
-
-
 class ChatBackend(NamedTuple):
     """Чем отвечает тренер на этом ходе: клиент, модель, глубина размышлений.
 
@@ -797,60 +720,30 @@ class ChatBackend(NamedTuple):
 
     client: AsyncOpenAI
     model: str
-    effort: str        # главный цикл с инструментами
+    effort: str        # главный цикл с инструментами (Responses API)
     quick_effort: str  # гейт, комментарий, дайджест, разбор поста, сводка тренера
-    name: str          # config.AI_MODEL_GROK | config.AI_MODEL_LUNA
-
-    @property
-    def is_openai(self) -> bool:
-        return self.name == config.AI_MODEL_LUNA
-
-
-def grok_backend() -> ChatBackend:
-    return ChatBackend(
-        client=_get_client(),
-        model=config.GROK_MODEL,
-        effort=config.GROK_REASONING_EFFORT,
-        quick_effort=config.GROK_QUICK_REASONING_EFFORT,
-        name=config.AI_MODEL_GROK,
-    )
 
 
 def luna_backend() -> ChatBackend:
     return ChatBackend(
-        client=_get_openai_chat_client(),
+        client=_get_client(),
         model=config.OPENAI_CHAT_MODEL,
         effort=config.OPENAI_REASONING_EFFORT,
         quick_effort=config.OPENAI_QUICK_REASONING_EFFORT,
-        name=config.AI_MODEL_LUNA,
     )
 
 
-async def ai_model_for(user_id: Optional[int]) -> str:
-    """Выбранная модель тренера: 'grok' | 'luna'. Чужому аккаунту — всегда grok,
-    что бы ни лежало в базе: в базу не смотрим вовсе."""
-    if not await db.ai_model_switch_allowed(user_id):
-        return config.AI_MODEL_GROK
-    try:
-        raw = await db.get_user_ai_model(user_id)
-    except Exception:
-        logger.exception("ai_model lookup failed for user %s, using grok", user_id)
-        return config.AI_MODEL_GROK
-    return raw if raw in config.AI_MODEL_CHOICES else config.AI_MODEL_GROK
+def vision_backend() -> ChatBackend:
+    """Ход или вызов с фото — config.OPENAI_VISION_MODEL. Одна точка: окажись у
+    Luna зрение хуже нужного, фото переезжает на другую модель OpenAI сменой env,
+    без правок кода. По умолчанию это та же Luna."""
+    return luna_backend()._replace(model=config.OPENAI_VISION_MODEL)
 
 
 async def chat_backend(user_id: Optional[int]) -> ChatBackend:
-    """Бэкенд текстовых вызовов тренера для этого человека.
-
-    Зовётся ОДИН раз на ход (ask) или вызов: смена модели посреди разговора —
-    промах кэша по всей шапке, поэтому переключатель в профиле действует со
-    следующего вопроса, а не с середины текущего.
-    """
-    if await ai_model_for(user_id) == config.AI_MODEL_LUNA:
-        if config.OPENAI_API_KEY:
-            return luna_backend()
-        logger.warning("ai_model=luna for user %s, but OPENAI_API_KEY is not set — using grok", user_id)
-    return grok_backend()
+    """Бэкенд текстовых вызовов тренера. Модель одна на всех (Luna); user_id
+    остался в подписи ради мест вызова — выбора модели больше нет."""
+    return luna_backend()
 
 
 # Запас под размышления у OpenAI: там они расходуют тот же
@@ -873,55 +766,54 @@ def _model_kwargs(
     quick: bool,
     scope: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Параметры запроса под бэкенд: модель, потолок, глубина, ключ кэша.
+    """Параметры chat/completions-запроса: модель, потолок, глубина, ключ кэша.
 
-    grok — ровно то, что уезжало всегда: max_tokens, reasoning_effort в
-    extra_body и x-grok-conv-id (_cache_headers) при заданном scope.
-
-    Luna (OpenAI Chat Completions): reasoning-модели OpenAI не принимают
-    max_tokens — только max_completion_tokens; роутинг кэша у OpenAI — параметр
-    prompt_cache_key, а не заголовок. Оба через extra_body: SDK в проекте
-    (openai 1.57) prompt_cache_key не знает, а «none» нет в его подсказках типов.
+    reasoning-модели OpenAI не принимают max_tokens — только
+    max_completion_tokens; роутинг кэша — параметр prompt_cache_key (scope
+    разводит вызовы с РАЗНЫМИ системными промптами по разным слотам, см.
+    _cache_key). Оба через extra_body: SDK в проекте (openai 1.57)
+    prompt_cache_key не знает, а «none» нет в его подсказках типов.
     """
     effort = backend.quick_effort if quick else backend.effort
-    if backend.is_openai:
-        extra: dict[str, Any] = {"reasoning_effort": effort}
-        if scope is not None and user_id is not None:
-            extra["prompt_cache_key"] = f"{scope}-{user_id}"
-        budget = max_tokens + _reasoning_headroom(effort)
-        return {"model": backend.model, "max_completion_tokens": budget, "extra_body": extra}
-    kwargs: dict[str, Any] = {
-        "model": backend.model,
-        "max_tokens": max_tokens,
-        "extra_body": {"reasoning_effort": effort},
-    }
-    if scope is not None:
-        kwargs["extra_headers"] = _cache_headers(user_id, scope=scope)
-    return kwargs
+    extra: dict[str, Any] = {"reasoning_effort": effort}
+    key = _cache_key(user_id, scope)
+    if key is not None:
+        extra["prompt_cache_key"] = key
+    budget = max_tokens + _reasoning_headroom(effort)
+    return {"model": backend.model, "max_completion_tokens": budget, "extra_body": extra}
 
 
-def _wire_messages(backend: ChatBackend, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Сообщения в том виде, в каком их примет бэкенд.
+def _cache_key(user_id: Optional[int], scope: Optional[str]) -> Optional[str]:
+    """prompt_cache_key запроса: OpenAI роутит запросы с одним ключом на одну
+    машину, и совпавший префикс там берётся из кэша (вход в 10 раз дешевле).
 
-    grok получает список как есть (тот же объект — префикс не трогаем).
-    OpenAI проверяет поля сообщений строго, а reasoning_content — поле xAI: в
-    истории оно лежит у ходов, отвеченных grok'ом, и для Luna его снимаем.
-    (Главный цикл Luna сюда не ходит — он собирает input Responses API сам,
-    _responses_input; это для quick-вызовов на chat/completions.)
-    """
-    # Пометка заметки о начале разговора (HISTORY_SUMMARY_KEY) — наша, не
-    # провайдера: не уходит никому.
-    if not backend.is_openai:
-        # Сырые элементы Responses API (OPENAI_OUTPUT_KEY) — поле Luna-хода:
-        # атлет переключился обратно на grok — снимаем. В истории без Luna-ходов
-        # и без заметки список уходит тем же объектом, как всегда.
-        private = (OPENAI_OUTPUT_KEY, HISTORY_SUMMARY_KEY)
-        if not any(key in m for m in messages for key in private):
-            return messages
-        return [{k: v for k, v in m.items() if k not in private} for m in messages]
-    private = ("reasoning_content", HISTORY_SUMMARY_KEY)
+    Ключ — пользователь, потому что кэшируется ровно его растущий диалог: общая
+    шапка (system + схемы инструментов) одинакова у всех, а дальше к ней
+    прирастает его собственная история.
+
+    scope разводит по разным ключам вызовы с РАЗНЫМИ системными промптами. У
+    гейта (_gate_verdict) промпт свой и втрое короче, общего с основным у них
+    почти ничего — под одним ключом они вытесняли друг друга из одного слота
+    (лог прода у прежнего провайдера: основной вызов после гейта падал с
+    14080 токенов из кэша до 128 — вчетверо дороже самого запроса)."""
+    if scope is None or user_id is None:
+        return None
+    return f"{scope}-{user_id}"
+
+
+def _wire_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сообщения истории в том виде, в каком их примет chat/completions.
+
+    OpenAI проверяет поля сообщений строго: reasoning_content (поле прежнего
+    провайдера, лежит в старых историях), сырые элементы Responses API
+    (OPENAI_OUTPUT_KEY) и наша пометка заметки о начале разговора
+    (HISTORY_SUMMARY_KEY) — не поля chat-сообщения, их снимаем. Главный цикл
+    сюда не ходит — он собирает input Responses API сам (_responses_input)."""
+    private = ("reasoning_content", OPENAI_OUTPUT_KEY, HISTORY_SUMMARY_KEY)
+    if not any(key in m for m in messages for key in private):
+        return messages
     return [
-        {k: v for k, v in m.items() if k not in private} if any(key in m for key in private) else m
+        {k: v for k, v in m.items() if k not in private}
         for m in messages
     ]
 
@@ -982,59 +874,6 @@ async def transcribe_voice(
     except Exception:
         logger.exception("failed to log transcription cost event")
     return (response.text or "").strip()
-
-
-# AsyncXAIClient owns a grpc.aio channel bound to whatever asyncio loop is
-# current at construction time. Building it at import time (before the bot's
-# real loop exists) would bind it to the wrong loop, so it's built lazily on
-# first use instead — same reasoning as fun_bot's grok.py.
-_sdk_client: Optional[AsyncXAIClient] = None
-_sdk_client_lock = asyncio.Lock()
-
-
-def _cache_headers(user_id: Optional[int], *, scope: str = "trainer") -> dict[str, str]:
-    """Заголовок, которым xAI роутит запрос на тот же сервер, что и прошлый.
-
-    Кэш входа у xAI работает сам по себе — платим за совпавший префикс по
-    сильно сниженной ставке, — но попадание в него зависит от того, попадёт ли
-    запрос на сервер, где этот префикс уже лежит. Без явного conv-id это
-    лотерея, и в консоли она видна: половина токенов префикса уезжает мимо
-    кэша по полной цене.
-
-    Ключ — пользователь, потому что кэшируется ровно его растущий диалог:
-    общая часть (system + схемы инструментов, вместе около одиннадцати тысяч
-    токенов) одинакова у всех и осядет на его сервере с первого же запроса, а
-    дальше к ней прирастает его собственная история.
-
-    scope разводит по разным ключам вызовы с РАЗНЫМИ системными промптами. У
-    гейта (_gate_verdict, SEARCH_DECISION_SYSTEM_PROMPT) промпт свой и втрое
-    короче, общего с основным у них почти ничего — а ходили они под одним
-    conv-id, то есть в один слот кэша. В логах прода это выглядело так:
-
-        14:57:20  main: 14855 токенов (из кэша 14080)   ← тепло
-        14:59:56  гейт: 1318 токенов  (из кэша 896)     ← гейт занял слот
-        15:00:06  main: 12203 токенов (из кэша 128)     ← основному не осталось
-
-    Между тёплым и холодным основным вызовом — две минуты и ни одного
-    перезапуска, так что дело не в TTL и не в деплое. Холодный основной вызов
-    стоит ~$0.026 против ~$0.006 тёплого, то есть вытеснение слота вчетверо
-    дороже самого запроса.
-    """
-    return {"x-grok-conv-id": f"{scope}-{user_id}"} if user_id is not None else {}
-
-
-async def _get_sdk_client() -> AsyncXAIClient:
-    global _sdk_client
-    if _sdk_client is None:
-        async with _sdk_client_lock:
-            if _sdk_client is None:
-                # Клиент SDK ходит ровно в один шаг — живой поиск (см.
-                # _web_search_findings), — поэтому и часы у него свои: см.
-                # config.AI_SEARCH_TIMEOUT_SECONDS.
-                _sdk_client = AsyncXAIClient(
-                    api_key=config.XAI_API_KEY, timeout=config.AI_SEARCH_TIMEOUT_SECONDS
-                )
-    return _sdk_client
 
 
 SYSTEM_PROMPT = """\
@@ -1628,7 +1467,7 @@ def _with_language_tail(prompt: str) -> str:
     в промпт: остальной код зовёт эту функцию, а не пишет "по-русски"/"in English"
     сам по месту, — так этот приём невозможно случайно обойти.
 
-    ПОЧЕМУ ИМЕННО В ХВОСТЕ. Кэшированный вход у xAI в 6.7 раза дешевле обычного,
+    ПОЧЕМУ ИМЕННО В ХВОСТЕ. Кэшированный вход у OpenAI в 10 раз дешевле обычного,
     но кэш живёт только на НЕИЗМЕННОМ префиксе (см. CLAUDE.md, «Сколько это
     стоит»). Языковая директива в начале или середине промпта расщепила бы кэш
     на ru/en с самого первого токена — и переплачивали бы ВСЕ пользователи,
@@ -1665,7 +1504,7 @@ def _system_prompt() -> str:
 
 
 SEARCH_SYSTEM_PROMPT = """\
-Ты решаешь, нужен ли живой веб/X-поиск для вопроса пользователя AI-тренеру в
+Ты решаешь, нужен ли живой веб-поиск для вопроса пользователя AI-тренеру в
 Telegram-боте дневника силовых тренировок, и если нужен — сразу его выполняешь.
 
 Используй поиск только для вопросов, которые выходят за рамки личных данных
@@ -1867,9 +1706,8 @@ async def fact_check_post(
             {"type": "text", "text": post_text},
             {"type": "image_url", "image_url": {"url": image_data_url}},
         ]
-    # Картинка едет той же моделью, что выбрана в профиле: Luna смотрит фото
-    # сама (image_url в chat-форме OpenAI понимает), чужим аккаунтам — grok.
-    backend = await chat_backend(user_id)
+    # С картинкой — vision_backend() (config.OPENAI_VISION_MODEL).
+    backend = vision_backend() if image_data_url else await chat_backend(user_id)
     messages = [
         # Хендлер уже выставил язык через middleware (см. _with_language_tail) —
         # разбор поста происходит синхронно внутри обработки апдейта, отдельного
@@ -1880,8 +1718,8 @@ async def fact_check_post(
     async with _bill_if_aborted(user_id, backend.model, messages=messages):
         response = await backend.client.chat.completions.create(
             # Свой scope кэша: системный промпт с основным чатом почти не пересекается,
-            # и под общим conv-id этот вызов вытеснял бы тёплый слот основного диалога
-            # (см. _cache_headers).
+            # и под общим ключом этот вызов вытеснял бы тёплый слот основного диалога
+            # (см. _cache_key).
             **_model_kwargs(backend, user_id, max_tokens=700, quick=True, scope="fact_check"),
             messages=messages,
         )
@@ -1942,7 +1780,7 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         card_text = await workout_card_for_model(user, workout)
         # Первая тренировка в дневнике — строкой в данных запроса, а не в
         # системном промпте: тот общий у всех и должен оставаться неизменным
-        # префиксом (кэш xAI, см. CLAUDE.md). Без неё «отметь, что не так» из
+        # префиксом (кэш входа, см. CLAUDE.md). Без неё «отметь, что не так» из
         # промпта превращало разбор первой тренировки в список недоборов.
         if await _is_first_workout(user_id, workout_id):
             card_text += "\n\n" + i18n.t("ai.comment.first_workout_note")
@@ -1953,8 +1791,8 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
             lambda: backend.client.chat.completions.create(
                 # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
                 # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
-                # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
-                # вопрос тренеру (см. docstring _cache_headers).
+                # ключом кэша, что и main, это гарантированный промах по нему на
+                # СЛЕДУЮЩИЙ вопрос тренеру (см. docstring _cache_key).
                 **_model_kwargs(backend, user_id, max_tokens=700, quick=True, scope="workout_comment"),
                 messages=[
                     {
@@ -2119,8 +1957,8 @@ async def weekly_digest(user_id: int) -> Optional[str]:
                 user_id, None,
                 lambda: backend.client.chat.completions.create(
                     # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
-                    # основного чата, под общим conv-id вытеснял бы её слот раз в
-                    # неделю (см. docstring _cache_headers).
+                    # основного чата, под общим ключом кэша вытеснял бы её слот раз
+                    # в неделю (см. docstring _cache_key).
                     **_model_kwargs(backend, user_id, max_tokens=500, quick=True, scope="weekly_digest"),
                     messages=[
                         {"role": "system", "content": _with_language_tail(WEEKLY_DIGEST_SYSTEM_PROMPT)},
@@ -2194,13 +2032,11 @@ BEHAVIOUR_DIGEST_SYSTEM_PROMPT = """\
 _BEHAVIOUR_DIGEST_MAX_TOKENS = 1200
 
 
-def _grok_digest_request() -> tuple[AsyncOpenAI, dict[str, Any]]:
-    """Прежний бэкенд разбора — запасной путь, когда OpenAI нет или он не ответил."""
-    return _get_client(), {
-        "model": config.GROK_MODEL,
-        "max_tokens": _BEHAVIOUR_DIGEST_MAX_TOKENS,
-        "extra_body": {"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-    }
+def _luna_digest_request() -> tuple[AsyncOpenAI, dict[str, Any]]:
+    """Запасной путь разбора — модель тренера (Luna), когда старшая модель не
+    ответила."""
+    backend = luna_backend()
+    return backend.client, _model_kwargs(backend, None, max_tokens=_BEHAVIOUR_DIGEST_MAX_TOKENS, quick=True)
 
 
 def _openai_digest_request(*, with_effort: bool = True) -> tuple[AsyncOpenAI, dict[str, Any]]:
@@ -2215,7 +2051,7 @@ def _openai_digest_request(*, with_effort: bool = True) -> tuple[AsyncOpenAI, di
     }
     if with_effort:
         kwargs["extra_body"] = {"reasoning_effort": effort}
-    return _get_openai_chat_client(), kwargs
+    return _get_client(), kwargs
 
 
 def _says_reasoning_effort_unsupported(exc: BaseException) -> bool:
@@ -2269,37 +2105,34 @@ async def behaviour_digest(summary: str, memory: Optional[str] = None) -> Option
         *([{"role": "user", "content": memory}] if memory else []),
         {"role": "user", "content": summary},
     ]
-    # Старшая модель OpenAI живым вызовом не проверена — поэтому падение или
-    # пустой ответ не роняют разбор дня, а отдают его прежнему бэкенду. Повтор
-    # без reasoning_effort — ровно один и только когда ошибка прямо называет
-    # этот параметр неподдерживаемым.
-    if config.OPENAI_API_KEY:
-        model = config.OPENAI_ADMIN_DIGEST_MODEL
-        try:
-            try:
-                text = await _digest_attempt(_openai_digest_request(), messages)
-            except Exception as exc:
-                if not _says_reasoning_effort_unsupported(exc):
-                    raise
-                logger.warning(
-                    "Admin behaviour digest on %s: reasoning_effort unsupported (%s: %s) — retrying without it",
-                    model, type(exc).__name__, exc,
-                )
-                text = await _digest_attempt(_openai_digest_request(with_effort=False), messages)
-            if text:
-                return text
-            logger.warning("Admin behaviour digest on %s: empty answer — falling back to %s", model, config.GROK_MODEL)
-        except Exception as exc:
-            logger.warning(
-                "Admin behaviour digest on %s failed (%s: %s) — falling back to %s",
-                model, type(exc).__name__, exc, config.GROK_MODEL, exc_info=True,
-            )
-    elif is_configured():
-        logger.warning("OPENAI_API_KEY is not set — admin behaviour digest falls back to %s", config.GROK_MODEL)
     if not is_configured():
         return None
+    # Старшая модель OpenAI живым вызовом не проверена — поэтому падение или
+    # пустой ответ не роняют разбор дня, а отдают его модели тренера (Luna).
+    # Повтор без reasoning_effort — ровно один и только когда ошибка прямо
+    # называет этот параметр неподдерживаемым.
+    model = config.OPENAI_ADMIN_DIGEST_MODEL
     try:
-        return await _digest_attempt(_grok_digest_request(), messages)
+        try:
+            text = await _digest_attempt(_openai_digest_request(), messages)
+        except Exception as exc:
+            if not _says_reasoning_effort_unsupported(exc):
+                raise
+            logger.warning(
+                "Admin behaviour digest on %s: reasoning_effort unsupported (%s: %s) — retrying without it",
+                model, type(exc).__name__, exc,
+            )
+            text = await _digest_attempt(_openai_digest_request(with_effort=False), messages)
+        if text:
+            return text
+        logger.warning("Admin behaviour digest on %s: empty answer — falling back to %s", model, config.OPENAI_CHAT_MODEL)
+    except Exception as exc:
+        logger.warning(
+            "Admin behaviour digest on %s failed (%s: %s) — falling back to %s",
+            model, type(exc).__name__, exc, config.OPENAI_CHAT_MODEL, exc_info=True,
+        )
+    try:
+        return await _digest_attempt(_luna_digest_request(), messages)
     except Exception:
         logger.exception("Admin behaviour digest generation failed")
         return None
@@ -3512,13 +3345,13 @@ async def _match_alias_batch(
     if await ai_limits.hard_stop_block() is not None:
         return {}
     try:
-        client = _get_client()
+        backend = luna_backend()
         response = await paid_call(
             user_id, None,
-            lambda: client.chat.completions.create(
-                model=config.GROK_MODEL,
-                max_tokens=2000,
-                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            lambda: backend.client.chat.completions.create(
+                # Строгая схема — structured outputs OpenAI: ответ обязан ей
+                # соответствовать, разбор ниже — вторая линия обороны.
+                **_model_kwargs(backend, user_id, max_tokens=2000, quick=True, scope="import_alias"),
                 response_format=_EXERCISE_ALIAS_SCHEMA,
                 messages=[
                     {"role": "system", "content": _EXERCISE_ALIAS_SYSTEM_PROMPT},
@@ -3621,13 +3454,11 @@ async def guess_exercise_groups(user_id: int, names: list[str]) -> dict[str, str
         if await ai_limits.hard_stop_block() is not None:
             return result
         try:
-            client = _get_client()
+            backend = luna_backend()
             response = await paid_call(
                 user_id, None,
-                lambda batch=batch, client=client: client.chat.completions.create(
-                    model=config.GROK_MODEL,
-                    max_tokens=1500,
-                    extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                lambda batch=batch, backend=backend: backend.client.chat.completions.create(
+                    **_model_kwargs(backend, user_id, max_tokens=1500, quick=True, scope="import_group"),
                     response_format=_exercise_group_schema(groups),
                     messages=[
                         {"role": "system", "content": _EXERCISE_GROUP_SYSTEM_PROMPT},
@@ -6422,7 +6253,7 @@ async def ask(
 
     history — то, что реально уехало модели в прошлый раз, включая её обращения к
     инструментам и их результаты. Раньше сюда шли только видимые реплики, а
-    tool-сообщения выбрасывались как ненужные — но по документации xAI кэш живёт
+    tool-сообщения выбрасывались как ненужные — но кэш входа живёт
     ровно на НЕИЗМЕННОМ префиксе, и выброшенное сообщение это переписанная
     история, то есть промах. В логах прода это выглядело так: внутри одного
     вопроса раунды дописываются и кэш растёт (10752 → 11776 → 14080), а каждый
@@ -6470,13 +6301,13 @@ async def ask(
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
     перед основным ответом дешёвый гейт (см. _gate_verdict)
-    решает, нужен ли вопросу живой веб/X-поиск, и только на «да» поднимается
-    отдельный дорогой шаг multi-agent поиска (см. _web_search_findings). Найденное
+    решает, нужен ли вопросу живой веб-поиск, и только на «да» поднимается
+    отдельный шаг живого поиска (см. _web_search_findings). Найденное
     (если есть) добавляется контекстом к основному REST-вызову с обычными
     инструментами.
     """
     # Дешёвый гейт (_gate_verdict) решает, стоит ли вообще
-    # поднимать дорогой multi-agent поиск, и только на «да» он запускается. Так
+    # поднимать платный живой поиск, и только на «да» он запускается. Так
     # дорогая модель не дёргается на каждый вопрос (большинство — про личные данные,
     # поиска не требуют). Порядок в and важен: короткое замыкание не даёт вызвать
     # гейт при исчерпанной квоте.
@@ -6501,19 +6332,15 @@ async def ask(
     # нетронутыми, а не удалены: это осознанно обратимая правка на время
     # сравнения костов до/после, а не архитектурное решение.
     gate = GateVerdict(search=False, data=True, ok=True)
-    # Модель — одна на весь ход, выбрана здесь и больше не перечитывается:
-    # переключатель в профиле действует со СЛЕДУЮЩЕГО вопроса (см. chat_backend).
-    # Ход с фото — той же моделью, что и текстовый: у Luna картинка уезжает в
-    # Responses как input_image (см. _responses_content), в историю — как и у
-    # grok — не кладётся. Поиск идёт тем же провайдером, что и ответ (см.
-    # _web_search_findings).
-    backend = await chat_backend(user_id)
+    # Модель — одна на весь ход, выбрана здесь. Ход с фото — vision_backend()
+    # (config.OPENAI_VISION_MODEL, по умолчанию та же Luna).
+    backend = vision_backend() if image_data_url else await chat_backend(user_id)
     if video_context:
         # Разбор ролика решается кадрами, а не сетью: наблюдения уже приехали от
         # модели, которая его смотрела. Гейт же судит по тексту вопроса, и на
         # «разбери технику приседа легенды Святослава» честно решает, что надо
-        # выяснить, кто это, — поднимая multi-agent с четырьмя агентами и платой
-        # $5 за 1000 вызовов инструментов за информацию, которая ответу не нужна.
+        # выяснить, кто это, — поднимая платный web_search (OpenAI берёт за каждый
+        # вызов сверх токенов) за информацию, которая ответу не нужна.
         search_outcome = "skipped: видео разбирается по кадрам, сеть не нужна"
     elif gate.ok and not gate.search:
         # Гейт честно решил, что поиск не нужен — до резерва слота в общем
@@ -6532,7 +6359,7 @@ async def ask(
         # Гейт молчит, но вопрос сам говорит, что ему нужна свежесть. Дефолт «не
         # искать» тут стоил бы ответа по существу: на «что нового в мире
         # бодибилдинга» модель рассказала бы о мире, которого уже нет.
-        search_context = await _web_search_findings(user_id, question, light, on_status, backend=backend)
+        search_context = await _web_search_findings(user_id, question, light, on_status)
         search_outcome = (
             "used (гейт сломался, но вопрос просит свежести)" if search_context
             else "ran but returned nothing (гейт сломался, искали по признакам)"
@@ -6543,9 +6370,9 @@ async def ask(
         # лог уверял, что поиск не нужен, хотя гейт просто вернул пустоту.
         search_outcome = "skipped: ГЕЙТ СЛОМАЛСЯ, сработал дефолт (см. WARNING выше)"
     else:
-        search_context = await _web_search_findings(user_id, question, light, on_status, backend=backend)
+        search_context = await _web_search_findings(user_id, question, light, on_status)
         # «Нашёл» и «упал» — разные исходы, и путать их дорого: на неподдерживаемом
-        # agent_count поиск падал ValueError ещё в chat.create, а в логе это
+        # параметре поиск падал ValueError ещё до запроса, а в логе это
         # читалось как «сходил и ничего не нашёл» — функция была выключена месяцами.
         search_outcome = "used" if search_context else "ran but returned nothing (см. ERROR выше, если был)"
     logger.info(
@@ -6608,8 +6435,12 @@ async def _completion_round(
     include_tools: bool = True,
     tools: Optional[list[dict[str, Any]]] = None,
     cache_scope: str = "trainer",
-) -> tuple[str, list[Any]]:
-    """One chat-completion turn. Returns (content, tool_calls).
+) -> tuple[str, list[Any], list[dict[str, Any]]]:
+    """Один раунд главного цикла. Возвращает (текст, tool_calls, элементы
+    output для истории — см. OPENAI_OUTPUT_KEY).
+
+    Идёт через Responses API (_responses_round): в /chat/completions gpt-6-luna
+    не берёт инструменты вместе с reasoning_effort.
 
     `on_chunk` включает стриминг: текст отдаётся наружу по мере генерации, не
     чаще чем раз в STREAM_FLUSH_SECONDS. Стримить имеет смысл только тот раунд,
@@ -6623,99 +6454,12 @@ async def _completion_round(
     запросе модели физически нечего вызвать, и она обязана ответить текстом.
 
     `client` — ChatBackend хода (см. chat_backend) или голый клиент: тогда это
-    grok, как было всегда (так зовут тесты с поддельным клиентом).
+    Luna с этим клиентом (так зовут тесты с поддельным клиентом).
     """
-    backend = client if isinstance(client, ChatBackend) else ChatBackend(
-        client=client,
-        model=config.GROK_MODEL,
-        effort=config.GROK_REASONING_EFFORT,
-        quick_effort=config.GROK_QUICK_REASONING_EFFORT,
-        name=config.AI_MODEL_GROK,
-    )
-    if backend.is_openai:
-        # Luna — через Responses API: в /chat/completions gpt-6-luna не берёт
-        # инструменты вместе с reasoning_effort (см. _responses_round).
-        return await _responses_round(
-            backend, messages, user_id, on_chunk,
-            include_tools=include_tools, tools=tools, cache_scope=cache_scope,
-        )
-    model = backend.model
-    request = _model_kwargs(backend, user_id, max_tokens=2048, quick=False, scope=cache_scope)
-    wire_messages = _wire_messages(backend, messages)
-    tools_kwarg = {"tools": TOOLS if tools is None else tools} if include_tools else {}
-    if on_chunk is None:
-        async with _bill_if_aborted(user_id, model, messages=messages):
-            response = await backend.client.chat.completions.create(
-                messages=wire_messages, **request, **tools_kwarg,
-            )
-        await _log_llm_cost(user_id, model, getattr(response, "usage", None))
-        m = response.choices[0].message
-        return (m.content or ""), list(m.tool_calls or []), _reasoning_of(m)
-
-    stream = await backend.client.chat.completions.create(
-        messages=wire_messages, **request,
-        stream=True, stream_options={"include_usage": True},
-        **tools_kwarg,
-    )
-    parts: list[str] = []
-    reasoning_parts: list[str] = []
-    tool_calls: dict[int, dict[str, Any]] = {}
-    usage = None
-    last_flush: Optional[float] = None
-    # xAI sends `usage` only on the final chunk. A timeout/cancellation/network
-    # drop partway through the `async for` used to leave `_log_llm_cost` never
-    # called at all — tokens the provider already billed us for went unlogged.
-    # `finished` tells the `finally` below whether the loop actually reached
-    # that final chunk, so it only reaches for the fallback estimate on abort.
-    finished = False
-    try:
-        async for event in stream:
-            usage = getattr(event, "usage", None) or usage
-            if not event.choices:
-                continue
-            delta = event.choices[0].delta
-            reasoning_delta = _reasoning_of(delta)
-            if reasoning_delta:
-                reasoning_parts.append(reasoning_delta)
-            for tc in getattr(delta, "tool_calls", None) or []:
-                slot = tool_calls.setdefault(
-                    tc.index, {"id": "", "name": "", "arguments": ""}
-                )
-                slot["id"] += tc.id or ""
-                if tc.function:
-                    slot["name"] += tc.function.name or ""
-                    slot["arguments"] += tc.function.arguments or ""
-            if delta.content:
-                parts.append(delta.content)
-                text = "".join(parts)
-                now = asyncio.get_running_loop().time()
-                # Before the first flush, time elapsed alone isn't a good signal —
-                # the wait for the model's first token already eats into it — so
-                # the first flush also needs enough text to be worth showing.
-                ready = (
-                    (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
-                    or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
-                )
-                if ready:
-                    last_flush = now
-                    await on_chunk(text)
-        finished = True
-    finally:
-        if usage is None and not finished:
-            # Aborted before the final chunk arrived, so there's no real usage
-            # to report. Best available estimate: ~4 chars/token over the
-            # prompt actually sent and whatever completion text streamed back
-            # before the drop — better than silently losing the event, and the
-            # only signal we have without the provider's own count.
-            usage = SimpleNamespace(
-                prompt_tokens=_estimate_tokens_from_messages(messages),
-                completion_tokens=_estimate_tokens_from_text("".join(parts)),
-            )
-        await _log_llm_cost(user_id, model, usage)
-    return (
-        "".join(parts),
-        [_StreamedToolCall(slot) for slot in tool_calls.values()],
-        "".join(reasoning_parts),
+    backend = client if isinstance(client, ChatBackend) else luna_backend()._replace(client=client)
+    return await _responses_round(
+        backend, messages, user_id, on_chunk,
+        include_tools=include_tools, tools=tools, cache_scope=cache_scope,
     )
 
 
@@ -6750,9 +6494,9 @@ class _StreamedToolCall:
 # (кэш — prompt_cache_key, как у quick-вызовов).
 
 # Поле assistant-сообщения истории с сырыми элементами output Responses API.
-# grok его не видит (_wire_messages снимает), chat-форма рядом — content и
-# tool_calls — остаётся полной: переключился атлет обратно на grok — разговор
-# продолжается.
+# chat/completions его не видит (_wire_messages снимает), chat-форма рядом —
+# content и tool_calls — остаётся полной: история читается и глазами (архив
+# разговоров), и коротким вызовам без инструментов.
 OPENAI_OUTPUT_KEY = "openai_output"
 
 # Какие элементы output сохраняем, чтобы вернуть следующим запросом.
@@ -6806,8 +6550,9 @@ def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     assistant с OPENAI_OUTPUT_KEY — его сырые элементы output, как их прислала
     модель (рассуждение с encrypted_content, текст, вызовы). Без него (ход
-    grok'а, предзагрузка пресета) — собираем из chat-формы: текст и
-    function_call по каждому tool_call. reasoning_content xAI не едет. tool →
+    прежней модели в старой истории, предзагрузка пресета) — собираем из
+    chat-формы: текст и function_call по каждому tool_call. reasoning_content
+    прежнего провайдера не едет. tool →
     function_call_output с тем же call_id."""
     items: list[dict[str, Any]] = []
     for m in messages:
@@ -6997,14 +6742,11 @@ async def _responses_round(
 
 def _reasoning_fields(reasoning: Any) -> dict[str, Any]:
     """Поля, с которыми рассуждение раунда уезжает в историю рядом с ответом:
-    у grok — строка reasoning_content (как всегда), у Luna — сырые элементы
-    output (OPENAI_OUTPUT_KEY). Пусто — ничего: пустое поле тоже меняет
-    сообщение и ломает префикс."""
-    if not reasoning:
+    сырые элементы output Responses API (OPENAI_OUTPUT_KEY). Пусто — ничего:
+    пустое поле тоже меняет сообщение и ломает префикс."""
+    if not reasoning or not isinstance(reasoning, list):
         return {}
-    if isinstance(reasoning, list):
-        return {OPENAI_OUTPUT_KEY: reasoning}
-    return {"reasoning_content": reasoning}
+    return {OPENAI_OUTPUT_KEY: reasoning}
 
 
 # Готовые вопросы интро (handlers/ai_trainer._preset_questions), на которые
@@ -7132,7 +6874,7 @@ async def _ask_plain(
         messages.append(
             {
                 "role": "system",
-                "content": f"Результаты живого веб/X-поиска по текущему вопросу пользователя:\n{search_context}",
+                "content": f"Результаты живого веб-поиска по текущему вопросу пользователя:\n{search_context}",
             }
         )
     # Дата едет тут, в хвосте последнего user-сообщения, а не в системном
@@ -7209,9 +6951,8 @@ async def _ask_plain(
             ],
         }
         if isinstance(reasoning, list):
-            # Luna: рассуждение и вызовы раунда едут назад элементами output —
-            # без них следующий раунд рассуждает с нуля (см. OPENAI_OUTPUT_KEY).
-            # У grok промежуточные раунды, как и прежде, без reasoning_content.
+            # Рассуждение и вызовы раунда едут назад элементами output — без
+            # них следующий раунд рассуждает с нуля (см. OPENAI_OUTPUT_KEY).
             said.update(_reasoning_fields(reasoning))
         messages.append(said)
         for tc in tool_calls:
@@ -7370,28 +7111,6 @@ async def _explained_final_program(
     return (explained or cleaned), new_reasoning
 
 
-def _to_xai_messages(
-    history: list[dict[str, Any]],
-    question: str,
-    image_data_url: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-) -> list:
-    if system_prompt is None:
-        raise ValueError("system_prompt обязателен: он содержит дату пользователя")
-    out = [xai_system(system_prompt)]
-    for msg in history:
-        content = msg.get("content", "")
-        if msg.get("role") == "assistant":
-            out.append(xai_assistant(content))
-        else:
-            out.append(xai_user(content))
-    if image_data_url:
-        out.append(xai_user(question, xai_image(image_data_url, detail="high")))
-    else:
-        out.append(xai_user(question))
-    return out
-
-
 # Гейт отвечает одним словом — но отвечает им ризонинговая модель, а
 # reasoning-токены списываются из того же бюджета, что и ответ. На прежних
 # max_tokens=3 бюджет заканчивался внутри размышления, наружу приходил ПУСТОЙ
@@ -7429,8 +7148,8 @@ async def _gate_verdict(
     history: list[dict[str, Any]],
     backend: Optional[ChatBackend] = None,
 ) -> GateVerdict:
-    """Дешёвый гейт: решаем на config.GROK_MODEL, нужен ли вопросу живой
-    веб/X-поиск и нужны ли тренеру данные пользователя.
+    """Дешёвый гейт: решаем коротким вызовом Luna (quick effort), нужен ли
+    вопросу живой веб-поиск и нужны ли тренеру данные пользователя.
 
     Второе решение экономит заметно больше первого. Схемы 27 инструментов — это
     около 6900 токенов, которые уезжают в КАЖДОМ раунде tool-call'ов, и на
@@ -7439,12 +7158,12 @@ async def _gate_verdict(
     минус две трети входа.
 
     Решение «искать или нет» — обычная классификация, ей не нужен веб-доступ,
-    поэтому гонять на каждый вопрос отдельный шаг с config.GROK_SEARCH_MODEL
+    поэтому гонять на каждый вопрос отдельный шаг с web_search
     только ради этого решения — пустой слив бюджета: большинство вопросов к
     боту-дневнику про личные данные пользователя и поиска не требуют. Шаг с
     поиском поднимаем только когда этот гейт сказал «да». Картинку в решение
     не передаём — тема поиска считывается по тексту, а фото у нас почти всегда
-    личное (форма, еда), поиска не просит.
+    личное (форма, тело), поиска не просит.
 
     При любой ошибке или неразборчивом ответе возвращаем значения по умолчанию
     (см. GateVerdict): не искать и данные всё-таки дать.
@@ -7466,8 +7185,8 @@ async def _gate_verdict(
     # РОВНО одним добавленным сообщением, а не случайно чем-то ещё.
     request_kwargs: dict[str, Any] = {
         # Свой слот кэша: у гейта системный промпт втрое короче основного и
-        # общего с ним почти ничего, а под одним conv-id они вытесняли друг
-        # друга — см. _cache_headers, там разобран лог прода.
+        # общего с ним почти ничего, а под одним ключом они вытесняли друг
+        # друга — см. _cache_key, там разобран лог прода.
         **_model_kwargs(backend, user_id, max_tokens=_SEARCH_GATE_MAX_TOKENS, quick=True, scope="gate"),
         # Схема, а не два слова текстом: на текстовом формате разбор зависел от
         # того, не обернёт ли модель ответ в markdown. Пустой content схема,
@@ -7533,11 +7252,10 @@ async def _gate_verdict(
         # модель послушно думала оба раза и оба раза ничего не сказала. Просить
         # то же самое третьим способом смысла нет: меняем сам режим запроса.
         retry_kwargs.pop("response_format", None)
-        # extra_body убираем целиком, а не подменяем усилие: «none» xAI не
-        # принимает вовсе («This model does not support reasoning_effort value
-        # none», 400 на каждом повторе), а любое другое значение — это то же
-        # самое, что уже промолчало. Без ключа модель идёт на своих дефолтах,
-        # то есть повтор всё равно отличается от первой попытки.
+        # extra_body убираем целиком, а не подменяем усилие: любое заданное
+        # значение — это то же самое, что уже промолчало. Без ключа модель
+        # идёт на своих дефолтах, то есть повтор отличается от первой попытки
+        # (и уходит мимо слота кэша гейта — это дешевле, чем без вердикта).
         retry_kwargs.pop("extra_body", None)
         retry_kwargs["messages"] = [
             *request_kwargs["messages"],
@@ -7588,95 +7306,16 @@ async def _web_search_findings(
     question: str,
     history: list[dict[str, Any]],
     on_status: StatusCallback = None,
-    *,
-    backend: Optional[ChatBackend] = None,
 ) -> Optional[str]:
-    """Отдельный шаг перед основным ответом: чистый server-side веб/X-поиск, без
-    наших DB-инструментов (см. модуль docstring, почему они разведены по разным
-    вызовам). Возвращает найденное текстом или None, если поиск не нужен вопросу
-    или сам шаг не удался — в обоих случаях основной ответ просто идёт без него.
-
-    Одиночный линейный запрос (обычно 1 обращение в сеть на вопрос), а не
-    параллельный research по многим источникам, поэтому agent_count держим на
-    минимуме (config.GROK_SEARCH_AGENT_COUNT, дефолт 4) — раньше он вообще не
-    передавался явно, а по докам xAI непереданный effort может отображаться в
-    16 агентов, и биллятся токены (включая ризонинг и тул-коллы) всех агентов
-    сразу, не только лидера. Если этот шаг когда-нибудь станет вопросом
-    "прочесать много независимых источников параллельно" — тогда есть смысл
-    поднять agent_count до 16, а не менять модель: grok-4.20-multi-agent
-    дешевле grok-4.5 за токен и не в процессе вывода из эксплуатации.
-
-    web_search/x_search — server-side: модель вызывает их и получает результаты
-    в рамках одного sample(), без tool_calls, которые нужно было бы исполнять
-    самим — поэтому реальное использование поиска видно только постфактум, по
-    citations/server_side_tool_usage в ответе. Сам шаг занимает заметное время
-    независимо от исхода, поэтому статус про поиск шлём заранее, а не постфактум.
+    """Отдельный шаг перед основным ответом: живой веб-поиск без наших
+    DB-инструментов. Возвращает найденное текстом или None, если шаг не удался —
+    тогда основной ответ просто идёт без него. Путь один — OpenAI Responses со
+    встроенным web_search (_openai_web_search_findings); поиска по X нет.
 
     Фото пользователя в этот шаг НЕ передаём: оно почти всегда личное (форма,
-    тело, еда), а тему поиска модель считывает по тексту — незачем форвардить
-    личную картинку во внешний веб/X-поиск (тот же довод, что и в _gate_verdict).
-
-    backend — бэкенд хода: у Luna-аккаунта поиск идёт через OpenAI
-    (_openai_web_search_findings), у всех остальных — этим путём, xAI, как всегда.
+    тело), а тему поиска модель считывает по тексту.
     """
-    if backend is not None and backend.is_openai:
-        return await _openai_web_search_findings(user_id, question, history, on_status)
-    if on_status:
-        await on_status(i18n.t("ai.tool_status.web_search"))
-    started = asyncio.get_running_loop().time()
-    try:
-        sdk_client = await _get_sdk_client()
-        chat_session = sdk_client.chat.create(
-            model=config.GROK_SEARCH_MODEL,
-            messages=_to_xai_messages(
-                history, question,
-                system_prompt=_search_system_prompt(await _user_today(user_id)),
-            ),
-            tools=[xai_web_search(), xai_x_search()],
-            max_tokens=1024,
-            # agent_count — параметр multi-agent-моделей, обычной он не нужен и
-            # SDK его для неё не ждёт. Передаём только когда модель правда
-            # multi-agent: см. config.GROK_SEARCH_MODEL, где разобрано, почему мы
-            # с него ушли.
-            **(
-                {"agent_count": config.GROK_SEARCH_AGENT_COUNT}
-                if "multi-agent" in config.GROK_SEARCH_MODEL
-                else {}
-            ),
-        )
-        async with _bill_if_aborted(
-            user_id, config.GROK_SEARCH_MODEL,
-            prompt_tokens=config.SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS,
-            completion_tokens=config.SEARCH_ABORT_ESTIMATE_COMPLETION_TOKENS,
-            server_tool_calls=1,
-        ):
-            response = await chat_session.sample()
-    except Exception:
-        # Сколько именно ждали до обрыва — то, по чему потом и подбирается
-        # бюджет: без этой цифры «поиск отвалился» не отличить от «поиск
-        # отвалился, не дотянув пары секунд».
-        logger.exception(
-            "AI trainer web search step failed after %.1fs (budget %.0fs), "
-            "answering without live search",
-            asyncio.get_running_loop().time() - started,
-            config.AI_SEARCH_TIMEOUT_SECONDS,
-        )
-        return None
-    logger.info(
-        "AI trainer web search step took %.1fs (budget %.0fs)",
-        asyncio.get_running_loop().time() - started,
-        config.AI_SEARCH_TIMEOUT_SECONDS,
-    )
-
-    await _log_llm_cost(user_id, config.GROK_SEARCH_MODEL, getattr(response, "usage", None))
-    await _log_server_tool_calls(user_id, response)
-    if not (response.citations or response.server_side_tool_usage):
-        return None
-    # Личный счётчик — единственное, что двигается тут: общий потолок уже
-    # зарезервирован раньше, в _search_block, атомарно и ДО этого сетевого
-    # похода (см. db.try_increment_ai_search_count_global).
-    await db.increment_ai_search_count(user_id)
-    return (response.content or "").strip() or None
+    return await _openai_web_search_findings(user_id, question, history, on_status)
 
 
 def _responses_usage(raw: Any) -> SimpleNamespace:
@@ -7724,22 +7363,21 @@ async def _openai_web_search_findings(
     history: list[dict[str, Any]],
     on_status: StatusCallback = None,
 ) -> Optional[str]:
-    """Живой поиск для Luna-аккаунта: OpenAI Responses API со встроенным
-    web_search на config.OPENAI_SEARCH_MODEL.
+    """Живой поиск: OpenAI Responses API со встроенным web_search на
+    config.OPENAI_SEARCH_MODEL (единственный путь, см. _web_search_findings).
 
-    Контракт тот же, что у xAI-пути (_web_search_findings): тот же системный
-    промпт поиска (_search_system_prompt — даты и источники в тексте), только
+    Тот же системный промпт поиска (_search_system_prompt — даты и источники в тексте), только
     видимые реплики истории, фото не передаём; на выходе — текст находок или
     None (поиск не состоялся или упал), и он так же едет контекстом в главный
     ответ. Квоты проверяет вызывающий (ask → _search_block, те же виды
     ai_limits), личный счётчик двигается здесь же, на успехе.
 
-    Цена — две строки, как у xAI: токены по ставке модели (llm_call) и по
+    Цена — две строки: токены по ставке модели (llm_call) и по
     строке server_tool на каждый вызов web_search (config.OPENAI_WEB_SEARCH_TOOL,
     своя ставка). Таймаут и отмена — оценкой через _bill_if_aborted.
 
     SDK в проекте (openai 1.57) Responses API ещё не знает, поэтому запрос идёт
-    низкоуровневым client.post("/responses") тем же клиентом, что у Luna-чата, —
+    низкоуровневым client.post("/responses") тем же клиентом, что у главного цикла, —
     тело то же, что принял бы client.responses.create.
     """
     if on_status:
@@ -7761,7 +7399,7 @@ async def _openai_web_search_findings(
         "store": False,
     }
     try:
-        client = _get_openai_chat_client()
+        client = _get_client()
         async with _bill_if_aborted(
             user_id, model,
             prompt_tokens=config.SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS,
@@ -7796,7 +7434,7 @@ async def _openai_web_search_findings(
             logger.exception("failed to log server tool cost event")
     if not calls:
         # Модель ответила из памяти, в сеть не сходив, — это не находки (тот же
-        # критерий, что у xAI: ни цитат, ни вызовов инструмента).
+        # критерий: ни одного вызова инструмента).
         return None
     await db.increment_ai_search_count(user_id)
     return _responses_text(response).strip() or None

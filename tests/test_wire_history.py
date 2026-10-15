@@ -11,6 +11,7 @@ messages breaks the cache. Only append new messages at the end». Раньше �
 import json
 
 import pytest
+from luna_fakes import as_luna
 
 import ai_trainer
 import config
@@ -153,7 +154,7 @@ async def test_wire_carries_the_answer_so_the_next_question_appends(
     """Финальный ответ в messages не попадал — цикл на нём заканчивается. Без него
     история отдаёт вопрос без ответа, то есть снова не тот префикс."""
     client = _fake_client([_response(content="жми дальше", reasoning="думал")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     seen: list = []
 
     await ai_trainer.ask(
@@ -165,8 +166,10 @@ async def test_wire_carries_the_answer_so_the_next_question_appends(
     today = await ai_trainer._user_today(user_id)
     assert wire[0]["content"] == f"как прогресс?\n\nСегодня {today.isoformat()}."
     assert wire[-1]["content"] == "жми дальше"
-    # Размышления обязаны уехать назад — это причина промахов номер один по докам xAI.
-    assert wire[-1]["reasoning_content"] == "думал"
+    # Элементы ответа Responses (с рассуждением, если оно было) обязаны уехать
+    # назад рядом с текстом — следующий ход вернёт их модели как есть.
+    assert wire[-1][ai_trainer.OPENAI_OUTPUT_KEY][-1]["type"] == "message"
+    assert "reasoning_content" not in wire[-1]
     # Системного промпта в истории нет: он не входит в историю и пересобирается
     # заново на каждый запрос (и теперь не зависит от даты).
     assert all(m["role"] != "system" for m in wire)
@@ -176,7 +179,7 @@ async def test_photo_is_not_stored_in_history(fresh_db, user_id, monkeypatch):
     """База64 картинки в FSM — это мегабайты в файле, который читается на каждый
     апдейт, плюс повторная плата за image-токены на каждом следующем вопросе."""
     client = _fake_client([_response(content="вижу еду")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     seen: list = []
 
     await ai_trainer.ask(
@@ -198,7 +201,7 @@ async def test_video_observations_stay_in_history(fresh_db, user_id, monkeypatch
     """Чтобы на «точно нет ошибок?» тренер помнил, что именно видел на ролике —
     раньше этот контекст терялся сразу после ответа."""
     client = _fake_client([_response(content="норм")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
     seen: list = []
 
     await ai_trainer.ask(

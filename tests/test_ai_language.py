@@ -10,6 +10,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from luna_fakes import as_luna
+
 import ai_trainer
 import config
 import i18n
@@ -87,7 +89,7 @@ async def test_workout_comment_uses_the_users_stored_language_not_the_context(
     workout_id = await fresh_db.create_workout(user_id)
     await fresh_db.finish_workout(workout_id)
     client = _fake_client([_response(content="Solid session.")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     with i18n.use_lang("ru"):  # контекст нарочно "неправильный"
         await ai_trainer.comment_on_workout(user_id, workout_id)
@@ -104,9 +106,9 @@ async def test_weekly_digest_uses_the_users_stored_language_not_the_context(
     крутит цикл по многим telegram_id вообще без апдейта. Тот же инвариант,
     что и у comment_on_workout: язык — из базы, а не из контекста."""
     await fresh_db.set_user_lang(user_id, "en")
-    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     client = _fake_client([_response(content="Solid week.")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
 
     with i18n.use_lang("ru"):  # контекст нарочно "неправильный"
         await ai_trainer.weekly_digest(user_id)

@@ -27,14 +27,11 @@
     # 5. перегенерить забракованное (слаги — по одному на строку в файле)
     python3 scripts/gen_exercise_images.py --only @rejects.txt --force
 
-Бэкенды. `--backend openai` (по умолчанию) шлёт вместе с промптом ДВЕ
-референс-картинки: аватарку тренера (кто это) и кадр из free-exercise-db (что
+Генератор — OpenAI (gpt-image-1, images.edit): вместе с промптом уходят ДВЕ
+референс-картинки: аватарка тренера (кто это) и кадр из free-exercise-db (что
 за поза) — именно так персонаж держится одинаковым от упражнения к упражнению,
-а техника не выдумывается. `--backend xai` ходит в Грок, но его картиночный
-эндпоинт (на момент написания) принимает только текст: персонаж будет плыть от
-кадра к кадру, а поза — врать. Проверь текущее состояние API, прежде чем
-выбирать xai: если он научился принимать картинки на вход, поправить нужно одну
-функцию `_render_xai`.
+а техника не выдумывается. Описания поз пишет текстовая модель тренера
+(config.OPENAI_CHAT_MODEL). Прежнего бэкенда xAI больше нет.
 """
 
 import argparse
@@ -206,7 +203,7 @@ def generate_poses() -> None:
     """Дописать в poses.json всё, чего там ещё нет, одним вызовом на пачку."""
     from openai import OpenAI
 
-    client = OpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
+    client = OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
     poses = load_poses()
     missing = [(name, slug) for name, slug in exercise_media.EXERCISE_IMAGE_SLUGS.items()
                if slug not in poses]
@@ -219,7 +216,7 @@ def generate_poses() -> None:
         batch = missing[i:i + POSES_BATCH]
         listing = "\n".join(f"{slug}: {name}" for name, slug in batch)
         response = client.chat.completions.create(
-            model=config.GROK_MODEL,
+            model=config.OPENAI_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": f"{POSES_INSTRUCTION}\n\nПример формата:\n{example}"},
                 {"role": "user", "content": listing},
@@ -260,20 +257,7 @@ def _render_openai(prompt: str, references: list[pathlib.Path]) -> bytes:
     return base64.b64decode(response.data[0].b64_json)
 
 
-def _render_xai(prompt: str, references: list[pathlib.Path]) -> bytes:
-    """Грок. Референсы игнорируются — эндпоинт принимает только текст, поэтому
-    персонаж держится одним описанием в промпте и будет плыть. Оставлено ради
-    сравнения и на случай, если API научится принимать картинки."""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
-    response = client.images.generate(
-        model="grok-2-image-1212", prompt=prompt, n=1, response_format="b64_json",
-    )
-    return base64.b64decode(response.data[0].b64_json)
-
-
-BACKENDS = {"openai": _render_openai, "xai": _render_xai}
+BACKENDS = {"openai": _render_openai}
 
 
 # ---------------------------------------------------------------- прогон

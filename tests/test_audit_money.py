@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from luna_fakes import ResponsesScript, as_luna
 
 import ai_limits
 import ai_trainer
@@ -415,7 +416,7 @@ async def test_paid_call_cancel_logs_fallback_estimate(fresh_db, user_id):
 
 async def test_fact_check_timeout_is_billed(fresh_db, user_id, monkeypatch):
     create = AsyncMock(side_effect=asyncio.TimeoutError)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _novita_client(create))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_novita_client(create)))
     with pytest.raises(asyncio.TimeoutError):
         await ai_trainer.fact_check_post(user_id, "пост " * 500)
     assert len(await _events("llm_call")) == 1
@@ -425,26 +426,21 @@ async def test_completion_round_timeout_is_billed(fresh_db, user_id):
     create = AsyncMock(side_effect=asyncio.TimeoutError)
     messages = [{"role": "user", "content": "вопрос " * 300}]
     with pytest.raises(asyncio.TimeoutError):
-        await ai_trainer._completion_round(_novita_client(create), messages, user_id)
+        await ai_trainer._completion_round(as_luna(_novita_client(create)), messages, user_id)
     (event,) = await _events("llm_call")
     assert event["prompt_tokens"] == ai_trainer._estimate_tokens_from_messages(messages)
 
 
 async def test_web_search_timeout_logs_flat_estimate_and_tool_call(fresh_db, user_id, monkeypatch):
-    class Session:
-        async def sample(self):
-            raise asyncio.TimeoutError
-
-    sdk = SimpleNamespace(chat=SimpleNamespace(create=lambda **kw: Session()))
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk))
-    monkeypatch.setattr(ai_trainer, "_to_xai_messages", lambda *a, **k: [])
+    client = ResponsesScript([asyncio.TimeoutError()])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     assert await ai_trainer._web_search_findings(user_id, "что нового", []) is None
 
     (llm,) = await _events("llm_call")
     assert llm["prompt_tokens"] == config.SEARCH_ABORT_ESTIMATE_PROMPT_TOKENS
     assert len(await _events("server_tool")) == 1
-    assert await db.get_cost_total_usd() > config.SERVER_TOOL_PRICE_USD_PER_CALL
+    assert await db.get_cost_total_usd() > config.OPENAI_WEB_SEARCH_USD_PER_CALL
 
 
 # ---------- 6. «Понятно» не снимает HARD ----------
@@ -493,7 +489,7 @@ async def test_ai_trainer_matching_layer_neither_checks_nor_spends_import_quota(
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     reply = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({"matches": []})))])
     create = AsyncMock(return_value=reply)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _novita_client(create))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_novita_client(create)))
 
     await ai_trainer.match_exercise_names_to_catalog(user_id, ["Bench"])
     await ai_trainer.match_exercise_names_to_catalog(user_id, ["Squat"])
@@ -579,7 +575,7 @@ def _alias_client(monkeypatch, groups=True):
         return reply
 
     calls = AsyncMock(side_effect=create)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _novita_client(calls))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(_novita_client(calls)))
     return calls
 
 

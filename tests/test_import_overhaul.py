@@ -21,6 +21,7 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
+from luna_fakes import as_luna
 
 import ai_trainer
 import analytics
@@ -651,7 +652,7 @@ async def test_l7_name_matching_goes_through_paid_call(fresh_db, monkeypatch):
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"matches": []}'))])
 
     monkeypatch.setattr(ai_trainer, "paid_call", fake_paid_call)
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: object())
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(object()))
     monkeypatch.setattr(ai_limits, "hard_stop_block", AsyncMock(return_value=None))
     await ai_trainer.match_exercise_names_to_catalog(1, ["Weird Move"])
     assert calls == [None]

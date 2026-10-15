@@ -827,7 +827,7 @@ async def test_short_card_still_gets_the_comment_appended_in_place(fresh_db, use
 
 async def test_comment_button_refuses_a_double_tap(fresh_db, user_id, monkeypatch):
     """Without the busy claim, two fast taps both reach comment_on_workout —
-    double the Grok cost for one card."""
+    double the model cost for one card."""
     import ai_trainer as ai_trainer_module
     import db as dbmod
 
