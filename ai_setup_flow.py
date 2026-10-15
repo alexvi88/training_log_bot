@@ -9,9 +9,11 @@ ai_program_actions.py и progression_data.py).
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 import db
+import formatting
 import i18n
 
 # Сколько кругов уточнений подряд разрешаем одной просьбе. Второй круг нужен по
@@ -22,30 +24,77 @@ import i18n
 # дефолтах».
 SETUP_MAX_ROUNDS = 2
 
-# По этим кускам узнаём вопрос про цель, который модель всё-таки задала сама
-# (промпт запрещает, но запрет — не гарантия). Совпало — свой не подставляем:
-# два вопроса про одно подряд читаются как поломка. Смешивает оба языка сразу
+# Ядро опросника бот/приложение задают сами, а не полагаются на модель.
+# Промпт просил «2-5 вопросов, дни всегда, по одной вещи в вопросе», а в проде
+# модель с богатой историей прислала ОДИН вопрос «сколько дней и сколько
+# времени на тренировку» — человек нажал «3 дня», время потерялось, а про
+# травмы, место и опыт никто не спросил. Промпт — не гарантия. Поэтому шесть
+# вводных, без которых программа собирается наугад, бот ставит сам, всегда и
+# в одном порядке (одинаково у любой модели): цель, дни, время, место и
+# инвентарь, опыт, травмы. От модели — максимум SETUP_MAX_EXTRA_QUESTIONS
+# своих вопросов про этого атлета (приоритеты, что оставить из текущих
+# упражнений), и только после ядра.
+CORE_SLOTS = ("goal", "days", "time", "place", "experience", "injuries")
+
+# Своих вопросов модели после ядра — не больше стольких. Их место — то, чего
+# ядро не покрывает: приоритеты, любимые и нелюбимые упражнения.
+SETUP_MAX_EXTRA_QUESTIONS = 2
+
+# По этим кускам узнаём вопрос модели, который повторяет слот ядра (или
+# склеивает два слота в один — «сколько дней и сколько времени»: кнопки
+# отвечают только на одно, второе теряется). Такой вопрос выбрасываем целиком:
+# ядро его и так задаст, по одной вещи в вопросе. Маркеры смешивают оба языка
 # (см. running_texts._TOPIC_STEMS — тот же приём): язык ответа модели зависит
-# от языка пользователя, а не от языка этого файла, так что маркер обязан
-# ловить обе версии вопроса о цели.
-SETUP_GOAL_MARKERS = (
-    "цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат",
-    # Голое "goal" ловило обычные тренерские вопросы не про цель тренировок
-    # вовсе ("What's your rep goal for this exercise?", "any weight goal for
-    # this month?") — и защёлкивало "цель уже спросили" раньше, чем реальный
-    # вопрос вообще звучал. Фразы ниже — так же специфичны, как русские выше.
-    "your goal", "training goal", "what do you want", "what are you after",
-    "why train", "why do you train", "what result",
-)
+# от языка пользователя, а не от языка этого файла. Ложное срабатывание стоит
+# одного вопроса модели, поэтому маркеры — фразы, а не голые слова: голое
+# "goal" ловило "What's your rep goal for this exercise?", голое "минут" —
+# вопрос про отдых между подходами.
+SETUP_SLOT_MARKERS: dict[str, tuple[str, ...]] = {
+    "goal": (
+        "цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат",
+        "your goal", "training goal", "what do you want", "what are you after",
+        "why train", "why do you train", "what result",
+    ),
+    "days": (
+        "дней в неделю", "дня в неделю", "раз в неделю", "сколько дней",
+        "days a week", "days per week", "times a week", "times per week", "how many days",
+    ),
+    "time": (
+        "сколько времени", "времени на трениров", "минут на трениров", "длительность трениров",
+        "how much time", "how long do you have", "how long can you", "how long per",
+        "how long is a session", "how long are your", "session length", "minutes per",
+    ),
+    "place": (
+        "где трен", "где занима", "оборудован", "инвентар", "зал или дом",
+        "where do you train", "where do you work out", "equipment", "gym or home",
+    ),
+    "experience": (
+        # Голое "опыт" сидит внутри «попытка».
+        "какой опыт", "какой у тебя опыт", "опыт трен", "опыт в зал", "стаж", "давно трен",
+        "experience", "how long have you been", "how long have you trained",
+    ),
+    "injuries": (
+        "травм", "болит", "огранич", "injur", "pain", "hurt", "limitation",
+    ),
+}
+SETUP_GOAL_MARKERS = SETUP_SLOT_MARKERS["goal"]
+
+# Варианты ответа слотов ядра — те же, что у чистого листа.
+_SLOT_CHOICES = {
+    "days": ("2", "3", "4", "5"),
+    "time": ("45", "60", "90"),
+    "place": ("gym", "home_weights", "home_bare", "bar"),
+    "experience": ("new", "year", "years", "veteran"),
+    "injuries": ("none", "back", "knees", "shoulders"),
+}
 
 
-# Вопрос про цель бот/приложение задают сами, а не полагаются на модель. Цель
-# была одним пунктом промпта среди пяти, а слотов в опроснике меньше, чем тем,
-# — и она регулярно проигрывала дням, времени, травмам и сплиту: человек
-# отвечал на четыре вопроса и получал программу, ни разу не сказав, ЗАЧЕМ он
-# тренируется. Это единственная вводная, без которой программа собирается
-# наугад, поэтому она идёт первой и не зависит от того, вспомнит ли о ней
-# модель.
+def covered_slots(question_text: str) -> set[str]:
+    """Какие слоты ядра задевает вопрос модели (по SETUP_SLOT_MARKERS)."""
+    text = (question_text or "").lower()
+    return {slot for slot, markers in SETUP_SLOT_MARKERS.items() if any(m in text for m in markers)}
+
+
 def setup_goal_question(*, for_client: bool = False) -> dict[str, Any]:
     """`for_client` — тренер собирает программу своему атлету
     (coach_program_ai): тот же вопрос, только про атлета."""
@@ -60,42 +109,92 @@ def setup_goal_question(*, for_client: bool = False) -> dict[str, Any]:
     }
 
 
-async def questions_with_goal(
+def _saved_profile_value(user: Any, slot: str) -> Optional[str]:
+    """То, что атлет уже рассказывал (экран «Обо мне»), для слота ядра."""
+    if user is None:
+        return None
+    if slot == "goal":
+        return (user["goal"] or "").strip() or None
+    if slot == "experience":
+        return (user["experience"] or "").strip() or None
+    if slot == "place":
+        raw = (user["equipment"] or "").strip()
+        if not raw:
+            return None
+        try:
+            items = json.loads(raw)
+        except ValueError:
+            return raw
+        if isinstance(items, list):
+            return ", ".join(str(item).strip() for item in items if str(item).strip()) or None
+        return raw
+    return None
+
+
+def _with_saved_first(question: dict[str, Any], saved: Optional[str]) -> dict[str, Any]:
+    """Сохранённое значение — первой кнопкой «Как раньше: …». Переспросить надо
+    (цель и зал меняются, а программа собирается под сегодняшние), но вопрос
+    без прошлого ответа под рукой читается как «он забыл»."""
+    if not saved:
+        return question
+    import ai_trainer  # локально — цикл импортов (нужны только потолки)
+
+    label = formatting.shorten(i18n.t("ai.screen.setup_core.as_before", value=saved), ai_trainer.SETUP_CHOICE_LIMIT)
+    rest = [choice for choice in question["choices"] if choice != label]
+    return {**question, "choices": [label, *rest][: ai_trainer.SETUP_MAX_CHOICES]}
+
+
+def core_questions(user: Any = None, *, for_client: bool = False) -> list[dict[str, Any]]:
+    """Шесть вопросов ядра на языке текущего контекста, в порядке CORE_SLOTS.
+
+    `user` — строка users атлета: его сохранённые цель, опыт и инвентарь встают
+    первой кнопкой. `for_client` — тренер отвечает за своего атлета: вопросы
+    про атлета, а профиль тренера тут ни при чём (его не передают). Каждый
+    вопрос несёт `slot` — по нему повторный проход узнаёт, что ядро уже
+    поставлено (см. questions_with_core)."""
+    prefix = "coach.ai_chat.setup_fresh" if for_client else "ai.screen.setup_fresh"
+    goal = setup_goal_question(for_client=for_client)
+    questions = [_with_saved_first({**goal, "slot": "goal"}, _saved_profile_value(user, "goal"))]
+    for slot in CORE_SLOTS[1:]:
+        question = {
+            "question": i18n.t(f"{prefix}.{slot}.question"),
+            "choices": [i18n.t(f"ai.screen.setup_fresh.{slot}.choice_{choice}") for choice in _SLOT_CHOICES[slot]],
+            "slot": slot,
+        }
+        questions.append(_with_saved_first(question, _saved_profile_value(user, slot)))
+    return questions
+
+
+async def questions_with_core(
     user_id: int, questions: list[dict[str, Any]], previous: dict[str, Any], *, for_client: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Поставить вопрос про цель первым — если её ещё никто не спросил.
+    """Опросник целиком: ядро (CORE_SLOTS) первым, потом не больше
+    SETUP_MAX_EXTRA_QUESTIONS своих вопросов модели — тех, что не повторяют и
+    не склеивают слоты ядра.
 
-    Возвращает (вопросы, «цель закрыта»). Второе переживает круги уточнений:
-    профиль между кругами не меняется (модель сохранит цель только в финальной
-    сборке), так что без флага второй круг задал бы тот же вопрос ещё раз.
+    Возвращает (вопросы, «ядро задано»). Второе переживает круги уточнений
+    (в состоянии лежит под старым именем `goal_asked`): на втором круге модель
+    переспрашивает то, что осталось открытым, и ядро второй раз не ставится.
 
-    `SETUP_MAX_QUESTIONS` — потолок на число вопросов в опроснике — держится в
-    ai_trainer.py (там же, где остальные потолки propose_program/ask_setup_questions);
-    импортируем его отсюда, а не дублируем числом.
+    Идемпотентна: список, где ядро уже стоит (вопросы со `slot`), возвращается
+    как есть. Это важно — её зовут дважды: в момент вызова инструмента (чтобы
+    ответ инструмента модели перечислял ровно заданное, см.
+    ai_trainer.sync_setup_payload) и при раскладке опросника на экран.
     """
-    import ai_trainer  # локально — иначе цикл импортов (ai_trainer тут не нужен нигде, кроме этой константы)
+    import ai_trainer  # локально — иначе цикл импортов (нужна только константа)
 
-    if previous.get("goal_asked"):
-        return questions, True
-    asked_by_model = any(
-        marker in (question.get("question") or "").lower()
-        for question in questions
-        for marker in SETUP_GOAL_MARKERS
-    )
-    if asked_by_model:
-        return questions, True
+    # `slot` есть у каждого вопроса ядра; `slot: None` ставит сам инструмент на
+    # уточнении перед тренировкой на сегодня (today_workout) — там ядра нет.
+    if previous.get("goal_asked") or any("slot" in question for question in questions):
+        return questions[: ai_trainer.SETUP_MAX_QUESTIONS], True
     # Программа атлету: профиль тренера тут ни при чём, а профиля атлета
-    # тренер не видит — про цель атлета спрашиваем всегда.
+    # тренер не видит — кнопок «как раньше» там нет.
     user = None if for_client else await db.get_user(user_id)
-    if user is not None and (user["goal"] or "").strip():
-        # Цель уже записана с его слов — переспрашивать то, что бот показывает
-        # на экране «Обо мне», значит признаваться, что он этого не помнит.
-        return questions, True
-    goal = setup_goal_question(for_client=for_client)
-    goal_question = {"question": goal["question"], "choices": list(goal["choices"])}
-    # Срезаем с хвоста: свой вопрос идёт первым, а лишним оказывается последний
-    # вопрос модели — он же и наименее важный, вопросы она ставит по убыванию.
-    return ([goal_question] + questions)[: ai_trainer.SETUP_MAX_QUESTIONS], True
+    extras = [
+        question for question in questions
+        if not covered_slots(question.get("question") or "")
+    ][:SETUP_MAX_EXTRA_QUESTIONS]
+    return (core_questions(user, for_client=for_client) + extras)[: ai_trainer.SETUP_MAX_QUESTIONS], True
 
 
 def setup_answers_text(setup: dict[str, Any]) -> str:
@@ -140,33 +239,13 @@ def setup_enough_text(previous_goal: Optional[str]) -> str:
 # Вопросы тогда фиксированные — те же, что модель обычно задаёт, — а модель
 # подключается один раз, уже за программой, когда ответы собраны.
 
-_FRESH_QUESTIONS = (
-    ("days", ("2", "3", "4", "5")),
-    ("time", ("45", "60", "90")),
-    ("place", ("gym", "home_weights", "home_bare", "bar")),
-    ("experience", ("new", "year", "years", "veteran")),
-    ("injuries", ("none", "back", "knees", "shoulders")),
-)
-
-
 def fresh_start_questions(*, for_client: bool = False) -> list[dict[str, Any]]:
-    """Шесть вопросов чистого листа на языке текущего контекста: цель — первой
-    (тот же `setup_goal_question`, что подставляется в обычном пути), дальше
-    дни, время, место и инвентарь, опыт, травмы. Не больше
-    `ai_trainer.SETUP_MAX_QUESTIONS` — иначе потолок молча срезал бы последний.
+    """Вопросы чистого листа — то же ядро, что ставится в обычном пути
+    (`core_questions`): цель, дни, время, место и инвентарь, опыт, травмы.
 
     `for_client` — тренер отвечает за своего атлета: те же вопросы и варианты,
     только сами вопросы — про атлета, а не про того, кто отвечает."""
-    import ai_trainer  # локально — цикл импортов, как в questions_with_goal
-
-    prefix = "coach.ai_chat.setup_fresh" if for_client else "ai.screen.setup_fresh"
-    questions = [setup_goal_question(for_client=for_client)]
-    for slot, choices in _FRESH_QUESTIONS:
-        questions.append({
-            "question": i18n.t(f"{prefix}.{slot}.question"),
-            "choices": [i18n.t(f"ai.screen.setup_fresh.{slot}.choice_{choice}") for choice in choices],
-        })
-    return questions[: ai_trainer.SETUP_MAX_QUESTIONS]
+    return core_questions(for_client=for_client)
 
 
 def fresh_start_reply(*, for_client: bool = False) -> str:
