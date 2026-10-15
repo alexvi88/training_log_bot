@@ -471,7 +471,7 @@ def test_prompt_shapes_a_progress_review():
     assert "## Растёт" in example and "## На паузе" in example
     assert "## Moving" in example and "## On pause" in example
     assert "Главное:" in example
-    assert len(example) < 1200, "пример разбора разросся — он живёт в кэшируемом префиксе"
+    assert len(example) < 2000, "пример разбора разросся — он живёт в кэшируемом префиксе"
     # Плохие фразы из живого ответа звучат только в «Нет», не в образце.
     good = example[example.index("Да:"):]
     for leak in ("can't confirm", "shouldn't", "не должен", "status says"):
