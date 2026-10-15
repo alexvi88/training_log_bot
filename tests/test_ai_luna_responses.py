@@ -381,3 +381,47 @@ async def test_api_stream_on_luna_keeps_chunk_status_done(fresh_db, own_luna, mo
     # История в базе несёт рассуждение — следующий вопрос вернёт его модели.
     saved = await db.get_ai_conversation_wire_history(OWN)
     assert saved[-1][ai_trainer.OPENAI_OUTPUT_KEY] == [REASONING_2, MESSAGE_2]
+
+
+# ---------- ход с фото ----------
+
+PHOTO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+
+async def test_luna_photo_turn_sends_input_image_and_keeps_history_light(
+    fresh_db, own_luna, monkeypatch,
+):
+    """Фото к вопросу у атлета на Luna идёт в Luna (не в xAI — own_luna роняет
+    любое касание grok-клиента), картинкой input_image в последнем user-элементе;
+    в историю хода — текст вопроса без база64; цена — обычным cost-событием."""
+    await _luna_user(fresh_db)
+    fake = _FakeOpenAI([_round_body([REASONING_2, MESSAGE_2], USAGE_2)])
+    monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: fake)
+    wire: dict = {}
+
+    async def on_wire(messages):
+        wire["messages"] = messages
+
+    answer = await ai_trainer.ask(
+        OWN, "Что это за тренажёр?", [], image_data_url=PHOTO, on_wire=on_wire,
+    )
+    assert answer == ANSWER
+
+    (body,) = fake.requests
+    last = body["input"][-1]
+    assert last["role"] == "user"
+    text_part, image_part = last["content"]
+    assert text_part["type"] == "input_text" and text_part["text"].startswith("Что это за тренажёр?")
+    assert image_part == {"type": "input_image", "image_url": PHOTO}
+
+    saved = wire["messages"]
+    user_turn = next(m for m in saved if m.get("role") == "user")
+    assert isinstance(user_turn["content"], str)
+    assert user_turn["content"].startswith("Что это за тренажёр?")
+    assert "base64" not in json.dumps(saved)
+
+    llm = await db.get_llm_cost_breakdown(_today())
+    assert llm["gpt-6-luna"]["calls"] == 1
+    assert await db.get_cost_total_usd() == pytest.approx(
+        config.call_price_usd("gpt-6-luna", 13_000, 900, 11_000, 400)
+    )
