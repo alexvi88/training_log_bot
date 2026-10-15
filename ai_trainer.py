@@ -44,6 +44,7 @@ import db
 import formatting
 import i18n
 import seed_data
+import shutdown_drain
 import timeutil
 import view_builder
 from seed_data import EXERCISE_TEMPLATES, canonical_muscle_group_name
@@ -664,13 +665,18 @@ async def paid_call(
             else:
                 raise LimitBlocked(block)
     response = None
-    try:
-        async with _bill_if_aborted(user_id, model, messages=messages, source=source):
-            response = await coro_factory()
-        return response
-    finally:
-        if response is not None:
-            await _log_llm_cost(user_id, model, getattr(response, "usage", None), source=source)
+    # Фоновый платный вызов (дайджест, разбор тренировки) — тоже ход для
+    # остановки на деплое: она дождётся ответа и его cost-события, а не
+    # закроет базу посреди (shutdown_drain.py). Внутри хода тренера — часть
+    # этого хода, второй раз не считается.
+    async with shutdown_drain.track_unless_inside("paid"):
+        try:
+            async with _bill_if_aborted(user_id, model, messages=messages, source=source):
+                response = await coro_factory()
+            return response
+        finally:
+            if response is not None:
+                await _log_llm_cost(user_id, model, getattr(response, "usage", None), source=source)
 
 
 def is_configured() -> bool:
