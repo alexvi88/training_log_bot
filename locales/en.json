@@ -2293,6 +2293,7 @@
   "ai.screen.setup_fresh.injuries.choice_back": "Back",
   "ai.screen.setup_fresh.injuries.choice_knees": "Knees",
   "ai.screen.setup_fresh.injuries.choice_shoulders": "Shoulders",
+  "ai.screen.setup_core.as_before": "As before: {value}",
   "ai.tool_status.get_training_overview.1": "📋 looking at the big picture of your training...",
   "ai.tool_status.get_training_overview.2": "🗺️ taking in the whole training picture...",
   "ai.tool_status.get_training_overview.3": "📊 pulling together a summary of your workouts...",

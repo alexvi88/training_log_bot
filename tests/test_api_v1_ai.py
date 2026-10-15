@@ -19,6 +19,7 @@ import ai_trainer
 import api_v1
 import config
 import db
+import i18n
 import running_texts
 import video_analysis
 
@@ -940,10 +941,17 @@ async def test_ask_returns_mentioned_exercises_and_programs(fresh_db, client_fac
 # ---------- опросник перед сборкой программы (POST /ai/questions/answer) ----------
 
 
-def _fake_ask_with_questions(*question_texts: str):
+def _fake_ask_with_questions(*question_texts: str, core: bool = False):
+    """Опросник от «модели». По умолчанию — с пометкой `slot: None` (так
+    инструмент помечает уточнение перед тренировкой на сегодня): ядро из шести
+    вопросов тогда не ставится, и тесты механики ответов не зависят от него.
+    `core=True` — обычная сборка программы, с ядром."""
     async def fake_ask(user_id, question, history, on_questions=None, **kwargs):
         if on_questions is not None:
-            await on_questions([{"question": text, "choices": []} for text in question_texts])
+            await on_questions([
+                {"question": text, "choices": [], **({} if core else {"slot": None})}
+                for text in question_texts
+            ])
         return "Уточню пару вещей, прежде чем собрать план."
 
     return fake_ask
@@ -952,11 +960,12 @@ def _fake_ask_with_questions(*question_texts: str):
 @pytest.mark.asyncio
 async def test_ask_returns_setup_questions(fresh_db, client_factory, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?"))
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_questions(
+        "Сколько дней в неделю и сколько времени на тренировку?", "Что подтянуть в приоритете?", core=True,
+    ))
     client = await _linked_client(fresh_db, client_factory)
-    # Профиль с уже заполненной целью — иначе первым вопросом всегда встаёт
-    # вопрос о цели (ai_setup_flow.questions_with_goal), и тест зависел бы от
-    # текста, которого сам не задавал.
+    # Цель в профиле — вопрос о ней всё равно задаётся, но первой кнопкой
+    # стоит сохранённая («Как раньше: …»), чтобы не читалось как «забыл».
     await fresh_db.update_user(111, goal="набор массы")
 
     resp = await client.post("/ai/ask", json={"question": "Собери программу"})
@@ -966,9 +975,16 @@ async def test_ask_returns_setup_questions(fresh_db, client_factory, monkeypatch
     questions = body["questions"]
     assert questions is not None
     assert questions["index"] == 0
-    assert questions["total"] == 1
-    assert questions["question"] == "Сколько дней в неделю?"
+    # Ядро (6) + свой вопрос модели; склеенный «дни и время» выброшен.
+    assert questions["total"] == 7
+    with i18n.use_lang("ru"):
+        assert questions["question"] == i18n.t("ai.screen.setup_goal.question")
+        assert questions["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="набор массы")
     assert questions["skip_label"]
+    state = await fresh_db.get_ai_setup_state(111)
+    texts = [q["question"] for q in state["questions"]]
+    assert "Сколько дней в неделю и сколько времени на тренировку?" not in texts
+    assert texts[-1] == "Что подтянуть в приоритете?"
 
 
 @pytest.mark.asyncio
