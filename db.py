@@ -11999,7 +11999,8 @@ async def prune_old_limit_acks(keep_days: int = 7) -> int:
 # ---------- AI trainer: durable chat history ----------
 #
 # Separate from the live in-FSM window (handlers/ai_trainer.py's ai_history,
-# capped and reset with the conversation) — this is the full, permanent log,
+# capped and reset with the conversation) — this is the long log (kept
+# config.AI_CONVERSATION_RETENTION_DAYS, see prune_old_ai_chat_messages),
 # queryable on demand via the get_full_chat_history tool (ai_trainer.py) when
 # a question references something older than what's in the live window.
 
@@ -12016,6 +12017,18 @@ async def add_ai_chat_message(telegram_id: int, role: str, content: str) -> None
             (telegram_id, role, content, now_iso()),
         )
         await conn().commit()
+
+
+async def prune_old_ai_chat_messages(retention_days: int) -> int:
+    """Снести реплики вечного лога бота старше retention_days
+    (config.AI_CONVERSATION_RETENTION_DAYS — тот же срок, что у журнала
+    ai_turn_log и архива разговоров приложения: политика описывает их одной
+    строкой). get_full_chat_history после этого вспоминает полгода, а не всё."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM ai_chat_messages WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount or 0
 
 
 async def get_ai_chat_history(telegram_id: int, limit: int = MAX_AI_CHAT_HISTORY_READ) -> list[aiosqlite.Row]:
