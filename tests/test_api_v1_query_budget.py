@@ -51,7 +51,8 @@ MAX_QUERIES_ACTIVE_WORKOUT = 14
 MAX_QUERIES_HALL_OF_FAME = 13
 # GET /exercises: три запроса авторизации + сам список (usage_count и число
 # подходов считаются подзапросами внутри одного SELECT, а не по запросу на
-# упражнение) — потолок с запасом, чтобы N+1 на каталоге не прошёл молча.
+# упражнение) и одна выборка `sessions`/`last_workout_at` на весь список
+# (api_v1_common.trained_exercise_stats) — потолок с запасом, чтобы N+1 на каталоге не прошёл молча.
 MAX_QUERIES_EXERCISES = 6
 
 FIXED_TODAY = dt.date(2026, 9, 1)
