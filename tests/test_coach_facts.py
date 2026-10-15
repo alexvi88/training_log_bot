@@ -361,3 +361,23 @@ async def test_compare_periods_windows_do_not_overlap(fresh_db, user_id):
 
 def test_negative_zero_is_scrubbed():
     assert json.dumps(ai_trainer._without_negative_zero({"a": [-0.0, (1.0, -0.0)]})) == '{"a": [0.0, [1.0, 0.0]]}'
+
+
+def test_prompt_has_a_static_section_on_judging_progress():
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Как судить о прогрессе." in prompt
+    for rule in (
+        "повторы сравнивай только на одном весе",
+        "бэкофф и разминка — не рабочий вес",
+        "меньше трёх сессий на весе — начало, а не тупик",
+        "посмотри перерывы, болезнь и заметки и назови их",
+        "числа цитируй из полей инструментов вместе с датой",
+        "статус инструмента не переворачивай без явной причины",
+        "свежая прибавка веса, на которой повторы держатся, — это прогресс",
+    ):
+        assert rule in prompt, rule
+    # Поиск отключён гейтом (search=False) и инструментом модели не был никогда.
+    assert "Если среди доступных инструментов есть веб-поиск" not in prompt
+    assert "не притворяйся, что искал в интернете" in prompt
+    # Промпт — статичный префикс: ни даты, ни данных атлета.
+    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT)
