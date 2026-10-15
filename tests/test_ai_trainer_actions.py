@@ -232,14 +232,14 @@ async def test_exercise_tools_do_not_touch_catalog_templates(fresh_db, user_id):
 
 
 async def test_log_bodyweight_writes_it_straight_away(fresh_db, user_id):
-    payload, _undo = await ai_trainer._log_bodyweight(user_id, {"weight": 78.4})
+    payload, _undo = await ai_trainer._log_bodyweight(user_id, {"weight": 78.4, "user_asked_to_log": True})
 
     assert payload["ok"] is True
     assert (await dbmod.get_latest_bodyweight(user_id))["weight"] == 78.4
 
 
 async def test_log_bodyweight_rejects_nonsense(fresh_db, user_id):
-    payload, _undo = await ai_trainer._log_bodyweight(user_id, {"weight": 4})
+    payload, _undo = await ai_trainer._log_bodyweight(user_id, {"weight": 4, "user_asked_to_log": True})
     assert "error" in payload
     assert await dbmod.get_latest_bodyweight(user_id) is None
 
@@ -347,7 +347,7 @@ async def test_every_self_acting_tool_offers_an_undo(fresh_db, user_id):
 
 
 async def test_logged_bodyweight_can_be_taken_back(fresh_db, user_id):
-    action = await _call(user_id, "log_bodyweight", {"weight": 78.4})
+    action = await _call(user_id, "log_bodyweight", {"weight": 78.4, "user_asked_to_log": True})
 
     assert action is not None and action["undo"]["kind"] == "bodyweight"
     assert len(await fresh_db.list_bodyweight_logs(user_id)) == 1
@@ -365,7 +365,7 @@ async def test_logged_bodyweight_also_offers_a_diary_link(fresh_db, user_id):
         captured.append(action)
 
     await ai_trainer.execute_tool(
-        user_id, "log_bodyweight", {"weight": 78.4}, on_action=on_action
+        user_id, "log_bodyweight", {"weight": 78.4, "user_asked_to_log": True}, on_action=on_action
     )
 
     assert [a["label"] for a in captured] == ["↩️ Отменить", "⚖️ Дневник веса"]
@@ -375,7 +375,7 @@ async def test_logged_bodyweight_also_offers_a_diary_link(fresh_db, user_id):
 async def test_undo_removes_that_entry_not_the_latest(fresh_db, user_id):
     """Между записью тренера и тапом человек мог взвеситься ещё раз руками —
     снос «последней» утащил бы не то."""
-    action = await _call(user_id, "log_bodyweight", {"weight": 78.4})
+    action = await _call(user_id, "log_bodyweight", {"weight": 78.4, "user_asked_to_log": True})
     await fresh_db.add_bodyweight_log(user_id, 81.0)
 
     await ai_handler._apply_undo(user_id, action["undo"])
@@ -802,7 +802,7 @@ async def test_action_button_labels_are_english_under_lang_en(fresh_db, user_id,
         _, action = await ai_trainer._archive_exercises(user_id, {"names": ["BSS"]})
         labels.append(action["label"])
 
-        _, action = await ai_trainer._log_bodyweight(user_id, {"weight": 82.5})
+        _, action = await ai_trainer._log_bodyweight(user_id, {"weight": 82.5, "user_asked_to_log": True})
         labels.append(action["label"])
 
         weight_log = await dbmod.get_latest_bodyweight(user_id)
@@ -816,7 +816,7 @@ async def test_action_button_labels_are_english_under_lang_en(fresh_db, user_id,
         async def on_action(action: dict) -> None:
             labels.append(action["label"])
 
-        await ai_trainer.execute_tool(user_id, "log_bodyweight", {"weight": 70}, on_action=on_action)
+        await ai_trainer.execute_tool(user_id, "log_bodyweight", {"weight": 70, "user_asked_to_log": True}, on_action=on_action)
 
     assert program_id and exercise_id  # использованы выше, для читаемости
     for label in labels:
