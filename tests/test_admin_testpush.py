@@ -79,3 +79,23 @@ async def test_not_configured(fresh_db, monkeypatch):
     message = _message(ADMIN_ID, "/testpush")
     await admin.cmd_testpush(message, await _state(ADMIN_ID))
     assert "не настроен" in message.answer.await_args.args[0]
+
+
+async def test_lands_in_inbox_on_the_target_language(fresh_db, monkeypatch):
+    """Проверочный пуш ложится в «Уведомления», как настоящий, — даже без токена."""
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    monkeypatch.setattr(apns, "is_configured", lambda: True)
+    monkeypatch.setattr(apns, "send_alert", AsyncMock(return_value=True))
+    await fresh_db.get_or_create_user(telegram_id=42, username="u")
+    await fresh_db.set_user_lang(42, "en")
+    monkeypatch.setattr(fresh_db, "is_app_user", AsyncMock(return_value=True))
+    message = _message(ADMIN_ID, "/testpush 42")
+    await admin.cmd_testpush(message, await _state(ADMIN_ID))
+    cur = await fresh_db.conn().execute("SELECT category, title, body, lang FROM inbox WHERE user_id = 42")
+    rows = [dict(r) for r in await cur.fetchall()]
+    assert rows == [{
+        "category": "admin_test", "title": "PUSH CHECK",
+        "body": "HEY ATHLETE! If you're reading this, pushes get through.", "lang": "en",
+    }]
+    assert "нет iOS-токена" in message.answer.await_args.args[0]
+    assert "строка в «Уведомлениях» есть" in message.answer.await_args.args[0]

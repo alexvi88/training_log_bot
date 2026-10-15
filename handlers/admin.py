@@ -30,6 +30,7 @@ import config
 import db
 import formatting
 import i18n
+import inbox
 import keyboards
 import product_metrics
 import push_texts
@@ -258,9 +259,22 @@ async def cmd_testpush(message: Message, state: FSMContext):
         except ValueError:
             await message.answer("Формат: /testpush или /testpush <user_id>")
             return
+    # Через inbox.deliver, как настоящие пуши: строка ложится в
+    # «Уведомления» приложения даже без токена и без APNs — так проверяется
+    # и раздел, а не только баннер. Текст — на языке того, кому шлём.
+    user = await db.get_user(target)
+    lang = user["lang"] if user and user["lang"] else i18n.DEFAULT_LANG
+    with i18n.use_lang(lang):
+        title, body = i18n.t("push.test.title"), i18n.t("push.test.body")
+    delivery = await inbox.deliver(target, "admin_test", title, body, lang=lang)
+    shelf = (
+        "строка в «Уведомлениях» есть" if delivery.inbox_id is not None
+        else "в «Уведомления» не легло — человек ни разу не входил в приложение"
+    )
     if not apns.is_configured():
         await message.answer(
-            "❌ APNs не настроен: нужны APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID и APNS_BUNDLE_ID."
+            "❌ APNs не настроен: нужны APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID и APNS_BUNDLE_ID. "
+            f"Баннера не будет, {shelf}."
         )
         return
     tokens = await db.get_push_tokens(target)
@@ -268,27 +282,19 @@ async def cmd_testpush(message: Message, state: FSMContext):
         total = await db.count_push_tokens()
         await message.answer(
             f"❌ У пользователя {target} нет iOS-токена. Открой приложение, разреши "
-            f"уведомления и войди — токен придёт сам. iOS-токенов в базе всего: {total}."
+            f"уведомления и войди — токен придёт сам. iOS-токенов в базе всего: {total}. "
+            f"Баннера не будет, {shelf}."
         )
         return
-    # На каждое устройство атлета — проверка должна показать, что пуш доходит
-    # и до iPad, а не только до последнего зарегистрированного телефона.
-    results = [
-        await apns.send_alert(
-            target, token, "Проверка пушей", "ПРИВЕТ АТЛЕТ! Если ты это читаешь — пуши доходят.",
-            category="admin_test",
-        )
-        for token in tokens
-    ]
-    ok = any(results)
-    if ok:
+    if delivery.accepted:
         await message.answer(
             f"✅ Apple принял пуш для {target} ({config.APNS_ENV}) на "
-            f"{sum(results)} из {len(results)} устройств. Смотри телефон."
+            f"{delivery.accepted} из {len(tokens)} устройств, {shelf}. Смотри телефон."
         )
     else:
         await message.answer(
-            "❌ Apple пуш не принял. Причина — в логах: fly logs -a training-log-bot | grep -i apns"
+            f"❌ Apple пуш не принял ({shelf}). Причина — в логах: "
+            "fly logs -a training-log-bot | grep -i apns"
         )
 
 
