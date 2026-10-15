@@ -360,11 +360,11 @@ _TABLE_ANSWER = (
 
 
 async def test_a_plain_prose_answer_stays_an_ordinary_message(fresh_db, user_id, monkeypatch):
-    """Rich messages are laid out like an article — big headings, wide spacing —
-    so an answer with nothing but prose in it must not go that way: there's
-    nothing a plain message can't carry, and the article look just inflates it."""
+    """Rich messages are laid out with wide spacing, so an answer with nothing
+    but prose in it — no table, no heading — must not go that way: there's
+    nothing a plain message can't carry, and the airy layout just inflates it."""
     monkeypatch.setattr(
-        ai_trainer.ai_trainer, "ask", AsyncMock(return_value="## Итог\n\nТяга растёт, жми дальше.")
+        ai_trainer.ai_trainer, "ask", AsyncMock(return_value="Тяга растёт, **жми** дальше.")
     )
 
     state = await _make_state(user_id)
@@ -378,8 +378,58 @@ async def test_a_plain_prose_answer_stays_an_ordinary_message(fresh_db, user_id,
 
     placeholder.bot.edit_message_text.assert_not_awaited()
     message.answer_rich.assert_not_awaited()
-    # The heading still arrives as a bold line rather than raw hashes.
-    assert "<b>Итог</b>" in placeholder.edit_text.await_args.args[0]
+    assert "<b>жми</b>" in placeholder.edit_text.await_args.args[0]
+
+
+async def test_an_answer_with_headings_goes_rich_with_the_smallest_heading(
+    fresh_db, user_id, monkeypatch
+):
+    """Жирная строка-заголовок терялась среди жирных названий упражнений, и у
+    длинного ответа не было видимой структуры. Ответ с заголовками уходит
+    rich-сообщением, и любой уровень становится самым мелким заголовком —
+    подзаголовок, а не статья."""
+    answer = "Смотрю по дневнику.\n# 📈 Растёт\n**Жим лёжа** +5 кг.\n\n### Стоит\nПрисед."
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=answer))
+    await fresh_db.claim_ai_actions_hint(user_id)
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "что с прогрессом?")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock()
+
+    await ai_trainer.ai_question(message, state)
+
+    sent = placeholder.bot.edit_message_text.await_args.kwargs["rich_message"].markdown
+    assert sent == (
+        "Смотрю по дневнику.\n\n###### 📈 Растёт\n**Жим лёжа** +5 кг.\n\n###### Стоит\nПрисед."
+    )
+    placeholder.edit_text.assert_not_awaited()
+
+
+async def test_headings_fall_back_to_bold_without_rich_support(fresh_db, user_id, monkeypatch):
+    """Сервер или клиент без rich: заголовок — жирной строкой, без решёток."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    answer = "Смотрю по дневнику.\n## 📈 Растёт\n\n**Жим лёжа** +5 кг."
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=answer))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "что с прогрессом?")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="unknown field rich_message")
+    )
+    message.answer_rich = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="unknown method")
+    )
+
+    await ai_trainer.ai_question(message, state)
+
+    sent = placeholder.edit_text.await_args.args[0]
+    assert "#" not in sent
+    assert "Смотрю по дневнику.\n\n<b>📈 Растёт</b>\n<b>Жим лёжа</b> +5 кг." in sent
 
 
 async def test_answer_goes_out_as_a_rich_message_when_the_server_supports_it(
@@ -424,7 +474,7 @@ async def test_headings_go_out_as_real_rich_headings(fresh_db, user_id, monkeypa
     await ai_trainer.ai_question(message, state)
 
     sent = placeholder.bot.edit_message_text.await_args.kwargs["rich_message"].markdown
-    assert "## Твои цифры" in sent
+    assert sent.startswith("###### Твои цифры\n")
     # The table itself is untouched — that's the whole reason for going rich.
     assert "| **squat** | 140×6 |" in sent
 
