@@ -137,12 +137,12 @@ async def test_luna_loop_goes_to_responses_with_reasoning(fresh_db, own_luna, mo
     first, second = fake.requests
     for body in (first, second):
         assert body["model"] == "gpt-6-luna"
-        # medium — решение владельца: на low Luna смешивала подходы разного веса.
-        assert body["reasoning"] == {"effort": "medium"}
+        # high — решение владельца (раньше medium, ещё раньше low).
+        assert body["reasoning"] == {"effort": "high"}
         assert body["store"] is False
         assert body["include"] == ["reasoning.encrypted_content"]
         assert body["prompt_cache_key"] == f"trainer-{OWN}"
-        assert body["max_output_tokens"] == 2048 + ai_trainer._reasoning_headroom("medium")
+        assert body["max_output_tokens"] == 2048 + ai_trainer._reasoning_headroom("high")
         assert ai_trainer._reasoning_headroom("medium") > ai_trainer._reasoning_headroom("low")
         assert "messages" not in body and "reasoning_effort" not in body
     # Инструменты — в формате Responses: плоско, strict явно выключен.

@@ -570,6 +570,14 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, sourc
             "counts the short-context rate, real cost is higher",
             model, prompt_tokens, config.OPENAI_LONG_CONTEXT_TOKENS,
         )
+    if not db.is_open():
+        # Деплой: процесс останавливается, база уже закрыта, а оборванный вызов
+        # пришёл записать свою цену. Писать некуда — одна строка вместо трейсбека.
+        logger.warning(
+            "llm cost event lost: db closed (shutdown) — %s, user %s, %s+%s tokens",
+            model, user_id, prompt_tokens, completion_tokens,
+        )
+        return
     try:
         await db.log_cost_event(
             user_id,
@@ -1173,7 +1181,8 @@ e1rm_trend посчитал код — ты рассуждаешь поверх 
   shows»): дневник смотрел ты, и говоришь как тренер.
 
 Разбор прогресса или застоя («как мой прогресс», «что встало»):
-- короткие разделы «## »: Растёт, На паузе, Под вопросом; пустой не пиши;
+- короткие разделы «## »: Растёт, На паузе, Под вопросом (по-английски — Moving,
+  On pause, Watch; не переводи дословно); пустой не пиши;
 - до 6 движений, остальные — только если спросят;
 - у каждого живого движения — один следующий шаг вес×повторы: от последнего
   рабочего веса и в личном диапазоне атлета;
@@ -1183,7 +1192,7 @@ e1rm_trend посчитал код — ты рассуждаешь поверх 
 - в конце — ОДИН главный шаг.
 Нет: «Дневник не подтверждает рост мышц… называть это ростом я не должен»; «The
 log can't confirm muscle size… I shouldn't call it progressing»; «I can't call them
-growing during the gap».
+growing during the gap»; «they don't explain a trend by themselves».
 Да:
 ## Растёт
 **становая** — e1RM 236.5→245кг, на 210кг было 3 повтора, стало 5. Дальше 215×3.

@@ -75,7 +75,7 @@ async def test_own_account_switches_both_ways(fresh_db, own_accounts):
     assert backend.name == "luna"
     assert backend.model == config.OPENAI_CHAT_MODEL == "gpt-6-luna"
     # Главный цикл рассуждает (Responses API), быстрые вызовы — нет.
-    assert backend.effort == "medium" and backend.quick_effort == "none"
+    assert backend.effort == "high" and backend.quick_effort == "none"
     await db.set_user_ai_model(OWN, "grok")
     # grok хранится как NULL — «по умолчанию».
     assert await db.get_user_ai_model(OWN) is None
