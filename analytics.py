@@ -1134,10 +1134,43 @@ class StallVerdict:
     # вес, и его некому было применить проактивно.
     ready_to_add_weight: bool
     avg_top_rpe: Optional[float]
+    # С какой даты стоит текущий рабочий вес (последняя прибавка в окне или
+    # начало окна) и сколько сессий на нём было. None — упражнение на весе тела.
+    weight_since: Optional[str] = None
+    sessions_at_top_weight: int = 0
 
 
 def _session_top_weight(session: SessionStats) -> float:
     return max((s.weight for s in session.sets), default=0.0)
+
+
+def best_reps_at(session: SessionStats, weight: float) -> int:
+    """Лучшие повторы сессии НА ЭТОМ весе (0 — такого веса в ней не было).
+
+    Не max_reps_in_set: в сессии «77×6, 73×12» лучший подход по повторам — на
+    73, и сравнение «повторы на рабочем весе было 12, стало 7» смешивало два
+    разных веса. Так тренер однажды и сказал «повторы упали с 12 до 7» там, где
+    на 77 они выросли 6→7.
+    """
+    return max((s.reps for s in session.sets if s.weight == weight), default=0)
+
+
+def _last_weight_bump(sessions: list[SessionStats]) -> tuple[int, float]:
+    """(индекс сессии с последней прибавкой, лучший вес ДО неё).
+
+    Прибавка — сессия, чей рабочий вес выше всего, что было до неё в этом
+    списке. Именно рекорд, а не «больше, чем в прошлый раз»: пила 100 → 95 →
+    100 иначе каждую вторую сессию читалась бы как прибавка. Прибавок не было —
+    (0, вес первой сессии): вес стоит с начала списка. Одна точка правды для
+    classify_stall и progress_facts.
+    """
+    best = _session_top_weight(sessions[0])
+    idx, before = 0, best
+    for i, s in enumerate(sessions[1:], start=1):
+        w = _session_top_weight(s)
+        if w > best:
+            idx, before, best = i, best, w
+    return idx, before
 
 
 def classify_stall(
@@ -1177,25 +1210,27 @@ def classify_stall(
     # в прошлый раз»: пила 100 → 95 → 100 иначе каждую вторую сессию читалась
     # бы как прибавка.
     weeks_flat: Optional[float] = None
+    weight_since: Optional[str] = None
     if not bodyweight_only:
-        best_before = _session_top_weight(window[0])
-        last_bump_at = dt.datetime.fromisoformat(window[0].started_at).date()
-        for s in window[1:]:
-            w = _session_top_weight(s)
-            if w > best_before:
-                best_before = w
-                last_bump_at = dt.datetime.fromisoformat(s.started_at).date()
-        weeks_flat = round((today - last_bump_at).days / 7, 1)
+        # Сколько вес стоит — между первым и последним появлением текущего
+        # рабочего веса, а не до сегодня: «77 кг около четырёх недель» на двух
+        # сессиях за три недели плюс неделю отдыха — уже преувеличение.
+        bump_idx, _ = _last_weight_bump(window)
+        last_bump_at = dt.datetime.fromisoformat(window[bump_idx].started_at).date()
+        last_at = dt.datetime.fromisoformat(window[-1].started_at).date()
+        weeks_flat = round((last_at - last_bump_at).days / 7, 1)
+        weight_since = last_bump_at.isoformat()
 
-    # Повторы на текущем рабочем весе: первая и последняя сессия, где он стоял.
-    # Для веса тела «текущий вес» нулевой и условие ловит все сессии — как раз
-    # то, что нужно: там вся прогрессия и есть в повторах.
+    # Повторы на текущем рабочем весе: первая и последняя сессия, где он стоял,
+    # и повторы — только подходов НА этом весе (best_reps_at), а не лучший
+    # подход сессии вообще. Для веса тела «текущий вес» нулевой и условие ловит
+    # все сессии — как раз то, что нужно: там вся прогрессия и есть в повторах.
     at_top = [
         s for s in window
         if bodyweight_only or _session_top_weight(s) == top_weight
     ]
-    reps_first = at_top[0].max_reps_in_set if at_top else 0
-    reps_last = at_top[-1].max_reps_in_set if at_top else 0
+    reps_first = best_reps_at(at_top[0], top_weight) if at_top else 0
+    reps_last = best_reps_at(at_top[-1], top_weight) if at_top else 0
 
     rpes = [
         s.top_set.rpe for s in window
@@ -1233,4 +1268,166 @@ def classify_stall(
         reps_at_top_last=reps_last,
         ready_to_add_weight=reps_last >= REP_RANGE_MAX,
         avg_top_rpe=avg_rpe,
+        weight_since=weight_since,
+        sessions_at_top_weight=len(at_top),
     )
+
+
+# ---------- факты для тренера: тренд и застой, посчитанные кодом ----------
+#
+# Модель судила о застое по сырому списку подходов и путала веса: «на 77 кг
+# повторы упали с 12 до 7», когда 12 было на 73, а на 77 повторы выросли 6→7.
+# Всё, что можно утверждать про «встал / растёт / упали повторы», считается
+# здесь, а промпт велит говорить только по этим полям.
+
+# Рабочий вес — не легче этой доли от тяжёлого веса той же сессии: разминка на
+# 50% иначе раздула бы same_weight_reps рядом ровных «10, 10, 10».
+WORKING_WEIGHT_SHARE = 0.8
+# Сколько весов отдаём в same_weight_reps (самые недавние) — ради токенов.
+SAME_WEIGHT_MAX_WEIGHTS = 3
+# «Изменение e1RM против четырёх недель назад».
+E1RM_COMPARE_WEEKS = 4
+
+
+def _date(session: SessionStats) -> str:
+    return session.started_at[:10]
+
+
+def _change(first: float, last: float) -> str:
+    return "up" if last > first else ("down" if last < first else "flat")
+
+
+def same_weight_reps(sessions: list[SessionStats]) -> list[dict[str, Any]]:
+    """По каждому рабочему весу, встречавшемуся в ≥2 сессиях: (дата, лучшие
+    повторы на ЭТОМ весе) по порядку и итог first→last. Самые недавние веса
+    первыми, не больше SAME_WEIGHT_MAX_WEIGHTS."""
+    by_weight: dict[float, list[tuple[str, int]]] = {}
+    last_seen: dict[float, str] = {}
+    for s in sessions:
+        if not s.sets:
+            continue
+        top = _session_top_weight(s)
+        for w in sorted({x.weight for x in s.sets if x.weight >= top * WORKING_WEIGHT_SHARE}):
+            by_weight.setdefault(w, []).append((_date(s), best_reps_at(s, w)))
+            last_seen[w] = s.started_at
+    repeated = [w for w, pts in by_weight.items() if len(pts) >= 2]
+    repeated.sort(key=lambda w: (last_seen[w], w), reverse=True)
+    return [
+        {
+            "weight": w,
+            "reps": [list(p) for p in by_weight[w]],
+            "change": _change(by_weight[w][0][1], by_weight[w][-1][1]),
+        }
+        for w in repeated[:SAME_WEIGHT_MAX_WEIGHTS]
+    ]
+
+
+def e1rm_trend(
+    sessions: list[SessionStats], today: dt.date, *, window_weeks: int = STALL_WINDOW_WEEKS
+) -> Optional[dict[str, Any]]:
+    """Лучший e1RM по сессиям за окно: наклон в неделю и изменение против
+    сессии четырёхнедельной давности. None — у упражнения нет e1RM (вес тела).
+    e1RM без RPE — тот же, по которому classify_stall считает наклон."""
+    scored = [(s, s.top_e1rm_ignoring_rpe) for s in sessions]
+    scored = [(s, v) for s, v in scored if v > 0]
+    if not scored:
+        return None
+    since = today - dt.timedelta(weeks=window_weeks)
+    window = [(s, v) for s, v in scored if dt.datetime.fromisoformat(s.started_at).date() >= since]
+    trend = linear_trend(
+        [(dt.datetime.fromisoformat(s.started_at), v) for s, v in window]
+    )
+    latest_s, latest_v = scored[-1]
+    cutoff = today - dt.timedelta(weeks=E1RM_COMPARE_WEEKS)
+    before = [
+        (s, v) for s, v in scored if dt.datetime.fromisoformat(s.started_at).date() <= cutoff
+    ]
+    out: dict[str, Any] = {
+        "window_weeks": window_weeks,
+        "sessions_in_window": len(window),
+        "slope_per_week": round(trend.slope_per_week, 2) if trend else None,
+        "latest": [_date(latest_s), round(latest_v, 1)],
+        "four_weeks_ago": None,
+        "change_vs_four_weeks_ago": None,
+    }
+    if before:
+        b_s, b_v = before[-1]
+        out["four_weeks_ago"] = [_date(b_s), round(b_v, 1)]
+        out["change_vs_four_weeks_ago"] = round(latest_v - b_v, 1)
+    return out
+
+
+def weight_increase(sessions: list[SessionStats], today: dt.date) -> Optional[dict[str, Any]]:
+    """Последняя прибавка рабочего веса (по _last_weight_bump, как в
+    classify_stall). None — прибавок не было или упражнение на весе тела."""
+    if not sessions or all(s.is_bodyweight_mode for s in sessions):
+        return None
+    idx, before = _last_weight_bump(sessions)
+    if idx == 0:
+        return None
+    s = sessions[idx]
+    to = _session_top_weight(s)
+    day = dt.datetime.fromisoformat(s.started_at).date()
+    return {
+        "date": _date(s),
+        "from": before,
+        "to": to,
+        "step": round(to - before, 2),
+        "weeks_ago": round((today - day).days / 7, 1),
+    }
+
+
+def _fmt(x: float) -> str:
+    return f"{x:g}"
+
+
+def stall_facts(sessions: list[SessionStats], today: dt.date, unit: str) -> dict[str, Any]:
+    """classify_stall в виде, который модель пересказывает: вердикт, флаг
+    «встал» (dead_end/regressing), с какой даты стоит рабочий вес и строка
+    фактов «почему»."""
+    v = classify_stall(sessions, today)
+    if v is None:
+        since = today - dt.timedelta(weeks=STALL_WINDOW_WEEKS)
+        n = sum(1 for s in sessions if dt.datetime.fromisoformat(s.started_at).date() >= since)
+        return {
+            "stalled": None,
+            "verdict": None,
+            "top_weight_since": None,
+            "why": (
+                f"{n} sessions in last {STALL_WINDOW_WEEKS} weeks, need "
+                f"{STALL_MIN_SESSIONS} to judge"
+            ),
+        }
+    parts = [f"{v.sessions_in_window} sessions in {STALL_WINDOW_WEEKS} weeks"]
+    if v.e1rm_slope_per_week is not None:
+        parts.append(f"e1RM {v.e1rm_slope_per_week:+g} {unit}/week")
+    if v.weight_since is not None:
+        parts.append(
+            f"top weight {_fmt(v.top_weight)} {unit} since {v.weight_since} "
+            f"({v.weeks_weight_flat:g} weeks, {v.sessions_at_top_weight} sessions on it)"
+        )
+        parts.append(
+            f"reps at {_fmt(v.top_weight)} {unit}: {v.reps_at_top_first}→{v.reps_at_top_last}"
+        )
+    else:
+        parts.append(f"bodyweight, best reps {v.reps_at_top_first}→{v.reps_at_top_last}")
+    return {
+        "stalled": v.kind in ("dead_end", "regressing"),
+        "verdict": v.kind,
+        "top_weight_since": v.weight_since,
+        "why": "; ".join(parts),
+    }
+
+
+def progress_facts(
+    sessions: list[SessionStats], today: dt.date, unit: str, *, recent: int
+) -> dict[str, Any]:
+    """Все четыре факта для get_exercise_progress. `recent` — сколько
+    последних сессий смотрит same_weight_reps: ровно те, что модель видит
+    списком, чтобы даты в фактах совпадали с датами в истории."""
+    return {
+        "same_weight_reps": same_weight_reps(sessions[-recent:]),
+        "e1rm_trend": e1rm_trend(sessions, today),
+        "stall": stall_facts(sessions, today, unit),
+        "weight_increase": weight_increase(sessions, today),
+    }
