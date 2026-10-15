@@ -474,6 +474,14 @@ OPENAI_LONG_CONTEXT_TOKENS = int(os.getenv("OPENAI_LONG_CONTEXT_TOKENS", "200000
 # инструментов остаются на chat/completions с none (см. выше).
 OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none")
+# Суточный разбор лога действий для админа (ai_trainer.behaviour_digest) — на
+# старшей модели OpenAI, а не на модели тренера: вызов раз в сутки, без
+# пользователя и без инструментов, поэтому chat/completions с reasoning_effort.
+# medium — анализ, а не быстрый шаг. Нет OPENAI_API_KEY — разбор пишет прежний
+# бэкенд (с предупреждением в логе), а не пропадает молча. Сменил id — допиши
+# его строку в LLM_PRICES_USD_PER_1K и CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL.
+OPENAI_ADMIN_DIGEST_MODEL = os.getenv("OPENAI_ADMIN_DIGEST_MODEL", "gpt-6.1-sol")
+OPENAI_ADMIN_DIGEST_REASONING_EFFORT = os.getenv("OPENAI_ADMIN_DIGEST_REASONING_EFFORT", "medium")
 
 # Короткие токены выбора модели тренера (users.ai_model). Первый — по умолчанию.
 AI_MODEL_GROK = "grok"
@@ -769,6 +777,12 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     # стали: записанные токены считаются здесь по обычной ставке входа, то есть
     # занижение — максимум 0.25× от входа первого, холодного запроса.
     "gpt-6-luna": (0.0001, 0.0005),
+    # OpenAI GPT-6.1 Sol — суточный разбор лога для админа
+    # (OPENAI_ADMIN_DIGEST_MODEL). Официальный прайс OpenAI, Standard, short
+    # context, за 1M: вход $2.00, кэшированный вход $0.10 (доля 0.05 — см.
+    # CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL), запись в кэш $2.50 (как у Luna —
+    # отдельного числа в usage нет, считается по ставке входа), выход $10.00.
+    "gpt-6.1-sol": (0.002, 0.01),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():
@@ -816,6 +830,8 @@ CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER",
 # Правится без кода: CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL_JSON='{"gpt-6-luna": 0.1}'.
 CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL: dict[str, float] = {
     "gpt-6-luna": 0.1,
+    # GPT-6.1 Sol: $0.10 кэшированного при $2.00 обычного входа.
+    "gpt-6.1-sol": 0.05,
 }
 try:
     for _model, _mult in json.loads(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL_JSON", "{}")).items():
@@ -827,7 +843,9 @@ except (TypeError, ValueError, AttributeError, json.JSONDecodeError):
 # OpenAI (completion_tokens_details.reasoning_tokens — часть completion_tokens),
 # а xAI — нет, там это отдельный тип. Прибавь их сверху для OpenAI — и каждое
 # размышление Luna посчиталось бы дважды.
-REASONING_INCLUDED_IN_COMPLETION: set[str] = {"gpt-6-luna", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL}
+REASONING_INCLUDED_IN_COMPLETION: set[str] = {
+    "gpt-6-luna", "gpt-6.1-sol", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL, OPENAI_ADMIN_DIGEST_MODEL,
+}
 
 
 def cached_input_multiplier(model: str) -> float:
