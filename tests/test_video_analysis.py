@@ -558,3 +558,71 @@ async def test_model_gone_falls_back_to_the_next_and_remembers(monkeypatch):
 async def test_every_video_model_has_a_price():
     for model in (config.NOVITA_VIDEO_MODEL, *config.NOVITA_VIDEO_FALLBACK_MODELS):
         assert model in config.LLM_PRICES_USD_PER_1K, model
+
+
+async def test_coach_is_told_to_be_decisive_about_what_is_visible():
+    """Живой провал: становая снята низко и с перекрытием, а тренер ответил
+    «бёдра, кажется, поднимаются раньше плеч… гриф, возможно, уходит… не могу
+    надёжно оценить… пересними». Атлет взорвался, второй ответ начался с «Fair —
+    I hedged too much» и снова мялся. Видимое — фактом, оговорка одна."""
+    block = video_analysis.to_context_block(_analysis())
+    assert "утверждением" in block
+    for hedge in ("«похоже»", "«кажется»", "«возможно»", "«seems»", "«appears»", "«may»"):
+        assert hedge in block, hedge
+    assert "максимум ОДНА" in block
+    assert "не больше одного раза" in block
+
+
+async def test_coach_is_given_a_fixed_answer_structure():
+    """Главная ошибка одной строкой → 2–3 повелительные подсказки на следующий
+    подход → при плохом ракурсе одна строка про съёмку в конце, и никогда
+    только «пересними»."""
+    block = video_analysis.to_context_block(
+        _analysis(camera_advice="сбоку на уровне бедра")
+    )
+    assert "Первая строка — главная ошибка" in block
+    assert "2–3 подсказки на следующий подход" in block
+    assert "Плечи над грифом" in block
+    assert "в самом конце ОДНА" in block
+    assert "одним «пересними»" in block
+    assert block.index("Как переснять (одной строкой в самом конце") > 0
+
+
+async def test_coach_is_banned_from_meta_talk_and_apologies():
+    block = video_analysis.to_context_block(_analysis())
+    assert "Fair — I hedged too much" in block
+    assert "справедливо, я перестраховался" in block
+    assert "извиняться" in block
+    assert "I can't reliably assess" in block
+
+
+async def test_pushback_gets_best_effort_analysis_without_commentary():
+    """«давай анализируй» — это просьба о разборе, а не о самоанализе. Второй
+    ход разговора видео-контекста уже не несёт, поэтому правило стоит и в
+    шапке основного чата."""
+    import ai_trainer
+
+    block = video_analysis.to_context_block(_analysis())
+    assert "«давай анализируй»" in block
+    assert "без комментариев о себе" in block
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "«давай анализируй»" in prompt
+    assert "Fair — I hedged" in prompt
+    assert "никогда не\n  сводится к «пересними»" in prompt
+
+
+async def test_decisiveness_does_not_license_inventing_faults():
+    import ai_trainer
+
+    block = video_analysis.to_context_block(_analysis())
+    assert "ошибку, которой нет в списке, не придумывай" in block
+    assert "Чего в наблюдениях не\n  было, не выдумывай" in ai_trainer.SYSTEM_PROMPT
+
+
+async def test_watcher_writes_findings_as_statements_not_guesses():
+    """Хедж рождается ещё у глаз: «seems to rise» в evidence тренер честно
+    пересказывал. Неуверенность — в поле confidence, а не в словах; видимое
+    целиком хотя бы на одном повторе — «высокая» даже при плохом ракурсе."""
+    prompt = video_analysis.SYSTEM_PROMPT
+    assert "Неуверенность выражает поле confidence" in prompt
+    assert "«высокая», даже если ракурс низкий" in prompt
