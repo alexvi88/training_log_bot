@@ -42,6 +42,14 @@ xAI** — строка живёт только чтобы старые запи�
 логе. Поиск на Luna — Responses API `web_search`: $10 за 1000 вызовов
 (`OPENAI_WEB_SEARCH_USD_PER_CALL`, строки `server_tool` с именем
 `openai_web_search`) плюс найденный контент входными токенами по ставке модели.
+Главный цикл Luna с инструментами — тоже Responses API (`/v1/chat/completions`
+не берёт инструменты вместе с `reasoning_effort`), рассуждение `low`
+(`OPENAI_REASONING_EFFORT`), `store: false`: вся история едет элементами input,
+рассуждение — зашифрованным (`reasoning.encrypted_content`) прямо в истории
+(`ai_trainer.OPENAI_OUTPUT_KEY`). Это килобайты на ход, и они идут входными
+токенами — кэш (`prompt_cache_key`) держится на том, что элементы отправляются
+назад байт в байт. Цена — из usage Responses: `input_tokens` /
+`input_tokens_details.cached_tokens` / `output_tokens` (размышления уже внутри).
 Дневной отчёт показывает цену по каждой модели отдельной строкой.
 
 ## Сколько стоит каждое событие

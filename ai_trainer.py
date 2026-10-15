@@ -35,7 +35,7 @@ import uuid
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
-from openai import APITimeoutError, AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI, AsyncStream
 from xai_sdk import AsyncClient as AsyncXAIClient
 from xai_sdk.chat import assistant as xai_assistant
 from xai_sdk.chat import image as xai_image
@@ -157,7 +157,10 @@ def _light_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     чём говорили словами.
     """
     return [
-        m for m in history
+        # Сырые элементы Luna-хода (OPENAI_OUTPUT_KEY) — шифрованное рассуждение
+        # на килобайты: гейту и поиску оно ни к чему.
+        {k: v for k, v in m.items() if k != OPENAI_OUTPUT_KEY} if OPENAI_OUTPUT_KEY in m else m
+        for m in history
         if m.get("role") in ("user", "assistant")
         and not m.get("tool_calls")
         and (m.get("content") or "")
@@ -615,9 +618,16 @@ def _wire_messages(backend: ChatBackend, messages: list[dict[str, Any]]) -> list
     grok получает список как есть (тот же объект — префикс не трогаем).
     OpenAI проверяет поля сообщений строго, а reasoning_content — поле xAI: в
     истории оно лежит у ходов, отвеченных grok'ом, и для Luna его снимаем.
+    (Главный цикл Luna сюда не ходит — он собирает input Responses API сам,
+    _responses_input; это для quick-вызовов на chat/completions.)
     """
     if not backend.is_openai:
-        return messages
+        # Сырые элементы Responses API (OPENAI_OUTPUT_KEY) — поле Luna-хода:
+        # атлет переключился обратно на grok — снимаем. В истории без Luna-ходов
+        # список уходит тем же объектом, как всегда.
+        if not any(OPENAI_OUTPUT_KEY in m for m in messages):
+            return messages
+        return [{k: v for k, v in m.items() if k != OPENAI_OUTPUT_KEY} for m in messages]
     return [
         {k: v for k, v in m.items() if k != "reasoning_content"} if "reasoning_content" in m else m
         for m in messages
@@ -6558,6 +6568,13 @@ async def _completion_round(
         quick_effort=config.GROK_QUICK_REASONING_EFFORT,
         name=config.AI_MODEL_GROK,
     )
+    if backend.is_openai:
+        # Luna — через Responses API: в /chat/completions gpt-6-luna не берёт
+        # инструменты вместе с reasoning_effort (см. _responses_round).
+        return await _responses_round(
+            backend, messages, user_id, on_chunk,
+            include_tools=include_tools, tools=tools, cache_scope=cache_scope,
+        )
     model = backend.model
     request = _model_kwargs(backend, user_id, max_tokens=2048, quick=False, scope=cache_scope)
     wire_messages = _wire_messages(backend, messages)
@@ -6645,6 +6662,285 @@ class _StreamedToolCall:
     def __init__(self, slot: dict[str, Any]) -> None:
         self.id = slot["id"]
         self.function = SimpleNamespace(name=slot["name"], arguments=slot["arguments"])
+
+
+# --- Luna: главный цикл через OpenAI Responses API ---------------------------
+#
+# В /v1/chat/completions gpt-6-luna отвечает 400 на инструменты вместе с
+# reasoning_effort («use /v1/responses or set reasoning_effort to 'none'»), а
+# без инструментов главного цикла нет. Поэтому Luna-ход идёт в POST /responses
+# (низкоуровневым client.post — SDK 1.57 Responses не знает, как и у поиска,
+# _openai_web_search_findings), а остальной код хода этого не замечает:
+# _responses_round возвращает то же (content, tool_calls, reasoning), что и
+# chat-путь, история в памяти и в базе — те же chat-сообщения.
+#
+# Состояние между раундами — store: false и вся история элементами input, а
+# не previous_response_id со store: true: ответы и рассуждения не остаются у
+# OpenAI (политика обещает, что OpenAI получает у обычных атлетов только
+# голос; Luna — лишь для своих аккаунтов, но и им незачем хранить разговор у
+# провайдера). Рассуждение переносится между раундами зашифрованным
+# (include: reasoning.encrypted_content): элементы output модели — reasoning,
+# message, function_call — кладутся в assistant-сообщение истории полем
+# OPENAI_OUTPUT_KEY и на следующем запросе отправляются назад ровно как
+# пришли. Так и рассуждение доезжает, и префикс запроса не переписывается
+# (кэш — prompt_cache_key, как у quick-вызовов).
+
+# Поле assistant-сообщения истории с сырыми элементами output Responses API.
+# grok его не видит (_wire_messages снимает), chat-форма рядом — content и
+# tool_calls — остаётся полной: переключился атлет обратно на grok — разговор
+# продолжается.
+OPENAI_OUTPUT_KEY = "openai_output"
+
+# Какие элементы output сохраняем, чтобы вернуть следующим запросом.
+_RESPONSES_REPLAY_TYPES = frozenset({"reasoning", "message", "function_call"})
+
+
+def _responses_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Схемы инструментов chat-формата → формат Responses API.
+
+    {"type":"function","function":{name, description, parameters}} →
+    {"type":"function", name, description, parameters, strict}. strict ставим
+    явно: в Responses API он по умолчанию включён, а наши схемы под строгий
+    режим не писались (не все поля required, нет additionalProperties: false)
+    — без явного False запрос получил бы 400 на первой же схеме.
+    """
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        fn = tool.get("function") if tool.get("type") == "function" else None
+        if not isinstance(fn, dict):
+            out.append(tool)  # уже в формате Responses
+            continue
+        converted: dict[str, Any] = {"type": "function", "name": fn["name"]}
+        if fn.get("description") is not None:
+            converted["description"] = fn["description"]
+        converted["parameters"] = fn.get("parameters") or {"type": "object", "properties": {}}
+        converted["strict"] = bool(fn.get("strict", False))
+        out.append(converted)
+    return out
+
+
+def _responses_content(content: Any) -> Any:
+    """Содержимое user/system-сообщения: строка как есть, части — в input_*."""
+    if not isinstance(content, list):
+        return content if content is not None else ""
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        kind = part.get("type") if isinstance(part, dict) else None
+        if kind == "text":
+            parts.append({"type": "input_text", "text": part.get("text") or ""})
+        elif kind == "image_url":
+            url = part.get("image_url")
+            url = url.get("url") if isinstance(url, dict) else url
+            parts.append({"type": "input_image", "image_url": url})
+        elif isinstance(part, dict):
+            parts.append(part)
+    return parts
+
+
+def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """chat-сообщения хода → элементы input Responses API.
+
+    assistant с OPENAI_OUTPUT_KEY — его сырые элементы output, как их прислала
+    модель (рассуждение с encrypted_content, текст, вызовы). Без него (ход
+    grok'а, предзагрузка пресета) — собираем из chat-формы: текст и
+    function_call по каждому tool_call. reasoning_content xAI не едет. tool →
+    function_call_output с тем же call_id."""
+    items: list[dict[str, Any]] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "assistant":
+            replay = m.get(OPENAI_OUTPUT_KEY)
+            if replay:
+                items.extend(replay)
+                continue
+            if m.get("content"):
+                items.append({"role": "assistant", "content": m["content"]})
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                items.append({
+                    "type": "function_call",
+                    "call_id": tc.get("id") or "",
+                    "name": fn.get("name") or "",
+                    "arguments": fn.get("arguments") or "{}",
+                })
+        elif role == "tool":
+            items.append({
+                "type": "function_call_output",
+                "call_id": m.get("tool_call_id") or "",
+                "output": m.get("content") or "",
+            })
+        else:
+            items.append({"role": role, "content": _responses_content(m.get("content"))})
+    return items
+
+
+def _responses_body(
+    backend: ChatBackend,
+    messages: list[dict[str, Any]],
+    user_id: Optional[int],
+    *,
+    include_tools: bool,
+    tools: Optional[list[dict[str, Any]]],
+    cache_scope: str,
+    stream: bool,
+) -> dict[str, Any]:
+    """Тело POST /responses для раунда главного цикла Luna."""
+    effort = backend.effort
+    body: dict[str, Any] = {
+        "model": backend.model,
+        "input": _responses_input(messages),
+        # Размышления едят тот же бюджет, что и ответ (см. _model_kwargs).
+        "max_output_tokens": 2048 + (0 if effort == "none" else _OPENAI_REASONING_HEADROOM),
+        "reasoning": {"effort": effort},
+        "store": False,
+        "include": ["reasoning.encrypted_content"],
+    }
+    if user_id is not None:
+        body["prompt_cache_key"] = f"{cache_scope}-{user_id}"
+    if include_tools:
+        body["tools"] = _responses_tools(TOOLS if tools is None else tools)
+    if stream:
+        body["stream"] = True
+    return body
+
+
+def _responses_round_result(output: list[Any]) -> tuple[str, list[Any], list[dict[str, Any]]]:
+    """output Responses → (текст, tool_calls в chat-форме, элементы для истории)."""
+    items = [i for i in output or [] if isinstance(i, dict) and i.get("type") in _RESPONSES_REPLAY_TYPES]
+    text = _responses_text({"output": items})
+    calls = [
+        _StreamedToolCall({
+            "id": i.get("call_id") or "",
+            "name": i.get("name") or "",
+            "arguments": i.get("arguments") or "",
+        })
+        for i in items if i.get("type") == "function_call"
+    ]
+    return text, calls, items
+
+
+def _responses_event(raw: Any) -> dict[str, Any]:
+    """Событие стрима Responses: SDK заворачивает SSE с именем события в
+    {"event": ..., "data": {...}}; тип события — data["type"]."""
+    if not isinstance(raw, dict):
+        return {}
+    data = raw.get("data") if "event" in raw and isinstance(raw.get("data"), dict) else raw
+    if "type" not in data and raw.get("event"):
+        data = {**data, "type": raw["event"]}
+    return data
+
+
+class ResponsesStreamError(RuntimeError):
+    """Responses API оборвал стрим событием error / response.failed."""
+
+
+async def _responses_round(
+    backend: ChatBackend,
+    messages: list[dict[str, Any]],
+    user_id: Optional[int],
+    on_chunk: ChunkCallback,
+    *,
+    include_tools: bool,
+    tools: Optional[list[dict[str, Any]]],
+    cache_scope: str,
+) -> tuple[str, list[Any], list[dict[str, Any]]]:
+    """Один раунд главного цикла на Luna — POST /responses.
+
+    Возвращает то же, что chat-путь _completion_round, только третьим
+    элементом — не строка reasoning_content, а сырые элементы output для
+    истории (см. OPENAI_OUTPUT_KEY и _reasoning_fields). Цена — по usage
+    Responses (_responses_usage: reasoning уже внутри output_tokens), имя
+    модели — backend.model. Таймаут и отмена — как у chat-пути: нестрим под
+    _bill_if_aborted, стрим — оценкой в finally."""
+    model = backend.model
+    stream = on_chunk is not None
+    body = _responses_body(
+        backend, messages, user_id,
+        include_tools=include_tools, tools=tools, cache_scope=cache_scope, stream=stream,
+    )
+    if not stream:
+        async with _bill_if_aborted(user_id, model, messages=messages):
+            response = await backend.client.post("/responses", body=body, cast_to=object)
+        response = response if isinstance(response, dict) else {}
+        await _log_llm_cost(user_id, model, _responses_usage(response.get("usage")))
+        if response.get("status") == "incomplete":
+            logger.warning(
+                "Luna round for user %s incomplete: %s", user_id, response.get("incomplete_details"),
+            )
+        return _responses_round_result(response.get("output") or [])
+
+    events = await backend.client.post(
+        "/responses", body=body, cast_to=object, stream=True, stream_cls=AsyncStream[object],
+    )
+    parts: list[str] = []
+    done_items: list[dict[str, Any]] = []
+    final_output: Optional[list[Any]] = None
+    usage: Any = None
+    last_flush: Optional[float] = None
+    finished = False
+    try:
+        async for raw in events:
+            event = _responses_event(raw)
+            kind = event.get("type")
+            if kind == "response.output_text.delta":
+                parts.append(event.get("delta") or "")
+                text = "".join(parts)
+                now = asyncio.get_running_loop().time()
+                # Тот же ритм флаша, что у chat-пути (MIN_FIRST_FLUSH_CHARS,
+                # STREAM_FLUSH_SECONDS). Раунд с вызовами инструментов текста
+                # почти не шлёт — там говорят статусы.
+                ready = (
+                    (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
+                    or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
+                )
+                if ready:
+                    last_flush = now
+                    await on_chunk(text)
+            elif kind == "response.output_item.done":
+                item = event.get("item")
+                if isinstance(item, dict):
+                    done_items.append(item)
+            elif kind in ("response.completed", "response.incomplete"):
+                response = event.get("response") or {}
+                usage = _responses_usage(response.get("usage"))
+                final_output = response.get("output")
+                if kind == "response.incomplete":
+                    logger.warning(
+                        "Luna round for user %s incomplete: %s",
+                        user_id, response.get("incomplete_details"),
+                    )
+            elif kind in ("response.failed", "error"):
+                response = event.get("response") or {}
+                usage = _responses_usage(response.get("usage")) if response.get("usage") else usage
+                error = response.get("error") or event.get("error") or event
+                raise ResponsesStreamError(f"Luna stream failed: {error}")
+            # response.function_call_arguments.delta и прочие промежуточные
+            # события не нужны: вызов целиком приезжает в output_item.done и в
+            # response.completed.
+        finished = True
+    finally:
+        if usage is None and not finished:
+            # Оборвали до response.completed — оценка, как у chat-пути.
+            usage = SimpleNamespace(
+                prompt_tokens=_estimate_tokens_from_messages(messages),
+                completion_tokens=_estimate_tokens_from_text("".join(parts)),
+            )
+        await _log_llm_cost(user_id, model, usage)
+    text, calls, items = _responses_round_result(final_output if final_output else done_items)
+    # Текст из дельт — то, что атлет уже видел; финальный output его повторяет.
+    return (text or "".join(parts)), calls, items
+
+
+def _reasoning_fields(reasoning: Any) -> dict[str, Any]:
+    """Поля, с которыми рассуждение раунда уезжает в историю рядом с ответом:
+    у grok — строка reasoning_content (как всегда), у Luna — сырые элементы
+    output (OPENAI_OUTPUT_KEY). Пусто — ничего: пустое поле тоже меняет
+    сообщение и ломает префикс."""
+    if not reasoning:
+        return {}
+    if isinstance(reasoning, list):
+        return {OPENAI_OUTPUT_KEY: reasoning}
+    return {"reasoning_content": reasoning}
 
 
 # Готовые вопросы интро (handlers/ai_trainer._preset_questions), на которые
@@ -6800,7 +7096,7 @@ async def _ask_plain(
         if not tool_calls:
             # Размышления ФИНАЛЬНОГО раунда — то, что должно уехать назад вместе
             # с ответом в истории (см. _reasoning_of и on_reasoning).
-            if on_reasoning and reasoning:
+            if on_reasoning and isinstance(reasoning, str) and reasoning:
                 await on_reasoning(reasoning)
             break
         logger.info(
@@ -6816,20 +7112,24 @@ async def _ask_plain(
             proposed_program = True
             stale_fragments.extend(pending_fragments)
             pending_fragments.clear()
-        messages.append(
-            {
-                "role": "assistant",
-                "content": content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in tool_calls
-                ],
-            }
-        )
+        said: dict[str, Any] = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in tool_calls
+            ],
+        }
+        if isinstance(reasoning, list):
+            # Luna: рассуждение и вызовы раунда едут назад элементами output —
+            # без них следующий раунд рассуждает с нуля (см. OPENAI_OUTPUT_KEY).
+            # У grok промежуточные раунды, как и прежде, без reasoning_content.
+            said.update(_reasoning_fields(reasoning))
+        messages.append(said)
         for tc in tool_calls:
             try:
                 args = json.loads(tc.function.arguments or "{}")
@@ -6863,7 +7163,7 @@ async def _ask_plain(
         )
         # Это тоже финальный ответ — значит и его размышления должны уехать в
         # историю, иначе следующий вопрос промахнётся мимо кэша.
-        if on_reasoning and reasoning:
+        if on_reasoning and isinstance(reasoning, str) and reasoning:
             await on_reasoning(reasoning)
 
     text = (content or "").strip()
@@ -6880,8 +7180,7 @@ async def _ask_plain(
         # историю, где на последний вопрос нет ответа, — то есть снова НЕ тот
         # префикс, что закэширован.
         final: dict[str, Any] = {"role": "assistant", "content": text}
-        if reasoning:
-            final["reasoning_content"] = reasoning
+        final.update(_reasoning_fields(reasoning))
         wire = messages[len(head):] + [final]  # без шапки: она собирается заново на каждый ход
         # Фото в историю не кладём: это база64 на мегабайты в FSM-файле и повторная
         # плата за image-токены на каждом следующем вопросе. Подменяем на текст
@@ -6936,14 +7235,14 @@ async def _explained_final_program(
     messages: list[dict[str, Any]],
     user_id: int,
     text: str,
-    reasoning: str,
+    reasoning: Any,
     stale_fragments: list[str],
     *,
     on_chunk: ChunkCallback,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]],
     include_tools: bool,
     round_kwargs: Optional[dict[str, Any]] = None,
-) -> tuple[str, str]:
+) -> tuple[str, Any]:
     """Финальный ответ хода, в котором тренер собрал программу.
 
     Живой прогон: модель вызвала propose_program трижды, урезая подходы под
@@ -6966,8 +7265,7 @@ async def _explained_final_program(
     )
     if text:
         said: dict[str, Any] = {"role": "assistant", "content": text}
-        if reasoning:
-            said["reasoning_content"] = reasoning
+        said.update(_reasoning_fields(reasoning))
         messages.append(said)
     messages.append({"role": "system", "content": _EXPLAIN_FINAL_PROGRAM})
     try:
@@ -6980,7 +7278,7 @@ async def _explained_final_program(
         # чтобы сохранённая история не кончалась просьбой без ответа.
         del messages[-2 if text else -1:]
         return cleaned, reasoning
-    if on_reasoning and new_reasoning:
+    if on_reasoning and isinstance(new_reasoning, str) and new_reasoning:
         await on_reasoning(new_reasoning)
     explained = _without_stale_fragments((content or "").strip(), stale_fragments)
     return (explained or cleaned), new_reasoning
