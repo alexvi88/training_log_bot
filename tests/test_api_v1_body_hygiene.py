@@ -58,42 +58,6 @@ async def _set_ids(fresh_db, wid):
 # ---------- еда ----------
 
 
-@pytest.mark.parametrize("field", ["kcal", "protein", "fat", "carbs"])
-async def test_food_rejects_negative_numbers(fresh_db, client_factory, field):
-    client = await _client(fresh_db, client_factory)
-    resp = await client.post("/food", json={"name": "еда", field: -9000})
-    assert resp.status_code == 400, resp.text
-    assert resp.json()["error"] == "bad_request"
-    assert resp.json()["message"]
-    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM food_entries")
-    assert (await cur.fetchone())[0] == 0
-
-
-@pytest.mark.parametrize("field", ["kcal", "protein", "fat", "carbs"])
-async def test_food_rejects_bools(fresh_db, client_factory, field):
-    client = await _client(fresh_db, client_factory)
-    resp = await client.post("/food", json={"name": "еда", field: True})
-    assert resp.status_code == 400, resp.text
-
-
-async def test_food_rejects_nan(fresh_db, client_factory):
-    client = await _client(fresh_db, client_factory)
-    resp = await client.post(
-        "/food", content=b'{"name": "f", "kcal": NaN}', headers={"content-type": "application/json"}
-    )
-    assert resp.status_code == 400, resp.text
-
-
-async def test_food_still_accepts_zero_and_normal_numbers(fresh_db, client_factory):
-    client = await _client(fresh_db, client_factory)
-    resp = await client.post(
-        "/food", json={"name": "еда", "kcal": 0, "protein": 12.5, "fat": None, "carbs": 30}
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["calories"] == 0 and body["protein"] == 12.5 and body["fat"] is None
-
-
 # ---------- вес подхода ----------
 
 

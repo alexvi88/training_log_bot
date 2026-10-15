@@ -115,7 +115,7 @@ def _headers(token: str | None, host: str = "training-log.example.com") -> dict[
 def test_whitelist_contains_only_real_tools():
     """Белый список сверяется с инструментами AI-тренера: опечатка в имени —
     это молча не работающий инструмент, а лишнее имя — дыра наружу."""
-    declared = {t["function"]["name"] for t in ai_trainer.TOOLS}
+    declared = {t["function"]["name"] for t in ai_trainer.TOOLS} | ai_trainer.MCP_ONLY_TOOLS
     assert declared >= mcp_server.EXPOSED_TOOLS
     assert declared >= mcp_server.WRITE_TOOLS
     # Пишущее наружу уходит только из ai_trainer._UNDOABLE_TOOLS (делает

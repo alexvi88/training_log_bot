@@ -468,15 +468,6 @@ async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
     await show_settings(callback, state)
 
 
-@router.callback_query(F.data == "settings:food_macros")
-async def settings_food_macros(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    await db.update_user(
-        callback.from_user.id, food_macros_enabled=0 if user["food_macros_enabled"] else 1
-    )
-    await show_settings(callback, state)
-
-
 async def _send_archive(callback: CallbackQuery, caption: str) -> None:
     """Архив всего дневника (full_export.py) документом в чат. Тот же файл,
     что отдаёт приложению GET /v1/export/archive."""

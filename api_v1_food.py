@@ -1,291 +1,38 @@
-"""REST `/v1` для дневника еды (в боте — handlers/food_diary.py).
+"""REST `/v1/food*` — дневника еды в приложении больше нет.
 
-Транспорт поверх db.py, не вторая реализация логики: суммы по дню считаются
-здесь так же, как их считает formatting.build_food_day_screen для бота, а
-распознавание фото/текста уходит в ai_trainer.analyze_food — ту же функцию,
-что дёргает бот.
+Приложение убрало дневник еды целиком (iOS, «Убрал дневник еды из приложения
+целиком», 2026-09-22, ещё на сборке 1), а на сервере выпилен AI-разбор еды
+(`ai_trainer.analyze_food`, квота `food` в ai_limits). Ручки оставлены только
+затем, чтобы самая ранняя сборка, у которой экран еды ещё был, получила не
+404 и не молчание, а 410 с человеческим текстом на языке атлета
+(`api.error.food_gone`).
 
-`/food/parse` не сохраняет запись — только отдаёт догадку модели, как
-карточка «Всё верно?» в боте до подтверждения. Сохранение — отдельный
-POST /food с уже готовыми полями (человек мог их поправить в приложении).
+Записи, которые люди успели сделать, никуда не деваются: они в `food_entries`,
+уезжают в полную выгрузку (full_export) и стираются «Удалить аккаунт», как и
+раньше. В Telegram-боте ручной дневник (/food_diary) остаётся — без модели.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-from typing import Any, Optional
-
 from starlette.requests import Request
 from starlette.routing import Route
 
-import ai_limits
-import ai_trainer
 import api_v1_common as common
-import busy_lock
-import config
-import db
-import i18n
-import timeutil
 from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
 
-# Потолок одной записи дневника: 1e308 — «конечное число», но сумма за день
-# после него даёт inf, и ответ перестаёт быть JSON. Граммы — тот же потолок,
-# что у разбора еды моделью (ai_trainer.MAX_FOOD_GRAMS); ккал на запись шире
-# потолка модели на один продукт (10000), потому что запись — целый приём пищи.
-MAX_ENTRY_KCAL = 20000.0
-MAX_ENTRY_GRAMS = ai_trainer.MAX_FOOD_GRAMS
 
-# Тот же замок, что у бота (busy_lock.py, handlers/ai_trainer._busy) — один
-# разбор еды на пользователя одновременно. Без него два быстрых фото тарелки
-# подряд (двойной тап, ретрай) оба проходят `ai_limits.check` до того, как
-# первое успевает отметиться (`db.increment_ai_food_count` — только ПОСЛЕ
-# ответа модели), и оба уходят в модель — двойной платёж, а дневная квота
-# может быть превышена на число проскочивших так запросов. Свой набор, не
-# общий с api_v1_ai.py: разбор еды и вопрос тренеру — разные деньги и разные
-# экраны, один не должен блокировать другой.
-_busy: set[int] = set()
-
-
-def _parse_date(raw: Optional[str], user) -> dt.date:
-    """Дата параметром, а без неё — «сегодня» по таймзоне пользователя
-    (timeutil.user_today), не по UTC сервера: иначе поздний ужин после
-    полуночи UTC, но до полуночи по местному времени, попадал бы во вчера."""
-    if not raw:
-        return timeutil.user_today(user)
-    try:
-        return dt.date.fromisoformat(raw)
-    except ValueError as exc:
-        raise ApiError(400, "bad_request", "date must be YYYY-MM-DD") from exc
-
-
-def _entry_json(row) -> dict[str, Any]:
-    return {
-        "id": row["id"],
-        "eaten_on": row["eaten_on"],
-        "description": row["description"],
-        "calories": row["calories"],
-        "protein": row["protein"],
-        "fat": row["fat"],
-        "carbs": row["carbs"],
-        "has_photo": bool(row["photo_file_id"]),
-        "source": row["source"],
-        "created_at": row["created_at"],
-    }
-
-
-def _sum(rows, key: str) -> Optional[float]:
-    """SUM по возможно-NULL столбцу: пусто — None (нечего складывать), как и
-    в db.list_food_days, а не 0 — 0 ккал за день без единой записи с калориями
-    выглядел бы как «поел на ноль», а не «не считали»."""
-    values = [r[key] for r in rows if r[key] is not None]
-    return sum(values) if values else None
-
-
-async def get_day(request: Request) -> JSONResponse:
-    user_id = await common.authed_user_id(request)
-    user = await db.get_user(user_id)
-    date = _parse_date(request.query_params.get("date"), user)
-    rows = await db.list_food_entries(user_id, date.isoformat())
-    return JSONResponse(
-        {
-            "date": date.isoformat(),
-            "entries": [_entry_json(r) for r in rows],
-            "totals": {
-                "calories": _sum(rows, "calories"),
-                "protein": _sum(rows, "protein"),
-                "fat": _sum(rows, "fat"),
-                "carbs": _sum(rows, "carbs"),
-            },
-            "kcal_goal": user["kcal_goal"] if user else None,
-        }
-    )
-
-
-async def add_entry(request: Request) -> JSONResponse:
-    user_id = await common.authed_user_id(request)
-    user = await db.get_user(user_id)
-    body = await common.json_body(request)
-    description = str(common.require(body, "name", str)).strip()
-    if not description:
-        raise ApiError(400, "bad_request", "name must not be empty", key="api.error.name_empty")
-    calories = common.optional_non_negative_number(body, "kcal", MAX_ENTRY_KCAL)
-    protein = common.optional_non_negative_number(body, "protein", MAX_ENTRY_GRAMS)
-    fat = common.optional_non_negative_number(body, "fat", MAX_ENTRY_GRAMS)
-    carbs = common.optional_non_negative_number(body, "carbs", MAX_ENTRY_GRAMS)
-    eaten_on_raw = common.optional_str(body, "eaten_on")
-    eaten_on = _parse_date(eaten_on_raw, user)
-    # Съесть что-то завтра нельзя — та же проверка, что у занесения
-    # тренировки задним числом (POST /workouts/backfill).
-    await common.reject_future_date(eaten_on, user_id, field="eaten_on")
-    entry_id = await db.add_food_entry(
-        user_id,
-        eaten_on.isoformat(),
-        description,
-        calories=calories,
-        protein=protein,
-        fat=fat,
-        carbs=carbs,
-    )
-    row = await db.get_food_entry(entry_id)
-    return JSONResponse(_entry_json(row), status_code=201)
-
-
-async def _owned_entry(entry_id: int, user_id: int):
-    """get_food_entry отдаёт запись по id без проверки хозяина (id из URL мог
-    быть чужим и просто угадан), так что владение проверяется здесь, на
-    каждом пути к конкретной записи."""
-    row = await db.get_food_entry(entry_id)
-    if row is None or row["telegram_id"] != user_id:
-        raise ApiError(404, "not_found", "food entry not found")
-    return row
-
-
-async def get_entry(request: Request) -> JSONResponse:
-    user_id = await common.authed_user_id(request)
-    entry_id = int(request.path_params["entry_id"])
-    row = await _owned_entry(entry_id, user_id)
-    return JSONResponse(_entry_json(row))
-
-
-async def delete_entry(request: Request) -> JSONResponse:
-    user_id = await common.authed_user_id(request)
-    entry_id = int(request.path_params["entry_id"])
-    await _owned_entry(entry_id, user_id)
-    await db.delete_food_entry(entry_id)
-    return JSONResponse({"deleted": True})
-
-
-async def list_days(request: Request) -> JSONResponse:
-    """Список дней с суммами — экран истории дневника еды."""
-    user_id = await common.authed_user_id(request)
-    limit = common.query_int(request, "limit", 8, minimum=1, maximum=100)
-    offset = common.query_int(request, "offset", 0, minimum=0)
-    rows = await db.list_food_days(user_id, limit=limit, offset=offset)
-    total = await db.count_food_days(user_id)
-    return JSONResponse(
-        {
-            "days": [
-                {
-                    "date": r["eaten_on"],
-                    "entries": r["entries"],
-                    "calories": r["calories"],
-                    "protein": r["protein"],
-                    "fat": r["fat"],
-                    "carbs": r["carbs"],
-                    "descriptions": r["descriptions"].split("\n") if r["descriptions"] else [],
-                }
-                for r in rows
-            ],
-            "total": total,
-        }
-    )
-
-
-async def parse_food(request: Request) -> JSONResponse:
-    """Распознать текст/фото едой моделью — без сохранения (см. докстринг
-    модуля). Тот же ai_trainer.analyze_food, что зовёт бот: он и так принимает
-    голые text/image_data_url, без объекта телеграм-сообщения, так что
-    рефакторинг handlers/food_diary.py тут не понадобился.
-
-    Дневная квота — общая с ботом (db.ai_food_usage), поэтому AI-разбор в
-    приложении отнимает такую же попытку, как разбор в Telegram."""
-    user_id = await common.authed_user_id(request)
-    if not ai_trainer.is_configured():
-        raise ApiError(503, "not_configured", "food analysis is not configured")
-    body = await common.json_body(request)
-    text = common.optional_str(body, "text") or ""
-    image_data_url = common.optional_str(body, "image_data_url")
-    correction = common.optional_str(body, "correction") or ""
-    previous = body.get("previous")
-    if previous is not None and not isinstance(previous, dict):
-        raise ApiError(400, "bad_request", "previous must be an object")
-    if not text and not image_data_url:
-        raise ApiError(400, "bad_request", "text or image_data_url required")
-
-    user = await db.get_user(user_id)
-    lang = user["lang"] if user is not None else "ru"
-
-    # Бронь — ДО проверки лимита: два параллельных запроса иначе оба читают
-    # ЕЩЁ не увеличенный счётчик, оба проходят `ai_limits.check` и оба уходят
-    # в модель (см. `_busy` выше). Второй получает не 5xx, а тот же самый
-    # отказ, что видит атлет в боте при двойном тапе (`ai.screen.busy`).
-    if not busy_lock.try_claim(_busy, user_id):
-        with i18n.use_lang(lang):
-            raise ApiError(429, "busy", "another request is in flight", key="ai.screen.busy")
-    try:
-        # preview-режим (свои аккаунты без "Понятно" за сегодня) в боте
-        # пропускает шаг вместе с предупреждением — у API нет экрана, куда это
-        # предупреждение показать, так что здесь любой Block, включая preview,
-        # значит «квота исчерпана» и отдаётся как 429, без «показать и всё
-        # равно выполнить».
-        block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
-        if block is not None:
-            raise ApiError(429, "food_limit_exceeded", "daily food analysis limit reached", human=block.user_text)
-
-        with_macros = bool(user["food_macros_enabled"]) if user else True
-        try:
-            # Под use_lang: названия блюд модель пишет на языке из хвоста
-            # системного промпта (ai_trainer._with_language_tail), а он берётся
-            # из контекста — без with англоязычный атлет получал «Гречка».
-            with i18n.use_lang(lang):
-                estimate = await ai_trainer.analyze_food(
-                    user_id,
-                    text=text,
-                    image_data_url=image_data_url,
-                    previous=previous,
-                    correction=correction,
-                    with_macros=with_macros,
-                    source="ios",
-                )
-        except Exception as exc:
-            raise ApiError(502, "analysis_failed", "food analysis failed") from exc
-
-        # Квота тратится за состоявшийся разбор, как и в боте — сбой уже
-        # произошёл бы раньше (см. except выше) и до сюда не дошёл. Атомарный
-        # UPDATE ... WHERE count < limit (db.try_increment_ai_food_count) —
-        # вторая линия обороны на случай, если этот busy-замок когда-нибудь
-        # ослабят: сам счётчик больше не может перескочить свой потолок
-        # (см. докстринг db.try_increment_ai_food_count).
-        await db.try_increment_ai_food_count(user_id, config.AI_FOOD_DAILY_LIMIT)
-        return JSONResponse(estimate)
-    finally:
-        _busy.discard(user_id)
-
-
-async def set_goal(request: Request) -> JSONResponse:
-    """«🎯 Цель ккал» (handlers/food_diary.py fd_goal_entered) — тот же
-    db.set_kcal_goal и те же границы (config.KCAL_GOAL_MIN/MAX), иначе
-    в приложении можно было бы поставить цель, которую бот считает опечаткой.
-
-    `goal: null` снимает цель — как и пустая история кнопки в боте нет, но
-    GET /food её уже отдаёт как kcal_goal: null, симметрично."""
-    user_id = await common.authed_user_id(request)
-    body = await common.json_body(request)
-    if "goal" not in body:
-        raise ApiError(400, "bad_request", "missing field: goal")
-    goal = body["goal"]
-    if goal is not None:
-        if not isinstance(goal, int) or isinstance(goal, bool):
-            raise ApiError(400, "bad_request", "goal must be an int or null")
-        if not (config.KCAL_GOAL_MIN <= goal <= config.KCAL_GOAL_MAX):
-            raise ApiError(
-                400,
-                "out_of_range",
-                f"goal must be between {config.KCAL_GOAL_MIN} and {config.KCAL_GOAL_MAX}",
-                key="food.goal_out_of_range", max=config.KCAL_GOAL_MAX,
-            )
-    await db.set_kcal_goal(user_id, goal)
-    return JSONResponse({"kcal_goal": goal})
+async def food_gone(request: Request) -> JSONResponse:
+    """Любая `/v1/food*` → 410 `food_gone` на языке атлета."""
+    await common.authed_user_id(request)
+    raise ApiError(410, "food_gone", "the food diary was removed from the app")
 
 
 routes = [
-    Route("/food", get_day, methods=["GET"]),
-    Route("/food", add_entry, methods=["POST"]),
-    Route("/food/days", list_days, methods=["GET"]),
-    Route("/food/parse", parse_food, methods=["POST"]),
-    Route("/food/goal", set_goal, methods=["POST"]),
-    Route("/food/{entry_id:int}", get_entry, methods=["GET"]),
-    Route("/food/{entry_id:int}", delete_entry, methods=["DELETE"]),
+    Route("/food", food_gone, methods=["GET", "POST"]),
+    Route("/food/days", food_gone, methods=["GET"]),
+    Route("/food/parse", food_gone, methods=["POST"]),
+    Route("/food/goal", food_gone, methods=["POST"]),
+    Route("/food/{entry_id:int}", food_gone, methods=["GET", "DELETE"]),
 ]

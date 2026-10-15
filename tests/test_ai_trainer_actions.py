@@ -11,7 +11,6 @@
 отката, а откат — вернуть как было.
 """
 
-import asyncio
 import datetime as dt
 from unittest.mock import AsyncMock
 
@@ -256,119 +255,22 @@ async def test_log_food_lands_in_todays_diary(fresh_db, user_id):
     assert entries[0]["calories"] == 420
 
 
-async def test_log_food_without_numbers_is_still_an_entry(fresh_db, user_id):
-    """Без оценщика (ключа нет) запись всё равно ложится — просто без цифр."""
+async def test_log_food_without_numbers_is_still_an_entry(fresh_db, user_id, monkeypatch):
+    """Своей оценки КБЖУ больше нет (analyze_food выпилен): без цифр запись
+    ложится без цифр, и ни один платный вызов не делается."""
+    monkeypatch.setattr(ai_trainer, "paid_call", AsyncMock(side_effect=AssertionError("no model")))
     payload, _undo = await ai_trainer._log_food(user_id, {"description": "Два яйца"})
     entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
     assert entries[0]["calories"] is None
-    assert payload["macros_estimated"] is False
+    assert "macros_estimated" not in payload
 
 
-async def test_log_food_without_numbers_asks_the_same_estimator_as_the_diary(
-    fresh_db, user_id, monkeypatch
-):
-    """Регрессия: одно и то же «хачапури» давало 865 ккал с экрана дневника и
-    пустую запись из чата с тренером, молча занижая итог дня."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def fake_analyze(uid, text="", **kwargs):
-        assert text == "Хачапури"
-        return {"is_food": True, "calories": 865, "protein": 35, "fat": 45, "carbs": 80}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fake_analyze)
-
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Хачапури"})
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] == 865
-    # Человек этих цифр не называл — тренер обязан сказать, что они прикидочные.
-    assert payload["macros_estimated"] is True
-
-
-async def test_log_food_estimate_respects_ai_limits(fresh_db, user_id, monkeypatch):
-    """Регрессия: чат с тренером (и MCP тем же путём) звал платный analyze_food
-    в обход ai_limits — раньше ни дневная квота еды, ни денежный стоп-кран сюда
-    не заглядывали вовсе, только экран 🍽 Дневник еды."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def fail(*a, **kw):
-        raise AssertionError("оценщик не должен вызываться при заблокированной квоте")
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fail)
-    monkeypatch.setattr(
-        ai_trainer.ai_limits, "check",
-        AsyncMock(return_value=ai_trainer.ai_limits.Block(kind="food", log="food: 30 из 30 за сутки")),
-    )
-    before = await dbmod.get_ai_food_count_today(user_id)
-
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Хачапури"})
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] is None
-    assert payload["macros_estimated"] is False
-    assert await dbmod.get_ai_food_count_today(user_id) == before
-
-
-async def test_log_food_keeps_numbers_the_person_named(fresh_db, user_id, monkeypatch):
-    """Названные вслух цифры важнее оценки: оценщик к ним не зовётся вовсе."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def fail(*a, **kw):
-        raise AssertionError("оценщик не должен вызываться, цифры уже есть")
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fail)
-
+async def test_log_food_keeps_numbers_the_person_named(fresh_db, user_id):
+    """Цифры, присланные клиентом (MCP), ложатся как есть."""
     payload, _undo = await ai_trainer._log_food(
         user_id, {"description": "Овсянка", "calories": 300}
     )
     assert payload["logged"]["calories"] == 300
-    assert payload["macros_estimated"] is False
-
-
-async def test_log_food_does_not_invent_numbers_for_a_non_meal(fresh_db, user_id, monkeypatch):
-    """«Поел» — не еда: оценщик отказывается, и запись остаётся без цифр."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-
-    async def not_food(uid, text="", **kwargs):
-        return {"is_food": False, "calories": None}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", not_food)
-
-    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Поел"})
-
-    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
-    assert entries[0]["calories"] is None
-    assert payload["macros_estimated"] is False
-
-
-async def test_estimate_missing_macros_lets_a_timed_out_call_finish_in_background(
-    fresh_db, user_id, monkeypatch
-):
-    """asyncio.wait_for cancels what it wraps on timeout — if analyze_food had
-    already reached the provider by then, that used to cancel the request
-    client-side before its own cost-logging line ever ran, losing a call we
-    were billed for. asyncio.shield keeps the underlying call alive past the
-    timeout: we stop waiting for its answer, but it still runs to completion
-    (and logs its own cost) in the background."""
-    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ai_trainer, "_FOOD_ESTIMATE_TIMEOUT", 0.01)
-
-    finished = asyncio.Event()
-
-    async def slow_analyze(uid, text="", **kwargs):
-        await asyncio.sleep(0.05)  # дольше таймаута — успевает состояться
-        finished.set()
-        return {"is_food": True, "calories": 300, "protein": 10, "fat": 5, "carbs": 40}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", slow_analyze)
-
-    entry: dict = {}
-    got = await ai_trainer._estimate_missing_macros(user_id, "что-то съел", entry)
-
-    assert got is False  # тайм-аут снаружи всё равно честно отдаёт "не успел"
-    assert entry == {}  # запись не подождала цифр — они не пишутся в неё
-
-    await asyncio.wait_for(finished.wait(), timeout=1)  # но вызов реально состоялся
 
 
 # ---------- сравнение периодов ----------

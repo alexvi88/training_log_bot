@@ -1,14 +1,11 @@
-"""🍽 Дневник питания — что съел, по дням, с распознаванием еды моделью.
+"""🍽 Дневник питания — что съел, по дням. Без модели: что написал, то и записано.
 
 Открывается кнопкой «🍽 Дневник еды» в главном меню или командой /food_diary.
 
 Как устроен ввод. Пользователь на экране дня просто пишет текстом или шлёт фото
 (можно фото с подписью) — отдельной кнопки «добавить» не нужно, как и на экране
-веса тела. Всё, что пришло, уходит в ai_trainer.analyze_food, оттуда возвращается
-структурированная оценка (название, раскладка, ккал и БЖУ), и она показывается
-как карточка с вопросом «всё верно?». Пользователь подтверждает, правит словами
-(«это была груша, и порция 300 г» — правка уходит модели вместе с прошлой
-догадкой, а не начинает разбор с нуля) или отменяет.
+веса тела. Запись ложится сразу, как есть: AI-разбора еды (калории по фото,
+КБЖУ моделью) больше нет — он выпилен целиком.
 
 Дата не спрашивается отдельным шагом: запись уходит в тот день, что сейчас
 открыт на экране. Чтобы занести еду за прошлый день, сначала переключаются на
@@ -16,8 +13,6 @@
 один и тот же путь что для сегодня, что для прошлого.
 """
 
-import asyncio
-import base64
 import datetime as dt
 import json
 import logging
@@ -29,11 +24,8 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
+from aiogram.types import CallbackQuery, Message
 
-import ai_limits
-import ai_trainer
-import busy_lock
 import config
 import db
 import formatting
@@ -47,39 +39,6 @@ from fsm import FoodDiaryFlow
 router = Router(name="food_diary")
 
 logger = logging.getLogger(__name__)
-
-# Guards "fd:ok" against a double tap: fd_pending is only cleared inside
-# _show_day, after db.add_food_entry has already run — and two callbacks from
-# the same user can run concurrently, each reading its own snapshot of state
-# with fd_pending still set, so the second tap would save the same meal a
-# second time. Same shape as handlers.workout._confirming / _try_claim_weight_confirm.
-_confirming: set[int] = set()
-
-
-def _try_claim_confirming(user_id: int) -> bool:
-    """Atomically check-and-reserve `_confirming` for this user — no `await`
-    between the membership check and the `.add()`, same reasoning as
-    ai_trainer._try_claim_busy."""
-    return busy_lock.try_claim(_confirming, user_id)
-
-
-# Разбор еды (_analyze_and_show ниже) сюда сходится тремя входами — фото,
-# текст, правка «✏️ Поправить», — и был единственной платёжной поверхностью
-# бота вовсе без замка от гонки: два быстрых фото тарелки подряд оба проходят
-# `ai_limits.check` до того, как первое успевает списаться
-# (`db.increment_ai_food_count` — только ПОСЛЕ ответа модели), и оба уходят в
-# модель — тот же инцидент, что уже был у вопросов тренеру (см.
-# `ai_trainer._try_claim_busy`). Свой набор, не общий с `ai_trainer._busy`:
-# разбор еды и чат тренера — разные деньги и разные экраны.
-_busy: set[int] = set()
-
-# Телеграмовское фото и так пережато, но подпирать base64-раздутым мегабайтником
-# запрос к модели незачем — тот же порог, что у фото-вопросов AI-тренеру.
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
-
-
-# ---------- вспомогательное ----------
-
 
 async def _today(user_id: int) -> dt.date:
     return timeutil.user_today(await db.get_user(user_id))
@@ -250,224 +209,23 @@ async def fd_goal_entered(message: Message, state: FSMContext):
     await _show_day(message, state, date)
 
 
-# ---------- распознавание еды ----------
-
-
-async def _download_photo_as_data_url(message: Message) -> Optional[str]:
-    photo = message.photo[-1]
-    if photo.file_size and photo.file_size > MAX_IMAGE_BYTES:
-        return None
-    buf = await message.bot.download(photo)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.read()).decode()
-
-
-def _estimate_text(estimate: dict[str, Any]) -> str:
-    items = [
-        formatting.FoodItemView(
-            name=i.get("name", ""), portion=i.get("portion", ""),
-            calories=i.get("calories"), protein=i.get("protein"),
-            fat=i.get("fat"), carbs=i.get("carbs"),
-        )
-        for i in estimate.get("items") or []
-    ]
-    return formatting.build_food_estimate_text(
-        estimate.get("description", ""),
-        items,
-        calories=estimate.get("calories"),
-        protein=estimate.get("protein"),
-        fat=estimate.get("fat"),
-        carbs=estimate.get("carbs"),
-        comment=estimate.get("comment", ""),
-    )
-
-
-async def _show_estimate(
-    message: Message,
-    state: FSMContext,
-    estimate: dict[str, Any],
-    placeholder: Optional[Message] = None,
-) -> None:
-    """Показать догадку модели с вопросом «всё верно?» и запомнить её в FSM.
-
-    Запись создаётся только после подтверждения, поэтому до него оценка живёт
-    в состоянии, а не в БД: отменённый или переигранный разбор не должен
-    оставлять следов в дневнике.
-    """
-    await state.update_data(fd_pending=estimate)
-    await state.set_state(FoodDiaryFlow.confirming)
-    text = _estimate_text(estimate)
-    kb = keyboards.food_confirm_keyboard()
-    if placeholder is not None:
-        try:
-            await placeholder.edit_text(text, parse_mode="HTML", reply_markup=kb)
-            return
-        except TelegramBadRequest:
-            pass  # экран мог не пережить правку — просто шлём новым сообщением
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
-
-
-async def _analyze_and_show(
-    message: Message,
-    state: FSMContext,
-    text: str = "",
-    image_data_url: Optional[str] = None,
-    photo_file_id: Optional[str] = None,
-    previous: Optional[dict[str, Any]] = None,
-    correction: str = "",
-) -> None:
-    if not ai_trainer.is_configured():
-        await message.reply(i18n.t("food.not_configured"))
-        return
-
-    # Бронь — до квоты и уж тем более до самого разбора: два быстрых фото
-    # тарелки подряд иначе оба проходят `ai_limits.check` (см. `_busy` выше)
-    # до того, как первое успевает списаться, и оба уходят в модель. Тап,
-    # который не успел застолбить место, получает тот же отказ, что и любой
-    # другой "занято" в боте (`ai.screen.busy`), а не тихо теряется в очереди.
-    user_id = message.from_user.id
-    if not busy_lock.try_claim(_busy, user_id):
-        await message.reply(i18n.t("ai.screen.busy"))
-        return
-    try:
-        # Мгновенное «вижу» на само сообщение — до "🤔 Разбираю…" и до квоты, у
-        # обоих есть сетевой круг до Telegram и обратно. Плейсхолдер не убираем:
-        # он остаётся тем же сообщением, что превратится в карточку (edit_text
-        # ниже, см. _show_estimate) — реакция и текст отвечают на разные
-        # вопросы («заметил» и «что именно происходит сейчас»), а не дублируют
-        # друг друга.
-        with suppress(TelegramBadRequest):
-            await message.bot.set_message_reaction(
-                chat_id=message.chat.id, message_id=message.message_id,
-                reaction=[ReactionTypeEmoji(emoji="👀")],
-            )
-
-        # Единственная платная поверхность бота, которая раньше не считалась
-        # вовсе: вопросы, видео и поиск свои квоты имели, а фотографировать
-        # тарелку можно было бесконечно. Проверяем здесь, потому что сюда
-        # сходятся все три входа — фото, текст и правка «✏️ Поправить».
-        block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
-        if block is not None:
-            logger.info("food analysis blocked for user %s: %s", user_id, block.log)
-            await ai_limits.reply(message, block)
-            # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор
-            # всё равно идёт, предупреждение не отменяет то, что его вызвало.
-            if not block.preview:
-                await state.set_state(FoodDiaryFlow.viewing)
-                return
-
-        # Модели отдаём только пищевую часть прошлой догадки: file_id
-        # фотографии, признак источника и вердикт is_food ей ни о чём не
-        # говорят, а место в промпте занимают. Само фото при правке заново не
-        # пересылается — держать base64 картинки в FSM (а он пишется на диск)
-        # дороже, чем пересчитать оценку по прошлой раскладке плюс правке
-        # пользователя.
-        model_previous = (
-            {k: v for k, v in previous.items() if k not in ("photo_file_id", "source", "is_food")}
-            if previous
-            else None
-        )
-
-        user = await db.get_user(user_id)
-        with_macros = bool(user["food_macros_enabled"])
-
-        # Экран дня (с подсказкой «напиши, что съел») намеренно не удаляется —
-        # разбор идёт отдельным сообщением ниже, а не заменяет собой то, на
-        # что человек только что ответил.
-        placeholder = await message.answer(i18n.t("food.thinking"))
-        try:
-            estimate = await asyncio.wait_for(
-                ai_trainer.analyze_food(
-                    user_id,
-                    text=text,
-                    image_data_url=image_data_url,
-                    previous=model_previous,
-                    correction=correction,
-                    with_macros=with_macros,
-                ),
-                timeout=90,
-            )
-        except Exception:
-            logger.exception("food analysis failed for user %s", user_id)
-            with suppress(TelegramBadRequest):
-                await placeholder.edit_text(i18n.t("food.analysis_failed"))
-            # Возвращаемся в режим просмотра дня, не трогая сам экран дня — он
-            # не удалялся и не менялся, перерисовывать (и тем более удалять)
-            # нечего.
-            await state.set_state(FoodDiaryFlow.viewing)
-            await state.update_data(fd_pending=None)
-            return
-
-        # Квота тратится за состоявшийся разбор — как и у вопросов с видео:
-        # сбой провайдера не должен стоить человеку попытки. Списывается и за
-        # «это не еда», и за правку: платный вызов уже сделан, и деньгам всё
-        # равно, чем он кончился. Атомарный UPDATE ... WHERE count < limit —
-        # вторая линия обороны на случай, если busy-замок выше когда-нибудь
-        # ослабят (см. db.try_increment_ai_food_count).
-        await db.try_increment_ai_food_count(user_id, config.AI_FOOD_DAILY_LIMIT)
-
-        if not estimate.get("is_food", True):
-            # Модель уверенно говорит, что это не еда — не подсовываем «Всё
-            # верно?» с нечем подтверждать: карточка на пустом месте только
-            # злит (см. отчёт пользователя про «нахуя мне заносить»). Просто
-            # объясняем и возвращаем экран дня, ничего не сохраняя.
-            comment = estimate.get("comment", "").strip()
-            not_food_text = i18n.t("food.not_food_detected") + (f": {escape(comment)}" if comment else ".")
-            not_food_text += f"\n{i18n.t('food.not_food_hint')}"
-            with suppress(TelegramBadRequest):
-                await placeholder.edit_text(not_food_text)
-            await state.set_state(FoodDiaryFlow.viewing)
-            await state.update_data(fd_pending=None)
-            return
-
-        if not estimate.get("description"):
-            # Модель не поняла, что на фото/в тексте — подставляем то, что
-            # написал человек, чтобы запись всё равно можно было сохранить
-            # своими словами.
-            estimate["description"] = text.strip() or i18n.t("food.default_meal_name")
-
-        # Фото не уходит в БД целиком: file_id хватает, чтобы показать 📷 в
-        # дневнике и (позже) переслать снимок, а картинки Telegram хранит у
-        # себя.
-        estimate["photo_file_id"] = photo_file_id or (previous or {}).get("photo_file_id")
-        estimate["source"] = (
-            "photo_text" if estimate["photo_file_id"] and text else
-            "photo" if estimate["photo_file_id"] else "text"
-        )
-        await _show_estimate(message, state, estimate, placeholder=placeholder)
-    finally:
-        _busy.discard(user_id)
-
-
-@router.message(StateFilter(FoodDiaryFlow.viewing), F.photo)
-async def fd_photo_entry(message: Message, state: FSMContext):
-    image_data_url = await _download_photo_as_data_url(message)
-    if image_data_url is None:
-        await message.reply(i18n.t("food.photo_too_large", mb=MAX_IMAGE_BYTES // (1024 * 1024)))
-        return
-    await _analyze_and_show(
-        message,
-        state,
-        text=(message.caption or "").strip(),
-        image_data_url=image_data_url,
-        photo_file_id=message.photo[-1].file_id,
-    )
+# ---------- запись ----------
+#
+# Без модели: AI-разбор еды выпилен целиком (в приложении дневника нет вовсе,
+# тренеру записи еды не уходят). Что человек написал — то и ложится в день;
+# фото сохраняется как file_id с подписью (или без неё — тогда «Приём пищи»).
 
 
 # Роутер дневника подключён раньше workout.router (чтобы /food_diary долетал из
 # любого состояния), поэтому его текстовые хендлеры обязаны пропускать команды
-# дальше по цепочке — иначе /start, набранный на экране дня, ушёл бы модели как
-# «что съел». Не совпавший фильтр отдаёт апдейт следующему роутеру, в отличие от
-# раннего return внутри хендлера.
+# дальше по цепочке — иначе /start, набранный на экране дня, лёг бы в дневник
+# как «что съел». Не совпавший фильтр отдаёт апдейт следующему роутеру, в
+# отличие от раннего return внутри хендлера.
 _NOT_A_COMMAND = ~F.text.startswith("/")
 
 
 def _plain_text_pending(text: str) -> dict[str, Any]:
-    """Пищевая запись без модели — то, что человек написал, как есть.
-
-    Используется, когда КБЖУ выключен в настройках: для текста это вообще не
-    требует запроса к модели — сохранять нечего проверять, кроме собственных
-    слов пользователя.
-    """
+    """Пищевая запись — то, что человек написал, как есть."""
     return {
         "is_food": True, "description": text, "items": [], "calories": None,
         "protein": None, "fat": None, "carbs": None, "comment": "",
@@ -475,87 +233,21 @@ def _plain_text_pending(text: str) -> dict[str, Any]:
     }
 
 
+@router.message(StateFilter(FoodDiaryFlow.viewing), F.photo)
+async def fd_photo_entry(message: Message, state: FSMContext):
+    caption = (message.caption or "").strip()
+    pending = _plain_text_pending(caption)
+    pending["photo_file_id"] = message.photo[-1].file_id
+    pending["source"] = "photo_text" if caption else "photo"
+    await _save_now(message, state, pending)
+
+
 @router.message(StateFilter(FoodDiaryFlow.viewing), F.text, _NOT_A_COMMAND)
 async def fd_text_entry(message: Message, state: FSMContext):
     text = (message.text or "").strip()
     if not text:
         return
-    user = await db.get_user(message.from_user.id)
-    if not user["food_macros_enabled"]:
-        # «Просто сохраняет твой текст» — без карточки-подтверждения: тут
-        # нечего проверять, это уже ровно то, что человек написал.
-        await _save_now(message, state, _plain_text_pending(text))
-        return
-
-    # Кончилась квота разборов — дневник не запирается: текст сохраняется как
-    # есть, тем же путём, что при выключенном КБЖУ. Пейволл на собственную еду —
-    # ровно то, за что нас понесли бы в отзывы (MONETIZATION.md), а разница для
-    # человека тут одна: сегодня без калорий.
-    block = await ai_limits.check(message.from_user.id, ai_limits.KIND_FOOD)
-    if block is not None:
-        if block.preview:
-            # Свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор всё
-            # равно идёт — предупреждение не отменяет то, что его вызвало.
-            await ai_limits.reply(message, block)
-        else:
-            await message.reply(i18n.t("food.saved_plain"))
-            await _save_now(message, state, _plain_text_pending(text))
-            return
-
-    await _analyze_and_show(message, state, text=text)
-
-
-# ---------- подтверждение и правка ----------
-
-
-@router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:fix")
-async def fd_fix(callback: CallbackQuery, state: FSMContext):
-    """Догадка модели остаётся на экране — правку проще написать, глядя на то,
-    что именно нужно поправить, а не вслепую по памяти."""
-    await state.set_state(FoodDiaryFlow.correcting)
-    data = await state.get_data()
-    pending = data.get("fd_pending") or {}
-    text = _estimate_text(pending) + "\n\n" + i18n.t("food.correct_hint")
-    await ui.safe_edit(
-        callback, text, reply_markup=keyboards.cancel_keyboard("fd:cancel"), parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.message(
-    StateFilter(FoodDiaryFlow.correcting, FoodDiaryFlow.confirming), F.text, _NOT_A_COMMAND
-)
-async def fd_correction(message: Message, state: FSMContext):
-    """Правка словами — и по кнопке «✏️ Поправить», и просто набранная в ответ
-    на карточку: дописать «это была груша» естественнее, чем сперва искать кнопку."""
-    correction = (message.text or "").strip()
-    if not correction:
-        return
-    data = await state.get_data()
-    pending = data.get("fd_pending") or {}
-    await _analyze_and_show(
-        message,
-        state,
-        text=pending.get("description", ""),
-        previous=pending,
-        correction=correction,
-    )
-
-
-@router.message(StateFilter(FoodDiaryFlow.correcting, FoodDiaryFlow.confirming), F.photo)
-async def fd_correction_photo(message: Message, state: FSMContext):
-    """Прислать вместо правки другое фото — это тоже правка: разбираем заново."""
-    await fd_photo_entry(message, state)
-
-
-@router.callback_query(
-    StateFilter(FoodDiaryFlow.confirming, FoodDiaryFlow.correcting), F.data == "fd:cancel"
-)
-async def fd_cancel(callback: CallbackQuery, state: FSMContext):
-    date = await _state_date(state, callback.from_user.id)
-    await state.update_data(fd_pending=None)
-    await _show_day(callback, state, date)
-    await callback.answer(i18n.t("food.cancelled_toast"))
+    await _save_now(message, state, _plain_text_pending(text))
 
 
 async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
@@ -584,29 +276,6 @@ async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
         source=pending.get("source", "text"),
     )
     await _show_day(event, state, date)
-
-
-@router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:ok")
-async def fd_confirm(callback: CallbackQuery, state: FSMContext):
-    """Claims `_confirming` before the first `await`: two fast taps on
-    «Записал 👌» both read `fd_pending` while it's still set (each holds its
-    own snapshot), so without this guard both would call db.add_food_entry —
-    clearing fd_pending only stops a *later* tap, not a second one racing the
-    first."""
-    user_id = callback.from_user.id
-    if not _try_claim_confirming(user_id):
-        await callback.answer()
-        return
-    try:
-        data = await state.get_data()
-        pending = data.get("fd_pending")
-        if not pending:
-            await callback.answer(i18n.t("food.nothing_to_save"), show_alert=True)
-            return
-        await _save_now(callback, state, pending)
-        await callback.answer(i18n.t("food.logged_toast"))
-    finally:
-        _confirming.discard(user_id)
 
 
 # ---------- удаление и история ----------

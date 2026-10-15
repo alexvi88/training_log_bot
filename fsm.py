@@ -113,8 +113,6 @@ class FeedbackFlow(StatesGroup):
 
 class FoodDiaryFlow(StatesGroup):
     viewing = State()          # one day's diary — typing/sending a photo here logs food
-    confirming = State()       # model's guess is on screen, awaiting подтверждение/правку
-    correcting = State()       # user is typing what the model got wrong
     browsing_history = State()
     setting_goal = State()     # «🎯 Цель ккал» — ждём число цели
 

@@ -2752,44 +2752,6 @@ def _item_line(item: FoodItemView) -> str:
     return f"{head} ({macros})" if macros else head
 
 
-def build_food_estimate_text(
-    description: str,
-    items: list[FoodItemView] | None = None,
-    calories: float | None = None,
-    protein: float | None = None,
-    fat: float | None = None,
-    carbs: float | None = None,
-    comment: str = "",
-    header: str | None = None,
-) -> str:
-    """The confirmation card shown after the model reads a meal, and (with a
-    different header) the preview of a correction.
-
-    `header` default — None, а не готовая русская строка: как и в
-    build_history_list, обычная константа в сигнатуре застыла бы на языке,
-    который был активен при импорте модуля.
-    """
-    if header is None:
-        header = i18n.t("food.estimate_header")
-    lines = [header, "", f"<b>{escape(description or i18n.t('food.default_meal_name'))}</b>"]
-    # Один компонент ничего не добавляет к названию приёма — не дублируем
-    # (та же логика, что в build_food_day_screen).
-    if items and len(items) > 1:
-        lines.extend(f"• {_item_line(i)}" for i in items)
-    if calories is not None:
-        # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
-        # "Итого: —") — так карточка от режима "без КБЖУ" не выглядит
-        # недосчитанной, ей просто нечего тут показывать.
-        macros = _macros_line(protein, fat, carbs)
-        totals = f"{format_kcal(calories)} · {macros}" if macros else format_kcal(calories)
-        lines.append("")
-        lines.append(i18n.t("food.totals_line", totals=totals))
-    if comment:
-        lines.append("")
-        lines.append(f"<i>{escape(comment)}</i>")
-    return "\n".join(lines)
-
-
 def _goal_line(kcal_goal: Optional[int], total_kcal: Optional[float]) -> str:
     """«Цель 2200 · осталось 640» / «Цель 2200 · перебор 150» — только когда и
     цель задана, и за день известно хоть сколько-то калорий (см. tone: об

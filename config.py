@@ -434,20 +434,6 @@ AI_SEARCH_GLOBAL_DAILY_LIMIT = int(os.getenv("AI_SEARCH_GLOBAL_DAILY_LIMIT", "10
 # разговор с тренером, до которого доходят единицы.
 AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "20"))
 
-# Сколько разборов еды в день на человека (дневник питания, ai_trainer.analyze_food).
-# Раньше единственная платная поверхность бота вообще без потолка: вопросы, видео и
-# поиск свои квоты имели, а фотографировать тарелку можно было бесконечно.
-#
-# Тридцать — это заметно больше, чем ест человек: пять приёмов пищи плюс правки и
-# переснятые фото. Упереться в него на честном использовании нельзя, а бесконечную
-# ленту фотографий он останавливает.
-#
-# Кончилась квота — дневник не запирается: текст сохраняется как есть, без модели
-# (тем же путём, что при выключенном КБЖУ, см. handlers/food_diary), и только фото
-# просит подождать до завтра. Пейволл на собственную еду — последнее, чего мы хотим.
-AI_FOOD_DAILY_LIMIT = int(os.getenv("AI_FOOD_DAILY_LIMIT", "30"))
-
-
 # Voice input for the AI trainer chat: Telegram voice messages get transcribed
 # via OpenAI's speech-to-text before being asked to Grok as a normal text
 # question. Separate key from XAI_API_KEY since this hits OpenAI's own API,

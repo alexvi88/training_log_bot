@@ -1888,7 +1888,7 @@ def settings_keyboard(
         callback_data="settings:formula",
     )
 
-    # --- Как разговариваю: пять тумблеров ---
+    # --- Как разговариваю: тумблеры ---
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились
     # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
@@ -1914,10 +1914,8 @@ def settings_keyboard(
         i18n.t("btn.ai_comments_on") if ai_comments_enabled else i18n.t("btn.ai_comments_off")
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
-    macros_label = (
-        i18n.t("btn.macros_on") if food_macros_enabled else i18n.t("btn.macros_off")
-    )
-    b.button(text=macros_label, callback_data="settings:food_macros")
+    # Тумблера «КБЖУ» больше нет: AI-разбор еды выпилен, считать нечем.
+    # food_macros_enabled остаётся параметром ради старых вызовов.
     # users.show_extra_stats has always gated the e1RM line on the finish card;
     # it just had no switch, so nobody could ever turn it off. «Подробно /
     # компактно» не говорило, что именно меняется — переименовано в то, что
@@ -2278,17 +2276,6 @@ def food_delete_confirm_keyboard(entry_id: int, back_date: dt.date) -> InlineKey
         yes_cb=f"fd:del:{entry_id}", no_cb=f"fd:day:{back_date.isoformat()}",
         yes_text=i18n.t("btn.delete"), no_text=i18n.t("btn.cancel"),
     )
-
-
-def food_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Под догадкой модели: подтвердить, поправить словами или выкинуть."""
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=i18n.t("btn.confirm_correct"), callback_data="fd:ok"))
-    b.row(
-        InlineKeyboardButton(text=i18n.t("btn.correct_it"), callback_data="fd:fix"),
-        InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="fd:cancel"),
-    )
-    return b.as_markup()
 
 
 def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:

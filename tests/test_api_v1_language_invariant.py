@@ -319,12 +319,6 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
 
     monkeypatch.setattr(ai_trainer, "transcribe_voice", fake_transcribe)
 
-    async def fake_analyze_food(user_id, **kwargs):
-        return {"is_food": True, "description": model["food"], "items": [], "calories": 250,
-                "protein": 5, "fat": 1, "carbs": 55}
-
-    monkeypatch.setattr(ai_trainer, "analyze_food", fake_analyze_food)
-
     async def fake_fact_check(user_id, post_text, image_data_url=None):
         return model["verdict"]
 
@@ -652,14 +646,15 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("PATCH", f"/bodyweight/{bw['id']}", json={"weight": 81}, expect=200)
     await w.call("DELETE", f"/bodyweight/{bw['id']}", expect=200)
     await w.call("DELETE", f"/bodyweight/{bw['id']}", expect=404)
-    food = (await w.call("POST", "/food", json={"name": text["food"], "kcal": 300}, expect=201)).json()
-    await w.call("GET", "/food", expect=200)
-    await w.call("GET", "/food/days", expect=200)
-    await w.call("GET", f"/food/{food['id']}", expect=200)
-    await w.call("POST", "/food/goal", json={"goal": 2200}, expect=200)
-    await w.call("POST", "/food/goal", json={"goal": 99999}, expect=400)
-    await w.call("POST", "/food/parse", json={"text": text["food"]}, expect=200)
-    await w.call("DELETE", f"/food/{food['id']}", expect=200)
+    # Дневника еды в приложении больше нет: каждая ручка — 410 с текстом
+    # на языке атлета (api.error.food_gone), его и проверяет обходчик.
+    await w.call("POST", "/food", json={"name": text["food"], "kcal": 300}, expect=410)
+    await w.call("GET", "/food", expect=410)
+    await w.call("GET", "/food/days", expect=410)
+    await w.call("GET", "/food/1", expect=410)
+    await w.call("POST", "/food/goal", json={"goal": 2200}, expect=410)
+    await w.call("POST", "/food/parse", json={"text": text["food"]}, expect=410)
+    await w.call("DELETE", "/food/1", expect=410)
 
     # --- программы ---
     catalog = (await w.call("GET", "/programs/catalog", expect=200)).json()
