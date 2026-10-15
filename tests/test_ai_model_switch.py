@@ -74,7 +74,8 @@ async def test_own_account_switches_both_ways(fresh_db, own_accounts):
     backend = await ai_trainer.chat_backend(OWN)
     assert backend.name == "luna"
     assert backend.model == config.OPENAI_CHAT_MODEL == "gpt-6-luna"
-    assert backend.effort == "none" and backend.quick_effort == "none"
+    # Главный цикл рассуждает (Responses API), быстрые вызовы — нет.
+    assert backend.effort == "low" and backend.quick_effort == "none"
     await db.set_user_ai_model(OWN, "grok")
     # grok хранится как NULL — «по умолчанию».
     assert await db.get_user_ai_model(OWN) is None
@@ -152,14 +153,11 @@ def test_grok_request_params_are_unchanged():
 def test_luna_request_params(monkeypatch):
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
     backend = ai_trainer.luna_backend()
-    main = ai_trainer._model_kwargs(backend, 5, max_tokens=2048, quick=False, scope="trainer")
-    assert main["model"] == "gpt-6-luna"
-    assert "max_tokens" not in main and "extra_headers" not in main
-    assert main["max_completion_tokens"] == 2048  # effort none — запаса на размышления нет
-    assert main["extra_body"] == {"reasoning_effort": "none", "prompt_cache_key": "trainer-5"}
     quick = ai_trainer._model_kwargs(backend, 5, max_tokens=700, quick=True, scope="workout_comment")
-    assert quick["max_completion_tokens"] == 700
-    assert quick["extra_body"]["reasoning_effort"] == "none"
+    assert quick["model"] == "gpt-6-luna"
+    assert "max_tokens" not in quick and "extra_headers" not in quick
+    assert quick["max_completion_tokens"] == 700  # effort none — запаса на размышления нет
+    assert quick["extra_body"] == {"reasoning_effort": "none", "prompt_cache_key": "workout_comment-5"}
     stripped = ai_trainer._wire_messages(
         backend, [{"role": "assistant", "content": "x", "reasoning_content": "думал"}]
     )
@@ -205,7 +203,7 @@ async def test_turn_keeps_its_model_when_switched_mid_turn(fresh_db, own_account
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: SimpleNamespace(
         chat=SimpleNamespace(completions=_relabel(shared, "grok"))))
     monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: SimpleNamespace(
-        chat=SimpleNamespace(completions=_relabel(shared, "luna"))))
+        post=_responses_proxy(shared)))
 
     async def tool_switches_model(user_id, name, args, **kwargs):
         # Посреди хода атлет переключился на grok — ход доезжает на Luna.
@@ -227,6 +225,26 @@ async def test_turn_keeps_its_model_when_switched_mid_turn(fresh_db, own_account
     breakdown = await db.get_llm_cost_breakdown(_today())
     assert breakdown["gpt-6-luna"]["calls"] == 2
     assert breakdown[config.GROK_MODEL]["calls"] == 1
+
+
+def _responses_proxy(shared: _FakeCompletions):
+    """Luna-ход идёт в POST /responses: тот же сценарий (вызов инструмента →
+    ответ) в форме Responses API."""
+    async def post(path, *, body, cast_to, **kwargs):
+        assert path == "/responses"
+        shared.label = "luna"
+        chat = await shared.create(**body)
+        message = chat.choices[0].message
+        if message.tool_calls:
+            tc = message.tool_calls[0]
+            output = [{"type": "function_call", "call_id": tc.id, "name": tc.function.name,
+                       "arguments": tc.function.arguments}]
+        else:
+            output = [{"type": "message", "role": "assistant",
+                       "content": [{"type": "output_text", "text": message.content}]}]
+        return {"output": output, "usage": {"input_tokens": 10_000, "output_tokens": 1_000}}
+
+    return post
 
 
 def _relabel(shared: _FakeCompletions, label: str):
