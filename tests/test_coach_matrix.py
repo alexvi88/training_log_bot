@@ -26,6 +26,7 @@ from __future__ import annotations
 import itertools
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from html import escape
 from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -446,7 +447,7 @@ async def athlete_opens_from_telegram(acc: Account, wid: int, text: str, coach_n
     assert result is not UNHANDLED
     screen = _screen(callback)
     assert text in screen and coach_name in screen
-    assert i18n.t_in(acc.lang, "coach.card.header") in screen
+    assert i18n.t_in(acc.lang, "coach.card.header_named", name=escape(coach_name)) in screen
 
 
 async def athlete_consent(acc: Account) -> None:

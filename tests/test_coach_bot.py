@@ -535,11 +535,29 @@ async def test_athlete_sees_coach_comments_under_the_workout_in_history(fresh_db
     callback = _callback(ATHLETE, f"hist:item:{wid}")
     assert await history.show_history_item(callback, wid)
     text = _screen(callback)
-    assert "Твой тренер" in text and "Отлично, держи темп" in text and "Иван Петров" in text
+    # Тренер один — по имени в заголовке, чтобы блок не путали с 🤖 AI-тренером (аудит u7).
+    assert "Иван Петров, твой тренер" in text and "Отлично, держи темп" in text
     # Открыл — прочитал; тренер видит отметку.
     assert (await fresh_db.list_coach_comments(wid))[0]["read_at"] is not None
     seen = await _tap(COACH, f"coach:w:{ATHLETE}:{wid}")
     assert "атлет прочитал" in _screen(seen)
+
+
+async def test_two_coaches_under_one_workout_are_named_each(fresh_db):
+    """Дневник открыт двоим — заголовок «Твои тренеры» и имя у каждого
+    комментария; одно имя в заголовке приписало бы оба комментария одному."""
+    await _linked(fresh_db)
+    await _user(fresh_db, STRANGER)
+    await fresh_db.upsert_coach_profile(STRANGER, "Ольга")
+    assert await fresh_db.create_coach_link(STRANGER, ATHLETE, "Маша", show_bodyweight=False)
+    wid = await _finished_workout(fresh_db, ATHLETE)
+    await fresh_db.add_coach_comment(COACH, ATHLETE, wid, "Держи темп")
+    await fresh_db.add_coach_comment(STRANGER, ATHLETE, wid, "Добавь подход")
+    callback = _callback(ATHLETE, f"hist:item:{wid}")
+    assert await history.show_history_item(callback, wid)
+    text = _screen(callback)
+    assert "Твои тренеры" in text and "твой тренер" not in text
+    assert "<b>Иван Петров</b>" in text and "<b>Ольга</b>" in text
 
 
 async def test_telegram_delivery_skips_app_only_athletes(fresh_db):
