@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import os
 
@@ -241,6 +242,11 @@ FEEDBACK_PUSH_INTERVAL_DAYS = 60
 # Реплика в поддержку в течение стольких дней после пуша считается ответом на
 # него (событие feedback_push_replied) — засчитывается только первая.
 FEEDBACK_PUSH_REPLY_WINDOW_DAYS = 7
+# Запуск пуша для тех, кто тренировался ДО него. До этой метки (naive UTC) пуш
+# не уходит никому. Тем, у кого первая тренировка была раньше метки, первый
+# вопрос уходит сразу с неё (12:00 по Москве), а не в вечернее окно, — любой
+# не тихий час по местному. Новички после запуска живут по обычным правилам.
+FEEDBACK_PUSH_LAUNCH_UTC = dt.datetime(2026, 10, 15, 9, 0)
 
 # Use an AI-generated personalized weekly digest (Sundays) in place of the static
 # rotation text, when the AI trainer is configured. Falls back to static copy on
