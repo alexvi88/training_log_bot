@@ -10,7 +10,8 @@
 или другой по параметру) и проходит путь целиком: тренер включает режим и
 получает приглашение → атлет принимает кодом, тренеру «новый клиент» по
 всем его каналам → пишет тренировку → тренер
-видит клиента и тренировку (имена — на языке тренера) → комментирует →
+видит клиента и тренировку (хром — на языке тренера, упражнения и группы
+атлета — на языке атлета) → комментирует →
 атлет получает комментарий по всем своим каналам и видит его под тренировкой →
 тренер назначает программу, атлет получает её по всем своим каналам →
 AI-сводка тренеру по правилу `_background_ai_allowed` → атлет закрывает доступ
@@ -594,13 +595,18 @@ async def test_coach_athlete_flow(
     assert athlete_name in await coach_client_names(trainer, telegram)
     card = await coach_card(trainer, athlete.uid, telegram)
     assert athlete_name in card
-    assert bench_for_coach in card, f"упражнение не на языке тренера: {card}"
-    assert bench_for_athlete not in card
+    # Упражнение атлета — его данные: тренер видит его на языке АТЛЕТА (он
+    # составляет атлету программы его словами), а хром — на своём.
+    assert bench_for_athlete in card, f"упражнение не на языке атлета: {card}"
+    assert bench_for_coach not in card
     detail = await coach_workout(trainer, athlete.uid, wid, telegram)
-    assert bench_for_coach in detail and bench_for_athlete not in detail, detail
+    assert bench_for_athlete in detail and bench_for_coach not in detail, detail
+    chest_for_athlete = seed_data.localized_muscle_group_name("Грудь", athlete_lang).upper()
     if coach_lang == "en":
         for shown in (card, detail):
-            assert not i18n_coverage.has_cyrillic(_strip(shown, athlete_name, coach_name)), shown
+            assert not i18n_coverage.has_cyrillic(
+                _strip(shown, athlete_name, coach_name, bench_for_athlete, chest_for_athlete)
+            ), shown
 
     # 3/5. Комментарий тренера доезжает до атлета по каждому его каналу и
     # только по ним. До комментария не уходило ничего.
@@ -666,7 +672,7 @@ async def test_coach_athlete_flow(
         summary, clients = await coach_summary(trainer, telegram)
     assert summary is not None and SUMMARY in summary and clients == 1
     model_data = fake_model.calls[-1]["messages"][1]["content"]
-    assert athlete_name in model_data and bench_for_coach in model_data, model_data
+    assert athlete_name in model_data and bench_for_athlete in model_data, model_data
     assert fake_model.calls[-1]["messages"][0]["content"].endswith(i18n.t_in(coach_lang, "ai.language_tail"))
 
     # 7. Атлет закрывает доступ — тренер не видит ничего.

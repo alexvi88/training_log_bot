@@ -3054,61 +3054,78 @@ async def relocalize_catalog_copies(user_id: int, lang: str) -> dict[str, int]:
         if await update_exercise_name(row["id"], wanted):
             counts["exercises"] += 1
 
+    # Каталожные программы — и свои («➕ Добавить себе», source='catalog'),
+    # и назначенные тренером копии каталожной программы (source='coach' с тем
+    # же ключом каталога в source_ref, coach_service.assign_program).
     cur = await conn().execute(
         "SELECT id, name, source_ref, description FROM programs "
-        "WHERE user_id = ? AND source = 'catalog'",
+        "WHERE user_id = ? AND source IN ('catalog', 'coach') AND source_ref IS NOT NULL",
         (user_id,),
     )
     for program in await cur.fetchall():
-        key = program["source_ref"]
-        catalog = PROGRAM_BY_KEY.get(key or "")
-        if catalog is None:
-            continue
-        wanted = localized_program_name(key, lang)
-        if (
-            program["name"] != wanted
-            and (
-                program["name"] in _catalog_spellings(localized_program_name, key)
-                or program["name"] in legacy_program_texts(key, "name")
-            )
-            and await rename_program_by_id(program["id"], wanted)
-        ):
-            counts["programs"] += 1
-
-        wanted_description = _catalog_program_description(key, lang)
-        if program["description"] != wanted_description and (
-            program["description"] in _catalog_spellings(_catalog_program_description, key)
-            or program["description"] in {
-                clean_program_description(text) for text in legacy_program_texts(key, "description")
-            }
-        ):
-            await set_program_description(program["id"], wanted_description)
-            counts["descriptions"] += 1
-
-        # День опознаём по имени, а не по day_order: порядок дней человек
-        # вправе переставить, а имя дня из каталога на любом языке однозначно
-        # указывает на свой индекс в program["days"].
-        for day in await list_program_days_by_id(program["id"]):
-            day_index = next(
-                (
-                    i for i in range(len(catalog["days"]))
-                    if day["name"] in _catalog_spellings(localized_program_day_name, key, i)
-                    or day["name"] in legacy_program_texts(key, f"day.{i}")
-                ),
-                None,
-            )
-            if day_index is None:
-                continue
-            wanted_day = localized_program_day_name(key, day_index, lang)
-            if day["name"] != wanted_day:
-                await rename_routine(day["id"], wanted_day)
-                counts["days"] += 1
-            counts["targets"] += await _relocalize_catalog_targets(
-                day["id"], catalog["days"][day_index][1], lang
-            )
+        await relocalize_catalog_program(program, lang, counts)
 
     if any(counts.values()):
         logger.info("relocalize_catalog_copies: user %s -> %s: %s", user_id, lang, counts)
+    return counts
+
+
+async def relocalize_catalog_program(
+    program: Any, lang: str, counts: Optional[dict[str, int]] = None
+) -> dict[str, int]:
+    """Одна программа из каталога (ключ — `program["source_ref"]`) — на `lang`:
+    имя, описание, дни и схемы, только нетронутое (те же правила, что у
+    relocalize_catalog_copies). Нужна и отдельно: копия, которую тренер
+    назначает атлету (coach_service.assign_program), ложится на языке тренера
+    и сразу переводится на язык атлета."""
+    if counts is None:
+        counts = {"exercises": 0, "programs": 0, "days": 0, "descriptions": 0, "targets": 0}
+    key = program["source_ref"]
+    catalog = PROGRAM_BY_KEY.get(key or "")
+    if catalog is None:
+        return counts
+    wanted = localized_program_name(key, lang)
+    if (
+        program["name"] != wanted
+        and (
+            program["name"] in _catalog_spellings(localized_program_name, key)
+            or program["name"] in legacy_program_texts(key, "name")
+        )
+        and await rename_program_by_id(program["id"], wanted)
+    ):
+        counts["programs"] += 1
+
+    wanted_description = _catalog_program_description(key, lang)
+    if program["description"] != wanted_description and (
+        program["description"] in _catalog_spellings(_catalog_program_description, key)
+        or program["description"] in {
+            clean_program_description(text) for text in legacy_program_texts(key, "description")
+        }
+    ):
+        await set_program_description(program["id"], wanted_description)
+        counts["descriptions"] += 1
+
+    # День опознаём по имени, а не по day_order: порядок дней человек
+    # вправе переставить, а имя дня из каталога на любом языке однозначно
+    # указывает на свой индекс в program["days"].
+    for day in await list_program_days_by_id(program["id"]):
+        day_index = next(
+            (
+                i for i in range(len(catalog["days"]))
+                if day["name"] in _catalog_spellings(localized_program_day_name, key, i)
+                or day["name"] in legacy_program_texts(key, f"day.{i}")
+            ),
+            None,
+        )
+        if day_index is None:
+            continue
+        wanted_day = localized_program_day_name(key, day_index, lang)
+        if day["name"] != wanted_day:
+            await rename_routine(day["id"], wanted_day)
+            counts["days"] += 1
+        counts["targets"] += await _relocalize_catalog_targets(
+            day["id"], catalog["days"][day_index][1], lang
+        )
     return counts
 
 

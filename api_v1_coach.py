@@ -215,7 +215,8 @@ async def client_progress(request: Request) -> JSONResponse:
     """«Прогресс клиента»: частота и тоннаж по неделям, основные движения
     по неделям, рекорды за всё время и свежие (coach_service.client_progress).
     Та же проверка связки, что у списка тренировок: чужой или бывший
-    клиент — 404 `not_linked`. Имена упражнений — на языке тренера."""
+    клиент — 404 `not_linked`. Имена упражнений — на языке атлета (это его
+    дневник, coach_service.client_exercise_name), подписи — на языке тренера."""
     user_id = await common.authed_user_id(request)
     _, client = await _linked_client(user_id, _client_id(request))
     weeks = common.query_int(
@@ -254,7 +255,7 @@ async def client_exercise_progress(request: Request) -> JSONResponse:
     """Прогресс одного упражнения клиента — ровно та же форма, что у атлета
     на `GET /exercises/{id}/progress/sessions` (одна сборка,
     api_v1_progress.series_payload): формула, единица и пояс — атлета,
-    подписи — на языке тренера. Сначала связка (404 `not_linked`), потом
+    подписи — на языке тренера (имени упражнения в ответе нет). Сначала связка (404 `not_linked`), потом
     упражнение этого атлета (404 `not_found` — и для чужого, и для
     несуществующего). `limit` — те же 10 / 20 / «все»."""
     user_id = await common.authed_user_id(request)
@@ -285,7 +286,7 @@ async def client_workouts(request: Request) -> JSONResponse:
     import api_v1
 
     user_id = await common.authed_user_id(request)
-    link, _ = await _linked_client(user_id, _client_id(request))
+    link, client = await _linked_client(user_id, _client_id(request))
     limit = common.query_int(request, "limit", 20, minimum=1, maximum=100)
     offset = common.query_int(request, "offset", 0, minimum=0)
     workouts = await db.list_workouts(link["client_id"], limit=limit, offset=offset, status="finished")
@@ -296,7 +297,7 @@ async def client_workouts(request: Request) -> JSONResponse:
     for w in workouts:
         names, set_count = contents.get(w["id"], ([], 0))
         item = api_v1._workout_json(w)
-        item["exercise_names"] = coach_service.shown_exercise_names(names)
+        item["exercise_names"] = coach_service.shown_exercise_names(client, names)
         item["set_count"] = set_count
         item["coach_comment_count"] = comments.get(w["id"], 0)
         items.append(item)
@@ -305,9 +306,10 @@ async def client_workouts(request: Request) -> JSONResponse:
 
 async def client_workout(request: Request) -> JSONResponse:
     """Тренировка атлета на чтение — та же сборка, что у GET /workouts/{id}
-    (api_v1._workout_detail_json), только тексты (рекорды, теги групп) — на
-    языке тренера, а единица веса приходит рядом: тренер в кг может смотреть
-    атлета в lb."""
+    (api_v1._workout_detail_json): данные атлета — имена упражнений и теги
+    групп — на языке АТЛЕТА (тренер составляет ему программы его словами),
+    подписи (строки рекордов, прошлые подходы) — на языке тренера, а единица
+    веса приходит рядом: тренер в кг может смотреть атлета в lb."""
     import api_v1
 
     user_id = await common.authed_user_id(request)
@@ -317,11 +319,13 @@ async def client_workout(request: Request) -> JSONResponse:
         raise ApiError(404, "not_found", "workout not found")
     viewer = dict(client)
     viewer["lang"] = i18n.get_lang()
-    detail = await api_v1._workout_detail_json(workout, viewer)
-    # Каталожные упражнения — на языке тренера, как и остальные тексты.
+    detail = await api_v1._workout_detail_json(
+        workout, viewer, group_lang=coach_service.client_lang(client)
+    )
+    # Каталожные упражнения — на языке атлета, по идентичности каталога.
     for block in detail["blocks"]:
         for exercise in block["exercises"]:
-            exercise["display_name"] = coach_service.shown_exercise_names([exercise["display_name"]])[0]
+            exercise["display_name"] = coach_service.client_exercise_name(client, exercise["display_name"])
     comments = await db.list_coach_comments(workout["id"], coach_id=user_id)
     return JSONResponse({
         "workout": detail,
