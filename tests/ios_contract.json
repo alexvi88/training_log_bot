@@ -214,6 +214,19 @@
     }
    }
   },
+  "AIModelChoiceResponse": {
+   "file": "TrainingLog/Features/Settings/AIModelChoice.swift",
+   "fields": {
+    "aiModel": {
+     "type": "String",
+     "optional": false
+    },
+    "aiModelOptions": {
+     "type": "[String]",
+     "optional": false
+    }
+   }
+  },
   "AIPendingState": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -1413,6 +1426,11 @@
     "visibility": {
      "type": "CoachVisibility",
      "optional": false
+    },
+    "suggestedName": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -2902,6 +2920,16 @@
      "type": "Int",
      "optional": true,
      "default": true
+    },
+    "aiModel": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "aiModelOptions": {
+     "type": "[String]",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4322,6 +4350,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.setAIModel",
+   "method": "PATCH",
+   "path": "/ai/model",
+   "root": "AIModelChoiceResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.aiPending",
    "method": "GET",
    "path": "/ai/pending",
@@ -4438,6 +4473,13 @@
    "method": "DELETE",
    "path": "/coach-links/{}",
    "root": "CoachRevokeResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.renameForMyCoach",
+   "method": "PATCH",
+   "path": "/coach-links/{}",
+   "root": "MyCoach",
    "nullable": false
   },
   {
@@ -5267,5 +5309,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "1ef1d6208407b480aa6bb027f7594b22c5d097b5"
+ "_ios_commit": "e23d5107e0a0f6af3262d2bbd23dec39351a581e"
 }

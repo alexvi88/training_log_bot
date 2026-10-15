@@ -83,7 +83,10 @@ async def _build_cost_report(date_str: str) -> str:
     # Вызовы web_search/x_search: $5 за 1000 СВЕРХ токенов. В консоли за неделю это
     # было $0.68 — пятнадцать процентов текстового счёта, которых отчёт не видел.
     server_tool_calls = sum(server_tools.values())
-    server_tool_cost = server_tool_calls * config.SERVER_TOOL_PRICE_USD_PER_CALL
+    # Ставка — по инструменту: у web_search xAI и OpenAI она разная.
+    server_tool_cost = sum(
+        calls * config.server_tool_price_usd(tool) for tool, calls in server_tools.items()
+    )
     total_cost = llm_cost + transcription_cost + server_tool_cost
 
     lines = [
@@ -93,7 +96,14 @@ async def _build_cost_report(date_str: str) -> str:
     ]
     for model, stats in sorted(llm_breakdown.items(), key=lambda x: -x[1]["calls"]):
         tok = stats["prompt_tokens"] + stats["completion_tokens"]
-        lines.append(f"  └ {model}: {stats['calls']} ({tok:,} ток.)".replace(",", " "))
+        # Цена по модели — та же формула, что в сумме выше: с пробой Luna на
+        # своих аккаунтах расход надо видеть раздельно, а не одной цифрой.
+        model_cost = config.call_price_usd(
+            model, stats["prompt_tokens"], stats["completion_tokens"],
+            stats.get("cached_tokens", 0), stats.get("reasoning_tokens", 0),
+        )
+        tok_text = f"{tok:,}".replace(",", " ")
+        lines.append(f"  └ {model}: {stats['calls']} ({tok_text} ток., ~${model_cost:.3f})")
     if transcriptions:
         lines.append(f"Голосовых распознано: {transcriptions} (~${transcription_cost:.2f})")
     if server_tool_calls:

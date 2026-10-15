@@ -21,6 +21,7 @@ import account_deletion
 import acquisition
 import activity_log
 import ai_limits
+import ai_trainer
 import announcements
 import api_v1_activity
 import api_v1_feedback
@@ -550,6 +551,36 @@ def _growth_day(raw: str) -> Optional[str]:
                 parsed = parsed.replace(year=today.year - 1)
         return parsed.isoformat()
     return None
+
+
+@router.message(Command("aimodel"))
+async def cmd_aimodel(message: Message, state: FSMContext):
+    """Модель тренера для своего аккаунта: `/aimodel` — какая сейчас,
+    `/aimodel grok` или `/aimodel luna` — сменить. Запасной путь к
+    переключателю в профиле приложения; только своим аккаунтам
+    (config.ai_model_switch_ids), остальным команда молчит. Действует со
+    следующего вопроса тренеру."""
+    user_id = message.from_user.id
+    if user_id not in config.ai_model_switch_ids():
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1:
+        choice = parts[1].strip().lower()
+        if choice not in config.AI_MODEL_CHOICES:
+            await message.answer(
+                "Не понял модель. Пиши «/aimodel grok» или «/aimodel luna»."
+            )
+            return
+        await db.set_user_ai_model(user_id, choice)
+        await message.answer(
+            f"Переключил тренера на {choice} — со следующего вопроса "
+            f"({config.GROK_MODEL if choice == config.AI_MODEL_GROK else config.OPENAI_CHAT_MODEL})."
+        )
+        return
+    current = await ai_trainer.ai_model_for(user_id)
+    await message.answer(
+        f"Сейчас тренер отвечает моделью {current}. Сменить: «/aimodel grok» или «/aimodel luna»."
+    )
 
 
 @router.message(Command("growth"))

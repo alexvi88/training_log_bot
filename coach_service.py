@@ -654,16 +654,16 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str
 async def _model_answer(coach_id: int, messages: list[dict[str, Any]]) -> str:
     """Один нестримящий платный вызов — через ai_trainer.paid_call (лимит
     вопроса тренера → вызов → цена в лог). LimitBlocked летит наружу."""
-    client = ai_trainer._get_client()
+    # Модель — по выбору тренера (своим аккаунтам можно Luna, см.
+    # ai_trainer.chat_backend); обычному — grok теми же параметрами, что всегда.
+    backend = await ai_trainer.chat_backend(coach_id)
     response = await ai_trainer.paid_call(
         coach_id, ai_limits.KIND_QUESTION,
-        lambda: client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=900,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            extra_headers=ai_trainer._cache_headers(coach_id, scope="coach_summary"),
+        lambda: backend.client.chat.completions.create(
+            **ai_trainer._model_kwargs(backend, coach_id, max_tokens=900, quick=True, scope="coach_summary"),
             messages=messages,
         ),
+        model=backend.model,
         messages=messages,
     )
     return (response.choices[0].message.content or "").strip()
