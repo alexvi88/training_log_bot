@@ -2272,6 +2272,7 @@ async def test_exercise_progress_never_compares_reps_across_weights(
     assert all(row["change"] != "down" for row in payload["same_weight_reps"])
 
     stall = payload["stall"]
+    assert stall["verdict"] == "progressing" and stall["stalled"] is False
     assert "reps at 77 kg: 6→7" in stall["why"]
     assert "12→7" not in json.dumps(payload, ensure_ascii=False)
     assert stall["top_weight_since"] == "2026-09-18"
@@ -2296,6 +2297,9 @@ async def test_stalled_lifts_reports_reps_on_the_top_weight_only(fresh_db, user_
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
 
     (lift,) = payload["lifts"]
+    assert lift["verdict"] == "progressing"
+    assert lift["weight_raised_from"] == 73
+    assert "reps at 77 kg: 6→7" in lift["why"]
     assert lift["reps_at_top_weight"] == "6→7"
     assert lift["top_weight_since"] == "2026-09-18"
     assert lift["sessions_at_top_weight"] == 2

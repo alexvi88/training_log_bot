@@ -599,7 +599,7 @@ def test_weight_changing_every_session_has_no_same_weight_pairs_but_a_trend():
     assert facts["same_weight_reps"] == []
     assert facts["weight_increase"]["date"] == "2026-10-08"
     assert facts["weight_increase"]["step"] == 2.5
-    assert facts["e1rm_trend"]["slope_per_week"] > analytics.STALL_SLOPE_EPS
+    assert facts["e1rm_trend"]["slope_per_week"] > 0
     assert facts["e1rm_trend"]["change_vs_four_weeks_ago"] > 0
     assert facts["stall"]["stalled"] is False
     assert facts["stall"]["verdict"] == "growing"
@@ -639,3 +639,95 @@ def test_bodyweight_exercise_facts_are_reps_only():
     assert facts["stall"]["verdict"] == "double_progression"
     assert facts["stall"]["top_weight_since"] is None
     assert "bodyweight" in facts["stall"]["why"]
+
+
+# ---------- вердикт — по наклону лучшего e1RM сессии ----------
+
+# Ровно данные из прод-лога: тренер (и Luna, и Грок) сказал «вес стоит на 77
+# ~4 недели, повторы упали 12→7».
+_PROD_CURLS = _dated([
+    ("2026-08-09", [(67.5, 12), (72.5, 8)]),
+    ("2026-08-13", [(73, 7), (73, 9)]),
+    ("2026-08-18", [(73, 8), (73, 6)]),
+    ("2026-08-22", [(73, 9)]),
+    ("2026-08-26", [(73, 9), (73, 10)]),
+    ("2026-08-30", [(73, 11)]),
+    ("2026-09-18", [(77, 6), (73, 12)]),
+    ("2026-10-08", [(77, 7)]),
+])
+
+
+def test_prod_case_is_progressing_not_a_stall_or_regression():
+    verdict = analytics.classify_stall(_PROD_CURLS, _FACTS_TODAY)
+
+    assert verdict.kind == "progressing"
+    assert verdict.weight_raised_from == 73
+    assert (verdict.reps_at_top_first, verdict.reps_at_top_last) == (6, 7)
+    facts = analytics.stall_facts(_PROD_CURLS, _FACTS_TODAY, "kg")
+    assert facts["stalled"] is False
+    # Оба факта честно: e1RM с 73×12 до 77×7 упал, а на 77 повторы растут.
+    assert "best e1RM 102.2 (73×12, 2026-09-18) → latest 95 (77×7, 2026-10-08)" in facts["why"]
+    assert "weight raised 73→77 kg on 2026-09-18" in facts["why"]
+    assert "reps at 77 kg: 6→7" in facts["why"]
+    assert "12→7" not in facts["why"]
+
+
+def _weekly(series):
+    """Сессия в неделю, последняя — 2026-10-08; series — [(вес, повторы), ...] на сессию."""
+    last = dt.date(2026, 10, 8)
+    n = len(series)
+    return _dated([
+        ((last - dt.timedelta(weeks=n - 1 - i)).isoformat(), sets)
+        for i, sets in enumerate(series)
+    ])
+
+
+def test_varied_weights_with_rising_e1rm_is_growing():
+    """Каждую тренировку другой вес — пар «тот же вес» нет, а рост есть."""
+    sessions = _weekly([[(80, 10)], [(90, 6)], [(85, 9)], [(95, 5)], [(88, 10)], [(100, 4)]])
+    verdict = analytics.classify_stall(sessions, _FACTS_TODAY)
+
+    assert analytics.same_weight_reps(sessions) == []
+    assert verdict.kind == "growing"
+    assert verdict.slope_pct_per_week >= analytics.STALL_FLAT_SHARE * 100
+
+
+def test_varied_weights_with_flat_e1rm_is_a_stall():
+    # У всех шести e1RM 120 по Эпли, веса разные.
+    sessions = _weekly([[(100, 6)], [(90, 10)], [(80, 15)], [(112.5, 2)], [(75, 18)], [(90, 10)]])
+    verdict = analytics.classify_stall(sessions, _FACTS_TODAY)
+
+    assert verdict.kind == "dead_end"
+    assert verdict.weight_raised_from is None
+
+
+def test_twelve_to_fifteen_rep_history_gets_a_trend():
+    """Кто работает в 12-15, должен получить наклон: такие подходы в счёте."""
+    sessions = _weekly([[(60, 12)], [(60, 13)], [(60, 14)], [(60, 15)], [(62.5, 13)], [(62.5, 15)]])
+    verdict = analytics.classify_stall(sessions, _FACTS_TODAY)
+
+    assert verdict.trend_points == 6
+    assert verdict.kind == "growing"
+    assert analytics.e1rm_trend(sessions, _FACTS_TODAY)["slope_per_week"] > 0
+
+
+def test_sets_above_twenty_reps_are_ignored_for_the_trend():
+    sessions = _weekly([[(40, 30), (100, 5)] for _ in range(5)])
+    verdict = analytics.classify_stall(sessions, _FACTS_TODAY)
+
+    assert verdict.e1rm_peak[1:3] == (100, 5)
+    assert verdict.kind == "dead_end"
+
+
+def test_reps_falling_on_the_same_weight_is_regressing():
+    sessions = _weekly([[(100, 10)], [(100, 9)], [(100, 7)], [(100, 6)], [(100, 5)]])
+
+    assert analytics.classify_stall(sessions, _FACTS_TODAY).kind == "regressing"
+
+
+def test_flat_over_too_short_a_span_is_unclear_not_a_stall():
+    """Четыре ровные тренировки за полторы недели — ещё не застой."""
+    sessions = _dated([(d, [(100, 8)]) for d in
+                       ("2026-09-28", "2026-10-01", "2026-10-05", "2026-10-08")])
+
+    assert analytics.classify_stall(sessions, _FACTS_TODAY).kind == "unclear"
