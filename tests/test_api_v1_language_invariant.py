@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import json
 import re
 from typing import Any
 
@@ -193,6 +194,22 @@ class _Walker:
         return resp
 
 
+def _sse_events(raw: str) -> list[tuple[str, Any]]:
+    """События `text/event-stream` (стрим тренера): (имя, data как JSON), без пингов."""
+    events: list[tuple[str, Any]] = []
+    for block in raw.split("\n\n"):
+        if not block.strip() or block.startswith(":"):
+            continue
+        name, data = "message", None
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                name = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        events.append((name, data))
+    return events
+
+
 # Текст, который атлет вводит сам, — на его языке.
 USER_TEXT = {
     "en": {
@@ -271,6 +288,15 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         elif question.startswith("SETUP"):
             await on_questions([{"question": model["question"], "choices": []}])
         else:
+            # Стрим: строка «что тренер делает» — настоящий каталог
+            # ai.tool_status.* под языком хода, как её шлёт цикл инструментов.
+            on_status = kwargs.get("on_status")
+            if on_status is not None:
+                await on_status(ai_trainer._tool_status_variants("get_full_workout_history")[0])
+                await on_status(ai_trainer._tool_status_variants("no_such_tool")[0])
+            on_chunk = kwargs.get("on_chunk")
+            if on_chunk is not None:
+                await on_chunk(model["answer"])
             # Настоящий инструмент тренера, пишущий в базу: он же собирает
             # подпись кнопки отката через i18n.t — под языком хода.
             await ai_trainer.execute_tool(
@@ -681,6 +707,17 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert asked["actions"], "тренер завёл упражнение — кнопка отката обязана прийти"
     assert len(asked["mentions"]["exercises"]) >= 2, "ответ назвал два упражнения — чипы обязаны прийти"
     await w.call("POST", "/ai/ask", json={"question": ""}, expect=400)
+    # Тот же ход стримом: события `chunk`/`status`/`done` — не JSON-ответ, и
+    # обходчик их не читает, поэтому разбираем их здесь и меряем тем же
+    # `language_violations`.
+    streamed = await w.call("POST", "/ai/ask", json={"question": text["question"], "stream": True}, expect=200)
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+    stream_events = _sse_events(streamed.text)
+    assert "status" in [name for name, _ in stream_events], "стрим обязан сказать, что тренер делает"
+    assert stream_events[-1][0] == "done"
+    for name, data in stream_events:
+        for v in language_violations(data, lang):
+            w.violations.append(f"POST /ai/ask stream [{name}]: {v}")
     await w.call("GET", "/ai/history", expect=200)
     conversations = (await w.call("GET", "/ai/conversations", expect=200)).json()
     conv_items = conversations.get("conversations") or conversations.get("items") or []

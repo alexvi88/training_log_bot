@@ -16,6 +16,7 @@ import ai_trainer
 import api_v1
 import api_v1_ai
 import config
+import i18n
 
 
 @pytest.fixture
@@ -98,6 +99,7 @@ async def test_stream_without_flag_keeps_plain_json(fresh_db, client_factory, mo
 
     async def fake_ask(user_id, question, history, **kwargs):
         assert "on_chunk" not in kwargs
+        assert "on_status" not in kwargs
         return "ответ"
 
     monkeypatch.setattr(ai_trainer, "ask", fake_ask)
@@ -249,3 +251,53 @@ async def test_stream_limit_check_failure_releases_busy(fresh_db, client_factory
     monkeypatch.setattr(ai_trainer, "ask", fine)
     again = await client.post("/ai/ask", json={"question": "ещё", "stream": True})
     assert again.status_code == 200, again.text
+
+
+@pytest.mark.asyncio
+async def test_stream_sends_tool_status_between_chunks(fresh_db, client_factory, monkeypatch):
+    """Живой случай: «I'll pull your training history and profile» — и тишина на
+    минуту, пока модель читает историю и собирает программу. Между кусками
+    текста стрим говорит, что тренер делает (`status`, ai.tool_status.* на языке
+    атлета), — иначе экран выглядит зависшим. Квота — одна за весь ход."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    seen: dict[str, object] = {}
+
+    async def fake_ask(user_id, question, history, on_chunk=None, on_status=None, **kwargs):
+        assert on_chunk is not None and on_status is not None
+        seen["lang"] = i18n.get_lang()
+        await on_chunk("I'll pull your training history and profile")
+        await on_status(ai_trainer._tool_status_variants("get_full_workout_history")[0])
+        await on_status("")  # пустую строку не шлём вовсе
+        await on_status(ai_trainer._tool_status_variants("propose_program")[0])
+        await on_chunk("Here's your program.")
+        return "Here's your program. Three days a week."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory, lang="en")
+
+    resp = await client.post("/ai/ask", json={"question": "Build me a program", "stream": True})
+    assert resp.status_code == 200, resp.text
+    events = [(name, data) for name, data in _events(resp.text) if name != "ping"]
+    assert [name for name, _ in events] == ["chunk", "status", "status", "chunk", "done"]
+    assert seen["lang"] == "en"
+    assert events[1][1] == {"text": i18n.t_in("en", "ai.tool_status.get_full_workout_history.1")}
+    assert events[2][1] == {"text": i18n.t_in("en", "ai.tool_status.propose_program.1")}
+    for _, data in events[1:3]:
+        assert not any("\u0400" <= ch <= "\u04ff" for ch in data["text"]), data
+    assert events[-1][1]["limits"]["question"]["used"] == 1
+    assert await fresh_db.get_ai_question_count_today(111) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_status_speaks_russian_to_russian_athlete(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_ask(user_id, question, history, on_status=None, **kwargs):
+        await on_status(ai_trainer._tool_status_variants("list_recent_workouts")[0])
+        return "ответ"
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory, lang="ru")
+    resp = await client.post("/ai/ask", json={"question": "вопрос", "stream": True})
+    status = [data for name, data in _events(resp.text) if name == "status"]
+    assert status == [{"text": i18n.t_in("ru", "ai.tool_status.list_recent_workouts.1")}]

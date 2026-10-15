@@ -409,6 +409,7 @@ async def _run_turn(
     saved_image_path: Optional[str] = None,
     shown_question: Optional[str] = None,
     on_chunk: Optional[Any] = None,
+    on_status: Optional[Any] = None,
     subject: Optional[coach_program_ai.ClientChat] = None,
 ) -> dict[str, Any]:
     """Один вызов ai_trainer.ask() с полным набором колбэков — общее ядро для
@@ -473,6 +474,11 @@ async def _run_turn(
     # наружу по мере генерации, как боту (`_completion_round` с on_chunk).
     if on_chunk is not None:
         ask_kwargs["on_chunk"] = on_chunk
+    # Строка «что тренер сейчас делает» (ai.tool_status.*, та же, что бот
+    # пишет в сообщение-заглушку) — только стриму: обычному ответу её некуда
+    # отдать. Набор инструментов и запрос к модели от неё не меняются.
+    if on_status is not None:
+        ask_kwargs["on_status"] = on_status
     # Программа атлету — инструменты читают его дневник (coach_program_ai).
     if subject is not None:
         ask_kwargs["subject"] = subject
@@ -963,9 +969,9 @@ async def ask_question(request: Request) -> JSONResponse:
             raise ApiError(429, "question_limit_exceeded", "daily question limit reached", human=block.user_text)
         return _stream_turn(
             user_id, lang,
-            lambda on_chunk: _ask_turn(
+            lambda on_chunk, on_status: _ask_turn(
                 user_id, lang, question, image_data_url, raw_image, shown_question, on_chunk=on_chunk,
-                subject=subject,
+                on_status=on_status, subject=subject,
             ),
         )
     try:
@@ -978,7 +984,9 @@ async def ask_question(request: Request) -> JSONResponse:
 
 # Пауза в стриме, после которой уходит пустой комментарий: между раундами
 # инструментов модель молчит по 10–20 секунд, а прокси по дороге (Fly, мобильный
-# оператор) закрывает соединение, по которому давно ничего не шло.
+# оператор) закрывает соединение, по которому давно ничего не шло. На этот
+# пульс опирается и приложение: минута без единого байта для него — обрыв
+# («Связь оборвалась…» с «Повторить»), так что пульс реже 60 с ломает клиента.
 STREAM_HEARTBEAT_SECONDS = 10.0
 
 _stream_tasks: set[asyncio.Task] = set()
@@ -1001,9 +1009,14 @@ def _stream_turn(user_id: int, lang: str, run: Any) -> StreamingResponse:
       * `done` — ровно то же тело, что у нестримящего /ai/ask;
       * `error` — `{"status", "error", "message", "detail"}`, те же поля, что у
         ошибки `/v1`: статус ответа после первого байта уже не поменять;
+      * `status` — `{"text": что тренер сейчас делает}` (ai.tool_status.*, на
+        языке атлета): модель ушла в инструменты — читает историю, собирает
+        программу, — и новых кусков текста минуту-другую не будет. Клиент
+        показывает строку под ответом, пока не придёт следующий `chunk`.
+        Старый клиент неизвестное событие пропускает;
       * `: ping` — комментарий-пульс раз в STREAM_HEARTBEAT_SECONDS.
 
-    `run(on_chunk)` — сам ход (см. `_ask_turn`). Бронь `_busy` снимается здесь,
+    `run(on_chunk, on_status)` — сам ход (см. `_ask_turn`). Бронь `_busy` снимается здесь,
     когда ход закончился, а не когда вернулся обработчик. Ушёл клиент — ход
     всё равно доводим до конца, как и нестримящий: ответ ложится в историю,
     и вернувшийся на экран тренера увидит его там."""
@@ -1012,9 +1025,13 @@ def _stream_turn(user_id: int, lang: str, run: Any) -> StreamingResponse:
     async def on_chunk(text: str) -> None:
         await queue.put(_sse("chunk", {"text": text}))
 
+    async def on_status(text: str) -> None:
+        if text:
+            await queue.put(_sse("status", {"text": text}))
+
     async def produce() -> None:
         try:
-            payload = await run(on_chunk)
+            payload = await run(on_chunk, on_status)
             await queue.put(_sse("done", payload))
         except ApiError as exc:
             await queue.put(_sse("error", {
@@ -1071,6 +1088,7 @@ async def _ask_turn(
     shown_question: Optional[str],
     *,
     on_chunk: Optional[Any] = None,
+    on_status: Optional[Any] = None,
     subject: Optional[coach_program_ai.ClientChat] = None,
 ) -> dict[str, Any]:
     """Ход /ai/ask после всех проверок тела и брони — общий у обычного ответа и
@@ -1096,7 +1114,7 @@ async def _ask_turn(
         turn = await _run_turn(
             user_id, question, history,
             image_data_url=image_data_url, saved_image_path=saved_image_path,
-            shown_question=shown_question, on_chunk=on_chunk, subject=subject,
+            shown_question=shown_question, on_chunk=on_chunk, on_status=on_status, subject=subject,
         )
         return await _turn_response(user_id, turn, goal=question, subject=subject)
     except BaseException:
