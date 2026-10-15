@@ -185,12 +185,30 @@ def invite_share_text(name: str, code: str, link: str) -> str:
     ])
 
 
-def shown_exercise_names(names: list[str]) -> list[str]:
-    """Имена упражнений атлета глазами тренера: каталожное — на языке
-    тренера (текущий язык запроса/апдейта), своё имя атлета — как есть.
-    У атлета упражнение лежит под именем на ЕГО языке, и без этого
-    англоязычный тренер читал «Жим штанги лёжа» в карточке русского атлета."""
-    return [sharing.shown_exercise_name(name) for name in names]
+def client_lang(client: Any) -> str:
+    """Язык атлета (`users.lang`) — на нём рендерится всё, что принадлежит
+    атлету или сделано для него: имена его упражнений и групп, программа,
+    которую ему собирают или назначают. Хром экранов тренера (кнопки,
+    заголовки, ошибки) остаётся на языке тренера — текущем языке запроса."""
+    lang = client["lang"] if client is not None else None
+    return lang if lang in i18n.SUPPORTED else i18n.DEFAULT_LANG
+
+
+def client_exercise_name(client: Any, name: str) -> str:
+    """Имя упражнения атлета глазами его тренера: каталожное — на языке
+    АТЛЕТА (по идентичности каталога, на каком бы языке оно ни лежало), своё
+    имя атлета — как есть. Тренер составляет атлету программы, и упражнения
+    должны называться так, как их видит сам атлет: англоязычный тренер
+    русского атлета читает «Жим штанги лёжа», а не «Barbell Bench Press».
+    Язык переключается только вокруг имени — подписи вокруг него остаются
+    на языке тренера."""
+    with i18n.use_lang(client_lang(client)):
+        return sharing.shown_exercise_name(name)
+
+
+def shown_exercise_names(client: Any, names: list[str]) -> list[str]:
+    """`client_exercise_name` для списка — строки тренировок атлета."""
+    return [client_exercise_name(client, name) for name in names]
 
 
 def visibility_json(link: Any) -> dict[str, Any]:
@@ -283,7 +301,7 @@ async def recent_records(client: Any, days: Optional[int] = None, *, running: bo
     ):
         out.append({
             "exercise_id": row["exercise_id"],
-            "exercise": sharing.shown_exercise_name(row["display_name"]),
+            "exercise": client_exercise_name(client, row["display_name"]),
             "weight": row["weight"],
             "reps": row["reps"],
             "e1rm": round(row["e1rm"], 1),
@@ -418,8 +436,9 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
     свежие рекорды. Один расчёт на бота (handlers/coach.py) и REST
     (`GET /coach/clients/{id}/progress`).
 
-    Только числа и имена: каталожное упражнение — на языке тренера
-    (`shown_exercise_names`), своё имя атлета — как есть. Веса — в единице
+    Только числа и имена: каталожное упражнение — на языке АТЛЕТА
+    (`client_exercise_name`), своё имя атлета — как есть; подписи
+    (`metric_label`, заголовок роста) — на языке тренера. Веса — в единице
     атлета (`unit` рядом). Недели — местные для атлета, с понедельника, от
     старых к новым, последняя — текущая (неполная). Данных мало — списки
     пустые, а не заполненные догадкой: что из этого рисовать, решает экран.
@@ -448,7 +467,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
             continue
         lifts.append({
             "exercise_id": row["id"],
-            "exercise": sharing.shown_exercise_name(row["display_name"]),
+            "exercise": client_exercise_name(client, row["display_name"]),
             "metric": "reps" if series.is_bodyweight else "e1rm",
             "metric_label": i18n.t("history.chart_metric_reps") if series.is_bodyweight else "e1RM",
             "points": points,
@@ -468,7 +487,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
                 continue
             records.append({
                 "exercise_id": row["id"],
-                "exercise": sharing.shown_exercise_name(row["display_name"]),
+                "exercise": client_exercise_name(client, row["display_name"]),
                 "metric": "reps" if is_bw else "e1rm",
                 "sessions": row["sessions"],
                 # Больше всего повторов в одном подходе — рекорд упражнения
@@ -481,7 +500,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
     # «Прогресса» (dashboard_data.lift_growth): тренер видит клиента тем же
     # экраном. Пустые плитки и заголовок — роста не видно (мало истории).
     growth_tiles, growth_title = await dashboard_data.lift_growth(
-        client_id, client, dates, today, shown_name=sharing.shown_exercise_name
+        client_id, client, dates, today, shown_name=lambda name: client_exercise_name(client, name)
     )
     return {
         "unit": client["unit"],
@@ -511,8 +530,8 @@ async def client_exercises(client: Any) -> list[dict[str, Any]]:
     них — тот же экран, что у атлета (api_v1_progress.series_payload, бот —
     handlers/history.progress_screen).
 
-    Имя — для показа: каталожное на языке тренера, своё имя атлета как есть
-    (`shown_exercise_names`). Идентичность — `exercise_id`, по нему и
+    Имя — для показа: каталожное на языке атлета, своё имя атлета как есть
+    (`client_exercise_name`). Идентичность — `exercise_id`, по нему и
     открывается прогресс."""
     rows = await db.list_trained_exercises(client["telegram_id"], tz_offset=timeutil.offset_hours(client))
     groups = {g["id"]: g for g in await db.list_muscle_groups(client["telegram_id"])}
@@ -521,24 +540,24 @@ async def client_exercises(client: Any) -> list[dict[str, Any]]:
         group = groups.get(row["primary_group_id"])
         items.append({
             "exercise_id": row["id"],
-            "exercise": sharing.shown_exercise_name(row["display_name"]),
+            "exercise": client_exercise_name(client, row["display_name"]),
             "sessions": row["sessions"],
             "last_workout_at": row["last_day"],
             # Строка списка — тем же видом, что «Все упражнения» в «Прогрессе»
             # атлета: первый кадр каталога (публичный URL, как `thumb` у
-            # GET /exercises) и группа на языке тренера. Своё фото атлета —
+            # GET /exercises) и группа на языке атлета. Своё фото атлета —
             # приватные байты за его токеном, тренеру не уходит.
             "thumb": exercise_media.thumb_url_for(row),
             "group_id": group["id"] if group is not None else None,
-            "group": shown_group_name(group) if group is not None else None,
+            "group": shown_group_name(client, group) if group is not None else None,
         })
     return items
 
 
-def shown_group_name(group: Any) -> str:
-    """Группа мышц глазами тренера: встроенная — на языке тренера (в базе она
-    навсегда русская), своя группа атлета — как есть."""
-    return seed_data.localized_muscle_group_name(group["name"], i18n.get_lang())
+def shown_group_name(client: Any, group: Any) -> str:
+    """Группа мышц атлета глазами тренера: встроенная — на языке АТЛЕТА (в
+    базе она навсегда русская), своя группа атлета — как есть."""
+    return seed_data.localized_muscle_group_name(group["name"], client_lang(client))
 
 
 async def client_exercise_groups(client: Any, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -548,7 +567,7 @@ async def client_exercise_groups(client: Any, items: list[dict[str, Any]]) -> li
     его плитках: самые используемые первыми."""
     used = {item["group_id"] for item in items if item["group_id"] is not None}
     return [
-        {"id": g["id"], "name": shown_group_name(g), "emoji": g["emoji"]}
+        {"id": g["id"], "name": shown_group_name(client, g), "emoji": g["emoji"]}
         for g in await db.list_muscle_groups(client["telegram_id"], order_by_usage=True)
         if g["id"] in used
     ]
@@ -581,7 +600,15 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
     схемы и правила прогрессии. Возвращает (program_id копии, её имя).
 
     Копия, а не ссылка: дальше программа живёт у атлета как своя, а правка у
-    тренера не переписывает тренировки атлета задним числом."""
+    тренера не переписывает тренировки атлета задним числом.
+
+    Копия — на языке АТЛЕТА: программа сделана для него. Упражнения
+    резолвятся по идентичности каталога и форкаются у атлета на его языке;
+    схемы подходов переводятся (`seed_data.relocalized_target`); у копии
+    каталожной программы нетронутые имя, дни и описание — тоже
+    (`db.relocalize_catalog_program`, ключ каталога остаётся в `source_ref`,
+    и смена языка атлета потом переведёт копию так же, как его собственные
+    каталожные). Имя, которое тренер набрал сам, остаётся как набрано."""
     program = await db.get_program(source_program_id)
     if program is None or program["user_id"] != coach_id:
         raise AssignError("not_found")
@@ -595,9 +622,20 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
     if await db.routine_budget(client_id, len(days)):
         raise AssignError("client_routine_limit")
 
-    name = await sharing._dedupe_program_name(client_id, program["name"], None)
+    lang = client_lang(await db.get_user(client_id))
+    catalog_key = (
+        program["source_ref"]
+        if program["source"] == "catalog" and program["source_ref"] in seed_data.PROGRAM_BY_KEY
+        else None
+    )
+    wanted_name = program["name"]
+    if catalog_key is not None and program["name"] in {
+        seed_data.localized_program_name(catalog_key, other) for other in i18n.SUPPORTED
+    }:
+        wanted_name = seed_data.localized_program_name(catalog_key, lang)
+    name = await sharing._dedupe_program_name(client_id, wanted_name, None)
     new_id = await db.create_program(
-        client_id, name, source="coach", description=program["description"],
+        client_id, name, source="coach", source_ref=catalog_key, description=program["description"],
         deload_every_weeks=program["deload_every_weeks"],
     )
     if new_id is None:  # имя заняли между проверкой и записью
@@ -616,7 +654,7 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
             if ex_id in seen:
                 continue
             seen.add(ex_id)
-            await db.add_routine_exercise(routine_id, ex_id, order, ex["target"])
+            await db.add_routine_exercise(routine_id, ex_id, order, seed_data.relocalized_target(ex["target"], lang))
             if ex["progression"]:
                 progressions[ex_id] = ex["progression"]
             order += 1
@@ -624,6 +662,11 @@ async def assign_program(coach_id: int, client_id: int, source_program_id: int) 
             for row in await db.list_routine_exercises(routine_id):
                 if row["exercise_id"] in progressions:
                     await db.set_routine_exercise_progression(row["id"], progressions[row["exercise_id"]])
+    if catalog_key is not None:
+        copy = await db.get_program(new_id)
+        if copy is not None:
+            await db.relocalize_catalog_program(copy, lang)
+            name = (await db.get_program(new_id))["name"]
     await db.add_coach_assignment(coach_id, client_id, new_id)
     return new_id, name
 
@@ -648,7 +691,10 @@ def _set_text(row: Any) -> str:
 async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str]:
     """Атлет текстом для модели: имя, неделя, пропуск, рекорды, назначенные
     программы, последние тренировки с подходами. Только то, что тренер и так
-    видит на экранах — ни веса тела, ни переписки с AI-тренером.
+    видит на экранах — ни веса тела, ни переписки с AI-тренером. Подписи
+    брифа — на языке тренера, имена упражнений — на языке атлета
+    (`client_exercise_name`), программы — как лежат у атлета (его копия на
+    его языке, assign_program).
 
     Возвращает (текст для модели, часть отпечатка). Отпечаток — тот же текст
     без строк, которые меняет календарь, а не дневник («тренировок на этой
@@ -680,7 +726,7 @@ async def _client_brief(coach_id: int, client: Any, link: Any) -> tuple[str, str
         counts[wid] = counts.get(wid, 0) + 1
         by_exercise = sets_by_workout.setdefault(wid, {})
         name, sets = by_exercise.setdefault(
-            row["exercise_id"], (sharing.shown_exercise_name(row["display_name"]), [])
+            row["exercise_id"], (client_exercise_name(client, row["display_name"]), [])
         )
         sets.append(_set_text(row))
     for w in workouts:
@@ -760,7 +806,11 @@ async def summary_fingerprint(coach_id: int, client_id: Optional[int] = None) ->
 
 async def ai_summary(coach_id: int, client_id: Optional[int] = None) -> dict[str, Any]:
     """Сводка по всем клиентам («кого пора пнуть», рекорды, застои) или по
-    одному. Язык — тренера (выставлен запросом). Клиенты, чьи данные модели
+    одному. Текст сводки — на языке тренера (выставлен запросом): это
+    разговор с ним, а клиенты в общей сводке бывают на разных языках. Данные
+    атлета в брифе (имена упражнений, программ) — на языке атлета
+    (`_client_brief`), и модель называет их так, как их видит сам атлет
+    (языковой хвост разрешает ей оставлять имена как даны). Клиенты, чьи данные модели
     отдавать нельзя (`ai_trainer._background_ai_allowed`), в данные не
     попадают — их число уходит в `skipped_no_consent`."""
     briefs, skipped, fingerprint = await _summary_inputs(coach_id, client_id)

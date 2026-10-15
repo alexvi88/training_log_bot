@@ -1117,6 +1117,9 @@ async def test_summary_data_carries_set_weights_in_set_format(fresh_db, fake_mod
 
 
 async def test_english_coach_screens_have_no_cyrillic_beyond_user_data(fresh_db):
+    """Хром экранов англоязычного тренера — английский. Данные русского
+    атлета — его имя, упражнения, группы мышц — на языке атлета: тренер
+    составляет ему программы его словами."""
     await _linked(fresh_db)
     await fresh_db.set_user_lang(COACH, "en")
     wid = await _finished_workout(fresh_db, ATHLETE)
@@ -1129,9 +1132,10 @@ async def test_english_coach_screens_have_no_cyrillic_beyond_user_data(fresh_db)
             await _tap(COACH, f"coach:w:{ATHLETE}:{wid}"),
             await _tap(COACH, f"coach:asg:{ATHLETE}"),
         ]
+    assert "[ГРУДЬ]" in _screen(screens[4]), "группа мышц атлета — на его языке"
     for callback in screens:
         text = _screen(callback) + " " + " ".join(t for t, _ in _buttons(_kb(callback)))
-        for data in ("Иван Петров", "Маша", "Жим лёжа", "Грудь"):
+        for data in ("Иван Петров", "Маша", "Жим лёжа", "Грудь", "ГРУДЬ"):
             text = text.replace(data, "")
         assert not i18n_coverage.has_cyrillic(text), text
 
@@ -1351,7 +1355,10 @@ async def test_all_exercises_empty_and_refusals(fresh_db):
         assert "не открыл тебе дневник" in _alert(callback), data
 
 
-async def test_english_coach_sees_catalog_exercise_in_english(fresh_db):
+async def test_english_coach_sees_russian_athletes_exercise_in_russian(fresh_db):
+    """Упражнение атлета — его данные: англоязычный тренер русского атлета
+    видит «Жим штанги лёжа» (так его называет сам атлет, и так тренер
+    составит ему программу), а подписи экранов — по-английски."""
     await _linked(fresh_db)
     await fresh_db.set_user_lang(COACH, "en")
     await _finished_workout(fresh_db, ATHLETE, "Жим штанги лёжа", 60.0, started_at=_days_ago(8))
@@ -1362,12 +1369,13 @@ async def test_english_coach_sees_catalog_exercise_in_english(fresh_db):
         listing = await _tap(COACH, f"coach:px:{ATHLETE}:0")
         chart = await _tap_photo(COACH, f"coach:pe:{ATHLETE}:{ex}:20:0")
     assert ("📈 All exercises", f"coach:px:{ATHLETE}:0") in _buttons(_kb(progress))
-    assert _buttons(_kb(listing))[0][0] == "Barbell Bench Press · 2 workouts"
+    assert _buttons(_kb(listing))[0][0] == "Жим штанги лёжа · 2 workouts"
     kwargs = chart.message.answer_photo.await_args.kwargs
     texts = [
         _screen(listing).replace("Маша", "") + " ".join(t for t, _ in _buttons(_kb(listing))),
         kwargs["caption"] + " ".join(t for t, _ in _buttons(kwargs["reply_markup"])),
     ]
-    assert "Barbell Bench Press" in kwargs["caption"]
+    assert "Жим штанги лёжа" in kwargs["caption"] and "Barbell Bench Press" not in kwargs["caption"]
+    texts = [text.replace("Жим штанги лёжа", "") for text in texts]
     for text in texts:
         assert not i18n_coverage.has_cyrillic(text), text

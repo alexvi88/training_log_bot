@@ -727,7 +727,11 @@ async def test_client_progress_empty_and_bodyweight_exercise(fresh_db):
     assert record["metric"] == "reps" and record["best_reps"] == 5
 
 
-async def test_client_progress_names_in_the_coachs_language(fresh_db):
+async def test_client_progress_names_in_the_athletes_language(fresh_db):
+    """Упражнения атлета — его данные: англоязычный тренер русского атлета
+    читает их по-русски (так он составит атлету программу), а подписи — по-
+    английски. И наоборот: английский атлет у русского тренера — по-английски,
+    даже если упражнение легло у атлета русским снимком (по идентичности)."""
     coach, athlete, _ = await _linked(fresh_db)
     await fresh_db.set_user_lang(COACH, "en")
     # Каталожное упражнение у русского атлета лежит под русским именем.
@@ -735,8 +739,17 @@ async def test_client_progress_names_in_the_coachs_language(fresh_db):
     await _finished_workout(athlete, ex, 60, date=(dt.date.today() - dt.timedelta(days=8)).isoformat())
     await _finished_workout(athlete, ex, 70)
     data = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
+    assert data["lifts"][0]["exercise"] == "Жим штанги лёжа"
+    assert data["records"][0]["exercise"] == "Жим штанги лёжа"
+    assert data["lifts"][0]["metric_label"] == "e1RM"
+    assert data["recent_records"][0]["text"].endswith("kg × 5"), "подписи — на языке тренера"
+
+    await fresh_db.set_user_lang(COACH, "ru")
+    await fresh_db.set_user_lang(CLIENT, "en")
+    data = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()
     assert data["lifts"][0]["exercise"] == "Barbell Bench Press"
     assert data["records"][0]["exercise"] == "Barbell Bench Press"
+    assert data["recent_records"][0]["text"].endswith("кг × 5")
 
 
 async def test_client_progress_refused_to_stranger_and_former_coach(fresh_db):
@@ -802,7 +815,8 @@ async def test_client_exercises_lists_trained_ones_frequent_and_fresh_first(fres
 async def test_client_exercises_rows_look_like_the_athletes_progress_list(fresh_db):
     """Строка «Всех упражнений» клиента — того же вида, что в «Прогрессе»
     атлета: кадр каталога тем же URL, что `thumb` у его GET /exercises, и
-    группа — тем же именем, что его плитка, только на языке тренера."""
+    группа — тем же именем, что его плитка: на языке атлета, при любом
+    языке тренера."""
     coach, athlete, _ = await _linked(fresh_db)
     await fresh_db.set_user_lang(COACH, "en")
     ex = await _exercise(athlete, "Жим штанги лёжа")
@@ -816,12 +830,20 @@ async def test_client_exercises_rows_look_like_the_athletes_progress_list(fresh_
     [group] = data["groups"]
     assert group["id"] == mine["primary_group_id"]
     assert row["group"] == group["name"]
-    assert not any("Ѐ" <= ch <= "ӿ" for ch in str(data))
+    assert row["exercise"] == "Жим штанги лёжа"
     # Тот же атлет — та же плитка, что у него самого, на его языке.
     athlete_groups = {g["id"]: g["name"] for g in (await athlete.get("/muscle-groups")).json()}
+    assert group["name"] == athlete_groups[group["id"]]
     await fresh_db.set_user_lang(COACH, "ru")
     ru = (await coach.get(f"/coach/clients/{CLIENT}/exercises")).json()
     assert ru["groups"][0]["name"] == athlete_groups[group["id"]]
+    # Английский атлет — плитка и имя по-английски и у русского тренера.
+    await fresh_db.set_user_lang(CLIENT, "en")
+    athlete_groups = {g["id"]: g["name"] for g in (await athlete.get("/muscle-groups")).json()}
+    en = (await coach.get(f"/coach/clients/{CLIENT}/exercises")).json()
+    assert en["groups"][0]["name"] == athlete_groups[group["id"]] == en["exercises"][0]["group"]
+    assert en["exercises"][0]["exercise"] == "Barbell Bench Press"
+    assert not any("Ѐ" <= ch <= "ӿ" for ch in str(en["groups"]) + en["exercises"][0]["exercise"])
 
 
 async def test_client_progress_growth_is_the_athletes_dashboard_block(fresh_db):
@@ -842,7 +864,7 @@ async def test_client_progress_growth_is_the_athletes_dashboard_block(fresh_db):
     assert tile["exercise_id"] == ex and tile["growth"].startswith("+")
 
 
-async def test_client_progress_growth_names_in_the_coachs_language(fresh_db):
+async def test_client_progress_growth_names_in_the_athletes_language(fresh_db):
     coach, athlete, _ = await _linked(fresh_db)
     await fresh_db.set_user_lang(COACH, "en")
     ex = await _exercise(athlete, "Жим штанги лёжа")
@@ -852,8 +874,12 @@ async def test_client_progress_growth_names_in_the_coachs_language(fresh_db):
     await _finished_workout(athlete, ex, 70, date=(today - dt.timedelta(days=5)).isoformat())
     growth = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]
     [tile] = growth["tiles"]
+    assert tile["exercise"] == "ЖИМ ШТАНГИ ЛЁЖА"
+    assert not any("Ѐ" <= ch <= "ӿ" for ch in growth["title"] + tile["detail"])
+    await fresh_db.set_user_lang(COACH, "ru")
+    await fresh_db.set_user_lang(CLIENT, "en")
+    [tile] = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]["tiles"]
     assert tile["exercise"] == "BARBELL BENCH PRESS"
-    assert not any("Ѐ" <= ch <= "ӿ" for ch in str(growth))
 
 
 async def test_client_progress_growth_empty_without_history(fresh_db):
@@ -910,6 +936,7 @@ async def test_client_exercise_progress_is_the_athletes_own_screen(fresh_db):
 
 
 async def test_client_exercise_progress_in_the_athletes_unit_and_coachs_language(fresh_db):
+    """Единица — атлета, подписи — тренера, имя упражнения — атлета."""
     coach, athlete, _ = await _linked(fresh_db)
     await fresh_db.set_user_lang(COACH, "en")
     ex = await _exercise(athlete, "Жим штанги лёжа")
@@ -919,7 +946,7 @@ async def test_client_exercise_progress_in_the_athletes_unit_and_coachs_language
 
     names = (await coach.get(f"/coach/clients/{CLIENT}/exercises")).json()
     assert names["unit"] == "lb"
-    assert names["exercises"][0]["exercise"] == "Barbell Bench Press"
+    assert names["exercises"][0]["exercise"] == "Жим штанги лёжа"
     data = (await coach.get(f"/coach/clients/{CLIENT}/exercises/{ex}/progress")).json()
     assert data["unit"] == "lb"
     assert "first" in data["comparison"]["text"] or "period" in data["comparison"]["text"]

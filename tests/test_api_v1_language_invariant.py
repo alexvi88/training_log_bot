@@ -16,6 +16,13 @@
 * Маршруты перечисляются из таблицы приложения (`api_v1.routes`), а не
   списком в тесте: новый эндпоинт, который сценарий не вызвал и который не
   внесён в `SKIPPED` с причиной, валит `test_every_route_is_walked`.
+* Тренер и атлет на РАЗНЫХ языках (`test_coach_and_client_on_different_languages`):
+  данные атлета у тренера — имена его упражнений и групп, программа, которую
+  тренер ему назначает или собирает с AI, — на языке АТЛЕТА, а хром экранов
+  тренера — на языке тренера. Такие поля перечислены поимённо, путями, в
+  `CLIENT_DATA_PATHS`, и проверяются не «пропуском», а языком атлета: русская
+  буква в них у английского атлета — такая же протечка. Обратная сторона —
+  `COACH_DATA_PATHS`: комментарий и имя тренера атлет видит как набрано.
 * Пользовательский текст (то, что атлет ввёл сам) в сценарии написан на
   языке атлета, поэтому исключений по полям почти нет: `EN_IDENTITY_KEYS` —
   идентичность шаблона каталога, она русская навсегда по замыслу
@@ -107,6 +114,67 @@ MACHINE_KEYS = {
 RU_ALLOWED_LATIN_PHRASES = ("full body",)
 
 
+# Данные атлета в ответах его тренеру — на языке АТЛЕТА (coach_service.client_lang):
+# тренер составляет атлету программы, и упражнения, группы и программа должны
+# называться так, как их видит сам атлет. Путь — без номеров элементов списка.
+# Только для обходчика тренера с атлетом другого языка; всё остальное в этих
+# же ответах (подписи, строки рекордов, ошибки) — на языке тренера.
+CLIENT_DATA_PATHS: dict[str, frozenset[str]] = {
+    # Карточка клиента: свежие рекорды и назначенные ему программы (копии у
+    # атлета — на его языке, coach_service.assign_program).
+    "GET /coach/clients/{client_id:user_id}": frozenset({
+        ".records[].exercise", ".programs[].name", ".programs[].days[].name",
+    }),
+    "GET /coach/clients/{client_id:user_id}/workouts": frozenset({".workouts[].exercise_names[]"}),
+    # Тренировка: имя упражнения и тег группы — атлета; строки рекорда и
+    # прошлых подходов — подписи тренеру.
+    "GET /coach/clients/{client_id:user_id}/workouts/{workout_id:int}": frozenset({
+        ".workout.blocks[].exercises[].display_name", ".workout.blocks[].exercises[].group_tag",
+    }),
+    "GET /coach/clients/{client_id:user_id}/progress": frozenset({
+        ".growth.tiles[].exercise", ".lifts[].exercise", ".records[].exercise", ".recent_records[].exercise",
+    }),
+    "GET /coach/clients/{client_id:user_id}/exercises": frozenset({
+        ".exercises[].exercise", ".exercises[].group", ".groups[].name",
+    }),
+    # Имя копии у атлета.
+    "POST /coach/clients/{client_id:user_id}/programs": frozenset({".name"}),
+    # Программа атлету в чате AI-тренера (coach_program_ai): черновик —
+    # программа ДЛЯ атлета. Реплика модели и подписи — тренеру.
+    "POST /ai/ask": frozenset({
+        ".program.name", ".program.description", ".program.days[].name",
+        ".program.days[].items[].name", ".program.days[].items[].target",
+    }),
+    "POST /ai/program/save": frozenset({".name"}),
+}
+
+# Обратная сторона: у атлета — то, что набрал тренер (комментарий, имя), как
+# набрано, то есть на языке тренера. `my_name` — имя, которым атлет назвался
+# тренеру: в этом прогоне оно набрано письмом тренера (см. _coach_scenario).
+COACH_DATA_PATHS: dict[str, frozenset[str]] = {
+    "GET /workouts/{workout_id:int}/coach-comments": frozenset({".comments[].text", ".comments[].coach_name"}),
+    "GET /coach/invites/{code}": frozenset({".coach_name"}),
+    "POST /coach/invites/{code}/accept": frozenset({".coach_name", ".my_name"}),
+    "GET /coach-links": frozenset({".coaches[].coach_name", ".coaches[].my_name"}),
+    "PATCH /coach-links/{coach_id:user_id}": frozenset({".coach_name", ".my_name"}),
+    # «Программа от тренера Миши» в списке программ атлета.
+    "GET /programs": frozenset({"[].coach_name"}),
+}
+
+# Строки, где хром одного языка обёрнут вокруг данных другого, — в прогоне с
+# разными языками их не проверить ни тем, ни другим языком; каждую сверяет
+# сам тест дословно.
+MIXED_PATHS: dict[str, frozenset[str]] = {
+    # «Забрать: <имя программы атлету>» — кнопка тренеру вокруг имени на
+    # языке атлета (test_coach_and_client_on_different_languages).
+    "POST /ai/ask": frozenset({".program.label"}),
+}
+
+
+def _shape(path: str) -> str:
+    return re.sub(r"\[\d+\]", "[]", path)
+
+
 def _string_leaves(value: Any, key: str | None = None, path: str = ""):
     if isinstance(value, str):
         yield key, path, value
@@ -118,11 +186,22 @@ def _string_leaves(value: Any, key: str | None = None, path: str = ""):
             yield from _string_leaves(v, key, f"{path}[{i}]")
 
 
-def language_violations(payload: Any, lang: str) -> list[str]:
+def language_violations(
+    payload: Any, lang: str, data_paths: frozenset[str] = frozenset(), data_lang: str | None = None,
+    mixed_paths: frozenset[str] = frozenset(),
+) -> list[str]:
+    """`data_paths` — поля, которые принадлежат другому человеку и проверяются
+    его языком `data_lang` (см. CLIENT_DATA_PATHS); `mixed_paths` — при
+    чужом языке не проверяются вовсе (MIXED_PATHS, их сверяет тест)."""
     found = []
+    default_lang = lang
     for key, path, text in _string_leaves(payload):
         if key in MACHINE_KEYS:
             continue
+        shape = _shape(path)
+        if data_lang is not None and shape in mixed_paths:
+            continue
+        lang = data_lang if data_lang is not None and shape in data_paths else default_lang
         if lang == "en":
             if key in EN_IDENTITY_KEYS:
                 continue
@@ -164,9 +243,16 @@ NON_JSON = {"GET /export/csv", "GET /export/archive"}
 
 
 class _Walker:
-    def __init__(self, client: httpx.AsyncClient, lang: str):
+    def __init__(
+        self, client: httpx.AsyncClient, lang: str, *,
+        data_lang: str | None = None, data_paths: dict[str, frozenset[str]] | None = None,
+    ):
         self.client = client
         self.lang = lang
+        # Чужие данные в ответах (атлет у тренера, тренер у атлета) — на языке
+        # их владельца: поля по маршрутам и этот язык.
+        self.data_lang = data_lang
+        self.data_paths = data_paths or {}
         self.walked: set[str] = set()
         self.violations: list[str] = []
         # Каждый JSON-ответ как есть — для контрактного теста с моделями
@@ -189,7 +275,10 @@ class _Walker:
         self.responses.append({
             "method": method, "route": route, "path": path, "status": resp.status_code, "body": body,
         })
-        for v in language_violations(body, self.lang):
+        mixed = MIXED_PATHS.get(route, frozenset()) if self.data_lang is not None else frozenset()
+        for v in language_violations(
+            body, self.lang, self.data_paths.get(route, frozenset()), self.data_lang, mixed,
+        ):
             self.violations.append(f"{method} {path} [{resp.status_code}]: {v}")
         return resp
 
@@ -275,15 +364,18 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
             (lambda name, args, **cb: ai_trainer.execute_tool(user_id, name, args, **cb))
         )
         if question.startswith("PROGRAM"):
+            # Программа атлету пишется на языке АТЛЕТА — так велит заметка
+            # режима (coach.ai_chat.mode_lang.*); реплика тренеру — на его.
+            program_text = MODEL_TEXT[subject.lang] if subject is not None else model
             await execute("propose_program", {
                 # Своё имя у программы атлету: «Забрать» той же программы в
                 # своём чате ниже по сценарию иначе упёрлось бы в занятое имя.
-                "name": model["program"] + (" 2" if subject is not None else ""),
-                "days": [{"name": model["day"], "exercises": [
+                "name": program_text["program"] + (" 2" if subject is not None else ""),
+                "days": [{"name": program_text["day"], "exercises": [
                     {"name": "Жим штанги лёжа", "sets": 3, "reps_min": 5, "reps_max": 8},
                     {"name": "Присед со штангой", "sets": 3, "reps_min": 5, "reps_max": 8},
                 ]}],
-                "description": model["program_description"],
+                "description": program_text["program_description"],
             }, on_program=on_program)
         elif question.startswith("SETUP"):
             await on_questions([{"question": model["question"], "choices": []}])
@@ -848,9 +940,21 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     return w
 
 
-async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: dict, program_id: int) -> None:
+async def _coach_scenario(
+    fresh_db, w: _Walker, headers: dict, lang: str, text: dict, program_id: int, client_lang: str | None = None,
+) -> None:
     """Обе стороны сервиса для тренеров: тренер (111, walker сценария) и его
-    атлет (222, свой walker) — каждая ручка /coach* и /coach-links*."""
+    атлет (222, свой walker) — каждая ручка /coach* и /coach-links*.
+
+    `client_lang` — атлет на другом языке, чем тренер: его данные у тренера
+    проверяются его языком (CLIENT_DATA_PATHS), комментарии тренера у него —
+    языком тренера (COACH_DATA_PATHS). Имя, которым атлет назвался тренеру,
+    в этом прогоне набрано письмом тренера: оно стоит внутри фраз тренеру
+    («Программа для Маши»), и смешанный язык там проверить нечем."""
+    alang = client_lang or lang
+    atext = USER_TEXT[alang]
+    if client_lang is not None:
+        w.data_lang, w.data_paths = client_lang, CLIENT_DATA_PATHS
     await w.call("GET", "/coach", expect=200)
     await w.call("GET", "/coach/clients", expect=403)
     await w.call("POST", "/coach", json={"display_name": " "}, expect=400)
@@ -859,11 +963,14 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await w.call("GET", "/coach/clients", expect=200)
 
     await fresh_db.get_or_create_user(telegram_id=222, username="athlete")
-    await fresh_db.set_user_lang(222, lang)
+    await fresh_db.set_user_lang(222, alang)
     athlete = _client()
     athlete.headers.update(headers)
+    athlete.headers["Accept-Language"] = "en-US,en;q=0.9" if alang == "en" else "ru-RU,ru;q=0.9"
     athlete.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(222)}"
-    a = _Walker(athlete, lang)
+    a = _Walker(athlete, alang)
+    if client_lang is not None:
+        a.data_lang, a.data_paths = lang, COACH_DATA_PATHS
     code = invite["code"]
     await a.call("GET", f"/coach/invites/{code}", expect=200)
     await a.call("GET", "/coach/invites/NOPE2345", expect=404)
@@ -875,15 +982,27 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await a.call("PATCH", "/coach-links/111", json={"show_bodyweight": True}, expect=200)
     await a.call("PATCH", "/settings", json={"ai_consent": True}, expect=200)
 
-    ex = (await a.call("POST", "/exercises", json={"name": text["exercise"]}, expect=201)).json()["id"]
+    ex = (await a.call("POST", "/exercises", json={"name": atext["exercise"]}, expect=201)).json()["id"]
+    # Каталожное упражнение атлета: у тренера оно обязано прийти на языке
+    # атлета, а не тренера (идентичность каталога — одна, показ — его).
+    bench = next(
+        t for t in (await a.call("GET", "/exercise-templates?query=" + ("bench" if alang == "en" else "жим"),
+                                 expect=200)).json()
+        if t["original_name"] == "Жим штанги лёжа"
+    )
+    bench_id = (await a.call("POST", f"/exercise-templates/{bench['id']}/add", expect=(200, 201))).json()["id"]
     # Две тренировки: старая легче — у свежей рекорд недели (records в карточке атлета).
     old = (await a.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
     await a.call("POST", f"/workouts/{old}/sets", json={"exercise_id": ex, "weight": 50, "reps": 5}, expect=201)
+    await a.call("POST", f"/workouts/{old}/sets", json={"exercise_id": bench_id, "weight": 70, "reps": 5},
+                 expect=201)
     await a.call("POST", f"/workouts/{old}/finish", json={}, expect=200)
     old_day = (dt.date.today() - dt.timedelta(days=20)).isoformat()
     await a.call("PATCH", f"/workouts/{old}/date", json={"date": old_day}, expect=200)
     wid = (await a.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
     await a.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": ex, "weight": 60, "reps": 5}, expect=201)
+    await a.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": bench_id, "weight": 80, "reps": 5},
+                 expect=201)
     await a.call("POST", f"/workouts/{wid}/finish", json={}, expect=200)
     await a.call("POST", "/bodyweight", json={"weight": 70.5}, expect=201)
 
@@ -924,6 +1043,11 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     await w.call("GET", "/ai/history", expect=200)
     client_turn = (await w.call("POST", "/ai/ask", json={"question": "PROGRAM " + text["question"]},
                                 expect=200)).json()
+    # Кнопка — тренеру на его языке, имя программы — атлету на его.
+    assert client_turn["program"]["name"] == MODEL_TEXT[alang]["program"] + " 2"
+    assert client_turn["program"]["label"] == i18n.t_in(
+        lang, "btn.claim_program", program_name=client_turn["program"]["name"]
+    )
     await w.call("POST", "/ai/program/train", json={"draft_id": client_turn["program"]["draft_id"]}, expect=409)
     client_program = (await w.call("POST", "/ai/program/save",
                                    json={"draft_id": client_turn["program"]["draft_id"]}, expect=200)).json()
@@ -945,6 +1069,7 @@ async def _coach_scenario(fresh_db, w: _Walker, headers: dict, lang: str, text: 
     w.walked |= a.walked
     w.violations += a.violations
     w.responses += a.responses
+    w.data_lang, w.data_paths = None, {}
 
 
 @pytest.mark.parametrize("lang", ["en", "ru"])
@@ -959,6 +1084,60 @@ async def test_no_foreign_language_in_any_v1_response(fresh_db, monkeypatch, tmp
     assert walker.captured["system_prompt"].endswith(i18n.t_in(lang, "ai.language_tail"))
     # AI-сводка тренеру — тот же языковой хвост языка тренера.
     assert walker.captured["coach_prompt"].endswith(i18n.t_in(lang, "ai.language_tail"))
+
+
+@pytest.mark.parametrize("coach_lang, client_lang", [("en", "ru"), ("ru", "en")])
+async def test_coach_and_client_on_different_languages(fresh_db, monkeypatch, tmp_path, coach_lang, client_lang):
+    """Тренер и атлет на разных языках: каждая ручка /coach* тем же
+    сценарием, хром тренеру — на языке тренера, данные атлета — на языке
+    атлета (CLIENT_DATA_PATHS), у атлета — всё на его языке, кроме набранного
+    тренером (COACH_DATA_PATHS). И то, что ложится атлету, — его копии
+    программ, — на его языке: каталожная и собранная с AI."""
+    captured = _install_fakes(monkeypatch, tmp_path, coach_lang)
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    await fresh_db.set_user_lang(111, coach_lang)
+    await fresh_db.update_user(111, ai_consent_at=fresh_db.now_iso())
+    headers = {"Accept-Language": "en-US,en;q=0.9" if coach_lang == "en" else "ru-RU,ru;q=0.9"}
+    client = _client()
+    client.headers.update(headers)
+    client.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(111)}"
+    w = _Walker(client, coach_lang)
+    catalog = (await w.call("GET", "/programs/catalog", expect=200)).json()
+    key = catalog[0]["key"]
+    catalog_program = (await w.call("POST", f"/programs/catalog/{key}", json={}, expect=201)).json()
+
+    await _coach_scenario(fresh_db, w, headers, coach_lang, USER_TEXT[coach_lang], catalog_program["id"],
+                          client_lang=client_lang)
+
+    assert not w.violations, (
+        f"тренер {coach_lang}, атлет {client_lang}: чужой язык —\n" + "\n".join(w.violations)
+    )
+    # Реплика модели и сводка — тренеру, на его языке.
+    assert set(captured["langs"]) == {coach_lang}
+    assert captured["coach_prompt"].endswith(i18n.t_in(coach_lang, "ai.language_tail"))
+
+    import seed_data
+
+    copies = {p["name"]: p for p in await fresh_db.list_programs(222)}
+    # Каталожная программа тренера — у атлета на языке атлета, с ключом
+    # каталога: смена языка атлета переведёт её как его собственную.
+    catalog_name = seed_data.localized_program_name(key, client_lang)
+    assert catalog_name in copies, copies.keys()
+    days = await fresh_db.list_program_days_by_id(copies[catalog_name]["id"])
+    assert [d["name"] for d in days] == [
+        seed_data.localized_program_day_name(key, i, client_lang) for i in range(len(days))
+    ]
+    # Программа, собранная тренером с AI для атлета, — на языке атлета: имя и
+    # день пишет модель (по заметке режима), упражнения — по идентичности.
+    ai_name = MODEL_TEXT[client_lang]["program"] + " 2"
+    assert ai_name in copies, copies.keys()
+    [day] = await fresh_db.list_program_days_by_id(copies[ai_name]["id"])
+    assert day["name"] == MODEL_TEXT[client_lang]["day"]
+    shown = [row["display_name"] for row in await fresh_db.list_routine_exercises(day["id"])]
+    assert shown == [
+        seed_data.localized_exercise_name("Жим штанги лёжа", client_lang),
+        seed_data.localized_exercise_name("Присед со штангой", client_lang),
+    ]
 
 
 async def test_every_route_is_walked(fresh_db, monkeypatch, tmp_path):

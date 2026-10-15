@@ -25,7 +25,14 @@
   черновик ложится тренеру НОВОЙ программой (`replaces_program` срезан) и
   несёт `for_client` — по нему карточка после «Забрать» предлагает сразу
   назначить её этому атлету;
-- лимит вопроса и цена — тренера: ход идёт обычным путём чата под его id.
+- лимит вопроса и цена — тренера: ход идёт обычным путём чата под его id;
+- язык: с тренером модель говорит на ЕГО языке (язык хода), а всё, что
+  делается для атлета, — на языке АТЛЕТА (`users.lang`): каталог упражнений
+  (`list_exercise_catalog`), имена его упражнений в обзоре, а в черновике —
+  каталожные упражнения и схемы подходов (`_localize_draft`, по
+  идентичности каталога); имя программы, дней и описание модель пишет на
+  языке атлета по заметке режима (`coach.ai_chat.mode_lang.*`). Копия у
+  атлета после «Назначить» — тоже на его языке (coach_service.assign_program).
 
 Кэш: режим — отдельный разговор со своим префиксом (заметка режима вторым
 системным сообщением, свой набор инструментов, свой conv-id `coach_client`).
@@ -45,6 +52,7 @@ import ai_trainer
 import coach_service
 import db
 import i18n
+import seed_data
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +109,9 @@ class ClientChat:
     name: str
     unit: str
     show_bodyweight: bool
+    # Язык атлета (users.lang) — не строка текста, а код: на нём рендерится
+    # то, что делается для атлета (см. модульную докстрингу).
+    lang: str = i18n.DEFAULT_LANG
 
     cache_scope = "coach_client"
 
@@ -110,9 +121,17 @@ class ClientChat:
 
     def system_note(self) -> str:
         """Второе системное сообщение разговора — одно и то же на каждом ходе
-        (имя и единица атлета посреди разговора не меняются), поэтому префикс
-        кэша не рвёт."""
-        return i18n.t("coach.ai_chat.mode_prompt", name=self.name, unit=self.unit)
+        (имя, единица и язык атлета посреди разговора не меняются), поэтому
+        префикс кэша не рвёт.
+
+        Атлет на другом языке, чем тренер, — строка о том, на каком языке
+        писать программу: с тренером модель говорит на его языке (языковой
+        хвост системного промпта), а имя программы, дней и описание читает
+        атлет."""
+        note = i18n.t("coach.ai_chat.mode_prompt", name=self.name, unit=self.unit)
+        if self.lang != i18n.get_lang():
+            note = f"{note} {i18n.t(f'coach.ai_chat.mode_lang.{self.lang}')}"
+        return note
 
     def as_json(self) -> dict[str, Any]:
         return {"client_id": self.client_id, "name": self.name}
@@ -130,6 +149,11 @@ class ClientChat:
             }
         elif name == "get_training_overview":
             payload = await self._overview()
+        elif name == "list_exercise_catalog":
+            # Каталог — на языке атлета: модель берёт имена отсюда, и
+            # программа атлету называет упражнения его словами. Обратно
+            # имя резолвится на любом языке (db._find_global_template_by_name).
+            payload = {"catalog": ai_trainer._localized_catalog(self.lang)}
         elif name == "get_bodyweight_history":
             if self.show_bodyweight:
                 payload = await ai_trainer._bodyweight_history(self.client_id)
@@ -151,6 +175,7 @@ class ClientChat:
             tool_input.pop("replaces_program", None)
             payload, draft = await ai_trainer._propose_program(self.coach_id, tool_input)
             if draft is not None:
+                await self._localize_draft(draft)
                 draft["replaces"] = None
                 draft["for_client"] = self.as_json()
                 payload["note"] = i18n.t("coach.ai_chat.proposed_note")
@@ -159,6 +184,26 @@ class ClientChat:
         else:
             return await ai_trainer.execute_tool(self.client_id, name, tool_input)
         return json.dumps(payload, ensure_ascii=False)
+
+    async def _localize_draft(self, draft: dict[str, Any]) -> None:
+        """Черновик — на языке атлета: каталожное упражнение по идентичности
+        (`original_name` у своего упражнения тренера, имя шаблона у ещё не
+        взятого) — именем каталога на языке атлета, если тренер его не
+        переименовал; своё имя тренера — как есть. Схема подходов («3 sets»,
+        «30–60 sec») — тоже на языке атлета.
+
+        Сохраняется черновик тренеру его же упражнениями: «Жим штанги лёжа»
+        у англоязычного тренера резолвится по той же идентичности в его
+        «Barbell Bench Press» (db.get_or_create_user_exercise_by_name), а
+        назначенная копия у атлета — в его форк на его языке."""
+        for day in draft.get("days") or []:
+            for item in day.get("items") or []:
+                _source, shown, identity = await db.resolve_exercise_identity(self.coach_id, item["name"])
+                if identity is not None and shown in {
+                    seed_data.localized_exercise_name(identity, lang) for lang in i18n.SUPPORTED
+                }:
+                    item["name"] = seed_data.localized_exercise_name(identity, self.lang)
+                item["target"] = seed_data.relocalized_target(item.get("target"), self.lang)
 
     async def _overview(self) -> dict[str, Any]:
         """Обзор дневника атлета без того, чего тренер не видит: профиля
@@ -169,12 +214,13 @@ class ClientChat:
         overview.pop("profile", None)
         if not self.show_bodyweight:
             overview.pop("latest_bodyweight", None)
-        exercises = overview.get("exercises") or []
-        shown = coach_service.shown_exercise_names([ex["name"] for ex in exercises])
-        for ex, shown_name in zip(exercises, shown, strict=True):
-            ex["name"] = shown_name
         link = await db.get_coach_link(self.coach_id, self.client_id)
         client = await db.get_user(self.client_id)
+        # Имена упражнений атлета — на его языке, как и каталог в этом режиме.
+        exercises = overview.get("exercises") or []
+        shown = coach_service.shown_exercise_names(client, [ex["name"] for ex in exercises])
+        for ex, shown_name in zip(exercises, shown, strict=True):
+            ex["name"] = shown_name
         if link is not None and client is not None:
             overview["coach_view"] = await coach_service._client_brief(self.coach_id, client, link)
         overview["athlete_name"] = self.name
@@ -196,6 +242,7 @@ async def open_chat(coach_id: int, client_id: int) -> ClientChat:
         name=link["client_name"],
         unit=client["unit"] or "kg",
         show_bodyweight=bool(link["show_bodyweight"]),
+        lang=coach_service.client_lang(client),
     )
 
 
