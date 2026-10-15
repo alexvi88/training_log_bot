@@ -5,6 +5,7 @@ DB layer and is trivially testable.
 """
 
 import datetime as dt
+import statistics
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
@@ -1155,6 +1156,44 @@ def trend_e1rm(session: "SessionStats") -> Optional[float]:
     return None if best is None else _trend_e1rm_of(best.weight, best.reps, session.formula)
 
 
+# Сессия, чей лучший e1RM ниже этой доли от медианы трёх предыдущих, —
+# «лёгкая»: разминка без рабочих подходов или недописанная тренировка. Прод:
+# присед 05.10 записан одним «20×8» после сессий 92.5×5, e1RM ~25 обвалил наклон,
+# и обе модели сказали «регресс, −10 кг/нед».
+LIGHT_SESSION_SHARE = 0.7
+LIGHT_SESSION_BASELINE = 3
+
+
+def light_sessions(sessions: list["SessionStats"]) -> list["SessionStats"]:
+    """Одиночные провалы: сессии, которые в наклон и вердикт не идут.
+
+    Исключается только ОДИНОЧНАЯ лёгкая сессия — соседи по обе стороны
+    нормальные (последняя сессия годится, если перед ней нормальная). Две
+    лёгкие подряд — это уже разгрузка или возвращение после перерыва, и
+    прятать их значило бы прятать правду.
+    """
+    values = [trend_e1rm(s) for s in sessions]
+    candidate = [False] * len(sessions)
+    baseline: list[float] = []
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        ref = baseline[-LIGHT_SESSION_BASELINE:]
+        if ref and v < statistics.median(ref) * LIGHT_SESSION_SHARE:
+            candidate[i] = True
+            continue
+        baseline.append(v)
+    out = []
+    for i, s in enumerate(sessions):
+        if not candidate[i]:
+            continue
+        prev_light = i > 0 and candidate[i - 1]
+        next_light = i + 1 < len(sessions) and candidate[i + 1]
+        if not prev_light and not next_light:
+            out.append(s)
+    return out
+
+
 @dataclass
 class StallVerdict:
     """Растёт, стоит или падает это упражнение — и почему.
@@ -1188,6 +1227,8 @@ class StallVerdict:
     # называл оба факта, а не один удобный.
     e1rm_peak: Optional[tuple[str, float, int, float]] = None
     e1rm_latest: Optional[tuple[str, float, int, float]] = None
+    # Одиночные лёгкие сессии окна, не взятые в расчёт: (дата, "20×8, ...").
+    light_sessions: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _session_top_weight(session: SessionStats) -> float:
@@ -1236,10 +1277,16 @@ def classify_stall(
     место (иначе на вопрос «что у меня встало» приезжает список заброшенного).
     """
     since = today - dt.timedelta(weeks=window_weeks)
-    window = [
+    light = {id(s) for s in light_sessions(sessions)}
+    in_window = [
         s for s in sessions
         if dt.datetime.fromisoformat(s.started_at).date() >= since
     ]
+    skipped = [
+        (s.started_at[:10], ", ".join(f"{x.weight:g}×{x.reps}" for x in s.sets))
+        for s in in_window if id(s) in light
+    ]
+    window = [s for s in in_window if id(s) not in light]
     if len(window) < min_sessions:
         return None
 
@@ -1334,6 +1381,7 @@ def classify_stall(
         trend_points=len(points),
         e1rm_peak=max(marks, key=lambda m: m[3]) if marks else None,
         e1rm_latest=marks[-1] if marks else None,
+        light_sessions=skipped,
     )
 
 
@@ -1391,8 +1439,12 @@ def e1rm_trend(
 ) -> Optional[dict[str, Any]]:
     """Лучший e1RM по сессиям за окно: наклон в неделю и изменение против
     сессии четырёхнедельной давности. None — у упражнения нет e1RM (вес тела).
-    Точки — trend_e1rm, те же, по которым classify_stall считает наклон."""
-    scored = [(s, v) for s in sessions if (v := trend_e1rm(s)) is not None]
+    Точки — trend_e1rm без одиночных лёгких сессий (light_sessions), те же,
+    по которым classify_stall считает наклон."""
+    light = {id(s) for s in light_sessions(sessions)}
+    scored = [
+        (s, v) for s in sessions if id(s) not in light and (v := trend_e1rm(s)) is not None
+    ]
     if not scored:
         return None
     since = today - dt.timedelta(weeks=window_weeks)
@@ -1502,6 +1554,8 @@ def stall_why(v: StallVerdict, unit: str) -> str:
         )
     else:
         parts.append(f"bodyweight, best reps {v.reps_at_top_first}→{v.reps_at_top_last}")
+    for day, sets in v.light_sessions:
+        parts.append(f"{day}: only {sets} — looks like warm-up or not fully logged, left out of trend")
     return "; ".join(parts)
 
 

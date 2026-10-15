@@ -731,3 +731,36 @@ def test_flat_over_too_short_a_span_is_unclear_not_a_stall():
                        ("2026-09-28", "2026-10-01", "2026-10-05", "2026-10-08")])
 
     assert analytics.classify_stall(sessions, _FACTS_TODAY).kind == "unclear"
+
+
+# ---------- одиночная лёгкая сессия не обваливает тренд ----------
+
+
+def test_isolated_light_session_is_left_out_of_the_verdict():
+    """Прод: присед 05.10 записан одним «20×8» после сессий 92.5×5 — e1RM ~25
+    обваливал наклон, и обе модели сказали «регресс, e1RM −10 кг/нед»."""
+    sessions = _dated([
+        ("2026-09-07", [(92.5, 5)]), ("2026-09-14", [(92.5, 5)]),
+        ("2026-09-21", [(92.5, 5)]), ("2026-09-28", [(92.5, 5)]),
+        ("2026-10-05", [(20, 8)]),
+    ])
+
+    assert analytics.light_sessions(sessions) == [sessions[-1]]
+    verdict = analytics.classify_stall(sessions, _FACTS_TODAY)
+    assert verdict.kind == "dead_end"  # ровно на 92.5×5, а не регресс
+    assert verdict.e1rm_slope_per_week == 0.0
+    assert verdict.top_weight == 92.5
+    why = analytics.stall_facts(sessions, _FACTS_TODAY, "kg")["why"]
+    assert "2026-10-05: only 20×8" in why and "left out of trend" in why
+    assert analytics.e1rm_trend(sessions, _FACTS_TODAY)["latest"][0] == "2026-09-28"
+
+
+def test_two_light_sessions_in_a_row_are_a_real_deload_and_stay():
+    sessions = _dated([
+        ("2026-09-07", [(92.5, 5)]), ("2026-09-14", [(92.5, 5)]),
+        ("2026-09-21", [(92.5, 5)]), ("2026-09-28", [(50, 5)]),
+        ("2026-10-05", [(50, 5)]),
+    ])
+
+    assert analytics.light_sessions(sessions) == []
+    assert analytics.classify_stall(sessions, _FACTS_TODAY).kind == "regressing"
