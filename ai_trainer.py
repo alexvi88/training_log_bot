@@ -757,8 +757,8 @@ def _get_audio_client() -> AsyncOpenAI:
 # параметры запроса байт в байт (см. _model_kwargs) — его кэш не трогается.
 #
 # Не переключаются: живой поиск (xAI gRPC, GROK_SEARCH_MODEL — это инструмент
-# xAI), разбор видео (Novita), расшифровка голоса, еда и ход с фото (зрение
-# Luna не проверено), разбор импорта (strict-схемы на Luna не проверены, шаг
+# xAI), разбор видео (Novita), расшифровка голоса, еда (фото тарелки — свой
+# вызов), разбор импорта (strict-схемы на Luna не проверены, шаг
 # разовый) и суточный разбор лога для админа (без пользователя).
 
 _openai_chat_client: Optional[AsyncOpenAI] = None
@@ -1777,8 +1777,9 @@ async def fact_check_post(
             {"type": "text", "text": post_text},
             {"type": "image_url", "image_url": {"url": image_data_url}},
         ]
-    # С картинкой — grok: зрение Luna не проверено (см. chat_backend).
-    backend = grok_backend() if image_data_url else await chat_backend(user_id)
+    # Картинка едет той же моделью, что выбрана в профиле: Luna смотрит фото
+    # сама (image_url в chat-форме OpenAI понимает), чужим аккаунтам — grok.
+    backend = await chat_backend(user_id)
     messages = [
         # Хендлер уже выставил язык через middleware (см. _with_language_tail) —
         # разбор поста происходит синхронно внутри обработки апдейта, отдельного
@@ -6772,9 +6773,11 @@ async def ask(
     gate = GateVerdict(search=False, data=True, ok=True)
     # Модель — одна на весь ход, выбрана здесь и больше не перечитывается:
     # переключатель в профиле действует со СЛЕДУЮЩЕГО вопроса (см. chat_backend).
-    # Ход с фото — grok: зрение Luna не проверено. Поиск идёт тем же
-    # провайдером, что и ответ (см. _web_search_findings).
-    backend = grok_backend() if image_data_url else await chat_backend(user_id)
+    # Ход с фото — той же моделью, что и текстовый: у Luna картинка уезжает в
+    # Responses как input_image (см. _responses_content), в историю — как и у
+    # grok — не кладётся. Поиск идёт тем же провайдером, что и ответ (см.
+    # _web_search_findings).
+    backend = await chat_backend(user_id)
     if video_context:
         # Разбор ролика решается кадрами, а не сетью: наблюдения уже приехали от
         # модели, которая его смотрела. Гейт же судит по тексту вопроса, и на
