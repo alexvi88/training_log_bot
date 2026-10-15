@@ -543,7 +543,7 @@ def luna_backend() -> ChatBackend:
 async def ai_model_for(user_id: Optional[int]) -> str:
     """Выбранная модель тренера: 'grok' | 'luna'. Чужому аккаунту — всегда grok,
     что бы ни лежало в базе: в базу не смотрим вовсе."""
-    if user_id is None or user_id not in config.ai_model_switch_ids():
+    if not await db.ai_model_switch_allowed(user_id):
         return config.AI_MODEL_GROK
     try:
         raw = await db.get_user_ai_model(user_id)

@@ -366,7 +366,7 @@ async def ai_model_json(user_id: int) -> dict[str, Any]:
     показывать ли строку «Модель тренера»). Остальным — пусто: полей в ответе
     нет вовсе, а не null, — старые сборки и обычные атлеты их не видят.
     """
-    if user_id not in config.ai_model_switch_ids():
+    if not await db.ai_model_switch_allowed(user_id):
         return {}
     return {
         "ai_model": await ai_trainer.ai_model_for(user_id),
@@ -382,7 +382,7 @@ async def set_ai_model(request: Request) -> JSONResponse:
     который уже идёт, доезжает на той модели, с которой начался.
     """
     user_id = await common.authed_user_id(request)
-    if user_id not in config.ai_model_switch_ids():
+    if not await db.ai_model_switch_allowed(user_id):
         raise ApiError(
             403, "forbidden", "ai model switch is for own accounts only",
             key="api.error.ai_model_own_only",

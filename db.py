@@ -2805,6 +2805,33 @@ async def get_user_ai_model(telegram_id: int) -> Optional[str]:
     return row[0] if row is not None else None
 
 
+async def is_walk_demo(telegram_id: int) -> bool:
+    """Аккаунт прогона скриншотов (WALK_DEMO_USERNAME, вход по паролю). Демо
+    App Review (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
+    if not config.WALK_DEMO_USERNAME:
+        return False
+    cur = await conn().execute(
+        "SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'review_demo' "
+        "AND provider_user_id = ?",
+        (telegram_id, config.WALK_DEMO_USERNAME),
+    )
+    return await cur.fetchone() is not None
+
+
+async def ai_model_switch_allowed(telegram_id: Optional[int]) -> bool:
+    """Кому доступен переключатель модели тренера: свои аккаунты
+    (config.ai_model_switch_ids) и аккаунт прогона скриншотов — с него
+    снимаются экраны и прогоняется тренер на тестовой модели."""
+    if telegram_id is None:
+        return False
+    if telegram_id in config.ai_model_switch_ids():
+        return True
+    try:
+        return await is_walk_demo(telegram_id)
+    except Exception:
+        return False
+
+
 async def set_user_ai_model(telegram_id: int, ai_model: Optional[str]) -> bool:
     """Записать выбор модели тренера — только своим аккаунтам.
 
@@ -2813,7 +2840,7 @@ async def set_user_ai_model(telegram_id: int, ai_model: Optional[str]) -> bool:
     «по умолчанию», чтобы смена дефолта когда-нибудь не застряла у тех, кто
     просто вернул grok. Неизвестный токен — ValueError. Возвращает, записал ли.
     """
-    if telegram_id not in config.ai_model_switch_ids():
+    if not await ai_model_switch_allowed(telegram_id):
         return False
     if ai_model is not None and ai_model not in config.AI_MODEL_CHOICES:
         raise ValueError(f"unknown ai_model {ai_model!r}")

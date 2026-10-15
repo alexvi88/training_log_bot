@@ -408,3 +408,21 @@ async def test_aborted_openai_search_is_billed_at_openai_rate(fresh_db, own_acco
     monkeypatch.setattr(ai_trainer, "_get_openai_chat_client", lambda: SimpleNamespace(post=slow_post))
     assert await ai_trainer._web_search_findings(OWN, "q", [], backend=ai_trainer.luna_backend()) is None
     assert await db.get_server_tool_count(_today()) == {config.OPENAI_WEB_SEARCH_TOOL: 1}
+
+
+async def test_walk_demo_account_can_switch_but_review_demo_cannot(fresh_db, monkeypatch):
+    """Аккаунт прогона скриншотов тоже свой: на нём снимаются экраны тестовой
+    модели. Демо App Review (другой логин) — нет."""
+    import config as _config
+    monkeypatch.setattr(_config, "ADMIN_ID", None)
+    monkeypatch.setattr(_config, "TEST_USER_ID", None)
+    monkeypatch.setattr(_config, "WALK_DEMO_USERNAME", "walker")
+    monkeypatch.setattr(_config, "REVIEW_DEMO_USERNAME", "reviewer")
+    await fresh_db.get_or_create_user(telegram_id=-1000000001, username=None)
+    await fresh_db.link_auth_identity(-1000000001, "review_demo", "walker")
+    await fresh_db.get_or_create_user(telegram_id=-1000000000, username=None)
+    await fresh_db.link_auth_identity(-1000000000, "review_demo", "reviewer")
+    assert await fresh_db.ai_model_switch_allowed(-1000000001)
+    assert not await fresh_db.ai_model_switch_allowed(-1000000000)
+    assert await fresh_db.set_user_ai_model(-1000000001, "luna")
+    assert not await fresh_db.set_user_ai_model(-1000000000, "luna")
