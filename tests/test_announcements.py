@@ -369,6 +369,22 @@ async def test_reaches_everyone_once(fresh_db):
     assert [chat_id for chat_id, _ in bot.sent] == [1, 2, 3]
 
 
+async def test_announcement_remembers_its_message_for_button_taps(fresh_db):
+    """Кнопка под анонсом — тоже тап по пушу: id сообщения в pushes."""
+    await _users(fresh_db, 1)
+
+    class NumberedBot(FakeBot):
+        async def _record(self, chat_id, text):
+            await super()._record(chat_id, text)
+            return SimpleNamespace(photo=None, message_id=100 + chat_id)
+
+    await announcements.send_announcement(NumberedBot(), _announcement())
+    cur = await fresh_db.conn().execute(
+        "SELECT telegram_id, tg_message_id FROM pushes WHERE category = 'test_release'"
+    )
+    assert [tuple(r) for r in await cur.fetchall()] == [(1, 101)]
+
+
 async def test_second_run_sends_nothing(fresh_db):
     await _users(fresh_db, 1, 2)
     ann = _announcement()
