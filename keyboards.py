@@ -1855,6 +1855,7 @@ def settings_keyboard(
     lang: str = "ru",
     show_feedback: bool = False,
     rep_range: Optional[tuple[int, int]] = None,
+    gender: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
     заголовки живут в тексте экрана (settings.screen.section.*, см.
@@ -1886,6 +1887,9 @@ def settings_keyboard(
         text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
         callback_data="settings:formula",
     )
+    # Пол — пятой кнопкой блока, отдельной строкой: необязательный ответ о
+    # себе (users.gender), по нему тренер выбирает род в обращении и нормы.
+    b.button(text=gender_button_text(gender), callback_data="settings:gender:menu")
 
     # --- Как разговариваю: тумблеры ---
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
@@ -1952,11 +1956,42 @@ def settings_keyboard(
     # продукта, и в приложении он живёт там же (DELETE /v1/account).
     b.button(text=i18n.t("btn.delete_account"), callback_data="settings:delete")
     b.button(text=i18n.t("btn.home_menu"), callback_data="settings:back")
-    # 2+2 для блока «Профиль» (все подписи короткие), дальше — по одной кнопке
+    # 2+2 для блока «Профиль» (все подписи короткие), пол — пятой кнопкой
+    # отдельной строкой, дальше — по одной кнопке
     # в ряд для тумблеров, блока «Данные» и «Меню»: adjust повторяет последний
     # размер на хвост, так что явно перечислять единицы для каждой из
     # оставшихся кнопок не нужно.
     b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+# Значения users.gender в том порядке, в каком они стоят на экране выбора;
+# "none" — кнопка «Не выбран», в базе это NULL.
+GENDER_CHOICES = ("male", "female", "none")
+
+
+def gender_value_text(gender: Optional[str]) -> str:
+    """«Мужской» / «Женский» / «Не выбран» — на языке рендера."""
+    return i18n.t(f"settings.gender.value.{gender if gender in ('male', 'female') else 'none'}")
+
+
+def gender_button_text(gender: Optional[str]) -> str:
+    return i18n.t("settings.gender.button", value=gender_value_text(gender))
+
+
+def gender_keyboard(current: Optional[str], source: str) -> InlineKeyboardMarkup:
+    """Экран «Пол»: три варианта, галочка у выбранного, «Назад» туда, откуда
+    пришли (`source`: "menu" — настройки, "profile" — «Что я про тебя знаю»)."""
+    b = InlineKeyboardBuilder()
+    selected = current if current in ("male", "female") else "none"
+    for choice in GENDER_CHOICES:
+        text = gender_value_text(choice)
+        if choice == selected:
+            text = f"✓ {text}"
+        b.button(text=text, callback_data=f"settings:gset:{choice}:{source}")
+    back = "settings:profile" if source == "profile" else "settings:menu"
+    b.button(text=i18n.t("btn.back"), callback_data=back)
+    b.adjust(1)
     return b.as_markup()
 
 
@@ -1991,15 +2026,19 @@ def rep_range_keyboard(current: tuple[int, int]) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def profile_keyboard() -> InlineKeyboardMarkup:
+def profile_keyboard(gender: Optional[str] = None) -> InlineKeyboardMarkup:
     """Экран «🧬 Обо мне»: посмотреть и, если надо, стереть.
 
     Правится профиль репликой тренеру, а не отсюда: поля свободнотекстовые, и
     городить под каждое свой ввод значило бы дублировать разговор, который для
     этого и существует. А вот стереть всё разом словами не попросишь — модель
     save_athlete_profile пустые поля игнорирует, — поэтому кнопка одна.
+
+    Пол — исключение: его тренер не пишет, это та же настройка, что
+    ⚙️ Настройки → Пол, и меняется той же кнопкой; «Очистить» его не трогает.
     """
     b = InlineKeyboardBuilder()
+    b.button(text=gender_button_text(gender), callback_data="settings:gender:profile")
     b.button(text=i18n.t("btn.clear"), callback_data="settings:profileclear")
     b.button(text=i18n.t("btn.back"), callback_data="settings:menu")
     b.adjust(1)

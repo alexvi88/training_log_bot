@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterable, Optional
 import analytics
 import db
 import formatting
+import seed_data
 import timeutil
 
 # Окно роста e1RM. У истории моложе восьми недель «рост за 8 недель» врёт: вся
@@ -32,6 +33,16 @@ LIFT_FALLBACK_WINDOW_WEEKS = 4
 # против максимума ВНУТРИ), и у многих частых движений он окажется нулевым —
 # форматтер их отбросит. Без запаса сводка часто оставалась бы вовсе без плиток.
 LIFT_CANDIDATES = 12
+
+# Фигура «ТЫ» в сцене зала приложения растёт по группам мышц от настоящего
+# объёма: среднее число рабочих подходов в неделю за последние BODY_VOLUME_WEEKS
+# недель. Шесть, а не одна: фигура — накопленное, а не «что было на этой
+# неделе», и пропущенная неделя не должна сдувать её за ночь.
+BODY_VOLUME_WEEKS = 6
+# Группы фигуры — машинные ключи встроенных групп (seed_data.muscle_group_slug),
+# в этом порядке и всегда все семь. «Другое» и свои группы атлета в фигуру не
+# идут: у них нет части тела.
+BODY_VOLUME_GROUPS = ("chest", "back", "legs", "shoulders", "biceps", "triceps", "abs")
 
 
 @dataclass(frozen=True)
@@ -59,6 +70,8 @@ class MenuDashboard:
     lift_tiles: list[tuple[str, str, str, int]] = field(default_factory=list)
     lifts_title: str = ""
     lifts_note: str = ""
+    #: (ключ группы, подходов в неделю) по BODY_VOLUME_GROUPS — см. body_volume
+    body_volume: tuple[tuple[str, float], ...] = ()
 
 
 async def collect(
@@ -140,6 +153,40 @@ async def collect(
         lift_tiles=lift_tiles,
         lifts_title=lifts_title,
         lifts_note=formatting.MENU_LIFTS_NOTE,
+        body_volume=await body_volume(
+            user_id, today, tz_offset=tz, exclude_workout_ids=excluded
+        ),
+    )
+
+
+async def body_volume(
+    user_id: int,
+    today: dt.date,
+    *,
+    tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
+) -> tuple[tuple[str, float], ...]:
+    """Среднее число рабочих подходов в неделю по семи группам фигуры за
+    последние BODY_VOLUME_WEEKS недель (по сегодня включительно), с одним
+    знаком после запятой.
+
+    Тот же счёт подходов, что у панели «ОБЪЁМ ЗА 7 ДНЕЙ» (db.weekly_volume_by_group
+    по exercises.primary_group_id), только окно длиннее и поделено на недели —
+    иначе фигура и панель под ней говорили бы о разных подходах. Группа без
+    подходов — 0.0, а не пропуск: ключи всегда все семь."""
+    start = today - dt.timedelta(days=BODY_VOLUME_WEEKS * 7 - 1)
+    counts = await db.weekly_volume_by_group(
+        user_id, start.isoformat(), today.isoformat(), tz_offset=tz_offset,
+        exclude_workout_ids=exclude_workout_ids,
+    )
+    sets_by_slug: dict[str, int] = {}
+    for group in await db.list_muscle_groups(user_id):
+        slug = seed_data.muscle_group_slug(group["name"])
+        if slug in BODY_VOLUME_GROUPS:
+            sets_by_slug[slug] = sets_by_slug.get(slug, 0) + counts.get(group["id"], 0)
+    return tuple(
+        (slug, round(sets_by_slug.get(slug, 0) / BODY_VOLUME_WEEKS, 1))
+        for slug in BODY_VOLUME_GROUPS
     )
 
 

@@ -173,7 +173,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- Бывший выбор модели тренера ('luna' или NULL = grok) у своих аккаунтов.
     -- Выбора больше нет (модель одна — Luna), колонку никто не читает и не
     -- пишет; не удалена, потому что миграции только добавляют.
-    ai_model TEXT
+    ai_model TEXT,
+    -- Пол атлета: 'male', 'female' или NULL — не выбран. Ставит только сам
+    -- человек (настройки бота, «Пол» в приложении, онбординг приложения), и
+    -- только через set_user_gender. Тренер знает его, только когда он выбран,
+    -- и никогда не угадывает по имени или данным (ai_trainer._profile_block).
+    -- Приложение рисует по нему фигуру «ТЫ» в сцене зала.
+    gender TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1915,6 +1921,10 @@ async def _migrate_schema() -> None:
             "WHERE app_since IS NULL"
         )
 
+    if "gender" not in user_cols:
+        # NULL всем существующим: пол никто не выбирал, угадывать нельзя.
+        await _conn.execute("ALTER TABLE users ADD COLUMN gender TEXT")
+
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
@@ -3005,6 +3015,29 @@ async def set_user_lang(telegram_id: int, lang: str) -> None:
     # интерфейсом и русскими названиями упражнений из каталога.
     if user is not None and user["lang"] != lang:
         await relocalize_catalog_copies(telegram_id, lang)
+
+
+# Допустимые значения users.gender; None — «не выбран».
+GENDERS = ("male", "female")
+
+
+async def set_user_gender(telegram_id: int, gender: Optional[str]) -> None:
+    """Записать пол атлета — единственная точка записи users.gender.
+
+    `None` снимает выбор («Не выбран»). Всё, кроме GENDERS и None, — ValueError,
+    а не тихое приведение, как у языка: пол — ответ человека о себе, и
+    подставить вместо мусора «мужской» значило бы сказать за него неправду.
+    Проверку с понятным текстом делают вызывающие (кнопки бота, PATCH
+    /v1/settings); здесь — последний рубеж.
+    """
+    if gender is not None and gender not in GENDERS:
+        raise ValueError(f"gender must be one of {GENDERS} or None")
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET gender = ? WHERE telegram_id = ?",
+            (gender, telegram_id),
+        )
+        await conn().commit()
 
 
 # Все языки, на которых каталожный текст мог лечь в базу. Не i18n.SUPPORTED —
@@ -8349,6 +8382,9 @@ _MERGE_USER_COLUMN_SQL = {
     "app_since": "COALESCE(app_since, ?)",
     # Имя из Telegram — у телеграм-строки; у app-строки его обычно нет.
     "first_name": "COALESCE(first_name, ?)",
+    # Пол — выбор приложения, а если там не выбран, то выбранный в боте:
+    # «не выбран» не стирает ответ, который человек уже дал.
+    "gender": "COALESCE(?, gender)",
 }
 # Колонки, которые остаются у телеграм-строки без сравнения.
 _MERGE_USER_KEEP_TARGET_COLUMNS = frozenset({

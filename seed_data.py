@@ -91,6 +91,11 @@ _MUSCLE_GROUP_SLUGS: dict[str, str] = {
 }
 
 
+def muscle_group_slug(canonical_name: str) -> Optional[str]:
+    """Машинный ключ встроенной группы («Грудь» → "chest"), None у своих."""
+    return _MUSCLE_GROUP_SLUGS.get(canonical_name)
+
+
 def localized_muscle_group_name(canonical_name: str, lang: str) -> str:
     """Display name for a muscle group in `lang`.
 

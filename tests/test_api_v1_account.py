@@ -609,6 +609,7 @@ async def test_athlete_profile_reads_fields_ai_trainer_writes(fresh_db, client_f
         "goal": "набрать массу",
         "equipment": ["штанга", "гантели"],
         "limitations": "болит плечо",
+        "gender": None,
     }
 
 
@@ -622,6 +623,7 @@ async def test_athlete_profile_empty_by_default(fresh_db, client_factory):
         "goal": None,
         "equipment": None,
         "limitations": None,
+        "gender": None,
     }
 
 
@@ -645,6 +647,7 @@ async def test_clear_athlete_profile_resets_all_fields(fresh_db, client_factory)
         "goal": None,
         "equipment": None,
         "limitations": None,
+        "gender": None,
     }
     user = await db.get_user(user_id)
     assert user["days_per_week"] is None
