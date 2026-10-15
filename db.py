@@ -9169,6 +9169,48 @@ async def reorder_program_day(routine_id: int, direction: str) -> None:
         await conn().commit()
 
 
+def arranged_ids(current: list[int], requested: list[int]) -> list[int]:
+    """Новый порядок списка по просьбе «поставь вот так» (перетаскивание в
+    приложении), не теряя того, чего просящий не видел.
+
+    Названные id, которые в списке есть, встают в названном порядке на места,
+    которые они и так занимали вместе; неназванные остаются на своих местах.
+    Чужие и уже удалённые id молча пропускаются, повторы — по первому
+    вхождению. Так день, добавленный ботом, пока телефон держал старый список,
+    или день, ждущий «Вернуть» в приложении, не уезжает в конец, а
+    перестановка видимых дней не трогает их места.
+    """
+    present = set(current)
+    wanted: list[int] = []
+    for item in requested:
+        if item in present and item not in wanted:
+            wanted.append(item)
+    chosen = set(wanted)
+    queue = iter(wanted)
+    return [next(queue) if item in chosen else item for item in current]
+
+
+async def set_program_day_order(program_id: int, routine_ids: list[int]) -> None:
+    """Поставить дни программы в порядок `routine_ids` (см. arranged_ids).
+
+    Порядок дней — один столбец `day_order`, и пишется он здесь и в
+    reorder_program_day под тем же _write_lock: чтение списка и запись
+    неделимы, иначе параллельная стрелка в боте посчитала бы позиции по
+    устаревшему списку. Номера после записи — 0..n-1 подряд.
+    """
+    async with _write_lock:
+        days = await list_program_days_by_id(program_id)
+        current = [d["id"] for d in days]
+        order = arranged_ids(current, routine_ids)
+        if order == current and all(d["day_order"] == i for i, d in enumerate(days)):
+            return
+        await conn().executemany(
+            "UPDATE routines SET day_order = ? WHERE id = ? AND program_id = ?",
+            [(i, day_id, program_id) for i, day_id in enumerate(order)],
+        )
+        await conn().commit()
+
+
 async def create_routine(
     user_id: int,
     name: str,
@@ -9290,6 +9332,32 @@ async def reorder_routine_exercise(routine_exercise_id: int, direction: str) -> 
             await conn().execute(
                 "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (order_index, ex_id)
             )
+        await conn().commit()
+
+
+async def set_routine_exercise_order(routine_id: int, item_ids: list[int]) -> None:
+    """Поставить упражнения дня в порядок `item_ids` (см. arranged_ids).
+
+    Список — со строками архивных упражнений: list_routine_exercises их
+    прячет, но order_index у них есть, и после разархивирования упражнение
+    должно вернуться на своё место, а не делить номер с соседом. Тот же
+    _write_lock, что у reorder_routine_exercise.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT id, order_index FROM routine_exercises WHERE routine_id = ? "
+            "ORDER BY order_index ASC, id ASC",
+            (routine_id,),
+        )
+        rows = await cur.fetchall()
+        current = [r["id"] for r in rows]
+        order = arranged_ids(current, item_ids)
+        if order == current and all(r["order_index"] == i for i, r in enumerate(rows)):
+            return
+        await conn().executemany(
+            "UPDATE routine_exercises SET order_index = ? WHERE id = ? AND routine_id = ?",
+            [(i, item_id, routine_id) for i, item_id in enumerate(order)],
+        )
         await conn().commit()
 
 

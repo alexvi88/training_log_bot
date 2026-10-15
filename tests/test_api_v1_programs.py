@@ -682,6 +682,158 @@ async def test_reorder_routine_exercise_foreign_is_404(fresh_db, client_factory)
     assert resp.status_code == 404
 
 
+# ---------- порядок целиком (перетаскивание в приложении) ----------
+
+async def _program_with_days(client, names, program_name="Split"):
+    program_id = (await client.post("/programs", json={"name": program_name})).json()["id"]
+    ids = []
+    for name in names:
+        ids.append((await client.post(f"/programs/{program_id}/days", json={"name": name})).json()["id"])
+    return program_id, ids
+
+
+@pytest.mark.asyncio
+async def test_set_program_day_order_puts_days_in_given_order(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id, (a, b, c, d) = await _program_with_days(client, ["A", "B", "C", "D"])
+
+    resp = await client.post(f"/programs/{program_id}/days/order", json={"routine_ids": [c, a, d, b]})
+    assert resp.status_code == 200, resp.text
+    assert [x["id"] for x in resp.json()["days"]] == [c, a, d, b]
+    # Нетронутая программа начинается с первого дня — теперь это C.
+    assert resp.json()["next_day"]["id"] == c
+
+    fetched = (await client.get(f"/programs/{program_id}")).json()
+    assert [x["id"] for x in fetched["days"]] == [c, a, d, b]
+    assert [x["day_order"] for x in fetched["days"]] == [0, 1, 2, 3]
+    assert (await client.get(f"/programs/{program_id}/next-day")).json()["id"] == c
+
+    # Повтор того же тела (офлайн, оборванный ответ) — тот же итог.
+    again = await client.post(f"/programs/{program_id}/days/order", json={"routine_ids": [c, a, d, b]})
+    assert [x["id"] for x in again.json()["days"]] == [c, a, d, b]
+
+
+@pytest.mark.asyncio
+async def test_set_program_day_order_keeps_unlisted_days_in_place(fresh_db, client_factory):
+    """День, которого приложение не видело (добавлен ботом, ждёт «Вернуть»),
+    остаётся на своём месте; чужие и удалённые id пропускаются."""
+    client = await _linked_client(fresh_db, client_factory)
+    program_id, (a, b, c, d) = await _program_with_days(client, ["A", "B", "C", "D"])
+    other_pid, (foreign,) = await _program_with_days(client, ["X"], "Other")
+
+    resp = await client.post(
+        f"/programs/{program_id}/days/order", json={"routine_ids": [d, foreign, 999999, a, d, c]}
+    )
+    assert resp.status_code == 200, resp.text
+    # B не назван — стоит вторым, как стоял; A, C, D встали на свои три места как D, A, C.
+    assert [x["id"] for x in resp.json()["days"]] == [d, b, a, c]
+    # День чужой программы никуда не переехал.
+    assert [x["id"] for x in (await client.get(f"/programs/{other_pid}")).json()["days"]] == [foreign]
+
+
+@pytest.mark.asyncio
+async def test_set_program_day_order_next_day_follows_new_order(fresh_db, client_factory):
+    """Атлет на середине программы: «следующий» — день ПОСЛЕ последнего
+    сделанного в НОВОМ порядке. Очередь не сбрасывается на первый день."""
+    client = await _linked_client(fresh_db, client_factory)
+    program_id, (a, b, c, d) = await _program_with_days(client, ["A", "B", "C", "D"])
+    for routine_id, started in ((a, "2026-09-01T10:00:00"), (b, "2026-09-03T10:00:00")):
+        wid = await db.create_workout(111, started_at=started, routine_id=routine_id)
+        await db.finish_workout(wid)
+    assert (await client.get(f"/programs/{program_id}/next-day")).json()["id"] == c
+
+    resp = await client.post(f"/programs/{program_id}/days/order", json={"routine_ids": [a, b, d, c]})
+    assert resp.json()["next_day"]["id"] == d
+
+    # Последний сделанный уехал в конец — дальше по кругу первый.
+    resp = await client.post(f"/programs/{program_id}/days/order", json={"routine_ids": [a, d, c, b]})
+    assert resp.json()["next_day"]["id"] == a
+
+
+@pytest.mark.asyncio
+async def test_set_program_day_order_empty_program(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "Empty"})).json()["id"]
+    resp = await client.post(f"/programs/{program_id}/days/order", json={"routine_ids": []})
+    assert resp.status_code == 200
+    assert resp.json() == {"days": [], "next_day": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"routine_ids": "1,2"}, {"routine_ids": [1, "2"]},
+                                  {"routine_ids": [True]}, {"routine_ids": list(range(201))}])
+async def test_set_program_day_order_rejects_bad_body(fresh_db, client_factory, body):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id, _ = await _program_with_days(client, ["A", "B"])
+    resp = await client.post(f"/programs/{program_id}/days/order", json=body)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bad_request"
+
+
+@pytest.mark.asyncio
+async def test_set_program_day_order_foreign_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    program_id, (a, b) = await _program_with_days(owner, ["A", "B"])
+    resp = await intruder.post(f"/programs/{program_id}/days/order", json={"routine_ids": [b, a]})
+    assert resp.status_code == 404
+    assert [x["id"] for x in (await owner.get(f"/programs/{program_id}")).json()["days"]] == [a, b]
+
+
+@pytest.mark.asyncio
+async def test_set_routine_exercise_order(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    routine_id = (await client.post("/routines", json={"name": "Push day"})).json()["id"]
+    exercise_ids = [await _make_exercise(fresh_db, 111, n) for n in ("Bench", "Press", "Dips")]
+    items = [
+        (await client.post(f"/routines/{routine_id}/exercises", json={"exercise_id": e})).json()["id"]
+        for e in exercise_ids
+    ]
+    i1, i2, i3 = items
+
+    resp = await client.post(f"/routines/{routine_id}/exercises/order", json={"item_ids": [i3, i1, i2]})
+    assert resp.status_code == 200, resp.text
+    assert [e["id"] for e in resp.json()["exercises"]] == [i3, i1, i2]
+    fetched = (await client.get(f"/routines/{routine_id}")).json()
+    assert [e["id"] for e in fetched["exercises"]] == [i3, i1, i2]
+
+
+@pytest.mark.asyncio
+async def test_set_routine_exercise_order_keeps_archived_slot(fresh_db, client_factory):
+    """Архивное упражнение приложение не видит и не шлёт — после
+    разархивирования оно на своём месте, а не делит номер с соседом."""
+    client = await _linked_client(fresh_db, client_factory)
+    routine_id = (await client.post("/routines", json={"name": "Push day"})).json()["id"]
+    exercise_ids = [await _make_exercise(fresh_db, 111, n) for n in ("Bench", "Press", "Dips")]
+    i1, i2, i3 = [
+        (await client.post(f"/routines/{routine_id}/exercises", json={"exercise_id": e})).json()["id"]
+        for e in exercise_ids
+    ]
+    await client.post(f"/exercises/{exercise_ids[1]}/archive")
+
+    resp = await client.post(f"/routines/{routine_id}/exercises/order", json={"item_ids": [i3, i1]})
+    assert [e["id"] for e in resp.json()["exercises"]] == [i3, i1]
+    await client.post(f"/exercises/{exercise_ids[1]}/unarchive")
+    fetched = (await client.get(f"/routines/{routine_id}")).json()
+    assert [e["id"] for e in fetched["exercises"]] == [i3, i2, i1]
+
+
+@pytest.mark.asyncio
+async def test_set_routine_exercise_order_foreign_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    routine_id = (await owner.post("/routines", json={"name": "Push day"})).json()["id"]
+    resp = await intruder.post(f"/routines/{routine_id}/exercises/order", json={"item_ids": []})
+    assert resp.status_code == 404
+
+
+def test_arranged_ids_is_pure_slot_fill():
+    assert db.arranged_ids([1, 2, 3, 4], [4, 1]) == [4, 2, 3, 1]
+    assert db.arranged_ids([1, 2, 3], []) == [1, 2, 3]
+    assert db.arranged_ids([1, 2, 3], [3, 3, 9, 2, 1]) == [3, 2, 1]
+    assert db.arranged_ids([], [1]) == []
+
+
 # ---------- 401 без токена ----------
 
 @pytest.mark.asyncio
@@ -698,6 +850,7 @@ async def test_reorder_routine_exercise_foreign_is_404(fresh_db, client_factory)
         ("POST", "/programs/1/merge"),
         ("GET", "/programs/1/next-day"),
         ("POST", "/programs/1/days"),
+        ("POST", "/programs/1/days/order"),
         ("GET", "/routines"),
         ("POST", "/routines"),
         ("GET", "/routines/1"),
@@ -705,6 +858,7 @@ async def test_reorder_routine_exercise_foreign_is_404(fresh_db, client_factory)
         ("DELETE", "/routines/1"),
         ("POST", "/routines/1/reorder"),
         ("POST", "/routines/1/exercises"),
+        ("POST", "/routines/1/exercises/order"),
         ("PATCH", "/routine-exercises/1"),
         ("DELETE", "/routine-exercises/1"),
         ("POST", "/routine-exercises/1/reorder"),

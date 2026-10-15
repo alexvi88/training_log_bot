@@ -538,30 +538,21 @@
     }
    }
   },
-  "APIClient.reorderProgramDay().Response": {
-   "file": "TrainingLog/Networking/APIClient+Parity.swift",
-   "fields": {
-    "days": {
-     "type": "[Routine]",
-     "optional": false
-    }
-   }
-  },
-  "APIClient.reorderRoutineExercise().Response": {
-   "file": "TrainingLog/Networking/APIClient+Parity.swift",
-   "fields": {
-    "exercises": {
-     "type": "[RoutineExercise]",
-     "optional": false
-    }
-   }
-  },
   "APIClient.requestWorkoutAIComment().Response": {
    "file": "TrainingLog/Networking/APIClient.swift",
    "fields": {
     "comment": {
      "type": "String",
      "optional": true
+    }
+   }
+  },
+  "APIClient.setRoutineExerciseOrder().Response": {
+   "file": "TrainingLog/Networking/APIClient+Parity.swift",
+   "fields": {
+    "exercises": {
+     "type": "[RoutineExercise]",
+     "optional": false
     }
    }
   },
@@ -3046,6 +3037,19 @@
     }
    }
   },
+  "ProgramDayOrder": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "days": {
+     "type": "[Routine]",
+     "optional": false
+    },
+    "nextDay": {
+     "type": "Routine",
+     "optional": true
+    }
+   }
+  },
   "ProgramDetail": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -4878,6 +4882,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.setProgramDayOrder",
+   "method": "POST",
+   "path": "/programs/{}/days/order",
+   "root": "ProgramDayOrder",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.mergeProgram",
    "method": "POST",
    "path": "/programs/{}/merge",
@@ -4903,13 +4914,6 @@
    "method": "PATCH",
    "path": "/routine-exercises/{}",
    "root": "RoutineExercise",
-   "nullable": false
-  },
-  {
-   "swift": "APIClient.reorderRoutineExercise",
-   "method": "POST",
-   "path": "/routine-exercises/{}/reorder",
-   "root": "APIClient.reorderRoutineExercise().Response",
    "nullable": false
   },
   {
@@ -4962,10 +4966,10 @@
    "nullable": false
   },
   {
-   "swift": "APIClient.reorderProgramDay",
+   "swift": "APIClient.setRoutineExerciseOrder",
    "method": "POST",
-   "path": "/routines/{}/reorder",
-   "root": "APIClient.reorderProgramDay().Response",
+   "path": "/routines/{}/exercises/order",
+   "root": "APIClient.setRoutineExerciseOrder().Response",
    "nullable": false
   },
   {
@@ -5242,5 +5246,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "8ba5f7288e38937d57aae5a2d8c6709ec09eb2f7"
+ "_ios_commit": "7000484ebb9811074678375d042102f72ae8d731"
 }
