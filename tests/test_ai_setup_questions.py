@@ -106,7 +106,7 @@ async def _state_with_setup(
             "rounds": rounds,
             "msg_id": 777,
             # Первый круг уже был, значит вопрос про цель бот на нём и задал —
-            # иначе второй круг подставил бы его ещё раз (см. _questions_with_goal).
+            # иначе второй круг подставил бы ядро ещё раз (см. _questions_with_core).
             "goal_asked": True,
             "scenario": scenario,
         }
@@ -159,7 +159,7 @@ async def test_tool_clamps_questions_and_choices_and_reports_it(fresh_db, user_i
         {
             "questions": [
                 {"question": f"Вопрос {i}", "choices": [f"в{j}" for j in range(6)]}
-                for i in range(7)
+                for i in range(ai_trainer_module.SETUP_MAX_QUESTIONS + 1)
             ]
         },
     )
@@ -194,7 +194,7 @@ async def test_tool_reports_empty_questionnaire_instead_of_asking(fresh_db, user
 async def test_questionnaire_is_shown_one_question_per_message(fresh_db, user_id, monkeypatch):
     """Стена из четырёх пронумерованных вопросов одним сообщением — то, ради чего
     всё и затевалось: на экране должен быть ровно первый вопрос."""
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=QUESTIONS))
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=QUESTIONS + EXTRA))
     state = await _make_state(user_id)
     chat = _Chat(user_id)
 
@@ -202,10 +202,10 @@ async def test_questionnaire_is_shown_one_question_per_message(fresh_db, user_id
 
     assert len(chat.questions_shown) == 1
     shown = chat.questions_shown[0]
-    # Четвёртый вопрос — про цель, его бот подставил сам первым (goal пуст).
-    assert "ВОПРОС 1 ИЗ 4" in shown
+    # Ядро из шести вопросов бот ставит сам, вопрос модели — седьмой.
+    assert "ВОПРОС 1 ИЗ 7" in shown
     assert ai_trainer.SETUP_GOAL_QUESTION["question"] in shown
-    assert QUESTIONS[0]["question"] not in "".join(item.text for item in chat.sent)
+    assert EXTRA[0]["question"] not in "".join(item.text for item in chat.sent)
 
     setup = (await state.get_data())["ai_setup"]
     assert setup["idx"] == 0
@@ -214,9 +214,6 @@ async def test_questionnaire_is_shown_one_question_per_message(fresh_db, user_id
 
 
 async def test_question_message_carries_choices_and_skip_button(fresh_db, user_id, monkeypatch):
-    # Цель уже в профиле — свой вопрос бот не подставляет, и первым идёт вопрос
-    # модели ровно с её вариантами.
-    await fresh_db.update_user(user_id, goal="масса")
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=QUESTIONS))
     state = await _make_state(user_id)
     chat = _Chat(user_id)
@@ -225,80 +222,141 @@ async def test_question_message_carries_choices_and_skip_button(fresh_db, user_i
 
     kb = [item for item in chat.sent if "ВОПРОС" in item.text][0].kwargs["reply_markup"]
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert callbacks == ["ai:qa:0:0", "ai:qa:0:1", "ai:qa:0:2", "ai:qskip"]
+    assert callbacks == ["ai:qa:0:0", "ai:qa:0:1", "ai:qa:0:2", "ai:qa:0:3", "ai:qskip"]
 
 
-# ---------- вопрос про цель бот задаёт сам ----------
+# ---------- ядро опросника бот задаёт сам ----------
+
+EXTRA = [{"question": "Что сейчас в приоритете подтянуть?", "choices": ["Грудь", "Спину"]}]
+
 
 async def _questions_after(user_id, state, chat, text="составь мне программу"):
     await ai_trainer.ai_question(chat.user_message(text), state)
     return [q["question"] for q in (await state.get_data())["ai_setup"]["questions"]]
 
 
-async def test_goal_question_is_added_first_when_profile_has_no_goal(
-    fresh_db, user_id, monkeypatch
-):
-    """Цель — единственная вводная, без которой программа собирается наугад, а
-    модель регулярно тратила слоты опросника на дни, время, травмы и сплит."""
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=QUESTIONS))
+def _core_texts(*, for_client: bool = False) -> list[str]:
+    import ai_setup_flow
+
+    return [q["question"] for q in ai_setup_flow.core_questions(for_client=for_client)]
+
+
+async def test_core_questions_come_first_in_fixed_order(fresh_db, user_id, monkeypatch):
+    """Промпт просил «дни всегда, по одной вещи в вопросе», а модель с богатой
+    историей прислала один вопрос. Ядро — цель, дни, время, место, опыт,
+    травмы — ставит бот, всегда и в одном порядке; свои модели — после."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=EXTRA))
     state = await _make_state(user_id)
     chat = _Chat(user_id)
 
     asked = await _questions_after(user_id, state, chat)
 
+    assert asked == _core_texts() + [EXTRA[0]["question"]]
     assert asked[0] == ai_trainer.SETUP_GOAL_QUESTION["question"]
-    assert asked[1:] == [q["question"] for q in QUESTIONS]
-    # Варианты — кнопками, но ответ ими не запирается: подсказка зовёт написать свой.
     setup = (await state.get_data())["ai_setup"]
     assert setup["questions"][0]["choices"] == ai_trainer.SETUP_GOAL_QUESTION["choices"]
     assert "напиши свой" in chat.questions_shown[0]
 
 
-async def test_goal_question_is_skipped_when_profile_already_knows_it(
-    fresh_db, user_id, monkeypatch
-):
-    await fresh_db.update_user(user_id, goal="набрать массу")
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=QUESTIONS))
+async def test_combined_days_and_time_question_is_split_into_core_questions(fresh_db, user_id, monkeypatch):
+    """Ровно прод-баг: единственный вопрос «сколько дней и сколько времени» —
+    кнопки отвечают только на дни, время теряется. Склеенный вопрос выброшен,
+    дни, время и травмы спрошены отдельно."""
+    combined = [{
+        "question": "Сколько дней в неделю можешь тренироваться и сколько времени на тренировку?",
+        "choices": ["2 дня", "3 дня", "4 дня"],
+    }]
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=combined))
     state = await _make_state(user_id)
 
     asked = await _questions_after(user_id, state, _Chat(user_id))
 
-    assert asked == [q["question"] for q in QUESTIONS]
+    assert asked == _core_texts()
+    assert combined[0]["question"] not in asked
 
 
-async def test_goal_question_is_skipped_when_the_model_asked_it_itself(
-    fresh_db, user_id, monkeypatch
-):
-    """Два вопроса про одно подряд читаются как поломка."""
-    own = [{"question": "Какая цель — масса или сила?", "choices": ["Масса", "Сила"]}]
+async def test_combined_question_in_english_is_dropped_too(fresh_db, user_id, monkeypatch):
+    import i18n
+
+    combined = [
+        {"question": "How many days per week can you train, and how long do you have per session?",
+         "choices": ["3 days"]},
+        {"question": "Any injuries or pain right now?", "choices": []},
+        {"question": "Which lifts do you want to keep from your current routine?", "choices": []},
+    ]
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=combined))
+    state = await _make_state(user_id)
+
+    # Язык хода в боте ставит middleware — здесь его нет, ставим сами.
+    with i18n.use_lang("en"):
+        asked = await _questions_after(user_id, state, _Chat(user_id))
+        core = _core_texts()
+    assert asked == core + [combined[2]["question"]]
+
+
+def test_slot_markers_ru_and_en():
+    import ai_setup_flow
+
+    cases = {
+        "Сколько дней в неделю готов ходить?": {"days"},
+        "Сколько времени есть на тренировку?": {"time"},
+        "Сколько дней в неделю и сколько времени на тренировку?": {"days", "time"},
+        "How many days a week, and how long do you have per workout?": {"days", "time"},
+        "Where do you train — gym or home?": {"place"},
+        "Какой у тебя опыт в зале?": {"experience"},
+        "Есть травмы или что-то болит?": {"injuries"},
+        "Any pain or injuries?": {"injuries"},
+        # Не ядро — остаются вопросами модели.
+        "Что сейчас в приоритете подтянуть?": set(),
+        "What's your rep goal for this exercise?": set(),
+        "Сколько минут отдыхаешь между подходами?": set(),
+        "С какой попытки берёшь рабочий вес?": set(),
+    }
+    for text, slots in cases.items():
+        assert ai_setup_flow.covered_slots(text) == slots, text
+
+
+async def test_model_question_already_asking_days_is_not_duplicated(fresh_db, user_id, monkeypatch):
+    own = [
+        {"question": "Сколько дней в неделю готов тренироваться?", "choices": ["3 дня"]},
+        {"question": "Какая цель — масса или сила?", "choices": ["Масса", "Сила"]},
+    ] + EXTRA
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=own))
     state = await _make_state(user_id)
 
     asked = await _questions_after(user_id, state, _Chat(user_id))
 
-    assert asked == [own[0]["question"]]
+    assert asked == _core_texts() + [EXTRA[0]["question"]]
 
 
-async def test_goal_question_still_asked_when_model_only_mentions_the_word_goal(
-    fresh_db, user_id, monkeypatch
-):
-    """Раньше SETUP_GOAL_MARKERS содержал голое "goal" — оно ловило обычные
-    тренерские вопросы про количество повторений/вес, а не только реальный
-    вопрос про цель тренировок, и наш обязательный вопрос про цель после
-    этого никогда не подставлялся."""
-    own = [{"question": "What's your rep goal for this exercise?", "choices": []}]
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=own))
+async def test_saved_profile_becomes_first_choice_not_a_skipped_question(fresh_db, user_id, monkeypatch):
+    """Цель, опыт и инвентарь в профиле — вопрос всё равно задан (программа под
+    сегодняшние вводные), но прошлый ответ стоит первой кнопкой."""
+    import i18n
+
+    await fresh_db.update_user(
+        user_id, goal="набрать массу", experience="3 года", equipment='["штанга", "гантели"]',
+    )
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=EXTRA))
     state = await _make_state(user_id)
 
-    asked = await _questions_after(user_id, state, _Chat(user_id))
+    await _questions_after(user_id, state, _Chat(user_id))
 
-    assert asked[0] == ai_trainer.SETUP_GOAL_QUESTION["question"]
-    assert asked[1:] == [own[0]["question"]]
+    by_slot = {q["slot"]: q for q in (await state.get_data())["ai_setup"]["questions"] if q.get("slot")}
+    with i18n.use_lang("ru"):
+        assert by_slot["goal"]["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="набрать массу")
+        assert by_slot["experience"]["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="3 года")
+        assert by_slot["place"]["choices"][0] == i18n.t(
+            "ai.screen.setup_core.as_before", value="штанга, гантели"
+        )
+    for question in by_slot.values():
+        assert len(question["choices"]) <= ai_trainer_module.SETUP_MAX_CHOICES
+        assert all(len(c) <= ai_trainer_module.SETUP_CHOICE_LIMIT for c in question["choices"])
 
 
-async def test_goal_question_is_not_repeated_on_the_second_round(fresh_db, user_id, monkeypatch):
-    """Профиль между кругами не меняется — модель сохранит цель только в сборке,
-    так что «уже спросили» живёт флагом в ai_setup."""
+async def test_core_is_not_repeated_on_the_second_round(fresh_db, user_id, monkeypatch):
+    """Профиль между кругами не меняется, а второй круг — доспрос открытого,
+    так что «ядро уже задано» живёт флагом в ai_setup."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=ROUND_TWO))
     state = await _state_with_setup(user_id, idx=2, answers=["3 дня", "час-полтора"])
 
@@ -307,10 +365,7 @@ async def test_goal_question_is_not_repeated_on_the_second_round(fresh_db, user_
     assert asked == [q["question"] for q in ROUND_TWO]
 
 
-async def test_goal_question_pushes_out_the_last_model_question_at_the_cap(
-    fresh_db, user_id, monkeypatch
-):
-    """Потолок опросника — SETUP_MAX_QUESTIONS вместе с подставленным вопросом."""
+async def test_cap_trims_model_extras_never_core(fresh_db, user_id, monkeypatch):
     full = [
         {"question": f"Вопрос {i}", "choices": []}
         for i in range(ai_trainer_module.SETUP_MAX_QUESTIONS)
@@ -321,8 +376,55 @@ async def test_goal_question_pushes_out_the_last_model_question_at_the_cap(
     asked = await _questions_after(user_id, state, _Chat(user_id))
 
     assert len(asked) == ai_trainer_module.SETUP_MAX_QUESTIONS
-    assert asked[0] == ai_trainer.SETUP_GOAL_QUESTION["question"]
-    assert asked[-1] == full[-2]["question"]
+    assert asked == _core_texts() + ["Вопрос 0", "Вопрос 1"]
+
+
+async def test_today_workout_questions_skip_the_core(fresh_db, user_id):
+    """«Собери тренировку на сегодня» — человек уже в зале: ядро про цель и
+    железо там лишнее, задаются только вопросы модели."""
+    import ai_setup_flow
+
+    payload, questions = await _ask_tool(
+        user_id, {"questions": [{"question": "Как самочувствие?"}], "today_workout": True},
+    )
+    resolved, _ = await ai_setup_flow.questions_with_core(user_id, questions, {})
+
+    assert [q["question"] for q in resolved] == ["Как самочувствие?"]
+    assert "core_note" not in payload
+
+
+async def test_tool_payload_lists_what_was_actually_asked(fresh_db, user_id):
+    """Ответ инструмента перечисляет итоговый опросник — иначе модель
+    пересказала бы свой единственный склеенный вопрос как заданный."""
+    import ai_setup_flow
+
+    async def on_questions(questions: list) -> None:
+        questions[:] = (await ai_setup_flow.questions_with_core(user_id, questions, {}))[0]
+
+    combined = "Сколько дней в неделю и сколько времени на тренировку?"
+    raw = await ai_trainer_module.execute_tool(
+        user_id, "ask_setup_questions", {"questions": [{"question": combined}]}, on_questions=on_questions,
+    )
+    payload = json.loads(raw)
+
+    assert payload["questions"] == _core_texts()
+    assert combined not in payload["questions"]
+    assert "core_note" in payload
+
+
+async def test_for_client_path_asks_core_about_the_athlete(fresh_db, user_id):
+    """Программа атлету: вопросы про атлета, и профиль тренера в кнопки «как
+    раньше» не попадает."""
+    import ai_setup_flow
+
+    await fresh_db.update_user(user_id, goal="набрать массу")
+    combined = [{"question": "Сколько дней в неделю и сколько времени у атлета?", "choices": []}] + EXTRA
+
+    resolved, asked = await ai_setup_flow.questions_with_core(user_id, combined, {}, for_client=True)
+
+    assert asked is True
+    assert [q["question"] for q in resolved] == _core_texts(for_client=True) + [EXTRA[0]["question"]]
+    assert resolved[0]["choices"] == ai_setup_flow.setup_goal_question(for_client=True)["choices"]
 
 
 # ---------- ответ кнопкой ----------
@@ -726,7 +828,10 @@ def test_fresh_start_questions_are_six_with_choices_and_goal_first():
     for lang in ("ru", "en"):
         with i18n.use_lang(lang):
             questions = ai_setup_flow.fresh_start_questions()
-            assert questions[0] == ai_setup_flow.setup_goal_question()
+            goal = ai_setup_flow.setup_goal_question()
+            assert questions[0]["question"] == goal["question"]
+            assert questions[0]["choices"] == goal["choices"]
+        assert [q["slot"] for q in questions] == list(ai_setup_flow.CORE_SLOTS)
         assert len(questions) == 6 <= ai_trainer_module.SETUP_MAX_QUESTIONS
         for question in questions:
             assert 0 < len(question["question"]) <= ai_trainer_module.SETUP_QUESTION_LIMIT

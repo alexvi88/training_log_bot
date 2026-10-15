@@ -499,6 +499,13 @@ async def _run_turn(
             actions.append(action)
 
     async def collect_questions(questions: list) -> None:
+        # Ядро опросника — сразу, в том же списке: ответ инструмента модели
+        # (ai_trainer.sync_setup_payload) перечисляет ровно заданное, а
+        # _next_setup_step зовёт то же ещё раз без изменений.
+        previous = await db.get_ai_setup_state(user_id) or {}
+        questions[:] = (await ai_setup_flow.questions_with_core(
+            user_id, questions, previous, for_client=subject is not None,
+        ))[0]
         questions_cell.clear()
         questions_cell.extend(questions)
 
@@ -738,7 +745,7 @@ async def _next_setup_step(
             "goal_asked": bool(previous.get("goal_asked")), "questions": [], "answers": [], "idx": 0,
         }
         return "force", (ai_setup_flow.setup_enough_text(previous.get("goal")), state)
-    resolved_questions, goal_asked = await ai_setup_flow.questions_with_goal(
+    resolved_questions, goal_asked = await ai_setup_flow.questions_with_core(
         user_id, questions, previous, for_client=for_client,
     )
     state = {
@@ -754,7 +761,7 @@ async def _turn_response(
 ) -> dict[str, Any]:
     """Форма ответа /ai/ask и финала /ai/questions/answer: текст плюс всё, чем
     в боте под ним становится клавиатура. `goal` — исходная просьба
-    пользователя (для опросника, см. ai_setup_flow.questions_with_goal).
+    пользователя (для опросника, см. ai_setup_flow.questions_with_core).
     `subject` — программа атлету: опросник про атлета, без упоминаний (свои
     упражнения и программы тренера в ответе про атлета — не те ссылки)."""
     user = await db.get_user(user_id)
