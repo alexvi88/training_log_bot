@@ -192,9 +192,12 @@ async def test_photo_is_not_stored_in_history(fresh_db, user_id, monkeypatch):
     assert "base64" not in dumped
     assert "AAAA" not in dumped
     # Вместо картинки — текст вопроса (с датой, как и уехало модели), чтобы
-    # сообщение осталось валидным.
+    # сообщение осталось валидным, и пометка, что фото было и его больше не
+    # видно: без неё следующий ход достраивал детали снимка, которого нет.
     today = await ai_trainer._user_today(user_id)
-    assert seen[0][0]["content"] == f"что тут по калориям?\n\nСегодня {today.isoformat()}."
+    assert seen[0][0]["content"] == (
+        f"что тут по калориям?\n\nСегодня {today.isoformat()}.\n\n{ai_trainer.PHOTO_GONE_NOTE}"
+    )
 
 
 async def test_video_observations_stay_in_history(fresh_db, user_id, monkeypatch):
