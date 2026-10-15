@@ -354,3 +354,12 @@ SCREEN_COACH_CLIENTS = "coach_clients"
 def coach_clients_route() -> dict:
     """Маршрут банера «новый клиент»: `{"screen": "coach_clients"}`."""
     return {"screen": SCREEN_COACH_CLIENTS}
+
+
+# Связка тренер ↔ атлет разорвана (api_v1_coach.revoke_my_coach /
+# remove_client и те же кнопки в боте, coach_notify.deliver_unlinked).
+# Тренеру — «клиент закрыл доступ», банер ведёт в «Мои клиенты», где неделю
+# стоит серая строка; атлету — «тренер больше не ведёт тебя», банер ведёт в
+# последнюю программу от этого тренера, если она у атлета есть.
+COACH_CLIENT_LEFT = "coach_client_left"
+COACH_UNLINKED = "coach_unlinked"

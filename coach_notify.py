@@ -6,9 +6,13 @@
 - тренер назначил программу → атлету (`deliver_program`), банер ведёт в
   программу, кнопка в боте — «Открыть программу» (`rt:prg:<id>`);
 - атлет принял приглашение → тренеру (`deliver_new_client`), банер ведёт в
-  «Мои клиенты», кнопка в боте — туда же (`coach:clients:0`).
+  «Мои клиенты», кнопка в боте — туда же (`coach:clients:0`);
+- связку разорвали (`deliver_unlinked`) → второй стороне: атлет закрыл
+  доступ — тренеру «Клиент закрыл доступ» (в «Мои клиенты»), тренер убрал
+  клиента — атлету «Тренер больше не ведёт тебя» (в его программу от тренера,
+  если она есть).
 
-Ниже — подробно про комментарий; остальные два устроены так же.
+Ниже — подробно про комментарий; остальные устроены так же.
 
 Сервис для тренеров (coach_service.py) пишет комментарий из двух мест — REST
 `/v1/coach/.../comments` (приложение) и экран тренировки клиента в боте
@@ -76,7 +80,7 @@ def _name_or_unnamed(name: Optional[str], lang: str) -> str:
 
 
 async def _push_ios(
-    recipient: Any, title_key: str, body_key: str, *, category: str, route: dict, **params: str
+    recipient: Any, title_key: str, body_key: str, *, category: str, route: Optional[dict], **params: str
 ) -> int:
     """Банер получателю на его языке, на каждое iOS-устройство, и строка в
     его «Уведомлениях» (inbox.deliver) — даже когда банер не дошёл. Возвращает,
@@ -94,7 +98,7 @@ async def _push_ios(
 
 
 async def _send_telegram(
-    bot, recipient: Any, build: Callable[[], Awaitable[tuple[str, InlineKeyboardMarkup]]], what: str
+    bot, recipient: Any, build: Callable[[], Awaitable[tuple[str, Optional[InlineKeyboardMarkup]]]], what: str
 ) -> bool:
     """Сообщение получателю в Telegram. False — писать некуда или не дошло
     (остановил бота, сеть). Не бросает."""
@@ -309,5 +313,116 @@ async def deliver_new_client(coach_id: int, client_name: str, *, bot: Optional[A
     pushed = await push_ios_new_client(coach, client_name)
     telegram = await _telegram_any_bot(
         bot, coach, lambda b: send_telegram_new_client(b, coach, client_name), "new client"
+    )
+    return pushed, telegram
+
+
+# ---------- связку разорвали → второй стороне ----------
+#
+# Подключение сопровождается пушем «Новый клиент», а разрыв раньше проходил
+# молча: тренер просто не находил клиента в списке, атлет узнавал, только
+# открыв «Тренер». Теперь вторая сторона слышит об этом тем же набором
+# каналов — банер, строка в «Уведомлениях», Telegram — и на своём языке.
+
+
+async def push_ios_client_left(coach: Any, client_name: str) -> int:
+    """Банер тренеру «Клиент закрыл доступ»; тап — в «Мои клиенты», где
+    неделю стоит серая строка."""
+    return await _push_ios(
+        coach, "coach.push.client_left_title", "coach.push.client_left_body",
+        category=push_ios.COACH_CLIENT_LEFT, route=push_ios.coach_clients_route(),
+        name=push_ios._clip_param(client_name, 24),
+    )
+
+
+async def telegram_client_left_message(coach: Any, client_name: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Текст и кнопка «Мои клиенты» — на языке тренера."""
+    with i18n.use_lang(_lang_of(coach)):
+        body = i18n.t("coach.tg.client_left", name=escape(client_name))
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=i18n.t("coach.btn.my_clients_short"), callback_data="coach:clients:0")
+        ]])
+    return body, kb
+
+
+async def push_ios_coach_left(client: Any, coach_name: Optional[str], program_id: Optional[int]) -> int:
+    """Банер атлету «Тренер больше не ведёт тебя». Про программы — только если
+    программа от этого тренера у атлета правда лежит (`program_id`); тогда и
+    тап ведёт в неё."""
+    lang = _lang_of(client)
+    body_key = "coach.push.coach_left_body_programs" if program_id is not None else "coach.push.coach_left_body"
+    return await _push_ios(
+        client, "coach.push.coach_left_title", body_key,
+        category=push_ios.COACH_UNLINKED,
+        route=push_ios.program_route(program_id) if program_id is not None else None,
+        coach=push_ios._clip_param(_name_or_unnamed(coach_name, lang), 20),
+    )
+
+
+async def telegram_coach_left_message(
+    client: Any, coach_name: Optional[str], program_id: Optional[int]
+) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+    """Текст на языке атлета; кнопка «Программы» — только когда программа от
+    тренера у него есть."""
+    with i18n.use_lang(_lang_of(client)):
+        key = "coach.tg.coach_left_programs" if program_id is not None else "coach.tg.coach_left"
+        body = i18n.t(key, coach=escape(coach_name or i18n.t("coach.unnamed")))
+        kb = None
+        if program_id is not None:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=i18n.t("btn.programs"), callback_data="rt:manage")
+            ]])
+    return body, kb
+
+
+async def _latest_coach_program(coach_id: int, client_id: int) -> Optional[int]:
+    """Свежая программа от этого тренера, которая у атлета всё ещё есть:
+    разрыв её не трогает (db.delete_coach_link), удалил сам — её нет."""
+    try:
+        rows = await db.list_coach_assignments(coach_id, client_id)
+    except Exception:
+        logger.exception("coach: unlink notify — can't read programs %s → %s", coach_id, client_id)
+        return None
+    return rows[0]["program_id"] if rows else None
+
+
+async def deliver_unlinked(
+    coach_id: int,
+    client_id: int,
+    *,
+    by: str,
+    client_name: str,
+    coach_name: Optional[str] = None,
+    bot: Optional[Any] = None,
+) -> tuple[int, bool]:
+    """Связку уже разорвали (db.delete_coach_link) — сказать второй стороне:
+    `by` = db.COACH_UNLINK_BY_CLIENT — тренеру, COACH_UNLINK_BY_COACH — атлету.
+    (сколько устройств приняли банер, ушло ли в Telegram). Не бросает."""
+    recipient_id = coach_id if by == db.COACH_UNLINK_BY_CLIENT else client_id
+    try:
+        recipient = await db.get_user(recipient_id)
+    except Exception:
+        logger.exception("coach: unlink notify — can't read user %s", recipient_id)
+        return 0, False
+    if recipient is None:
+        return 0, False
+    if by == db.COACH_UNLINK_BY_CLIENT:
+        pushed = await push_ios_client_left(recipient, client_name)
+        telegram = await _telegram_any_bot(
+            bot, recipient,
+            lambda b: _send_telegram(
+                b, recipient, lambda: telegram_client_left_message(recipient, client_name), "client left"
+            ),
+            "client left",
+        )
+        return pushed, telegram
+    program_id = await _latest_coach_program(coach_id, client_id)
+    pushed = await push_ios_coach_left(recipient, coach_name, program_id)
+    telegram = await _telegram_any_bot(
+        bot, recipient,
+        lambda b: _send_telegram(
+            b, recipient, lambda: telegram_coach_left_message(recipient, coach_name, program_id), "coach left"
+        ),
+        "coach left",
     )
     return pushed, telegram

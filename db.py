@@ -1186,6 +1186,25 @@ CREATE TABLE IF NOT EXISTS coach_links (
 );
 CREATE INDEX IF NOT EXISTS idx_coach_links_client ON coach_links (client_id);
 
+-- След разорванной связки — серая строка «Маша больше не делится дневником ·
+-- 14 окт» в «Моих клиентах» тренера (coach_service.recent_unlinks): клиент не
+-- исчезает из списка молча. client_name — копия имени из coach_links на
+-- момент разрыва, unlinked_by — кто разорвал: 'client' (атлет закрыл доступ)
+-- или 'coach' (тренер убрал сам; такую строку тренеру не показываем — он и
+-- так знает). Пишет db.delete_coach_link с `by=`, снимает повторное
+-- «Разрешить» (create_coach_link). Живёт COACH_UNLINK_SHOWN_DAYS (чистка —
+-- prune_old_coach_unlinks); два хозяина, как у coach_links, поэтому снос
+-- аккаунта чистит строку по обеим колонкам (_WIPE_PAIR_TABLES).
+CREATE TABLE IF NOT EXISTS coach_unlinks (
+    coach_id INTEGER NOT NULL,
+    client_id INTEGER NOT NULL,
+    client_name TEXT NOT NULL,
+    unlinked_by TEXT NOT NULL,
+    unlinked_at TEXT NOT NULL,
+    PRIMARY KEY (coach_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_coach_unlinks_client ON coach_unlinks (client_id);
+
 -- Программа, назначенная тренером: program_id — КОПИЯ у атлета (своя строка
 -- programs с source='coach'), а не ссылка на программу тренера. Атлет может
 -- её править и удалять как свою; подпись «от тренера» и прогресс по дням
@@ -3227,6 +3246,7 @@ _WIPE_PAIR_TABLES: tuple[tuple[str, str, str], ...] = (
     ("coach_comments", "coach_id", "client_id"),
     ("coach_assignments", "coach_id", "client_id"),
     ("coach_links", "coach_id", "client_id"),
+    ("coach_unlinks", "coach_id", "client_id"),
     ("coach_summaries", "coach_id", "client_id"),
     ("ai_coach_client_chats", "coach_id", "client_id"),
 )
@@ -13578,6 +13598,10 @@ async def create_coach_link(
             )
         except aiosqlite.IntegrityError:
             return False
+        # Вернулся — серой строки «закрыл доступ» у тренера больше нет.
+        await conn().execute(
+            "DELETE FROM coach_unlinks WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
+        )
         await conn().commit()
         return True
 
@@ -13608,17 +13632,38 @@ async def update_coach_link_visibility(
         return cur.rowcount > 0
 
 
-async def delete_coach_link(coach_id: int, client_id: int) -> bool:
+COACH_UNLINK_BY_CLIENT = "client"
+COACH_UNLINK_BY_COACH = "coach"
+
+
+async def delete_coach_link(coach_id: int, client_id: int, *, by: Optional[str] = None) -> bool:
     """Разорвать связку. Комментарии и назначенные программы остаются у атлета
     (это уже его дневник), но тренер без связки их больше не видит.
 
     AI-сводки уходят вместе со связкой: по этому атлету и «по всем клиентам»
-    у этого тренера — в общей сводке тоже его данные."""
+    у этого тренера — в общей сводке тоже его данные.
+
+    `by` — кто разорвал (COACH_UNLINK_BY_CLIENT / COACH_UNLINK_BY_COACH): тогда
+    в coach_unlinks ложится след разрыва для «Моих клиентов» тренера. Без
+    `by` следа нет."""
     async with _write_lock:
         db = conn()
         cur = await db.execute(
+            "SELECT client_name FROM coach_links WHERE coach_id = ? AND client_id = ?",
+            (coach_id, client_id),
+        )
+        link = await cur.fetchone()
+        cur = await db.execute(
             "DELETE FROM coach_links WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
         )
+        if link is not None and by is not None:
+            await db.execute(
+                "INSERT INTO coach_unlinks (coach_id, client_id, client_name, unlinked_by, unlinked_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(coach_id, client_id) DO UPDATE SET "
+                "client_name = excluded.client_name, unlinked_by = excluded.unlinked_by, "
+                "unlinked_at = excluded.unlinked_at",
+                (coach_id, client_id, link["client_name"], by, now_iso()),
+            )
         await db.execute(
             "DELETE FROM coach_summaries WHERE coach_id = ? AND client_id IN (?, ?)",
             (coach_id, client_id, COACH_SUMMARY_ALL),
@@ -13686,6 +13731,30 @@ async def prune_old_coach_summaries(retention_days: int) -> int:
     cutoff = (_utc_now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
     async with _write_lock:
         cur = await conn().execute("DELETE FROM coach_summaries WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
+
+
+async def list_recent_coach_unlinks(
+    coach_id: int, days: int, *, by: str = COACH_UNLINK_BY_CLIENT
+) -> list[aiosqlite.Row]:
+    """Следы разрывов за последние `days` дней у тренера, свежие выше —
+    серые строки «закрыл доступ» в «Моих клиентах»."""
+    cutoff = (_utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT * FROM coach_unlinks WHERE coach_id = ? AND unlinked_by = ? AND unlinked_at >= ? "
+        "ORDER BY unlinked_at DESC, client_id",
+        (coach_id, by, cutoff),
+    )
+    return await cur.fetchall()
+
+
+async def prune_old_coach_unlinks(days: int) -> int:
+    """Следы разрывов старше `days` дней: серую строку тренер уже не видит,
+    а имя бывшего клиента держать незачем."""
+    cutoff = (_utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM coach_unlinks WHERE unlinked_at < ?", (cutoff,))
         await conn().commit()
     return cur.rowcount
 

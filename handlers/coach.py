@@ -514,7 +514,14 @@ async def coach_revoke(callback: CallbackQuery, state: FSMContext):
         return
     coach_id = args[0]
     profile = await db.get_coach_profile(coach_id)
-    removed = await db.delete_coach_link(coach_id, callback.from_user.id)
+    link = await db.get_coach_link(coach_id, callback.from_user.id)
+    removed = await db.delete_coach_link(coach_id, callback.from_user.id, by=db.COACH_UNLINK_BY_CLIENT)
+    if removed and link is not None:
+        # Тренеру — «клиент закрыл доступ», на его языке.
+        await coach_notify.deliver_unlinked(
+            coach_id, callback.from_user.id, by=db.COACH_UNLINK_BY_CLIENT,
+            client_name=link["client_name"], bot=callback.bot,
+        )
     await clear_state_keep_workout(state)
     text, kb = await _hub_view(callback.from_user.id)
     if removed:
@@ -668,14 +675,31 @@ async def _clients_with_signals(coach_id: int) -> list[tuple[Any, Any, dict[str,
     return out
 
 
+async def _unlinked_lines(coach_id: int) -> str:
+    """Серые строки «Маша больше не делится дневником · 14 окт» — кто сам
+    закрыл доступ за последнюю неделю (coach_service.recent_unlinks). Без
+    кнопок: открыть бывшего клиента нельзя."""
+    coach = await db.get_user(coach_id)
+    lines = []
+    for row in await coach_service.recent_unlinks(coach_id):
+        when = dt.datetime.fromisoformat(row["unlinked_at"])
+        day = timeutil.to_user_local(when, coach).date() if coach is not None else when.date()
+        today = timeutil.user_today(coach) if coach is not None else None
+        date = formatting.format_day_month_ru(day, today)
+        lines.append(f"<i>{i18n.t('coach.clients.unlinked_row', name=escape(row['name']), date=escape(date))}</i>")
+    return "\n".join(lines)
+
+
 async def _clients_view(coach_id: int, page: int) -> tuple[str, InlineKeyboardMarkup]:
     items = await _clients_with_signals(coach_id)
+    unlinked = await _unlinked_lines(coach_id)
     kb = InlineKeyboardBuilder()
     head = i18n.t("coach.clients.title")
     if not items:
         kb.row(InlineKeyboardButton(text=i18n.t("coach.btn.invite"), callback_data="coach:invite"))
         kb.row(*_back_row("coach:hub"))
-        return f"{head}\n\n{i18n.t('coach.clients.empty')}", kb.as_markup()
+        tail = f"\n\n{unlinked}" if unlinked else ""
+        return f"{head}\n\n{i18n.t('coach.clients.empty')}{tail}", kb.as_markup()
     pages = max(1, (len(items) + CLIENTS_PAGE_SIZE - 1) // CLIENTS_PAGE_SIZE)
     page = max(0, min(page, pages - 1))
     shown = items[page * CLIENTS_PAGE_SIZE:(page + 1) * CLIENTS_PAGE_SIZE]
@@ -684,6 +708,8 @@ async def _clients_view(coach_id: int, page: int) -> tuple[str, InlineKeyboardMa
         tags = signal_texts(signals) or [i18n.t("coach.signal.none")]
         blocks.append(f"<b>{escape(link['client_name'])}</b>\n{' · '.join(tags)}")
         kb.row(InlineKeyboardButton(text=link["client_name"], callback_data=f"coach:cl:{link['client_id']}"))
+    if unlinked:
+        blocks.append(unlinked)
     blocks.append(f"<i>{i18n.t('coach.clients.ai_hint')}</i>")
     nav = []
     if page > 0:
@@ -1562,7 +1588,13 @@ async def coach_remove(callback: CallbackQuery, state: FSMContext):
     link, _client = await _linked(callback, args[0])
     if link is None:
         return
-    await db.delete_coach_link(callback.from_user.id, args[0])
+    if await db.delete_coach_link(callback.from_user.id, args[0], by=db.COACH_UNLINK_BY_COACH):
+        # Атлету — «тренер больше не ведёт тебя», на его языке.
+        profile = await db.get_coach_profile(callback.from_user.id)
+        await coach_notify.deliver_unlinked(
+            callback.from_user.id, args[0], by=db.COACH_UNLINK_BY_COACH, client_name=link["client_name"],
+            coach_name=profile["display_name"] if profile is not None else None, bot=callback.bot,
+        )
     text, kb = await _clients_view(callback.from_user.id, 0)
     await _show(callback, f"{i18n.t('coach.removed', name=escape(link['client_name']))}\n\n{text}", kb)
     await callback.answer()
