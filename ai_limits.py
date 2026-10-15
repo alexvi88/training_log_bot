@@ -360,6 +360,13 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
     else:
         log = f"{reason}: за сутки ~${await daily_spend_usd():.2f}"
 
+    if reason == kind and await db.is_walk_demo(user_id):
+        # Аккаунт прогонов (скриншоты, сравнение моделей в ai-compare.yml):
+        # один прогон — десятки вопросов подряд, и личная суточная квота
+        # обрывала его на втором. Личные квоты он не держит; SOFT и HARD по
+        # деньгам — держит, как все (reason тогда не равен kind).
+        logger.info("limit %s skipped: run account %s", kind, user_id)
+        return None
     block = Block(kind=kind, log=log, user_text=_user_text(kind, reason))
     if reason == KIND_SPEND_HARD:
         # HARD-стоп не пропускает никого и никакой «Понятно» (расписка могла

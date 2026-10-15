@@ -234,7 +234,7 @@ async def test_recent_workouts_lists_sets(fresh_db, user_id):
     )
 
     assert len(payload["workouts"]) == 2
-    latest = payload["workouts"][0]
+    latest = payload["workouts"][-1]  # старые первыми
     assert latest["date"] == "2026-01-03"
     assert latest["exercises"][0] == {"name": "Жим лёжа", "sets": ["103x8"], "note": None}
 
@@ -400,7 +400,7 @@ async def test_full_workout_history_is_not_capped_at_ten(fresh_db, user_id):
 
     assert len(recent["workouts"]) == 5  # default limit, unaffected by this change
     assert len(full["workouts"]) == 12
-    assert full["workouts"][-1]["date"] == "2026-01-01"  # oldest last, same ordering as list_recent_workouts
+    assert full["workouts"][0]["date"] == "2026-01-01"  # oldest first, same ordering as list_recent_workouts
 
 
 async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id, monkeypatch):

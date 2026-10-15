@@ -44,6 +44,8 @@ READ_TOOLS = [
     ("compare_periods", {}),
     ("list_recent_workouts", {}),
     ("get_full_workout_history", {}),
+    ("get_progress_report", {}),
+    ("get_balance_report", {}),
 ]
 
 # То, что тренер повторяет из русской истории разговора после смены языка

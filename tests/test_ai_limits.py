@@ -390,3 +390,32 @@ async def test_ack_lives_by_the_same_clock_as_its_limit(user_id, monkeypatch):
     assert await ai_limits.ack_day(user_id, ai_limits.KIND_VOICE) == "2026-08-09"
     assert await ai_limits.ack_day(user_id, ai_limits.KIND_SEARCH_GLOBAL) == "2026-08-10"
     assert await ai_limits.ack_day(user_id, ai_limits.KIND_SPEND_SOFT) == "2026-08-10"
+
+
+# ---------- аккаунт прогонов ----------
+
+
+async def test_walk_demo_skips_personal_quota(user_id, monkeypatch, free):
+    """Прогон ai-compare — десятки вопросов подряд с одного аккаунта: личная
+    квота обрывала его на втором вопросе."""
+    monkeypatch.setattr(dbmod, "is_walk_demo", AsyncMock(return_value=True))
+    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
+        await dbmod.increment_ai_question_count(user_id)
+
+    assert await ai_limits.check(user_id, ai_limits.KIND_QUESTION) is None
+
+
+async def test_walk_demo_still_holds_the_hard_stop(user_id, monkeypatch, free):
+    monkeypatch.setattr(dbmod, "is_walk_demo", AsyncMock(return_value=True))
+    _spend(monkeypatch, config.AI_DAILY_COST_HARD_STOP_USD)
+
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    assert block is not None
+    assert block.kind == ai_limits.KIND_SPEND_HARD
+
+
+async def test_walk_demo_still_holds_the_soft_cap(user_id, monkeypatch, free):
+    monkeypatch.setattr(dbmod, "is_walk_demo", AsyncMock(return_value=True))
+    _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD)
+
+    assert await ai_limits.check(user_id, ai_limits.KIND_SEARCH) is not None
