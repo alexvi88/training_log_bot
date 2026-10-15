@@ -2843,6 +2843,19 @@ async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def is_walk_demo(telegram_id: int) -> bool:
+    """Аккаунт прогона скриншотов (WALK_DEMO_USERNAME, вход по паролю). Демо
+    App Review (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
+    if not config.WALK_DEMO_USERNAME:
+        return False
+    cur = await conn().execute(
+        "SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'review_demo' "
+        "AND provider_user_id = ?",
+        (telegram_id, config.WALK_DEMO_USERNAME),
+    )
+    return await cur.fetchone() is not None
+
+
 async def set_user_first_name(telegram_id: int, first_name: Optional[str]) -> None:
     """Имя из профиля Telegram (см. колонку users.first_name). Пустое — NULL.
     Пишет только если изменилось: зовётся на апдейтах, а запись под общим
