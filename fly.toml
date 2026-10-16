@@ -29,10 +29,10 @@ kill_timeout = 60
   TEST_USER_ID = "8789172252"
   # Ссылка на приложение в App Store — строкой рядом с t.me в приглашении и
   # визитке (config.APP_STORE_URL). Пока не задана, строки нет вовсе.
-  # С provider token (pt=) — иначе метки кампаний (ct=you_story у сторис «ТЫ»)
-  # не видны в App Store Connect → Analytics → Campaigns, см. GROWTH.md.
-  # Без pt= пока: provider token добавить, когда владелец возьмёт его в Analytics.
-  APP_STORE_URL = "https://apps.apple.com/app/id6815211995"
+  # С provider token (pt=) — иначе метки кампаний (ct=you_story у сторис «ТЫ»,
+  # ct=site_<блок> у кнопок сайта, seo_pages.app_store_link) не видны в
+  # App Store Connect → Analytics → Campaigns, см. GROWTH.md. pt задан.
+  APP_STORE_URL = "https://apps.apple.com/app/apple-store/id6815211995?pt=129483617&mt=8"
   # Свой домен публичных страниц (seo_pages.py): canonical, hreflang, sitemap.
   # DNS athletediary.app смотрит на Fly, сертификат выпущен 16.10.2026.
   SITE_BASE_URL = "https://athletediary.app"

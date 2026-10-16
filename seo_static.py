@@ -12,7 +12,9 @@
     `fonts/OFL.txt`) из iOS-репозитория, урезанный до латиницы и кириллицы;
     урезанная копия — изменённая версия, поэтому по OFL она переименована
     (Reserved Font Name) в Basement Pixel, как и в приложении;
-  * иконки (`icons/`) — из иконки приложения (AppIcon 1024).
+  * иконки (`icons/`) — из иконки приложения (AppIcon 1024);
+  * пиксельный подвал (`gym/`) — сцена «Меню» приложения и спрайты из
+    iOS-репозитория (`docs/marketing/menu-gym`, наши собственные ассеты).
 - `/favicon.ico`, `/apple-touch-icon.png`, `/site.webmanifest` — по
   привычным адресам, их браузеры спрашивают сами.
 - `/og/<язык>/<ключ>.png` — картинка 1200×630 для превью ссылки: заголовок
@@ -60,6 +62,19 @@ SCREENS = {
 
 THEME_COLOR = "#120b09"
 
+# Пиксельный подвал с вкладки «Меню» приложения (iOS-репозиторий,
+# docs/marketing/menu-gym): настоящая сцена со скриншота симулятора и
+# спрайты, извлечённые из кода (raw, 1:1), склеенные в ленты кадров. Макеты
+# оттуда (папка mockups, с плашкой «макет») сюда не берутся.
+SCENE_SIZE = (1110, 617)
+# Лента кадров: (файл, ширина кадра, высота, кадров).
+SPRITES = {
+    "curl": ("gym/athlete_curl.png", 28, 77, 2),
+    "coach": ("gym/coach_idle.png", 58, 100, 4),
+    "dog": ("gym/dog_run.png", 33, 28, 4),
+    "stand": ("gym/athlete_stand.png", 28, 77, 1),
+}
+
 
 def site_file(rel: str) -> Optional[str]:
     """Абсолютный путь к файлу из media/site или None — чужой путь, тип или нет файла."""
@@ -100,7 +115,7 @@ async def site_route(request: Request) -> Response:
     return _file_response(path)
 
 
-def _root_file(rel: str):
+def root_file(rel: str):
     async def route(request: Request) -> Response:
         return _file_response(os.path.join(SITE_DIR, rel))
 
