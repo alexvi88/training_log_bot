@@ -1143,6 +1143,9 @@ COMMUNITY_CHAT_URL = os.getenv("COMMUNITY_CHAT_URL", "").strip()
 # с t.me-ссылкой — строка «С iPhone — приложение: <url>»
 # (sharing.app_store_line, в приложение — полем `app_store_url` в /me).
 # Пусто — строки нет вовсе: ссылка в никуда хуже отсутствующей.
+# Задаётся с provider token (`?pt=...`): приложение дописывает к ссылке у
+# сторис «ТЫ» кампанию `ct=you_story`, а Apple считает её только вместе с
+# `pt` (App Store Connect → Analytics → Campaigns, GROWTH.md).
 APP_STORE_URL = os.getenv("APP_STORE_URL", "").strip()
 
 

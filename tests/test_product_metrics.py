@@ -248,6 +248,65 @@ def test_plan_offer_event_keeps_only_action():
     assert product_metrics.clean_props("plan_offer", {}) == {}
 
 
+def test_you_story_events_keep_source_enum_and_capped_activity():
+    for event in ("you_story_open", "you_story_share"):
+        assert product_metrics.clean_props(event, {"source": "menu", "text": "что ввёл человек"}) == {
+            "source": "menu"
+        }
+        assert product_metrics.clean_props(event, {"source": "Finish"}) == {"source": "finish"}
+        # Источник не из списка — выкидывается, а не пишется как есть.
+        assert product_metrics.clean_props(event, {"source": "push"}) == {}
+    save = "com.apple.UIKit.activity.SaveToCameraRoll"
+    assert product_metrics.clean_props(
+        "you_story_shared", {"source": "finish", "activity": save, "caption": "подпись"}
+    ) == {"source": "finish", "activity": save}
+    assert product_metrics.clean_props("you_story_shared", {"activity": "cancelled"}) == {
+        "activity": "cancelled"
+    }
+    long = "com.example." + "a" * 200
+    assert product_metrics.clean_props("you_story_shared", {"activity": long}) == {
+        "activity": long[:100]
+    }
+    for junk in ("жим лёжа", "two words", 5, None, ""):
+        assert product_metrics.clean_props("you_story_shared", {"activity": junk}) == {}
+
+
+@pytest.mark.asyncio
+async def test_app_stores_you_story_events_and_drops_unknown_props(fresh_db):
+    await db.get_or_create_user(telegram_id=7, username="c")
+    token = await db.issue_api_token(7)
+    transport = httpx.ASGITransport(app=api_v1.build_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/events",
+            headers={"authorization": f"Bearer {token}", "x-app-version": "1.9 (80)"},
+            json={"events": [
+                {"name": "you_story_open", "props": {"source": "menu", "rank": "Новичок"}},
+                {"name": "you_story_share", "props": {"source": "finish", "junk": 1}},
+                {"name": "you_story_shared", "props": {
+                    "source": "menu",
+                    "activity": "com.apple.UIKit.activity.SaveToCameraRoll",
+                    "text": "секрет",
+                }},
+                {"name": "you_story_shared", "props": {"source": "elsewhere", "activity": "cancelled"}},
+            ]},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"stored": 4}
+
+    def dumped(props):
+        return json.dumps(props, separators=(",", ":"), sort_keys=True)
+
+    assert await _events(7) == [
+        ("you_story_open", dumped({"source": "menu"}), "ios", "1.9 (80)"),
+        ("you_story_share", dumped({"source": "finish"}), "ios", "1.9 (80)"),
+        ("you_story_shared", dumped({
+            "activity": "com.apple.UIKit.activity.SaveToCameraRoll", "source": "menu",
+        }), "ios", "1.9 (80)"),
+        ("you_story_shared", dumped({"activity": "cancelled"}), "ios", "1.9 (80)"),
+    ]
+
+
 # --- пуши в сводке ----------------------------------------------------------------
 
 
