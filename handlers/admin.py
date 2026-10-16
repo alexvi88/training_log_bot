@@ -14,7 +14,14 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, InlineKeyboardButton, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    FSInputFile,
+    InaccessibleMessage,
+    InlineKeyboardButton,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import account_deletion
@@ -629,11 +636,15 @@ ACTIVITY_PAGE_SIZE = 25
 # событий приходится куда больше времени наблюдения — короткая страница
 # заставляла бы листать через каждые несколько минут. Держим её длиннее.
 ACTIVITY_ALL_PAGE_SIZE = 80
-# Экран — одно сообщение (4096 символов у Telegram), а в базе строка может быть
-# длиной до activity_log.MAX_CONTENT_LEN. Показываем начало: для «что человек
-# ввёл» его хватает, а целиком длинная простыня всё равно вытеснила бы с экрана
-# соседние события — то есть контекст, ради которого лента и открыта.
-ACTIVITY_LINE_LIMIT = 120
+# Тексты в ленте — целиком: и что человек написал (до activity_log.MAX_CONTENT_LEN),
+# и расшифровка голосового, и ответ тренера. Раньше строка резалась до 120
+# символов, и владелец видел «Я бы **не переходил сразу** … Дли…» — ни вопроса,
+# ни ответа целиком. Страница, которая не влезает в одно сообщение Telegram,
+# уходит несколькими (ui.split_html), кнопки — под последним.
+ACTIVITY_CHUNK_LIMIT = 4000
+# Ответ тренера — markdown модели; в ленте он рендерится так же, как атлету
+# (formatting.ai_markdown_to_html), а не сырыми звёздочками.
+_ACTIVITY_MARKDOWN_KINDS = frozenset({activity_log.KIND_AI_REPLY})
 
 
 # Кто написал строку: человек, его тап или тренер в ответ.
@@ -676,9 +687,13 @@ def _activity_source(row) -> str:
 
 
 def _activity_content(row) -> str:
-    content = row["content"]
-    if len(content) > ACTIVITY_LINE_LIMIT:
-        content = content[: ACTIVITY_LINE_LIMIT - 1] + "…"
+    """Содержимое строки ленты в HTML — целиком, без обрезки.
+
+    Переводы строк — «⏎»: одно событие остаётся одной строкой ленты, и граница
+    между событиями всегда видна (по ней же ui.split_html режет страницу)."""
+    content = (row["content"] or "").strip()
+    markdown = row["kind"] in _ACTIVITY_MARKDOWN_KINDS
+    content = formatting.ai_markdown_to_html(content) if markdown else escape(content)
     return content.replace("\n", " ⏎ ")
 
 
@@ -692,15 +707,55 @@ def _activity_line(row) -> str:
 
 def _activity_line_all(row) -> str:
     """Та же строка, что и в ленте одного пользователя, но с автором — общая
-    лента иначе нечитаема — и в HTML, чтобы автора можно было выделить жирным."""
+    лента иначе нечитаема — и автор выделен жирным."""
     at = admin_time(row["created_at"])
     who = keyboards.admin_user_label(
         row["username"], keyboards.row_value(row, "email"), row["telegram_id"]
     )
     return (
         f"{at.strftime('%d.%m %H:%M')} {_activity_source(row)} {_activity_marker(row['kind'])} "
-        f"{escape(_activity_content(row))} — <b>{escape(who)}</b>"
+        f"{_activity_content(row)} — <b>{escape(who)}</b>"
     )
+
+
+async def _drop_activity_extras(callback: CallbackQuery, state: FSMContext) -> None:
+    """Убрать куски прошлой страницы ленты, кроме того, что под кнопками."""
+    data = await state.get_data()
+    extra = data.get("admin_activity_extra_ids") or []
+    if not extra:
+        return
+    await state.update_data(admin_activity_extra_ids=[])
+    chat_id = callback.message.chat.id
+    for message_id in extra:
+        with suppress(TelegramAPIError):
+            await callback.bot.delete_message(chat_id, message_id)
+
+
+async def _show_activity_text(
+    callback: CallbackQuery, state: FSMContext, text: str, reply_markup
+) -> None:
+    """Страница ленты — одним сообщением, а не влезла — несколькими подряд.
+
+    Кнопки — под последним куском: листают оттуда, где страница кончилась.
+    Куски прошлой страницы при перелистывании убираются, чтобы чат не копил
+    ленту дважды.
+    """
+    await _drop_activity_extras(callback, state)
+    chunks = ui.split_html(text, ACTIVITY_CHUNK_LIMIT)
+    if len(chunks) == 1:
+        await ui.safe_edit(callback, text, reply_markup=reply_markup, parse_mode="HTML")
+        return
+    message = callback.message
+    chat_id = message.chat.id
+    if not isinstance(message, InaccessibleMessage):
+        with suppress(TelegramAPIError):
+            await message.delete()
+    extra: list[int] = []
+    for chunk in chunks[:-1]:
+        sent = await callback.bot.send_message(chat_id, chunk, parse_mode="HTML")
+        extra.append(sent.message_id)
+    await callback.bot.send_message(chat_id, chunks[-1], reply_markup=reply_markup, parse_mode="HTML")
+    await state.update_data(admin_activity_extra_ids=extra)
 
 
 async def _show_activity_users(target: Message | CallbackQuery, state: FSMContext, page: int):
@@ -710,6 +765,8 @@ async def _show_activity_users(target: Message | CallbackQuery, state: FSMContex
     users = await db.list_users_with_event_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
     has_next = (page + 1) * USERS_PAGE_SIZE < total
     kb = keyboards.admin_activity_users_keyboard(users, page, has_next)
+    if isinstance(target, CallbackQuery):
+        await _drop_activity_extras(target, state)
     text = "👀 Что делают пользователи — выбери, чью ленту открыть:" if users else "Пользователей пока нет."
     if isinstance(target, CallbackQuery):
         await ui.safe_edit(target, text, reply_markup=kb)
@@ -731,26 +788,26 @@ async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target
         user["username"] if user else None, await db.get_user_email(target_user_id), target_user_id
     )
     if rows:
-        header = f"👀 {who} — {total} действий, свежие сверху:"
+        header = f"👀 {escape(who)} — {total} действий, свежие сверху:"
         text = header + "\n\n" + "\n".join(_activity_line(row) for row in rows)
     else:
-        text = f"👀 {who} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
+        text = f"👀 {escape(who)} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_feed_keyboard(target_user_id, page, has_next)
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    await _show_activity_text(callback, state, text, kb)
 
 
 SITE_FEED_PAGE_SIZE = 30
 
 
 async def _show_site_feed(callback: CallbackQuery, page: int):
-    """Посещения сайта людьми, сложенные по 10 минутам (site_stats.format_feed_line):
-    роботы и повторные обновления одной страницы ленту не забивают."""
+    """Посещения сайта, сложенные по 10 минутам (site_stats.format_feed_line):
+    люди — по страницам, роботы — одной строкой на робота в окне."""
     total = await db.count_site_visit_buckets()
     rows = await db.site_visits_feed(limit=SITE_FEED_PAGE_SIZE, offset=page * SITE_FEED_PAGE_SIZE)
     has_next = (page + 1) * SITE_FEED_PAGE_SIZE < total
     if rows:
-        text = "🌐 Сайт — просмотры людьми, по 10 минут, время UTC, свежие сверху:\n\n" + "\n".join(
+        text = "🌐 Сайт — просмотры по 10 минут (🤖 — роботы), время UTC, свежие сверху:\n\n" + "\n".join(
             escape(site_stats.format_feed_line(row)) for row in rows
         )
     else:
@@ -782,7 +839,7 @@ async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, pa
         text = f"👀 Действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_all_keyboard(page, has_next)
-    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await _show_activity_text(callback, state, text, kb)
 
 
 GROWTH_WINDOW_DAYS = 30
@@ -1459,6 +1516,178 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext):
     )
 
 
+
+
+# ---------- /ai_retry: ответить на вопрос, на котором тренер сорвался ----------
+#
+# Источник — лента user_events, а не ai_chat_messages: в вечный лог диалога
+# сорвавшийся ход не пишется вовсе (вопрос и ответ ложатся туда парой только
+# после ответа), а в ленте есть и сам вопрос (middleware пишет его до
+# обработчика), и KIND_AI_FAILED сразу за ним.
+
+AI_RETRY_LOOKBACK_DAYS = 7
+_AI_RETRY_KINDS = (
+    activity_log.KIND_MESSAGE,
+    activity_log.KIND_REPLY_BUTTON,
+    activity_log.KIND_CALLBACK,
+    activity_log.KIND_AI_REPLY,
+    activity_log.KIND_AI_FAILED,
+)
+
+
+async def find_failed_ai_question(telegram_id: int) -> Optional[dict]:
+    """Последний сбой тренера за AI_RETRY_LOOKBACK_DAYS, после которого ответа
+    не было, и вопрос перед ним. None — такого сбоя нет.
+
+    question=None — сбой есть, но повторить нечего: ход начала кнопка, голос или
+    фото (их в ленте нет, только пометка), тогда в asked — что это было.
+    """
+    now = dt.datetime.fromisoformat(db.now_iso())
+    since = (now - dt.timedelta(days=AI_RETRY_LOOKBACK_DAYS)).isoformat(timespec="seconds")
+    rows = await db.list_user_events_since(telegram_id, since, _AI_RETRY_KINDS)
+    failed_at = None
+    for i in range(len(rows) - 1, -1, -1):
+        kind = rows[i]["kind"]
+        if kind == activity_log.KIND_AI_REPLY:
+            return None  # после последнего сбоя тренер уже отвечал
+        if kind == activity_log.KIND_AI_FAILED:
+            failed_at = i
+            break
+    if failed_at is None:
+        return None
+    failed = rows[failed_at]
+    found = {
+        "failed_id": failed["id"], "failed_at": failed["created_at"], "reason": failed["content"],
+        "question": None, "asked": None, "asked_at": None,
+    }
+    for row in reversed(rows[:failed_at]):
+        if row["kind"] in (activity_log.KIND_AI_REPLY, activity_log.KIND_AI_FAILED):
+            break
+        found["asked"], found["asked_at"] = row["content"], row["created_at"]
+        content = (row["content"] or "").strip()
+        if (
+            row["kind"] == activity_log.KIND_MESSAGE
+            and activity_log.is_plain_text(content)
+            and not content.startswith("/")
+        ):
+            found["question"] = content
+        break
+    return found
+
+
+async def _resolve_athlete(arg: str) -> Optional[int]:
+    arg = arg.strip()
+    if arg.lstrip("-").isdigit():
+        user_id = int(arg)
+        return user_id if await db.get_user(user_id) is not None else None
+    return await db.find_user_id_by_username(arg)
+
+
+async def _athlete_label(user_id: int) -> str:
+    user = await db.get_user(user_id)
+    if user is None:
+        return str(user_id)
+    return keyboards.admin_user_label(user["username"], keyboards.row_value(user, "email"), user_id)
+
+
+@router.message(Command("ai_retry"))
+async def cmd_ai_retry(message: Message, state: FSMContext, command: CommandObject | None = None):
+    """Найти у атлета вопрос, на который тренер не ответил (сбой у нас), и после
+    подтверждения ответить обычным ходом тренера — без списания квоты."""
+    if not _is_admin(message.from_user.id):
+        return
+    arg = (command.args if command else None) or ""
+    if not arg.strip():
+        await message.answer(
+            "Кому ответить: <code>/ai_retry 123456789</code> или <code>/ai_retry @username</code>",
+            parse_mode="HTML",
+        )
+        return
+    user_id = await _resolve_athlete(arg)
+    if user_id is None:
+        await message.answer(f"Не нашёл атлета {escape(arg.strip())} — проверь id или @ник.", parse_mode="HTML")
+        return
+    label = escape(await _athlete_label(user_id))
+    found = await find_failed_ai_question(user_id)
+    if found is None:
+        await message.answer(
+            f"У {label} за {AI_RETRY_LOOKBACK_DAYS} дн. нет вопроса без ответа — тренер ответил на всё.",
+            parse_mode="HTML",
+        )
+        return
+    failed_at = admin_time(found["failed_at"]).strftime("%d.%m %H:%M")
+    if found["question"] is None:
+        what = escape(_trim(found["asked"], 200)) if found["asked"] else "не нашёл, что он прислал"
+        await message.answer(
+            f"У {label} сбой тренера {failed_at}, но вопрос был не текстом ({what}) — "
+            "повторить его я не могу.",
+            parse_mode="HTML",
+        )
+        return
+    user = await db.get_user(user_id)
+    lang = (user["lang"] if user is not None else None) or i18n.DEFAULT_LANG
+    asked_at = admin_time(found["asked_at"]).strftime("%d.%m %H:%M")
+    truncated = len(found["question"]) >= activity_log.MAX_CONTENT_LEN
+    await message.answer(
+        f"🔁 Вопрос без ответа у {label}\n"
+        f"Спросил: {asked_at}, сбой: {failed_at} ({escape(found['reason'])})\n\n"
+        f"<blockquote>{escape(_trim(found['question'], 1500))}</blockquote>\n"
+        + ("Вопрос в ленте обрезан — тренер получит только начало.\n" if truncated else "")
+        + f"Ответить от тренера? Уйдёт атлету в чат на его языке ({lang}), квоту не спишу.",
+        parse_mode="HTML",
+        reply_markup=keyboards.yes_no_keyboard(
+            f"admin:air:go:{user_id}:{found['failed_id']}", "admin:air:no",
+            yes_text="Ответить", no_text="Отмена",
+        ),
+    )
+
+
+@router.callback_query(F.data == "admin:air:no")
+async def ai_retry_cancel(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await ui.safe_edit(callback, "Отменил — атлету ничего не ушло.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:air:go:"))
+async def ai_retry_confirm(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    from handlers import ai_trainer as ai_handler
+
+    try:
+        user_id, failed_id = (int(part) for part in callback.data.split(":")[3:5])
+    except ValueError:
+        await callback.answer("Кнопка битая — начни заново через /ai_retry", show_alert=True)
+        return
+    found = await find_failed_ai_question(user_id)
+    if found is None or found["failed_id"] != failed_id or found["question"] is None:
+        await callback.answer("Уже неактуально: тренер ответил или сбой сменился. Запусти /ai_retry заново.", show_alert=True)
+        return
+    label = escape(await _athlete_label(user_id))
+    await callback.answer("Отвечаю…")
+    await ui.safe_edit(callback, f"⏳ Тренер отвечает {label}…", parse_mode="HTML")
+    logger.info("admin /ai_retry: answering user %s (failed event %s)", user_id, failed_id)
+    try:
+        answer = await ai_handler.retry_failed_question(callback.bot, state.storage, user_id, found["question"])
+    except ai_handler.RetryBusy:
+        result = "⏳ Атлет прямо сейчас ждёт другой ответ тренера — повтори через минуту."
+    except ai_handler.RetryBlocked as exc:
+        result = f"🛑 Не отправил: стоп по деньгам ({escape(str(exc))})."
+    except TelegramForbiddenError:
+        logger.info("admin /ai_retry: user %s blocked the bot", user_id)
+        result = f"⚠️ Не отправил: {label} заблокировал бота."
+    except Exception as exc:
+        logger.exception("admin /ai_retry: failed for user %s", user_id)
+        result = f"⚠️ Не отправил: {escape(type(exc).__name__)}: {escape(_trim(str(exc), 300))}"
+    else:
+        logger.info("admin /ai_retry: answered user %s, %d chars", user_id, len(answer))
+        result = f"✅ Ответ отправлен {label}."
+    with suppress(TelegramAPIError):
+        await callback.message.answer(result, parse_mode="HTML")
 
 
 # ---------- разовые релизные рассылки (announcements.py) ----------

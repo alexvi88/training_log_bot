@@ -296,6 +296,89 @@ async def test_only_the_last_modes_sessions_are_plotted(fresh_db, client_factory
     assert [p["date"] for p in body["points"]] == ["2026-03-08", "2026-03-15"]
 
 
+async def _bodyweight_exercise(user_id: int, name: str = "Подтягивания") -> int:
+    """Упражнение своим весом, как его заводит каталог (bodyweight_load='full'
+    из seed_data.BODYWEIGHT_TEMPLATES)."""
+    ex_id = await _exercise(user_id, name)
+    await db.conn().execute(
+        "UPDATE exercises SET bodyweight_load = 'full', bodyweight_factor = 1.0 WHERE id = ?", (ex_id,)
+    )
+    await db.conn().commit()
+    return ex_id
+
+
+async def test_barbell_points_carry_max_reps_and_no_bodyweight_flag(fresh_db, client_factory):
+    """`max_reps` — лучшие повторы в одном подходе тренировки — есть у каждой
+    точки, но штанга упражнением своим весом не считается: вкладка «Макс.
+    повторы» по умолчанию у неё не открывается."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _exercise(user_id)
+    await _log_session(user_id, ex_id, 1, [(50.0, 10), (60.0, 2)])
+    await _log_session(user_id, ex_id, 8, [(55.0, 8), (55.0, 9)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()
+
+    assert body["bodyweight_exercise"] is False
+    assert [p["max_reps"] for p in body["points"]] == [10, 9]
+    assert body["records"]["best_reps"] == 10
+
+
+async def test_bodyweight_exercise_zero_weight_sets(fresh_db, client_factory):
+    """Подтягивания без веса тела атлета: подходы 0×N, метрика — повторы,
+    `max_reps` совпадает с `value`, рекорд повторов — по всей истории."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _bodyweight_exercise(user_id)
+    await _log_session(user_id, ex_id, 1, [(0.0, 10), (0.0, 8)])
+    await _log_session(user_id, ex_id, 8, [(0.0, 12), (0.0, 9)])
+    await _log_session(user_id, ex_id, 15, [(0.0, 11)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions?limit=2")).json()
+
+    assert body["bodyweight_exercise"] is True
+    assert body["metric"] == "reps"
+    assert [p["max_reps"] for p in body["points"]] == [12, 11]
+    assert [p["max_reps"] for p in body["points"]] == [p["value"] for p in body["points"]]
+    assert body["records"]["best_reps"] == 12
+
+
+async def test_bodyweight_exercise_with_added_weight_keeps_max_reps(fresh_db, client_factory):
+    """Подтягивания с поясом и записанным весом тела: метрика — e1RM по
+    нагрузке (вес тела + блин), но `max_reps` — лучшие повторы подхода из
+    всех, с блином и без, а признак упражнения своим весом остаётся."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _bodyweight_exercise(user_id)
+    await db.add_bodyweight_log(user_id, 80.0, logged_at="2026-02-01T08:00:00")
+    await _log_session(user_id, ex_id, 1, [(0.0, 9), (10.0, 6)])
+    await _log_session(user_id, ex_id, 8, [(10.0, 7), (0.0, 11)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()
+
+    assert body["bodyweight_exercise"] is True
+    assert body["metric"] == "e1rm"
+    assert [p["max_reps"] for p in body["points"]] == [9, 11]
+    assert [p["max_weight"] for p in body["points"]] == [90.0, 90.0]
+    assert body["records"]["best_reps"] == 11
+
+
+async def test_bodyweight_exercise_added_weight_without_logged_bodyweight(fresh_db, client_factory):
+    """Без веса тела: подход с блином +10 делает тренировку «с весом», но
+    лучшие повторы считаются и по подходам 0×N той же тренировки."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _bodyweight_exercise(user_id, "Отжимания на брусьях")
+    await _log_session(user_id, ex_id, 1, [(10.0, 6), (0.0, 12)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()
+
+    assert body["bodyweight_exercise"] is True
+    assert body["metric"] == "e1rm"
+    assert body["points"][0]["max_reps"] == 12
+    assert body["points"][0]["max_weight"] == 10.0
+
+
 # ---------- доступ ----------
 
 

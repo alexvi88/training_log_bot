@@ -67,6 +67,7 @@ ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("POST", "/ai/program/save"): "сохранил программу от тренера",
     ("POST", "/ai/program/train"): "начал тренировку по плану от тренера",
     ("POST", "/workouts/{workout_id}/sets/voice"): "записал подход голосом",
+    ("POST", "/ai/voice"): "спросил тренера голосом",
     ("PATCH", "/workouts/{workout_id}/sets/{set_id}"): "исправил подход",
     ("DELETE", "/workouts/{workout_id}/exercises/{exercise_id}"): "убрал упражнение из тренировки",
     ("DELETE", "/workouts/active"): "удалил идущую тренировку",
@@ -113,7 +114,14 @@ _TEXT_FIELDS = ("text", "question", "answer", "name", "note", "description")
 _SCALAR_FIELDS = ("unit", "lang", "e1rm_formula", "timezone", "goal")
 # Тело больше этого — почти наверняка фото или видео: не разбираем.
 _MAX_DETAIL_BODY = 64 * 1024
-_MAX_TEXT = 200
+# Набранное в приложении — целиком, под тем же жёстким потолком, что и
+# сообщение в боте: лента не обрезает человека на полуслове.
+_MAX_TEXT = activity_log.MAX_CONTENT_LEN
+# Голосовое, которое не дало результата (4xx/5xx после расшифровки: не
+# расслышал, нет чисел в подходе, упал провайдер) — всё равно строка ленты,
+# с тем, что расслышали, или с «не распознал»: иначе голос, не сработавший
+# в приложении, в ленте просто исчезал.
+VOICE_FAILED_PHRASE = "прислал голосовое"
 
 # Вид события в ленте. Отдельный от телеграмных KIND_*: «нажал кнопку» и
 # «сделал запрос» — разные вещи, и смешивать их под одним видом значит потерять
@@ -259,10 +267,17 @@ class LogApiActions(BaseHTTPMiddleware):
                 body = await _request_json(request)
             except Exception:
                 logger.exception("Failed to read api action body")
-        response = await call_next(request)
+        # Слот под расшифровку голосового: обработчик (ai_trainer.transcribe_voice
+        # → activity_log.record_voice_transcript) кладёт её сюда, строка ленты
+        # пишется ниже, после ответа, — уже с тем, что человек сказал.
+        voice_slot, token = activity_log.open_voice_slot(source=activity_log.SOURCE_IOS)
+        try:
+            response = await call_next(request)
+        finally:
+            activity_log.close_voice_slot(token)
         self._log_failure(request, response)
         try:
-            await self._record(request, response, body)
+            await self._record(request, response, body, voice_slot.get("voice"))
         except Exception:
             # Ровно как в activity_log.LogIncomingMessages: лог действий не тот
             # повод, чтобы человеку не засчиталась тренировка.
@@ -297,14 +312,18 @@ class LogApiActions(BaseHTTPMiddleware):
             response.status_code,
         )
 
-    async def _record(self, request, response, body: dict | None = None) -> None:
+    async def _record(
+        self, request, response, body: dict | None = None, voice: str | None = None
+    ) -> None:
         method = request.method.upper()
         if method not in WRITING_METHODS:
             return
         # 4xx/5xx — это не действие, а отказ: тренировка не началась, подход не
         # записался. В ленте «начал тренировку» напротив запроса, который вернул
-        # 409, читалось бы прямой неправдой.
-        if response.status_code >= 400:
+        # 409, читалось бы прямой неправдой. Исключение — голосовое, которое уже
+        # дошло до расшифровки: его пишем нейтральной фразой (VOICE_FAILED_PHRASE).
+        failed = response.status_code >= 400
+        if failed and not voice:
             return
         user_id = getattr(request.state, "user_id", None)
         if user_id is None:
@@ -320,15 +339,19 @@ class LogApiActions(BaseHTTPMiddleware):
         # действие человека: строкой в ленте он был бы после каждого экрана.
         if template == "/events":
             return
-        await product_metrics.track(
-            user_id,
-            "action",
-            {"route": f"{method} {template}"},
-            platform=product_metrics.PLATFORM_IOS,
-            app_version=request.headers.get("x-app-version"),
-        )
-        action = describe(method, template)
+        if not failed:
+            # Только маршрут: расшифровка и любой текст в продуктовые события не идут.
+            await product_metrics.track(
+                user_id,
+                "action",
+                {"route": f"{method} {template}"},
+                platform=product_metrics.PLATFORM_IOS,
+                app_version=request.headers.get("x-app-version"),
+            )
+        action = VOICE_FAILED_PHRASE if failed else describe(method, template)
         detail = await describe_detail(body or {}, dict(request.path_params))
+        if voice:
+            detail = f"{detail} · {voice}" if detail else voice
         if detail:
             action = f"{action}: {detail}"
         path = request.url.path
