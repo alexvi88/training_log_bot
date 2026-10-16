@@ -4466,6 +4466,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.askCoachStreaming",
+   "method": "POST",
+   "path": "/ai/ask",
+   "root": "AIAnswer",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.aiConversations",
    "method": "GET",
    "path": "/ai/conversations",
@@ -4526,6 +4533,13 @@
    "method": "POST",
    "path": "/ai/program/train",
    "root": "AITrainResult",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.answerSetupQuestion",
+   "method": "POST",
+   "path": "/ai/questions/answer",
+   "root": "AIAnswer",
    "nullable": false
   },
   {
@@ -5474,5 +5488,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "5c2f621c5408a8a3ce567b97b1a13dc405a7e2fb"
+ "_ios_commit": "bb3b6c186205dd6c1ed4faa9cb233132ef4b524a"
 }
