@@ -112,6 +112,9 @@ async def test_merge_when_telegram_account_exists_but_empty(fresh_db):
     assert target["telegram_linked"] == 1
 
     after = await _content_counts(telegram_id)
+    # У пустого Telegram-аккаунта своё событие `signup` (lifecycle_events) —
+    # оно остаётся рядом с переехавшими событиями app-only аккаунта.
+    assert after.pop("analytics_events") == before.pop("analytics_events") + 1
     assert after == before
 
 

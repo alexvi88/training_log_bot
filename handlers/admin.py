@@ -12,9 +12,9 @@ from typing import Optional
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import account_deletion
@@ -34,6 +34,7 @@ import inbox
 import keyboards
 import product_metrics
 import push_texts
+import timeutil
 import ui
 import view_builder
 from fsm import AdminFlow
@@ -1099,6 +1100,107 @@ async def cmd_metrics(message: Message, state: FSMContext):
         await message.answer_document(
             BufferedInputFile(metrics_csv(names, rows), filename=f"metrics_{rows[-1]['day']}.csv")
         )
+
+
+# --- /events_csv: сырые продуктовые события для разбора где угодно ----------------
+
+EVENTS_CSV_DEFAULT_DAYS = 30
+# Потолок строк одной выгрузки: файл пишется на диск кусками (память не
+# растёт), но Telegram принимает от бота документ до 50 МБ, а строка — около
+# 120 байт. Больше — выгрузка обрезается, и подпись это говорит.
+EVENTS_CSV_MAX_ROWS = 200_000
+
+EVENTS_CSV_COLUMNS = ("ts", "user_id", "platform", "event", "props", "app_version", "own")
+EVENT_USERS_CSV_COLUMNS = (
+    "user_id", "signup_date", "source", "lang", "signup_platform", "has_app", "own",
+)
+
+
+def parse_events_csv_days(args: Optional[str]) -> Optional[int]:
+    """`/events_csv [дней]`: без числа — 30; больше срока хранения событий
+    смысла нет. None — не число."""
+    raw = (args or "").strip()
+    if not raw:
+        return EVENTS_CSV_DEFAULT_DAYS
+    if not raw.isdigit():
+        return None
+    return max(1, min(int(raw), config.ANALYTICS_RETENTION_DAYS))
+
+
+async def write_events_csv(path: str, since: str, limit: int, own: set[int]) -> int:
+    """Сырые события с `since` в CSV-файл — построчно, без всей выгрузки в
+    памяти. `own` — свои аккаунты (config.limit_preview_ids): строки не
+    выкидываются, а помечаются, отфильтровать — дело разбора. Вернёт число строк."""
+    import csv
+
+    count = 0
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(EVENTS_CSV_COLUMNS)
+        async for created_at, user_id, platform, event, props, app_version in db.iter_analytics_events(
+            since, limit
+        ):
+            writer.writerow(
+                [created_at, user_id, platform, event, props or "", app_version or "",
+                 1 if user_id in own else 0]
+            )
+            count += 1
+    return count
+
+
+async def write_event_users_csv(path: str, since: str, own: set[int]) -> int:
+    """Признаки атлетов из выгрузки для когорт: дата заведения, источник,
+    язык, где завёлся (app-only аккаунт — ios), есть ли вход в приложение."""
+    import csv
+
+    rows = await db.analytics_event_users(since)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(EVENT_USERS_CSV_COLUMNS)
+        for row in rows:
+            writer.writerow([
+                row["user_id"],
+                (row["created_at"] or "")[:10],
+                row["source"] or "",
+                row["lang"] or "",
+                "tg" if row["telegram_linked"] else "ios",
+                1 if row["has_app"] else 0,
+                1 if row["user_id"] in own else 0,
+            ])
+    return len(rows)
+
+
+@router.message(Command("events_csv"))
+async def cmd_events_csv(message: Message, state: FSMContext, command: CommandObject | None = None):
+    """Сырые продуктовые события (analytics_events) за N дней — для любой
+    воронки, которой нет в /metrics: два CSV, события и атлеты (джойн по
+    user_id). Без текста людей — его в событиях нет by design."""
+    if not _is_admin(message.from_user.id):
+        return
+    days = parse_events_csv_days(command.args if command else None)
+    if days is None:
+        await message.answer("Дней — числом: /events_csv 30")
+        return
+    import os
+    import tempfile
+
+    since = (timeutil.utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    total = await db.count_analytics_events_since(since)
+    if not total:
+        await message.answer(f"За {days} дн. событий нет.")
+        return
+    own = config.limit_preview_ids()
+    stamp = dt.date.today().isoformat()
+    with tempfile.TemporaryDirectory() as tmp:
+        events_path = os.path.join(tmp, f"events_{days}d_{stamp}.csv")
+        users_path = os.path.join(tmp, f"event_users_{days}d_{stamp}.csv")
+        written = await write_events_csv(events_path, since, EVENTS_CSV_MAX_ROWS, own)
+        users = await write_event_users_csv(users_path, since, own)
+        caption = f"События за {days} дн.: {written} строк, атлетов {users}."
+        if written < total:
+            caption += f" Обрезано: всего {total}, выгружены первые {written} — возьми меньше дней."
+        await message.answer_document(FSInputFile(events_path), caption=caption)
+        await message.answer_document(FSInputFile(users_path))
 
 
 @router.message(Command("activity"))

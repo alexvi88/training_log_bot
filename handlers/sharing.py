@@ -535,7 +535,8 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     # «Start». Клавиатура нужна так же, а «обновил меню» — так же не нужно.
     is_new = await db.get_user(message.from_user.id) is None
     await db.get_or_create_user(
-        message.from_user.id, message.from_user.username, message.from_user.language_code
+        message.from_user.id, message.from_user.username, message.from_user.language_code,
+        signup_source=acquisition.SOURCE_SHARED_CARD,
     )
     if is_new:
         # Та же догадка, что и в cmd_start (handlers/workout.py): визитка —

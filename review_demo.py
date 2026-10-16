@@ -154,7 +154,7 @@ async def ensure_demo_user(lang: Optional[str] = None, username: Optional[str] =
         if user_id is not None and await db.get_user(user_id) is None:
             user_id = None
         if user_id is None:
-            user = await db.create_app_only_user(language_code=lang or "en")
+            user = await db.create_app_only_user(language_code=lang or "en", track_signup=False)
             user_id = user["telegram_id"]
             await db.link_auth_identity(user_id, PROVIDER, username)
         elif lang:

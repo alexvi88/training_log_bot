@@ -35,6 +35,7 @@ import config
 import exercise_descriptions
 import exercise_photos
 import i18n
+import lifecycle_events
 import review_watch
 import search_terms
 from seed_data import (
@@ -850,6 +851,9 @@ CREATE TABLE IF NOT EXISTS analytics_events (
 );
 CREATE INDEX IF NOT EXISTS idx_analytics_events_created ON analytics_events (created_at);
 CREATE INDEX IF NOT EXISTS idx_analytics_events_event ON analytics_events (event, created_at);
+-- Вехи «один раз на человека» (lifecycle_events.MILESTONES) проверяют, было ли
+-- уже событие, — на каждом подходе; без индекса это скан всей таблицы.
+CREATE INDEX IF NOT EXISTS idx_analytics_events_user_event ON analytics_events (user_id, event);
 
 -- Суточная сводка метрик (analytics.rollup_day): строка на (сутки, метрика).
 -- Только агрегаты, без людей — поэтому хранится всегда: сырые события уходят по
@@ -2795,7 +2799,11 @@ async def _migrate_muscle_groups() -> None:
 # ---------- users ----------
 
 async def get_or_create_user(
-    telegram_id: int, username: Optional[str], language_code: Optional[str] = None
+    telegram_id: int,
+    username: Optional[str],
+    language_code: Optional[str] = None,
+    *,
+    signup_source: Optional[str] = None,
 ) -> aiosqlite.Row:
     """The user's row, creating it if this is their first /start.
 
@@ -2813,6 +2821,11 @@ async def get_or_create_user(
     восемь раз забудется в девятом. Так и вышло: язык выставлял только /start,
     а пришедший по ссылке навсегда оставался на русском, потому что запись уже
     есть и экран выбора языка ему больше не покажут.
+
+    Заведение записи — событие `signup` (platform tg, lifecycle_events).
+    `signup_source` — метка deep link'а, если вызывающий её уже разобрал
+    (/start, визитка, код тренера): тогда она едет в свойство `source` сразу,
+    а не только в `users.source` следующим шагом.
     """
     db = conn()
     async with _write_lock:
@@ -2848,6 +2861,11 @@ async def get_or_create_user(
                 # DEFAULT не помещаются.
                 i18n.normalize(language_code),
             ),
+        )
+        source = lifecycle_events.signup_source(signup_source)
+        await _emit_event(
+            telegram_id, lifecycle_events.SIGNUP, {"source": source} if source else None,
+            platform=lifecycle_events.PLATFORM_TG,
         )
         await db.commit()
         cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -2925,6 +2943,8 @@ async def create_app_only_user(
     language_code: Optional[str] = None,
     tz_offset: Optional[int] = None,
     unit: Optional[str] = None,
+    *,
+    track_signup: bool = True,
 ) -> aiosqlite.Row:
     """Завести аккаунт из приложения, без единого сообщения в Telegram — вход
     через Sign in with Apple, когда этот Apple ID ещё никому не известен и
@@ -2943,6 +2963,9 @@ async def create_app_only_user(
     `unit` — единицы по региону телефона ("kg"/"lb"), если приложение их
     прислало; всё остальное (None, мусор) — config.DEFAULT_UNIT, как раньше.
     Без этого американец записывал «225 8» в кг.
+
+    Событие `signup` (platform ios); `track_signup=False` — демо-аккаунт App
+    Review (review_demo), это не новичок.
     """
     db = conn()
     unit = unit if unit in ("kg", "lb") else config.DEFAULT_UNIT
@@ -2963,6 +2986,8 @@ async def create_app_only_user(
                 i18n.normalize(language_code),
             ),
         )
+        if track_signup:
+            await _emit_event(new_id, lifecycle_events.SIGNUP, platform=lifecycle_events.PLATFORM_IOS)
         await db.commit()
         cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (new_id,))
         return await cur.fetchone()
@@ -5409,6 +5434,7 @@ async def get_or_create_active_workout(
             "VALUES (?, ?, 'active', ?, ?)",
             (user_id, now_iso(), routine_id, program_id),
         )
+        await _emit_workout_started(user_id, "active", routine_id)
         await db.commit()
         return cur.lastrowid, True
 
@@ -5481,6 +5507,7 @@ async def get_or_create_workout_by_client_id(
             "VALUES (?, ?, 'active', ?, ?, ?)",
             (user_id, started_at or now_iso(), routine_id, program_id, client_id),
         )
+        await _emit_workout_started(user_id, "active", routine_id)
         await db.commit()
         return cur.lastrowid, True, False
 
@@ -5529,6 +5556,7 @@ async def get_or_create_backfill_workout(user_id: int, started_at: str) -> tuple
             "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'backfill')",
             (user_id, started_at),
         )
+        await _emit_workout_started(user_id, "backfill", None)
         await db.commit()
         return cur.lastrowid, True
 
@@ -5554,6 +5582,8 @@ async def create_workout(
             "VALUES (?, ?, ?, ?, ?)",
             (user_id, started_at or now_iso(), status, routine_id, program_id),
         )
+        if status in ("active", "backfill"):
+            await _emit_workout_started(user_id, status, routine_id)
         await conn().commit()
         return cur.lastrowid
 
@@ -5669,14 +5699,21 @@ async def finish_workout(
     is enough of a window for a double-tapped "🏁 Завершить" to produce two
     finish cards for one workout.
     """
+    finished_at = finished_at or now_iso()
     async with _write_lock:
+        before = await (
+            await conn().execute("SELECT * FROM workouts WHERE id = ?", (workout_id,))
+        ).fetchone()
         cur = await conn().execute(
             "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? "
             "WHERE id = ? AND status != 'finished'",
-            (finished_at or now_iso(), note, workout_id),
+            (finished_at, note, workout_id),
         )
+        done = cur.rowcount > 0
+        if done and before is not None:
+            await _emit_workout_finished(before, finished_at)
         await conn().commit()
-        return cur.rowcount > 0
+        return done
 
 
 async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> None:
@@ -7138,6 +7175,7 @@ async def append_set(
     user_id: Optional[int] = None,
     idempotency_key: Optional[str] = None,
     created_at: Optional[str] = None,
+    analytics_source: Optional[str] = None,
 ) -> int:
     """Insert a set with the next round_index, choosing it under the write lock.
 
@@ -7155,6 +7193,10 @@ async def append_set(
     одновременных повтора с одним ключом (двойная отправка из очереди
     приложения после мнимого обрыва) оба прошли бы проверку до того, как
     другой успеет записать результат, и оба бы вставили подход.
+
+    `analytics_source` — откуда подход для события `set_logged`
+    (lifecycle_events.SET_SOURCES); None — по клиенту (бот/приложение).
+    Повтор по ключу события не пишет: подход уже был.
     """
     load_weight = await _load_weight_for(
         exercise_id, weight, await _workout_date_of_block(block_id)
@@ -7188,6 +7230,7 @@ async def append_set(
                 "(user_id, idempotency_key, position, set_id, created_at) VALUES (?, ?, 0, ?, ?)",
                 (user_id, idempotency_key, set_id, now_iso()),
             )
+        await _emit_set_logged(block_id, [set_id], analytics_source)
         await conn().commit()
         return set_id
 
@@ -7280,6 +7323,7 @@ async def store_parsed_sets(
                     "(user_id, idempotency_key, position, set_id, created_at) VALUES (?, ?, ?, ?, ?)",
                     (user_id, idempotency_key, position, set_id, now_iso()),
                 )
+        await _emit_set_logged(block_id, created_ids, None)
         await conn().commit()
         return created_ids
 
@@ -9338,6 +9382,10 @@ async def create_program(
             )
         except aiosqlite.IntegrityError:
             return None
+        await _emit_event(
+            user_id, lifecycle_events.PROGRAM_CREATED,
+            {"origin": lifecycle_events.program_origin(source)},
+        )
         await conn().commit()
         return cur.lastrowid
 
@@ -11243,6 +11291,197 @@ async def log_analytics_events(rows: list[tuple]) -> None:
         await conn().commit()
 
 
+async def _emit_event(
+    user_id: int,
+    event: str,
+    props: Optional[dict] = None,
+    *,
+    once: bool = False,
+    platform: Optional[str] = None,
+) -> None:
+    """Событие жизненного цикла (lifecycle_events.py) — строкой в
+    analytics_events. Зовётся ВНУТРИ записи, под уже взятым `_write_lock` и до
+    её commit: событие ложится той же транзакцией, что и само действие.
+
+    Клиент — `platform` явно (заведение аккаунта знает его само) или из
+    контекста входа; контекста нет — не пишем (см. докстринг lifecycle_events).
+    `once` — веха: второй раз для того же человека не пишется. Не бросает:
+    аналитика не повод сорвать запись подхода."""
+    plat = platform or lifecycle_events.platform()
+    if plat is None:
+        return
+    payload = json.dumps(props, separators=(",", ":"), sort_keys=True) if props else None
+    row = (user_id, event, payload, plat, lifecycle_events.app_version(), now_iso())
+    try:
+        if once:
+            await conn().execute(
+                "INSERT INTO analytics_events "
+                "(user_id, event, props, platform, app_version, created_at) "
+                "SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS "
+                "(SELECT 1 FROM analytics_events WHERE user_id = ? AND event = ?)",
+                (*row, user_id, event),
+            )
+        else:
+            await conn().execute(
+                "INSERT INTO analytics_events "
+                "(user_id, event, props, platform, app_version, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                row,
+            )
+    except Exception:
+        logger.exception("lifecycle: не записал событие %s", event)
+
+
+async def _has_event(user_id: int, event: str) -> bool:
+    cur = await conn().execute(
+        "SELECT 1 FROM analytics_events WHERE user_id = ? AND event = ? LIMIT 1", (user_id, event)
+    )
+    return await cur.fetchone() is not None
+
+
+async def _emit_set_logged(block_id: int, set_ids: list[int], source: Optional[str]) -> None:
+    """`set_logged` на каждый записанный подход и веха `first_set` — под тем же
+    замком, что и вставка (append_set, store_parsed_sets). `workout` — во что
+    записан: идущая тренировка (live), занесение задним числом (backfill) или
+    уже законченная (edit — дописал в истории)."""
+    if not set_ids or lifecycle_events.platform() is None:
+        return
+    try:
+        cur = await conn().execute(
+            "SELECT w.user_id, w.status FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+            "WHERE b.id = ?",
+            (block_id,),
+        )
+        owner = await cur.fetchone()
+        if owner is None:
+            return
+        user_id = owner["user_id"]
+        kind = {"active": "live", "backfill": "backfill"}.get(owner["status"], "edit")
+        props = {
+            "source": source if source in lifecycle_events.SET_SOURCES
+            else lifecycle_events.default_set_source(),
+            "workout": kind,
+        }
+        for _ in set_ids:
+            await _emit_event(user_id, lifecycle_events.SET_LOGGED, props)
+        if await _has_event(user_id, lifecycle_events.FIRST_SET):
+            return
+        # Веха — по данным, а не только по ленте событий: события живут 13
+        # месяцев, и у старожила, чьё first_set уже вычищено, вторая «первая»
+        # запись была бы неправдой. Импорт не в счёт — это чужая история.
+        cur = await conn().execute(
+            "SELECT 1 FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+            "JOIN workouts w ON w.id = b.workout_id "
+            "WHERE w.user_id = ? AND w.import_batch_id IS NULL AND w.source != 'import' "
+            "AND s.id < ? LIMIT 1",
+            (user_id, min(set_ids)),
+        )
+        if await cur.fetchone() is None:
+            await _emit_event(user_id, lifecycle_events.FIRST_SET, {"source": props["source"]}, once=True)
+    except Exception:
+        logger.exception("lifecycle: не записал set_logged")
+
+
+async def _emit_workout_started(user_id: int, status: str, routine_id: Optional[int]) -> None:
+    await _emit_event(
+        user_id,
+        lifecycle_events.WORKOUT_STARTED,
+        {
+            "kind": "backfill" if status == "backfill" else "live",
+            "plan": "yes" if routine_id else "no",
+        },
+    )
+
+
+async def _emit_workout_finished(workout: Any, finished_at: str) -> None:
+    """`workout_finished` и вехи первой/второй законченной тренировки — под
+    замком finish_workout, после UPDATE. `workout` — строка ДО завершения
+    (статус ещё active/backfill)."""
+    if lifecycle_events.platform() is None:
+        return
+    try:
+        user_id = workout["user_id"]
+        cur = await conn().execute(
+            "SELECT COUNT(*) FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+            "WHERE b.workout_id = ?",
+            (workout["id"],),
+        )
+        n_sets = (await cur.fetchone())[0]
+        backfill = workout["status"] == "backfill"
+        seconds: Optional[float] = None
+        if not backfill and workout["started_at"]:
+            with suppress(ValueError, TypeError):
+                seconds = (
+                    dt.datetime.fromisoformat(finished_at)
+                    - dt.datetime.fromisoformat(workout["started_at"])
+                ).total_seconds()
+        await _emit_event(
+            user_id,
+            lifecycle_events.WORKOUT_FINISHED,
+            {
+                "kind": "backfill" if backfill else "live",
+                "plan": "yes" if workout["routine_id"] else "no",
+                "sets": lifecycle_events.sets_bucket(n_sets),
+                "duration": lifecycle_events.duration_bucket(seconds),
+            },
+        )
+        if not n_sets:
+            return
+        # Сколько у человека законченных своих тренировок, считая эту, — до
+        # трёх хватает. Импорт не в счёт: год истории из Hevy — не «вторая
+        # тренировка в продукте».
+        cur = await conn().execute(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM workouts WHERE user_id = ? AND status = 'finished' "
+            "AND import_batch_id IS NULL AND source != 'import' LIMIT 3)",
+            (user_id,),
+        )
+        finished = (await cur.fetchone())[0]
+        milestone = {
+            1: lifecycle_events.FIRST_WORKOUT_FINISHED,
+            2: lifecycle_events.SECOND_WORKOUT_FINISHED,
+        }.get(finished)
+        if milestone:
+            await _emit_event(user_id, milestone, {"kind": "backfill" if backfill else "live"}, once=True)
+    except Exception:
+        logger.exception("lifecycle: не записал workout_finished")
+
+
+async def count_analytics_events_since(since: str) -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM analytics_events WHERE created_at >= ?", (since,))
+    return (await cur.fetchone())[0]
+
+
+async def iter_analytics_events(since: str, limit: int, chunk: int = 5000):
+    """Сырые события с `since` по порядку записи — для выгрузки /events_csv.
+    Кусками по `chunk`, а не fetchall: в памяти держится кусок, не весь год.
+    Строки — (created_at, user_id, platform, event, props, app_version)."""
+    cur = await conn().execute(
+        "SELECT created_at, user_id, platform, event, props, app_version FROM analytics_events "
+        "WHERE created_at >= ? ORDER BY id LIMIT ?",
+        (since, limit),
+    )
+    while True:
+        rows = await cur.fetchmany(chunk)
+        if not rows:
+            break
+        for row in rows:
+            yield tuple(row)
+
+
+async def analytics_event_users(since: str) -> list[aiosqlite.Row]:
+    """Атлеты, у которых есть события с `since`, — признаки для когорт рядом с
+    выгрузкой: когда завёлся, откуда пришёл, язык, где завёлся (app-only
+    аккаунт — приложение) и есть ли у него вход в приложение."""
+    cur = await conn().execute(
+        "SELECT u.telegram_id AS user_id, u.created_at, u.source, u.lang, u.telegram_linked, "
+        "EXISTS (SELECT 1 FROM api_tokens t WHERE t.user_id = u.telegram_id) AS has_app "
+        "FROM users u WHERE u.telegram_id IN "
+        "(SELECT DISTINCT user_id FROM analytics_events WHERE created_at >= ?) "
+        "ORDER BY u.telegram_id",
+        (since,),
+    )
+    return await cur.fetchall()
+
+
 async def prune_old_analytics_events(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
@@ -11944,7 +12183,7 @@ async def increment_ai_question_count(telegram_id: int) -> None:
         await conn().commit()
 
 
-async def try_increment_ai_question_count(telegram_id: int, limit: int) -> bool:
+async def try_increment_ai_question_count(telegram_id: int, limit: int, *, kind: str = "text") -> bool:
     """Атомарно списать один вопрос из дневной квоты — но только если она ещё
     не выбрана к моменту записи.
 
@@ -11964,6 +12203,10 @@ async def try_increment_ai_question_count(telegram_id: int, limit: int) -> bool:
 
     limit <= 0 — квота снята (см. `AI_QUESTION_DAILY_LIMIT=0` как переменная
     окружения) — обычный инкремент без ограничения.
+
+    Списание — это и есть «вопрос тренеру состоялся»: здесь же событие
+    `ai_question` (`kind` text|photo|video|voice, lifecycle_events), одно на
+    отвеченный вопрос — и в боте, и в приложении, — без текста вопроса.
     """
     today = await _quota_day(telegram_id)
     async with _write_lock:
@@ -11984,8 +12227,12 @@ async def try_increment_ai_question_count(telegram_id: int, limit: int) -> bool:
                 "WHERE telegram_id = ? AND date = ?",
                 (telegram_id, today),
             )
+        charged = cur.rowcount > 0
+        await _emit_event(
+            telegram_id, lifecycle_events.AI_QUESTION, {"kind": lifecycle_events.ai_question_kind(kind)}
+        )
         await conn().commit()
-        return cur.rowcount > 0
+        return charged
 
 
 async def get_ai_video_count_today(telegram_id: int) -> int:
@@ -11998,6 +12245,8 @@ async def get_ai_video_count_today(telegram_id: int) -> int:
 
 
 async def increment_ai_video_count(telegram_id: int) -> None:
+    """Списать разбор видео — платный вызов состоялся (video_analysis.analyze).
+    Здесь же событие `video_review`: одно на состоявшийся разбор."""
     today = await _quota_day(telegram_id)
     async with _write_lock:
         await conn().execute(
@@ -12005,6 +12254,7 @@ async def increment_ai_video_count(telegram_id: int) -> None:
             "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
             (telegram_id, today),
         )
+        await _emit_event(telegram_id, lifecycle_events.VIDEO_REVIEW)
         await conn().commit()
 
 
@@ -13770,10 +14020,24 @@ async def create_import_batch(user_id: int, source: str) -> str:
 
 
 async def finish_import_batch(batch_id: str, workouts: int, sets: int) -> None:
+    """Итог импорта — и событие `import_done` (источник, корзины тренировок
+    и подходов): по одному на пачку, а не `set_logged` на каждый подход."""
     async with _write_lock:
         await conn().execute(
             "UPDATE import_batches SET workouts = ?, sets = ? WHERE id = ?", (workouts, sets, batch_id)
         )
+        batch = await (
+            await conn().execute("SELECT user_id, source FROM import_batches WHERE id = ?", (batch_id,))
+        ).fetchone()
+        if batch is not None:
+            await _emit_event(
+                batch["user_id"], lifecycle_events.IMPORT_DONE,
+                {
+                    "source": lifecycle_events.import_source(batch["source"]),
+                    "workouts": lifecycle_events.count_bucket(workouts),
+                    "sets": lifecycle_events.count_bucket(sets),
+                },
+            )
         await conn().commit()
 
 
@@ -13996,6 +14260,10 @@ async def create_coach_link(
         await conn().execute(
             "DELETE FROM coach_unlinks WHERE coach_id = ? AND client_id = ?", (coach_id, client_id)
         )
+        # Под атлетом: связку разрешает он (его клиент — его platform).
+        # Сторона тренера видна по его `action` /coach*, а событие на его id
+        # из запроса атлета посчитало бы тренера «активным» в чужом клиенте.
+        await _emit_event(client_id, lifecycle_events.COACH_LINKED)
         await conn().commit()
         return True
 

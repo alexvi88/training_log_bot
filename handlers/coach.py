@@ -315,7 +315,10 @@ async def open_coach_invite(message: Message, command: CommandObject, state: FSM
 
     user_id = message.from_user.id
     is_new = await db.get_user(user_id) is None
-    await db.get_or_create_user(user_id, message.from_user.username, message.from_user.language_code)
+    await db.get_or_create_user(
+        user_id, message.from_user.username, message.from_user.language_code,
+        signup_source=acquisition.SOURCE_COACH_INVITE,
+    )
     code = _extract_code((command.args or "")[len(START_PREFIX):])
     if is_new:
         guessed_lang = i18n.normalize(getattr(message.from_user, "language_code", None))

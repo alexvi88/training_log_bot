@@ -125,6 +125,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
         "crashes",
         "crash",
         "metrics",
+        "events_csv",
         "broadcast",
         "announce",
         "admin_wipe",

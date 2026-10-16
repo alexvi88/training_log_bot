@@ -277,5 +277,5 @@ async def test_every_attempt_is_tracked_for_the_daily_summary(monkeypatch, fresh
 async def test_unconfigured_apns_tracks_nothing(monkeypatch, fresh_db, user_id):
     monkeypatch.setattr(config, "APNS_KEY_P8", "")
     await apns.send_alert(user_id, "tok", "T", "B", category="skip_7")
-    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM analytics_events")
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM analytics_events WHERE event != 'signup'")
     assert (await cur.fetchone())[0] == 0

@@ -187,7 +187,7 @@ async def test_ai_voice_question_forwards_transcribed_text_as_question(fresh_db,
     message.reply.assert_awaited_once()
     assert "как мой прогресс" in message.reply.await_args.args[0]
     handle_question.assert_awaited_once_with(
-        message, state, "как мой прогресс", history_question="как мой прогресс"
+        message, state, "как мой прогресс", history_question="как мой прогресс", question_kind="voice"
     )
 
 
