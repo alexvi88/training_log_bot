@@ -199,7 +199,10 @@ platform `ios`): `you_story_open` (source `menu`|`finish`) → `you_story_share`
 «калькулятор 1ПМ», «нормативы жима лёжа», «программа 5×5» — и поиск внутри
 ChatGPT и Perplexity. Страницы отдаёт сам сервер бота (`seo_pages.py`;
 математика калькуляторов — `seo_tools.py`, оформление — `seo_design.py`,
-статика и картинки превью — `seo_static.py`), каждая на двух языках:
+статика и картинки превью — `seo_static.py`, библиотека — мышцы, пары,
+словарь, гайды, переезд, шаблон, «о проекте» — `seo_library.py`, новые
+калькуляторы и карточки «поделиться» — `seo_calcs.py`, файлы шаблона —
+`seo_template.py`, 301/gzip/ETag — `seo_http.py`), каждая на двух языках:
 `/ru/...` и `/en/...`, пары связаны `hreflang`, голый `/` уводит на язык
 браузера.
 
@@ -207,13 +210,21 @@ ChatGPT и Perplexity. Страницы отдаёт сам сервер бот�
 |---|---|---|
 | Главная, AI-тренер, разбор видео, бот в Telegram | `/`, `/ai-coach`, `/video-review`, `/telegram` | `src_seo_home`, `_ai`, `_video`, `_tg` |
 | Переезд | `/import/hevy`, `/import/strong`, `/import/csv` | `src_seo_imp_hevy`, `_imp_strng`, `_imp_csv` |
-| Калькуляторы | `/tools`, `/tools/1rm`, `/tools/warmup`, `/tools/rpe`, `/tools/wilks` (Wilks, DOTS, IPF GL); `/tools/plates` снят — 301 на `/tools` | `src_seo_tools`, `_rm1`, `_warmup`, `_rpe`, `_wilks` |
-| «Запиши этот подход» под результатом | те же калькуляторы и нормативы | `src_seo_rm1_log`, `_wu_log`, `_rpe_log`, `_wlk_log`, `_str_log` |
+| Калькуляторы | `/tools`, `/tools/1rm`, `/tools/warmup`, `/tools/rpe`, `/tools/wilks` (Wilks, DOTS, IPF GL), `/tools/tonnage`, `/tools/rest-timer`, `/tools/goal` («когда я пожму 100»), `/tools/strength-percentile`; `/tools/plates` снят — 301 на `/tools` | `src_seo_tools`, `_rm1`, `_warmup`, `_rpe`, `_wilks`, `_tonnage`, `_timer`, `_goal`, `_pct` |
+| «Запиши этот подход» под результатом | те же калькуляторы и нормативы; ведёт через `/go/diary` — туда же, куда главная кнопка на этом устройстве | `src_seo_rm1_log`, `_wu_log`, `_rpe_log`, `_wlk_log`, `_str_log`, `_ton_log`, `_tmr_log`, `_goal_log`, `_pct_log` |
 | Нормативы силы | `/strength`, `/strength/<bench-press\|squat\|deadlift>/<men\|women>` | `src_seo_str` |
 | Программы | `/programs`, `/programs/<key>` (весь `seed_data.WORKOUT_PROGRAMS`) | `src_seo_progs`, `_prog` |
 | Техника | `/exercises`, `/exercises/<адрес>` (`seo_pages.EXERCISES`, 72 упражнения) | `src_seo_exs`, `_ex` |
-| Сравнения | `/vs/hevy`, `/vs/strong` | `src_seo_vs_hevy`, `_vs_strng` |
-| Справка для AI-поиска | `/llms.txt` | `src_seo_llms` |
+| Сравнения с приложениями | `/vs/hevy`, `/vs/strong`, `/vs/fitbod`, `/vs/jefit` | `src_seo_vs_hevy`, `_vs_strng`, `_vs_fitbod`, `_vs_jefit` |
+| Альтернативы | `/alternatives/hevy`, `/alternatives/strong` | `src_seo_alt_hevy`, `_alt_strng` |
+| Дневник тренировок | `/workout-log-app` | `src_seo_app` |
+| Шаблон дневника | `/templates/workout-log` (+ `.xlsx`, `.csv`, `-example.csv` — импортируются без вопросов, тест туда-обратно) | `src_seo_tpl` |
+| Мышцы | `/muscles`, `/muscles/<12 групп>` | `src_seo_mus` |
+| Упражнение против упражнения | `/compare`, `/compare/<a>-vs-<b>` (20 пар, `seo_library.PAIRS`) | `src_seo_cmp` |
+| Словарь зала | `/glossary`, `/glossary/<12 терминов>` | `src_seo_gls` |
+| Гайды | `/guides`, `/guides/<10 статей>` с источниками | `src_seo_guide` |
+| О проекте | `/about` (разработчик, Organization с sameAs) | `src_seo_about` |
+| Справка для AI-поиска | `/llms.txt`, `/llms-full.txt` (полная версия) | `src_seo_llms` |
 
 Кнопки ведут через `/go/bot?f=<блок>` и `/go/appstore?f=<блок>`: сервер
 считает клик и отдаёт редирект на `t.me/<бот>?start=src_seo_<блок>` (ссылка
@@ -226,7 +237,29 @@ Store главный везде, кроме Android. Обе ссылки ест�
 адрес, который можно показывать в чужом iframe; на странице калькулятора —
 готовый код; старый `/embed/<язык>/plates` — 301 на него), картинки превью `/og/<язык>/<ключ>.png`,
 JSON-LD (SoftwareApplication, BreadcrumbList, ExercisePlan, Article,
-FAQPage — только где FAQ виден на странице), своя 404.
+FAQPage — только где FAQ виден на странице; Organization с sameAs и
+dateModified на каждой странице, видимая строка «Обновлено …»), своя 404
+(отвечает 404), карточки «поделиться» `/og/card/<язык>/<вид>.png`
+(цель, перцентиль, 1ПМ, DOTS, тоннаж, уровень — параметры строго проверяются),
+`sitemap.xml` с `<lastmod>` и картинками упражнений.
+
+Один домен: когда задан `SITE_BASE_URL`, страницы сайта с `www.<домен>` и с
+адреса сервера (fly.dev) отвечают 301 на тот же путь своего домена. Только
+белый список (`/`, `/ru`, `/en`, `/ru/*`, `/en/*`, sitemap, robots,
+llms-файлы) и только GET/HEAD; `/v1`, OAuth, `/mcp`, `/.well-known`,
+`/coach/*`, `/privacy`, `/terms`, `/support`, `/embed`, `/go`, `/og`,
+`/site`, `/media` не перенаправляются никогда (`seo_http.py`, тест на
+длинном списке). Там же gzip и ETag/304.
+
+Главная показывает «неделю в подвале» — настоящие цифры за 7 дней
+(`site_numbers.py` → `db.site_week_numbers`: закрытые тренировки, подходы,
+тонны; без импорта, своих аккаунтов и демо). Нет данных — нет и доски.
+
+Картинки сайта готовятся офлайн и лежат в `media/site/`: кадры упражнений
+AVIF/WebP 360/720 — `scripts/gen_site_exercise_images.py`, экраны
+приложения — `scripts/gen_site_screens.py`. Таблица перцентилей силы —
+`seo_data/strength_percentiles.json`, пересобирается из выгрузки
+OpenPowerlifting `scripts/build_strength_percentiles.py` (раз в полгода).
 
 Нормативы силы — своя шкала по DOTS, а не чужие таблицы: пороги уровней и
 доли упражнений в сумме (медианы по классическому троеборью из открытых
@@ -235,7 +268,8 @@ FAQPage — только где FAQ виден на странице), своя 
 
 Тексты — ключи `seo.*` в `locales/*.json`, данные (программы, упражнения,
 описания техники) — через те же локализаторы, что у бота. Сравнения с Hevy и
-Strong — факты «по данным на октябрь 2026» со ссылками на источники; цены у
+Strong, Fitbod, JEFIT и страницы альтернатив — факты «по данным на октябрь
+2026» со ссылками на источники; цены у
 конкурентов меняются — перепроверяй их раз в квартал и правь дату.
 
 ### Кампании App Store: ct=site_<блок>
