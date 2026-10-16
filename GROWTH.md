@@ -207,8 +207,8 @@ ChatGPT и Perplexity. Страницы отдаёт сам сервер бот�
 |---|---|---|
 | Главная, AI-тренер, разбор видео, бот в Telegram | `/`, `/ai-coach`, `/video-review`, `/telegram` | `src_seo_home`, `_ai`, `_video`, `_tg` |
 | Переезд | `/import/hevy`, `/import/strong`, `/import/csv` | `src_seo_imp_hevy`, `_imp_strng`, `_imp_csv` |
-| Калькуляторы | `/tools`, `/tools/1rm`, `/tools/plates`, `/tools/warmup`, `/tools/rpe`, `/tools/wilks` (Wilks, DOTS, IPF GL) | `src_seo_tools`, `_rm1`, `_plates`, `_warmup`, `_rpe`, `_wilks` |
-| «Запиши этот подход» под результатом | те же калькуляторы и нормативы | `src_seo_rm1_log`, `_plt_log`, `_wu_log`, `_rpe_log`, `_wlk_log`, `_str_log` |
+| Калькуляторы | `/tools`, `/tools/1rm`, `/tools/warmup`, `/tools/rpe`, `/tools/wilks` (Wilks, DOTS, IPF GL); `/tools/plates` снят — 301 на `/tools` | `src_seo_tools`, `_rm1`, `_warmup`, `_rpe`, `_wilks` |
+| «Запиши этот подход» под результатом | те же калькуляторы и нормативы | `src_seo_rm1_log`, `_wu_log`, `_rpe_log`, `_wlk_log`, `_str_log` |
 | Нормативы силы | `/strength`, `/strength/<bench-press\|squat\|deadlift>/<men\|women>` | `src_seo_str` |
 | Программы | `/programs`, `/programs/<key>` (весь `seed_data.WORKOUT_PROGRAMS`) | `src_seo_progs`, `_prog` |
 | Техника | `/exercises`, `/exercises/<адрес>` (`seo_pages.EXERCISES`, 72 упражнения) | `src_seo_exs`, `_ex` |
@@ -222,9 +222,9 @@ ChatGPT и Perplexity. Страницы отдаёт сам сервер бот�
 Android — бот, компьютер — QR-код в App Store; на английских страницах App
 Store главный везде, кроме Android. Обе ссылки есть в любом варианте.
 
-Ещё на сайте: встраиваемые калькуляторы `/embed/<язык>/1rm` и `/plates`
-(единственные адреса, которые можно показывать в чужом iframe; на странице
-калькулятора — готовый код), картинки превью `/og/<язык>/<ключ>.png`,
+Ещё на сайте: встраиваемый калькулятор `/embed/<язык>/1rm` (единственный
+адрес, который можно показывать в чужом iframe; на странице калькулятора —
+готовый код; старый `/embed/<язык>/plates` — 301 на него), картинки превью `/og/<язык>/<ключ>.png`,
 JSON-LD (SoftwareApplication, BreadcrumbList, ExercisePlan, Article,
 FAQPage — только где FAQ виден на странице), своя 404.
 

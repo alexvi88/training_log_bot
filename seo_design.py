@@ -276,7 +276,7 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
   background: radial-gradient(500px 220px at 100% 0%, rgba(255,138,61,.2), transparent 70%), var(--bg2); box-shadow: 0 30px 60px -40px rgba(255,106,43,.7); }
 .result .k { font-size: 14px; font-weight: 600; color: var(--muted); }
 .big { margin: 10px 0 6px; font: clamp(30px, 6vw, 44px)/1.15 var(--pixel); color: var(--accent2); text-shadow: 0 0 30px rgba(255,138,61,.45); overflow-wrap: anywhere; }
-.big .u, td .u, .plate .u { margin-left: .14em; }
+.big .u, td .u { margin-left: .14em; }
 .big .u { font-size: .55em; }
 .result .note { color: var(--muted); font-size: 15px; min-height: 1.5em; }
 .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: var(--s4); }
@@ -289,11 +289,6 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
 }
 .log-cta { display: none; margin-top: var(--s4); }
 .result.ok .log-cta { display: flex; }
-.bar-viz { margin: var(--s3) 0; }
-.bar-viz svg { width: 100%; height: auto; display: block; }
-.plates { display: flex; flex-wrap: wrap; gap: 6px; }
-.plate { display: inline-flex; align-items: center; padding: 6px 11px; border-radius: 9px; background: var(--glass2); border: 1px solid var(--line2); font-weight: 700; font-variant-numeric: tabular-nums; }
-.plate i { width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; }
 .steps-out { counter-reset: ws; display: grid; gap: 6px; margin: var(--s3) 0 0; padding: 0; list-style: none; }
 .steps-out li { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--glass2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .steps-out li::before { counter-increment: ws; content: counter(ws); font: 10px var(--pixel); color: var(--accent2); }
@@ -422,13 +417,3 @@ _ICON_PATHS = {
 def icon(name: str) -> str:
     return ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
             f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{_ICON_PATHS[name]}</svg>')
-
-
-# Цвета блинов — как у соревновательных блинов IWF (кг); фунтовые красятся
-# по тому же порядку.
-PLATE_COLORS = {
-    "kg": {25.0: "#d7263d", 20.0: "#2160d8", 15.0: "#f2c230", 10.0: "#2f9e44", 5.0: "#f1f1f1",
-           2.5: "#d7263d", 1.25: "#b9b9b9", 0.5: "#d0d0d0", 0.25: "#dedede"},
-    "lb": {55.0: "#d7263d", 45.0: "#2160d8", 35.0: "#f2c230", 25.0: "#2f9e44", 10.0: "#f1f1f1",
-           5.0: "#d7263d", 2.5: "#b9b9b9", 1.25: "#d0d0d0"},
-}
