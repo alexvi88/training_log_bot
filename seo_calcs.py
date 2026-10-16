@@ -292,7 +292,188 @@ def tool_percentile(lang: str, embed: bool = False) -> tuple[str, str, str]:
     return form, result, script
 
 
-TOOLS = {"tonnage": tool_tonnage, "rest-timer": tool_rest_timer, "goal": tool_goal, "strength-percentile": tool_percentile}
+# ---------- 5/3/1 ----------
+
+
+def tool_531(lang: str, embed: bool = False) -> tuple[str, str, str]:
+    t = sp._t(lang)
+    form = (
+        "<form class=calc onsubmit='return false'>"
+        + sp._seg("mode", t("seo.tool.goal.mode"), [("set", t("seo.tool.goal.mode_set")), ("max", t("seo.tool.goal.mode_max"))], "set")
+        + "<div class=row id=setrow>" + sp._num_input("w", t("seo.tool.1rm.weight"), "100", "0.25")
+        + sp._num_input("r", t("seo.tool.1rm.reps"), "5", "1", "numeric", "12") + "</div>"
+        + "<div class=row id=maxrow hidden>" + sp._num_input("m", t("seo.tool.goal.current_max"), "115", "0.25") + "</div>"
+        + "<div class=row>" + sp._seg("tm", t("seo.tool.531.tm"), [("90", "90%"), ("85", "85%")], "90")
+        + sp._seg("kind", t("seo.tool.531.kind"), [("upper", t("seo.tool.531.upper")), ("lower", t("seo.tool.531.lower"))], "upper")
+        + "</div>" + sp._unit_seg(lang) + "</form>"
+    )
+    kg = t("seo.tool.unit_kg")
+    plan = seo_tools.five31(seo_tools.e1rm(100, 5), seo_tools.WARMUP_STEP["kg"])
+    names = [t(f"seo.tool.531.week.{i}") for i in range(1, 5)]
+    rows = "".join(f"<tr><th scope=row>{sp._e(names[i])}</th>" + "".join(
+        f"<td class=num>{sp._w(w, kg)}<small>× {reps} · {round(p * 100)}%</small></td>" for p, w, reps in week) + "</tr>"
+        for i, week in enumerate(plan["weeks"]))
+    result = (
+        '<div class=result aria-live=polite><div class=pair>'
+        f'<div><div class=k>{sp._e(t("seo.tool.1rm.result"))}</div><div class=big id=orm>{sp._w(seo_tools.e1rm(100, 5), kg)}</div></div>'
+        f'<div><div class=k>{sp._e(t("seo.tool.531.tm_result"))}</div><div class=big id=tmv>{sp._w(plan["tm"], kg)}</div></div></div>'
+        '<div class=note id=note></div>'
+        f'<div class="table-card five31"><table><thead><tr><th>{sp._e(t("seo.tool.531.col.week"))}</th>'
+        f'<th class=num>{sp._e(t("seo.tool.531.col.set", n=1))}</th><th class=num>{sp._e(t("seo.tool.531.col.set", n=2))}</th>'
+        f'<th class=num>{sp._e(t("seo.tool.531.col.set", n=3))}</th></tr></thead><tbody id=weeks>{rows}</tbody></table></div>'
+        f'<p class=muted id=wu></p><p class=muted id=next></p>'
+        + ("" if embed else sp._log_cta(lang, "531", "seo.tool.531.log_cta")) + "</div>"
+    )
+    script = (
+        f"var WEEKS={json.dumps(names, ensure_ascii=False)},WU={sp._js_str(t('seo.tool.531.warmup', sets='{sets}'))},"
+        f"NEXT={sp._js_str(t('seo.tool.531.next', add='{add}', tm='{tm}'))},TOO={sp._js_str(t('seo.tool.1rm.too_many', max=config.E1RM_MAX_REPS))},"
+        f"STEP={json.dumps(seo_tools.WARMUP_STEP)},UP={json.dumps(seo_tools.FIVE31_STEP_UP)};"
+        "document.querySelectorAll('[name=mode]').forEach(function(el){el.addEventListener('change',function(){"
+        "$('setrow').hidden=this.value!=='set';$('maxrow').hidden=this.value!=='max';});});"
+        "function cell(x,u){return fu(x[1],u)+'<small>× '+x[2]+' · '+Math.round(x[0]*100)+'%</small>';}"
+        "function run(){var u=val('unit'),orm=0;$('note').textContent='';"
+        "if(val('mode')==='set'){var w=parseFloat($('w').value),r=parseInt($('r').value,10)||1;if(w>0){orm=e1rm(w,r,'epley',null);"
+        "if(!orm){$('orm').textContent=$('tmv').textContent='—';$('note').textContent=TOO;$('weeks').innerHTML='';done(0);return;}}}"
+        "else{orm=parseFloat($('m').value)||0;}"
+        "if(!(orm>0)){$('orm').textContent=$('tmv').textContent='—';$('weeks').innerHTML='';$('wu').textContent=$('next').textContent='';done(0);return;}"
+        "var p=five31(orm,STEP[u],parseInt(val('tm'),10)/100);$('orm').innerHTML=fu(orm,u);$('tmv').innerHTML=fu(p.tm,u);"
+        "$('weeks').innerHTML=p.weeks.map(function(wk,i){return '<tr><th scope=row>'+WEEKS[i]+'</th>'+wk.map(function(x){return '<td class=num>'+cell(x,u)+'</td>';}).join('')+'</tr>';}).join('');"
+        "$('wu').innerHTML=WU.replace('{sets}',p.warmup.map(function(x){return fu(x[0],u)+' × '+x[1];}).join(', '));"
+        "var add=UP[u][val('kind')];$('next').innerHTML=NEXT.replace('{add}',fu(add,u)).replace('{tm}',fu(p.tm+add,u));done(1);}"
+        "bind(run);"
+    )
+    return form, result, script
+
+
+# ---------- подходы на мышцу в неделю ----------
+
+
+def volume_catalog(lang: str) -> dict[str, dict[str, float]]:
+    """Имя упражнения каталога на языке страницы (без регистра и «ё») →
+    {мышца: доля подхода} — правилом бота (seo_catalog.share)."""
+    import seed_data
+    import seo_catalog
+    import seo_library
+    import seo_plans
+
+    out: dict[str, dict[str, float]] = {}
+    for _g, identity in seed_data.EXERCISE_TEMPLATES:
+        if seed_data.is_catalog_hidden(identity):
+            continue
+        shares = {}
+        for url in seo_plans.VOLUME_MUSCLES:
+            group, target = seo_library._MUSCLE_BY_URL[url]
+            value = seo_catalog.share(identity, group, target)
+            if value:
+                shares[url] = value
+        if shares:
+            out[normalize_name(seed_data.localized_exercise_name(identity, lang))] = shares
+    return out
+
+
+def normalize_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name.casefold().replace(chr(0x451), chr(0x435))).strip()
+
+
+def volume_example(lang: str) -> str:
+    """Пример плана — «Всё тело — 3 дня» из бота, по строке на упражнение."""
+    import seed_data
+
+    lines = []
+    for _day, exercises in seed_data.PROGRAM_BY_KEY["fullbody3"]["days"]:
+        for identity, scheme in exercises:
+            sets = re.match(r"\d+", scheme)
+            lines.append(f"{seed_data.localized_exercise_name(identity, lang)} {sets.group(0) if sets else 3}")
+    return "\n".join(lines)
+
+
+def volume_limits() -> dict:
+    """Минимумы и потолок недельного объёма — те же, что тренер держит в программе
+    (ai_trainer.PROGRAM_*), по адресам мышц сайта."""
+    import ai_trainer
+    import seo_library
+
+    targets = {"side_delts": "side-delts", "quads": "quads", "hamstrings": "hamstrings", "glutes": "glutes"}
+    groups = {group: url for url, group, target in seo_library.MUSCLES if target is None and url in ("biceps", "triceps")}
+    mins = {targets[k]: v for k, v in ai_trainer.PROGRAM_TARGET_MIN_SETS.items() if k in targets}
+    mins.update({groups[k]: v for k, v in ai_trainer.PROGRAM_GROUP_MIN_SETS.items() if k in groups})
+    return {"min": mins, "max": ai_trainer.PROGRAM_MAX_WEEKLY_SETS}
+
+
+# Разбор плана строками и счёт — тот же, что plan_volume ниже (тест гоняет
+# обе стороны на одних строках). Число в конце строки — подходы; схема
+# «4×8–12» — тоже подходы (первое число); без числа — 3 подхода.
+VOLUME_JS = (
+    "function norm(s){return s.toLowerCase().replace(/\\u0451/g,'\\u0435').replace(/\\s+/g,' ').trim();}"
+    "function parse(line){var m=line.match(/^(.*?)[\\s:—–-]*(\\d{1,2})(?:\\s*[x×\\u0445*]\\s*[\\d–-]+)?\\s*$/i);"
+    "if(m&&m[1].trim())return [norm(m[1]),parseInt(m[2],10)];return line.trim()?[norm(line),3]:null;}"
+    "function weekly(text,times){var tot={},bad=[];text.split(/\\n/).forEach(function(line){var p=parse(line);if(!p)return;var sh=CAT[p[0]];"
+    "if(!sh){bad.push(line.trim());return;}Object.keys(sh).forEach(function(k){tot[k]=(tot[k]||0)+p[1]*sh[k]*times;});});return [tot,bad];}"
+)
+_PLAN_LINE = re.compile(r"^(.*?)[\s:—–-]*(\d{1,2})(?:\s*[x×\u0445*]\s*[\d–-]+)?\s*$", re.I)
+
+
+def plan_volume(text: str, lang: str, times: int = 1) -> tuple[dict[str, float], list[str]]:
+    """Python-двойник VOLUME_JS: ({мышца: подходов в неделю}, [нераспознанные строки])."""
+    catalog = volume_catalog(lang)
+    totals: dict[str, float] = {}
+    bad: list[str] = []
+    for line in text.split("\n"):
+        match = _PLAN_LINE.match(line)
+        if match and match.group(1).strip():
+            name, sets = normalize_name(match.group(1)), int(match.group(2))
+        elif line.strip():
+            name, sets = normalize_name(line), 3
+        else:
+            continue
+        shares = catalog.get(name)
+        if shares is None:
+            bad.append(line.strip())
+            continue
+        for muscle, value in shares.items():
+            totals[muscle] = totals.get(muscle, 0.0) + sets * value * times
+    return totals, bad
+
+
+def tool_weekly_volume(lang: str, embed: bool = False) -> tuple[str, str, str]:
+    import seo_library
+    import seo_plans
+
+    t = sp._t(lang)
+    example = volume_example(lang)
+    form = (
+        "<form class=calc onsubmit='return false'>"
+        f"<label>{sp._e(t('seo.tool.weekly-volume.plan'))}<textarea id=plan rows=12 spellcheck=false "
+        f"autocomplete=off>{sp._e(example)}</textarea><small class=hint>{sp._e(t('seo.tool.weekly-volume.hint'))}</small></label>"
+        + sp._seg("times", t("seo.tool.weekly-volume.times"), [("1", "×1"), ("2", "×2")], "1")
+        + "</form>"
+    )
+    rows = "".join(f'<tr data-m="{url}"><th scope=row>{sp._e(seo_library.muscle_name(url, lang))}</th><td class=num>—</td><td></td></tr>'
+                   for url in seo_plans.VOLUME_MUSCLES)
+    result = (
+        f'<div class=result aria-live=polite><div class=k>{sp._e(t("seo.tool.weekly-volume.result"))}</div>'
+        f'<div class=table-card><table><thead><tr><th>{sp._e(t("seo.split.col.muscle"))}</th>'
+        f'<th class=num>{sp._e(t("seo.split.col.sets_week"))}</th><th>{sp._e(t("seo.tool.weekly-volume.col.note"))}</th></tr></thead>'
+        f'<tbody id=vol>{rows}</tbody></table></div><div class=note id=note></div>'
+        + ("" if embed else sp._log_cta(lang, "weekly-volume", "seo.tool.weekly-volume.log_cta")) + "</div>"
+    )
+    script = (
+        f"var CAT={json.dumps(volume_catalog(lang), ensure_ascii=False, separators=(',', ':'))},LIM={json.dumps(volume_limits())},"
+        f"LOW={sp._js_str(t('seo.tool.weekly-volume.low', min='{min}'))},HIGH={sp._js_str(t('seo.tool.weekly-volume.high', max='{max}'))},"
+        f"UNKNOWN={sp._js_str(t('seo.tool.weekly-volume.unknown', names='{names}'))},EMPTY={sp._js_str(t('seo.tool.weekly-volume.empty'))};"
+        + VOLUME_JS +
+        "function run(){var r=weekly($('plan').value,parseInt(val('times'),10)||1),tot=r[0],any=false;"
+        "document.querySelectorAll('#vol tr').forEach(function(tr){var k=tr.dataset.m,v=tot[k]||0,c=tr.querySelectorAll('td');"
+        "c[0].textContent=v?fmt(v):'0';if(v)any=true;var mn=LIM.min[k],note='';"
+        "if(mn&&v>0&&v<mn)note=LOW.replace('{min}',mn);if(v>LIM.max)note=HIGH.replace('{max}',LIM.max);c[1].textContent=note;});"
+        "$('note').textContent=r[1].length?UNKNOWN.replace('{names}',r[1].slice(0,5).join(', ')):(any?'':EMPTY);done(any);}"
+        "$('plan').addEventListener('input',run);bind(run);"
+    )
+    return form, result, script
+
+
+TOOLS = {"tonnage": tool_tonnage, "rest-timer": tool_rest_timer, "goal": tool_goal, "strength-percentile": tool_percentile,
+         "531": tool_531, "weekly-volume": tool_weekly_volume}
 
 
 # ---------- карточки для сторис ----------
@@ -371,7 +552,7 @@ def simple_card(lang: str, kind: str, request: Request) -> Optional[tuple[str, s
     footer = t("seo.tool.card_footer", host=_host())
     if kind == "level":
         level = _q(request, "l", _INT)
-        lift = _q(request, "lift", _INT, ("bench", "squat", "deadlift"))
+        lift = _q(request, "lift", _INT, ("bench", "squat", "deadlift", "total"))
         if level is None or lift is None or not 0 <= int(level) < len(seo_tools.LEVELS):
             return None
         name = t(f"seo.strength.level.{seo_tools.LEVELS[int(level)][0]}")

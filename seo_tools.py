@@ -181,14 +181,19 @@ def dots_coefficient(bodyweight_kg: float, sex: str) -> float:
     return 500 / _poly(DOTS_MEN if sex == "m" else DOTS_WOMEN, x)
 
 
+def lift_share(sex: str, lift: str) -> float:
+    """Доля упражнения в сумме; сама сумма троеборья (`total`) — вся, 1."""
+    return 1.0 if lift == "total" else LIFT_SHARE[sex][lift]
+
+
 def level_weight(threshold: float, lift: str, bodyweight_kg: float, sex: str) -> float:
-    """Вес в упражнении, с которого начинается уровень с этим порогом DOTS."""
-    return threshold / dots_coefficient(bodyweight_kg, sex) * LIFT_SHARE[sex][lift]
+    """Вес в упражнении (или сумма — `total`), с которого начинается уровень с этим порогом DOTS."""
+    return threshold / dots_coefficient(bodyweight_kg, sex) * lift_share(sex, lift)
 
 
 def lift_score(lift_kg: float, lift: str, bodyweight_kg: float, sex: str) -> float:
     """DOTS-эквивалент одного упражнения: как если бы сумма была в той же пропорции."""
-    return lift_kg / LIFT_SHARE[sex][lift] * dots_coefficient(bodyweight_kg, sex)
+    return lift_kg / lift_share(sex, lift) * dots_coefficient(bodyweight_kg, sex)
 
 
 def level_index(score: float) -> int:
@@ -296,6 +301,35 @@ def goal_weeks(current: float, target: float, level: str, freq: int, fast: bool)
     return None
 
 
+# ---------- 5/3/1 ----------
+#
+# Классическая схема Джима Вендлера: тренировочный максимум (ТМ) — 90%
+# разового максимума; неделя 1 — 65/75/85% ТМ на 5/5/5+, неделя 2 —
+# 70/80/90% на 3/3/3+, неделя 3 — 75/85/95% на 5/3/1+, неделя 4 — разгрузка
+# 40/50/60% на 5. Разминка — 40/50/60% ТМ на 5/5/3. Веса — вниз до шага,
+# который собирается блинами (как у разминки). После цикла ТМ растёт на
+# 2.5кг в жимах и 5кг в приседе и тяге (5 и 10 фунтов).
+FIVE31_TM = 0.9
+FIVE31_WEEKS = (
+    ((0.65, "5"), (0.75, "5"), (0.85, "5+")),
+    ((0.70, "3"), (0.80, "3"), (0.90, "3+")),
+    ((0.75, "5"), (0.85, "3"), (0.95, "1+")),
+    ((0.40, "5"), (0.50, "5"), (0.60, "5")),
+)
+FIVE31_WARMUP = ((0.40, "5"), (0.50, "5"), (0.60, "3"))
+FIVE31_STEP_UP = {"kg": {"upper": 2.5, "lower": 5.0}, "lb": {"upper": 5.0, "lower": 10.0}}
+
+
+def five31(one_rm: float, step: float, tm_share: float = FIVE31_TM) -> dict:
+    """{'tm': ТМ, 'warmup': [(вес, повторы)], 'weeks': [[(доля, вес, повторы)]]}."""
+    tm = one_rm * tm_share
+    return {
+        "tm": tm,
+        "warmup": [(_floor_step(tm * p, step), reps) for p, reps in FIVE31_WARMUP],
+        "weeks": [[(p, _floor_step(tm * p, step), reps) for p, reps in week] for week in FIVE31_WEEKS],
+    }
+
+
 # ---------- перцентиль на помосте ----------
 
 _PCT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seo_data", "strength_percentiles.json")
@@ -363,11 +397,13 @@ def js_constants() -> str:
         "rpeRows": list(RPE_ROWS),
         "rpeReps": list(RPE_REPS),
         "levels": [t for _n, t in LEVELS],
-        "share": LIFT_SHARE,
+        "share": {sex: {**shares, "total": 1.0} for sex, shares in LIFT_SHARE.items()},
         "goalRates": GOAL_RATES,
         "goalFreq": {str(k): v for k, v in GOAL_FREQ.items()},
         "goalDecay": GOAL_DECAY_WEEKS,
         "goalMax": GOAL_MAX_WEEKS,
+        "five31Weeks": [[list(x) for x in w] for w in FIVE31_WEEKS],
+        "five31Warmup": [list(x) for x in FIVE31_WARMUP],
     })
 
 
@@ -448,6 +484,11 @@ function percentile(P, v, sex, bw, lift) {
   if (v >= q[q.length - 1]) return [100, cls, cell.n];
   for (var i = 0; i < q.length - 1; i++) if (q[i] <= v && v < q[i + 1]) { var s = q[i + 1] > q[i] ? (v - q[i]) / (q[i + 1] - q[i]) : 0; return [p[i] + (p[i + 1] - p[i]) * s, cls, cell.n]; }
   return [100, cls, cell.n];
+}
+function five31(orm, step, share) {
+  var tm = orm * share, f = function (p) { return floorStep(tm * p, step); };
+  return { tm: tm, warmup: C.five31Warmup.map(function (x) { return [f(x[0]), x[1]]; }),
+    weeks: C.five31Weeks.map(function (w) { return w.map(function (x) { return [x[0], f(x[0]), x[1]]; }); }) };
 }
 function fmt(x) { var r = Math.round(x * 10) / 10; return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)); }
 """

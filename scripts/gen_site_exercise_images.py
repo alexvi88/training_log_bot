@@ -13,7 +13,12 @@
 - AVIF и WebP, качество 82 (AVIF — 60: у него шкала другая, на глаз то же).
 
 На странице списка — один кадр (конечное положение, `_2`), на странице
-техники — оба. Запуск после добавления упражнения в seo_pages.EXERCISES:
+техники — оба. Упражнения без своей страницы, которые сайт показывает
+карточкой (замены, «мышца × снаряд», дни шаблонов — seo_catalog.card_identities),
+получают только конечный кадр шириной 360 — карточке хватает, а репозиторий
+не раздувается. Готовые файлы не перезаписываются: AVIF
+кодируется не побайтно одинаково, а пересохранённые кадры — шум в истории.
+Запуск после добавления упражнения в seo_pages.EXERCISES или в каталог:
 
     python scripts/gen_site_exercise_images.py
 """
@@ -48,21 +53,27 @@ def grade(img: Image.Image) -> Image.Image:
 
 def main() -> int:
     import db  # noqa: F401 — seed_data тянет db, а seo_pages — seed_data
+    import exercise_media
+    import seo_catalog
     import seo_pages
 
     os.makedirs(OUT, exist_ok=True)
     count = 0
-    for _url, slug in seo_pages.EXERCISES:
-        for frame in (1, 2):
+    jobs = [(slug, (1, 2), WIDTHS) for _url, slug in seo_pages.EXERCISES]
+    jobs += [(exercise_media.EXERCISE_IMAGE_SLUGS[name], (2,), WIDTHS[:1]) for name in seo_catalog.card_identities()]
+    for slug, frames, widths in jobs:
+        for frame in frames:
             src = os.path.join(SRC, f"{slug}_{frame}.jpg")
             base = grade(Image.open(src))
-            for width in WIDTHS:
+            for width in widths:
                 if frame == 1 and width == 360:
                     continue  # стартовый кадр на карточках не показывается
                 height = round(width * 3 / 4)
                 img = base.resize((width, height), Image.LANCZOS)
                 img = img.filter(ImageFilter.UnsharpMask(radius=1.1, percent=70, threshold=2))
                 for fmt, q in QUALITY.items():
+                    if os.path.exists(os.path.join(OUT, f"{slug}_{frame}-{width}.{fmt}")):
+                        continue
                     img.save(os.path.join(OUT, f"{slug}_{frame}-{width}.{fmt}"), quality=q, method=6 if fmt == "webp" else None)
                     count += 1
     print(f"{count} files in {OUT}", file=sys.stderr)

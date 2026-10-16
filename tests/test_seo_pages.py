@@ -646,7 +646,9 @@ async def test_exercises_and_programs_link_each_other():
 
 
 def test_exercise_pages_have_media_and_their_own_text_on_both_languages():
-    assert 60 <= len(seo_pages.EXERCISES) <= 80
+    # Своя страница — только у упражнения со своим текстом; вариации без него
+    # показываются карточкой (seo_catalog), а не тонкой страницей.
+    assert 120 <= len(seo_pages.EXERCISES) <= 140
     assert len({u for u, _ in seo_pages.EXERCISES}) == len(seo_pages.EXERCISES)
     assert len({s for _, s in seo_pages.EXERCISES}) == len(seo_pages.EXERCISES)
     seen: dict[str, set[str]] = {}

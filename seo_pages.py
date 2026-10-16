@@ -78,8 +78,11 @@ BOT_TAG_PREFIX = "src_seo_"
 # Упражнения с отдельной страницей техники: адрес → слаг картинок
 # (exercise_media.EXERCISE_IMAGE_SLUGS). Только те, у которых есть пара
 # кадров, описание на обоих языках и свой текст (вступление, постановка,
-# ошибки) — это держит тест. Не больше 80: страница без своего текста —
-# тонкая, и поиск за такие наказывает.
+# ошибки, мышцы, снаряд и порог входа) — это держит тест. Остальные
+# упражнения каталога с кадрами (вариации хвата и угла: «… поочерёдно»,
+# «… в Смите за спиной») своей страницы не получают — показываются
+# карточкой в заменах и на страницах «мышца × снаряд»: своего текста на
+# каждую вариацию нет, а страница без него — тонкая.
 EXERCISES: tuple[tuple[str, str], ...] = (
     ("back-squat", "barbell_squat"),
     ("bench-press", "barbell_bench_press_medium_grip"),
@@ -154,13 +157,74 @@ EXERCISES: tuple[tuple[str, str], ...] = (
     ("cable-crunch", "cable_crunch"),
     ("ab-wheel-rollout", "ab_roller"),
     ("side-plank", "side_bridge"),
+    # Четвёртая волна — ходовые вариации со своим разбором.
+    ("dumbbell-shrug", "dumbbell_shrug"),
+    ("barbell-shrug", "barbell_shrug"),
+    ("hanging-knee-raise", "knee_hip_raise_on_parallel_bars"),
+    ("wrist-curl", "seated_palm_up_barbell_wrist_curl"),
+    ("reverse-wrist-curl", "seated_palms_down_barbell_wrist_curl"),
+    ("cable-lateral-raise", "standing_low_pulley_deltoid_raise"),
+    ("cable-curl", "standing_biceps_cable_curl"),
+    ("triceps-dips", "dips_triceps_version"),
+    ("overhead-dumbbell-extension", "standing_dumbbell_triceps_extension"),
+    ("reverse-crunch", "reverse_crunch"),
+    ("reverse-pec-deck", "reverse_machine_flyes"),
+    ("dumbbell-skull-crusher", "lying_dumbbell_tricep_extension"),
+    ("bicycle-crunch", "air_bike"),
+    ("close-grip-lat-pulldown", "close_grip_front_lat_pulldown"),
+    ("rope-hammer-curl", "cable_hammer_curls_rope_attachment"),
+    ("russian-twist", "russian_twist"),
+    ("machine-bicep-curl", "machine_bicep_curl"),
+    ("smith-machine-bench-press", "smith_machine_bench_press"),
+    ("machine-row", "leverage_high_row"),
+    ("reverse-curl", "reverse_barbell_curl"),
+    ("lying-leg-raise", "flat_bench_lying_leg_raise"),
+    ("hammer-strength-chest-press", "leverage_chest_press"),
+    ("smith-machine-squat", "smith_machine_squat"),
+    ("standing-dumbbell-press", "standing_dumbbell_press"),
+    ("ab-crunch-machine", "ab_crunch_machine"),
+    ("decline-crunch", "decline_crunch"),
+    ("decline-dumbbell-press", "decline_dumbbell_bench_press"),
+    ("underhand-lat-pulldown", "underhand_cable_pulldowns"),
+    ("seated-barbell-press", "seated_barbell_military_press"),
+    ("close-grip-push-up", "push_ups_close_triceps_position"),
+    ("pallof-press", "pallof_press"),
+    ("incline-dumbbell-fly", "incline_dumbbell_flyes"),
+    ("reverse-grip-barbell-row", "reverse_grip_bent_over_rows"),
+    ("seated-calf-raise", "seated_calf_raise"),
+    ("close-grip-dumbbell-press", "close_grip_dumbbell_press"),
+    ("cable-wood-chop", "standing_cable_wood_chop"),
+    ("chest-supported-dumbbell-row", "dumbbell_incline_row"),
+    ("dumbbell-pullover", "straight_arm_dumbbell_pullover"),
+    ("hip-abduction-machine", "thigh_abductor"),
+    ("hip-adduction-machine", "thigh_adductor"),
+    ("dead-bug", "dead_bug"),
+    ("jm-press", "jm_press"),
+    ("sit-up", "sit_up"),
+    ("bodyweight-glute-bridge", "butt_lift_bridge"),
+    ("cable-glute-kickback", "glute_kickback"),
+    ("bent-over-dumbbell-row", "bent_over_two_dumbbell_row"),
+    ("zottman-curl", "zottman_curl"),
+    ("standing-leg-curl", "standing_leg_curl"),
+    ("reverse-hyperextension", "reverse_hyperextension"),
+    ("kettlebell-swing", "one_arm_kettlebell_swings"),
+    ("bodyweight-squat", "bodyweight_squat"),
+    ("walking-lunge", "barbell_walking_lunge"),
+    ("reverse-lunge", "dumbbell_rear_lunge"),
+    ("dumbbell-squat", "dumbbell_squat"),
+    ("deficit-deadlift", "deficit_deadlift"),
+    ("box-squat", "box_squat"),
+    ("floor-press", "floor_press"),
+    ("assisted-pull-up", "band_assisted_pull_up"),
+    ("dumbbell-stiff-leg-deadlift", "stiff_legged_dumbbell_deadlift"),
+    ("weighted-pull-up", "weighted_pull_ups"),
 )
 _EXERCISE_BY_URL = dict(EXERCISES)
 # Упражнение в демо «подход строкой» на главной — по слагу картинок, не по имени.
 _DEMO_SLUG = "barbell_bench_press_medium_grip"
 
 IMPORT_SOURCES = ("hevy", "strong", "csv")
-TOOLS = ("1rm", "warmup", "rpe", "wilks", "tonnage", "rest-timer", "goal", "strength-percentile")
+TOOLS = ("1rm", "warmup", "rpe", "wilks", "tonnage", "rest-timer", "goal", "strength-percentile", "531", "weekly-volume")
 EMBEDS = ("1rm",)
 # Убранные адреса: 301 туда, где теперь то же самое (калькулятор блинов
 # снят — раскладку на сторону показывает разминка).
@@ -168,12 +232,12 @@ REMOVED_TOOLS = {"plates": "/tools"}
 REMOVED_EMBEDS = {"plates": "1rm"}
 COMPETITORS = ("hevy", "strong", "fitbod", "jefit")
 # Списки альтернатив: «чем заменить Hevy/Strong» — мы первые, остальные факты.
-ALTERNATIVES = ("hevy", "strong")
+ALTERNATIVES = ("hevy", "strong", "fitbod", "jefit")
 FEATURES = ("ai-coach", "video-review", "telegram", "workout-log-app")
 TEMPLATES = ("workout-log",)
 # Нормативы: адрес → ключ упражнения в seo_tools.LIFT_SHARE и адрес техники.
 STRENGTH_LIFTS = (("bench-press", "bench", "bench-press"), ("squat", "squat", "back-squat"),
-                  ("deadlift", "deadlift", "deadlift"))
+                  ("deadlift", "deadlift", "deadlift"), ("total", "total", ""))
 STRENGTH_SEXES = (("men", "m"), ("women", "f"))
 _LIFT_BY_URL = {url: (key, ex) for url, key, ex in STRENGTH_LIFTS}
 _SEX_BY_URL = dict(STRENGTH_SEXES)
@@ -211,6 +275,18 @@ _BLOCKS = {
     "vs:jefit": "vs_jefit",
     "alternatives:hevy": "alt_hevy",
     "alternatives:strong": "alt_strng",
+    "alternatives:fitbod": "alt_fbod",
+    "alternatives:jefit": "alt_jfit",
+    "exercise_alt": "ex_alt",
+    "splits": "split",
+    "split": "split",
+    "workout": "wkt",
+    "muscle_equip": "mus_eq",
+    "apps": "cmp_apps",
+    "tool:531": "t531",
+    "log:531": "t531_log",
+    "tool:weekly-volume": "vol",
+    "log:weekly-volume": "vol_log",
     "workout-log-app": "app",
     "template": "tpl",
     "about": "about",
@@ -297,11 +373,12 @@ _APP_ID_RE = re.compile(r"/id(\d+)")
 _PATH_FIXED = {
     "tools": "/tools", "strength": "/strength", "programs": "/programs", "exercises": "/exercises",
     "muscles": "/muscles", "compare": "/compare", "glossary": "/glossary", "guides": "/guides", "about": "/about",
+    "splits": "/splits",
 }
 _PATH_PREFIX = {
     "import": "/import/", "tool": "/tools/", "program": "/programs/", "exercise": "/exercises/", "vs": "/vs/",
     "alternatives": "/alternatives/", "muscle": "/muscles/", "pair": "/compare/", "term": "/glossary/",
-    "guide": "/guides/", "template": "/templates/",
+    "guide": "/guides/", "template": "/templates/", "split": "/splits/", "workout": "/workouts/", "apps": "/compare/",
 }
 # Метка блока зависит от аргумента (`vs:hevy`), а не только от раздела.
 _BLOCK_BY_ARG = ("import", "tool", "vs", "alternatives")
@@ -322,6 +399,10 @@ class Page:
             return f"/{self.kind}"
         if self.kind == "strength_lift":
             return f"/strength/{self.arg}/{self.arg2}"
+        if self.kind == "exercise_alt":
+            return f"/exercises/{self.arg}/alternatives"
+        if self.kind == "muscle_equip":
+            return f"/muscles/{self.arg}/{self.arg2}"
         if self.kind in _PATH_FIXED:
             return _PATH_FIXED[self.kind]
         if self.kind in _PATH_PREFIX:
@@ -359,8 +440,12 @@ def pages() -> list[Page]:
     result += [Page("template", t) for t in TEMPLATES]
     result.append(Page("about"))
     import seo_library
+    import seo_plans
+    import seo_swaps
 
     result += seo_library.pages()
+    result += seo_swaps.pages()
+    result += seo_plans.pages()
     return result
 
 
@@ -546,10 +631,10 @@ def _nav_pages() -> tuple[tuple[Page, str], ...]:
 _SECTION = {
     "tools": "tools", "tool": "tools", "strength": "tools", "strength_lift": "tools", "template": "tools",
     "guides": "guides", "guide": "guides", "glossary": "guides", "term": "guides",
-    "muscles": "muscles", "muscle": "muscles",
-    "exercises": "exercises", "exercise": "exercises",
-    "programs": "programs", "program": "programs",
-    "compare": "compare", "pair": "compare", "vs": "compare", "alternatives": "compare",
+    "muscles": "muscles", "muscle": "muscles", "muscle_equip": "muscles",
+    "exercises": "exercises", "exercise": "exercises", "exercise_alt": "exercises",
+    "programs": "programs", "program": "programs", "splits": "programs", "split": "programs", "workout": "programs",
+    "compare": "compare", "pair": "compare", "vs": "compare", "alternatives": "compare", "apps": "compare",
 }
 
 
@@ -573,8 +658,15 @@ def _parents(page: Page) -> list[Page]:
         return [Page("tools")]
     if k == "strength_lift":
         return [Page("tools"), Page("strength")]
+    if k == "exercise_alt":
+        return [Page("exercises"), Page("exercise", page.arg)]
+    if k == "muscle_equip":
+        return [Page("muscles"), Page("muscle", page.arg)]
+    if k in ("split", "workout"):
+        return [Page("programs"), Page("splits")]
     single = {"program": "programs", "exercise": "exercises", "muscle": "muscles", "pair": "compare",
-              "vs": "compare", "alternatives": "compare", "term": "glossary", "guide": "guides"}
+              "vs": "compare", "alternatives": "compare", "term": "glossary", "guide": "guides", "splits": "programs",
+              "apps": "compare"}
     return [Page(single[k])] if k in single else []
 
 
@@ -650,7 +742,7 @@ def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
     tools = [(Page("tool", s), t(f"seo.tool.{s}.short")) for s in TOOLS] + [(Page("strength"), t("seo.strength.short"))]
     library = [(Page("guides"), t("seo.nav.guides")), (Page("glossary"), t("seo.glossary.short")),
                (Page("exercises"), t("seo.exercises.h1")), (Page("muscles"), t("seo.nav.muscles")),
-               (Page("programs"), t("seo.programs.h1"))]
+               (Page("programs"), t("seo.programs.h1")), (Page("splits"), t("seo.splits.h1"))]
     compare = [(Page("compare"), t("seo.compare.short"))] + [(Page("vs", c), t(f"seo.vs.{c}.short")) for c in COMPETITORS]
     compare += [(Page("alternatives", c), t(f"seo.alt.{c}.short")) for c in ALTERNATIVES]
     moving = [(Page("import", s), t(f"seo.import.{s}.short")) for s in IMPORT_SOURCES]
@@ -1155,15 +1247,16 @@ def _render_home(lang: str, page: Page, request) -> str:
     t = _t(lang)
     imports = [(url_for(Page("import", s), lang), "import", t(f"seo.import.{s}.short"), t(f"seo.import.{s}.card"))
                for s in IMPORT_SOURCES]
+    imports.append((url_for(Page("template", "workout-log"), lang), "list", t("seo.template.workout-log.short"), t("seo.template.card")))
     tools = [(url_for(Page("tool", s), lang), _TOOL_ICONS[s], t(f"seo.tool.{s}.short"), t(f"seo.tool.{s}.card")) for s in TOOLS]
     tools.append((url_for(Page("strength"), lang), "scale", t("seo.strength.short"), t("seo.strength.card")))
     library = [
         (url_for(Page("programs"), lang), "program", t("seo.programs.h1"), t("seo.programs.card")),
+        (url_for(Page("splits"), lang), "chart", t("seo.splits.h1"), t("seo.splits.card")),
         (url_for(Page("exercises"), lang), "dumbbell", t("seo.exercises.h1"), t("seo.exercises.card", count=len(EXERCISES))),
         (url_for(Page("muscles"), lang), "body", t("seo.nav.muscles"), t("seo.muscles.card")),
         (url_for(Page("guides"), lang), "book", t("seo.nav.guides"), t("seo.guides.card")),
         (url_for(Page("compare"), lang), "list", t("seo.compare.short"), t("seo.compare.card")),
-        (url_for(Page("template", "workout-log"), lang), "import", t("seo.template.workout-log.short"), t("seo.template.card")),
     ]
     faq = _faq_items(lang, FAQ["home"])
 
@@ -1365,7 +1458,8 @@ def _render_import(lang: str, page: Page, request) -> str:
 # ---------- калькуляторы ----------
 
 _TOOL_ICONS = {"1rm": "calc", "warmup": "warmup", "rpe": "gauge", "wilks": "trophy",
-               "tonnage": "dumbbell", "rest-timer": "timer", "goal": "target", "strength-percentile": "percent"}
+               "tonnage": "dumbbell", "rest-timer": "timer", "goal": "target", "strength-percentile": "percent",
+               "531": "plates", "weekly-volume": "chart"}
 
 
 def _seg(name: str, legend: str, options: list[tuple[str, str]], checked: str) -> str:
@@ -1685,7 +1779,7 @@ def _strength_tool(lang: str, lift: str = "bench", sex: str = "m") -> tuple[str,
     t = _t(lang)
     form = (
         "<form class=calc onsubmit='return false'>"
-        + _seg("lift", t("seo.strength.tool.lift"), [(k, t(f"seo.strength.lift.{k}")) for k in seo_tools.STRENGTH_LIFTS], lift)
+        + _seg("lift", t("seo.strength.tool.lift"), [(k, t(f"seo.strength.lift.{k}")) for k in seo_tools.STRENGTH_LIFTS + ("total",)], lift)
         + "<div class=row>" + _seg("sex", t("seo.tool.wilks.sex"), [("m", t("seo.tool.wilks.male")), ("f", t("seo.tool.wilks.female"))], sex)
         + _unit_seg(lang) + "</div>"
         "<div class=row>" + _num_input("bw", t("seo.tool.wilks.bw"), "80" if sex == "m" else "60", "0.1")
@@ -1778,7 +1872,8 @@ def _render_strength_lift(lang: str, page: Page, request) -> str:
         + f"<section class=reveal><h2>{_e(t('seo.strength.table.h'))}</h2>{tables}"
         f"<p class=muted>{_e(t('seo.strength.table_note'))}</p></section>"
         + _strength_method(lang)
-        + f'<p><a href="{url_for(Page("exercise", ex_url), lang)}">{_e(t("seo.strength.technique", lift=lift_name))} →</a></p>'
+        + (f'<p><a href="{url_for(Page("exercise", ex_url), lang)}">{_e(t("seo.strength.technique", lift=lift_name))} →</a></p>'
+           if ex_url else "")
         + _cta(lang, page.block, _e(t("seo.strength.cta")), request)
         + _calc_script(lang, script)
     )
@@ -1810,6 +1905,8 @@ def _exercise_url_for_identity(identity: str) -> Optional[str]:
 
 
 def _render_programs(lang: str, page: Page, request) -> str:
+    import seo_plans
+
     t = _t(lang)
     cards = [
         (url_for(Page("program", p["key"]), lang), _strip_emoji(seed_data.localized_program_name(p["key"], lang)),
@@ -1821,6 +1918,10 @@ def _render_programs(lang: str, page: Page, request) -> str:
         f"<span class=eyebrow>{_e(t('seo.eyebrow.library'))}</span>"
         f"<h1>{_e(t('seo.programs.h1'))}</h1><p class=lead>{_e(t('seo.programs.lead'))}</p>"
         + program_cards([p["key"] for p in seed_data.WORKOUT_PROGRAMS], lang)
+        + f"<h2 class=group-title>{_e(t('seo.programs.splits.h'))}</h2>"
+        + _cards([(url_for(Page("split", s), lang), t(f"seo.split.{s}.h1"), t(f"seo.split.{s}.card")) for s in seo_plans.SPLIT_PAGES]
+                 + [(url_for(Page("workout", w), lang), t(f"seo.wkt.{w}.h1"), t(f"seo.wkt.{w}.card")) for w in seo_plans.WORKOUTS]
+                 + [(url_for(Page("splits"), lang), t("seo.splits.h1"), t("seo.splits.card"))])
         + f"<section class='prose reveal'><h2>{_e(t('seo.programs.take.h'))}</h2>{t('seo.programs.take_html', **_article_params(lang))}</section>"
         + _cta(lang, page.block, _e(t("seo.programs.cta")), request)
     )
@@ -1831,7 +1932,11 @@ def _render_programs(lang: str, page: Page, request) -> str:
 
 
 def _render_program(lang: str, page: Page, request) -> str:
+    import seo_library
+    import seo_plans
+
     t = _t(lang)
+    link_params = seo_library.link_params(lang)
     key = page.arg
     program = seed_data.PROGRAM_BY_KEY[key]
     name = _strip_emoji(seed_data.localized_program_name(key, lang))
@@ -1858,6 +1963,9 @@ def _render_program(lang: str, page: Page, request) -> str:
         f"<h1>{_e(name)}</h1><p class=lead>{_e(description)}</p>"
         f"<section><h2>{_e(t('seo.program.days.h'))}</h2><div class=days>{''.join(days)}</div>"
         f"<p class=muted style=\"margin-top:16px\">{_e(t('seo.program.target_note'))}</p></section>"
+        + seo_plans.program_week_html(key, lang)
+        + f"<section class='prose reveal'><h2>{_e(t('seo.program.who.h'))}</h2>{t(f'seo.program.{key}.who_html', **link_params)}</section>"
+        + f"<section class='prose reveal'><h2>{_e(t('seo.split.progress.h'))}</h2>{t('seo.split.progress_html', **link_params)}</section>"
         + _cta(lang, page.block, t("seo.program.cta_html", **_article_params(lang), name=_e(name)), request)
         + f"<h2>{_e(t('seo.program.more.h'))}</h2>" + program_cards(others, lang)
     )
@@ -1962,6 +2070,9 @@ def _exercise_aside(lang: str, page: Page, identity: str, request) -> str:
     links += [(url_for(Page("pair", seo_library.pair_slug(a, b)), lang),
                t("seo.pair.h1", a=seo_library._ex_name(a, lang), b=seo_library._ex_name(b, lang)))
               for a, b in seo_library.PAIRS if url in (a, b)]
+    import seo_swaps
+
+    links = seo_swaps.aside_link(url, lang) + links
     links.append((url_for(Page("video-review"), lang), t("seo.exercise.aside.video")))
     items = "".join(f'<li><a href="{href}">{_e(label)}</a></li>' for href, label in links)
     return (f"<aside class=ex-aside><dl class=facts>{rows}</dl>"
@@ -1975,6 +2086,8 @@ def _steps(identity: str, lang: str) -> list[str]:
 
 
 def _render_exercise(lang: str, page: Page, request) -> str:
+    import seo_swaps
+
     t = _t(lang)
     slug = _EXERCISE_BY_URL[page.arg]
     identity = _identity_for_media_slug(slug)
@@ -2012,6 +2125,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         f"<section class=reveal><h2>{_e(t('seo.exercise.setup.h'))}</h2><p>{_e(t(f'seo.ex.{slug}.setup'))}</p></section>"
         f"<section class=reveal><h2>{_e(t('seo.exercise.steps.h'))}</h2><ol class=steps>{steps}</ol></section>"
         f"<section class='mistakes reveal'><h2>{_e(t('seo.exercise.mistakes.h'))}</h2><ul>{mistakes}</ul></section>"
+        + seo_swaps.teaser(page.arg, lang)
         + in_programs
     )
     body = (
@@ -2109,7 +2223,7 @@ def render(page: Page, lang: str, request: Optional[Request] = None) -> str:
     if renderer is None:
         import seo_library
 
-        renderer = seo_library.RENDERERS[page.kind]
+        renderer = seo_library.renderers()[page.kind]
     return renderer(lang, page, request)
 
 
@@ -2174,6 +2288,12 @@ def page_images(page: Page, lang: str) -> list[str]:
         import seo_library
 
         return [_media_url(f"{_EXERCISE_BY_URL[u]}_1.jpg") for u in seo_library.pair_exercises(page.arg)]
+    if page.kind == "exercise_alt":
+        import seo_catalog
+        import seo_swaps
+
+        alts = seo_catalog.swaps(seo_swaps.identity_of(page.arg))
+        return [_media_url(f"{exercise_media.EXERCISE_IMAGE_SLUGS[a]}_2.jpg") for a in alts]
     return []
 
 
@@ -2226,7 +2346,7 @@ def llms_txt(request: Optional[Request] = None) -> str:
             out.append(f"- [{t('seo.cta.app_store')}]({store})")
         out.append(f"- [{t('seo.cta.bot')}](https://t.me/{bot_username()}?start={bot_payload(LLMS_BLOCK)})")
         main = [Page("home"), *[Page(f) for f in FEATURES], *[Page("import", s) for s in IMPORT_SOURCES], Page("tools"),
-                *[Page("tool", s) for s in TOOLS], Page("strength"), Page("programs"), Page("exercises"),
+                *[Page("tool", s) for s in TOOLS], Page("strength"), Page("programs"), Page("splits"), Page("exercises"),
                 Page("muscles"), Page("guides"), Page("glossary"), Page("compare"),
                 *[Page("template", s) for s in TEMPLATES],
                 *[Page("vs", c) for c in COMPETITORS], *[Page("alternatives", c) for c in ALTERNATIVES], Page("about")]
