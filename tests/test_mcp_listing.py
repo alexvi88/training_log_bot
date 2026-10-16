@@ -8,6 +8,7 @@
 подключён, а новый листинг завернут.
 """
 
+import html
 import json
 import re
 import tomllib
@@ -304,3 +305,69 @@ def test_server_json_matches_the_server():
     assert remotes == [{"type": "streamable-http", "url": fly["env"]["MCP_PUBLIC_URL"] + "/mcp"}]
     for icon in data.get("icons", []):
         assert icon["src"].startswith("https://") and len(icon["src"]) <= 255
+
+
+# ---------- код для ревьюеров каталогов ----------
+
+
+@pytest.fixture
+def demo_secrets(monkeypatch):
+    import review_demo
+
+    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "reviewer")
+    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "s3cret-pass")
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
+    review_demo.reset_failures()
+    yield
+    review_demo.reset_failures()
+
+
+async def test_demo_code_page_is_absent_without_demo_secrets(monkeypatch):
+    import mcp_oauth
+
+    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "")
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
+    status, _, _ = await _asgi(mcp_server.build_app(), "GET", mcp_oauth.DEMO_CODE_PATH)
+    assert status == 404
+
+
+async def test_reviewer_gets_a_code_that_the_consent_page_accepts(fresh_db, demo_secrets):
+    """Ревьюер без Telegram и iPhone: логин демо-аккаунта → код → тот же
+    путь через страницу согласия, что у живого атлета."""
+    import mcp_oauth
+
+    app = mcp_server.build_app()
+    status, _, body = await _asgi(app, "GET", mcp_oauth.DEMO_CODE_PATH)
+    assert status == 200 and 'name="password"' in body.decode()
+
+    status, _, body = await _asgi(
+        app, "POST", mcp_oauth.DEMO_CODE_PATH, form={"username": "reviewer", "password": "nope"}
+    )
+    assert status == 401
+    assert html.escape(i18n.t_in("en", "oauth.demo.error")) in body.decode()
+
+    status, _, body = await _asgi(
+        app, "POST", mcp_oauth.DEMO_CODE_PATH, form={"username": "reviewer", "password": "s3cret-pass"}
+    )
+    assert status == 200
+    code = re.search(r'id="code" value="(\d{6})"', body.decode()).group(1)
+
+    await fresh_db.save_oauth_client("c-review", None, json.dumps({"redirect_uris": ["https://claude.ai/cb"]}))
+    await fresh_db.create_oauth_consent_request(
+        request_id="req-review", client_id="c-review", redirect_uri="https://claude.ai/cb",
+        redirect_uri_provided_explicitly=True, code_challenge="x" * 43, scopes="[]",
+        resource=None, state=None, expires_at=9e12,
+    )
+    verdict, user_id = await fresh_db.verify_oauth_link_code(
+        "req-review", code, mcp_oauth.LINK_CODE_MAX_ATTEMPTS, client_ip="1.2.3.4",
+        window_seconds=600, window_limit_per_ip=10, window_limit_total=60,
+    )
+    assert verdict == "ok"
+    # Это демо-аккаунт с историей — ревьюеру есть что спросить.
+    workouts = await fresh_db.conn().execute(
+        "SELECT COUNT(*) FROM workouts WHERE user_id = ?", (user_id,)
+    )
+    assert (await workouts.fetchone())[0] > 0
