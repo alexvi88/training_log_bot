@@ -186,7 +186,7 @@ async def test_unknown_page_is_a_real_404_with_the_coach():
 
 
 def _go_links(html):
-    return re.findall(r'href="(/go/(bot|appstore)\?f=([a-z0-9_]+))"', html)
+    return re.findall(r'href="(/go/(bot|appstore|diary)\?f=([a-z0-9_]+))"', html)
 
 
 async def test_every_page_links_to_the_bot_through_go_with_a_known_block():
@@ -287,7 +287,7 @@ async def test_calculator_result_offers_to_log_the_set():
     for tool in seo_pages.TOOLS:
         en = responses[f"/en/tools/{tool}"].text
         block = seo_pages._BLOCKS[f"log:{tool}"]
-        assert f'class="log-cta btn-row"><a class="btn primary" href="/go/bot?f={block}"' in en
+        assert f'class="log-cta btn-row"><a class="btn primary" href="/go/diary?f={block}"' in en
     assert "Запиши этот подход — дальше посчитаю сам" in responses["/ru/tools/1rm"].text
     assert "Log this set — I&#x27;ll do the math from here" in responses["/en/tools/1rm"].text
 

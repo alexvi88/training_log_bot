@@ -954,7 +954,7 @@ def _live(lang: str, block: str, device: str) -> str:
         "function kg(x){return f1(x)+'\u00a0'+U;}"
         "function e1(w,r){return r<=1?w:w*(1+r/30);}"
         "f.addEventListener('submit',function(ev){ev.preventDefault();"
-        "var m=inp.value.replace(',','.').match(/^\\s*(\\d+(?:\\.\\d+)?)\\s*(?:[x×х*]|\\s)\\s*(\\d{1,3})\\s*$/i);"
+        "var m=inp.value.replace(',','.').match(/^\\s*(\\d+(?:\\.\\d+)?)\\s*(?:[x×\\u0445*]|\\s)\\s*(\\d{1,3})\\s*$/i);"
         "if(!m){out.hidden=false;out.innerHTML='<p>'+HUH+'</p>';return;}"
         "var w=parseFloat(m[1]),r=parseInt(m[2],10);if(!(w>0)||!(r>0)||w>1000||r>100){out.hidden=false;out.innerHTML='<p>'+HUH+'</p>';return;}"
         "HIST.push([w,r]);var li=document.createElement('li');li.className='new';li.innerHTML='<span>'+f1(w)+'\u00a0<span class=u>'+U+'</span> × '+r+'</span>';"

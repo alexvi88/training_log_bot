@@ -657,7 +657,7 @@ def guide_text(slug: str, lang: str) -> str:
     parts = [t(f"seo.guide.{slug}.lead")]
     for i in range(1, GUIDE_SECTIONS[slug] + 1):
         parts += [t(f"seo.guide.{slug}.s{i}.h"), t(f"seo.guide.{slug}.s{i}_html", **params)]
-    parts.append(t(f"seo.guide.{slug}.takeaways"))
+    parts.append(t(f"seo.guide.{slug}.takeaways", **params))
     return sp._plain(" ".join(parts))
 
 
@@ -683,7 +683,7 @@ def _render_guide(lang: str, page: Page, request) -> str:
     sections = "".join(
         f"<section class=reveal><h2>{sp._e(t(f'seo.guide.{slug}.s{i}.h'))}</h2>{t(f'seo.guide.{slug}.s{i}_html', **params)}</section>"
         for i in range(1, GUIDE_SECTIONS[slug] + 1))
-    takeaways = "".join(f"<li>{sp._e(x)}</li>" for x in t(f"seo.guide.{slug}.takeaways").split("\n") if x.strip())
+    takeaways = "".join(f"<li>{sp._e(x)}</li>" for x in t(f"seo.guide.{slug}.takeaways", **params).split("\n") if x.strip())
     sources = GUIDE_SOURCES[slug]
     sources_html = ""
     if sources:

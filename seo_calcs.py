@@ -291,12 +291,12 @@ def goal_card_text(lang: str, weight: str, unit: str, lift: str, m1: int, y1: in
     first = f"{t(f'seo.month_nom.{m1}')} {y1}"
     last = f"{t(f'seo.month_nom.{m2}')} {y2}"
     when = first if (m1, y1) == (m2, y2) else f"{first} — {last}"
-    return t("seo.tool.goal.card", weight=f"{weight}\u00a0{unit_label}", lift=t(f"seo.tool.goal.card_lift.{lift}"), when=when)
+    return t("seo.tool.goal.share", weight=f"{weight}\u00a0{unit_label}", lift=t(f"seo.tool.goal.card_lift.{lift}"), when=when)
 
 
 def pct_card_text(lang: str, p: int, cls: str, sex: str, lift: str) -> str:
     t = sp._t(lang)
-    return t("seo.tool.strength-percentile.card", p=p, cls=cls, lift=t(f"seo.tool.strength-percentile.card_lift.{lift}"),
+    return t("seo.tool.strength-percentile.share", p=p, cls=cls, lift=t(f"seo.tool.strength-percentile.card_lift.{lift}"),
              sex=sex)
 
 
