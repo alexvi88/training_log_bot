@@ -231,6 +231,7 @@ APP_FUNNEL_STEPS: tuple[tuple[str, str], ...] = (
     ("onboarding_slide_4", "слайд 4 «Давай посмотрю.»"),
     ("onboarding_slide_5", "слайд 5 «Это ТЫ.»"),
     ("onboarding_lock_screen", "экран блокировки (только iOS 17+)"),
+    ("onboarding_import", "«Вёл дневник раньше? Перенесу.»"),
     ("onboarding_gender", "«Твой пол»"),
     ("onboarding_gender_male", "↳ «Начать», пол: мужской"),
     ("onboarding_gender_female", "↳ «Начать», пол: женский"),
