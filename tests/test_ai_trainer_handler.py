@@ -2421,3 +2421,22 @@ async def test_a_plain_answer_leaves_no_program_trace(fresh_db, user_id, monkeyp
     kinds = [row["kind"] for row in await fresh_db.list_user_events(user_id)]
     assert activity_log.KIND_AI_PROGRAM_OFFERED not in kinds
     assert activity_log.KIND_AI_REPLY in kinds
+
+
+async def test_question_right_after_new_chat_does_not_crash(fresh_db, user_id, monkeypatch):
+    """«Новый разговор» обнуляет AI-ключи в None, а не удаляет их, и
+    data.get("ai_history", []) отдавал None — первый же вопрос после него
+    падал в ai_trainer.ask (TypeError в _light_history, прод 16.10)."""
+    ask = AsyncMock(return_value="бери пояс")
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", ask)
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    await state.update_data(ai_history=None, ai_archive=None, ai_undo=None, ai_feedback=None)
+    message = _make_chat_message(user_id, "как утяжелиться на брусьях?")
+
+    await ai_trainer.ai_question(message, state)
+
+    ask.assert_awaited_once()
+    assert ask.await_args.args[2] == []
+    assert await fresh_db.get_ai_question_count_today(user_id) == 1

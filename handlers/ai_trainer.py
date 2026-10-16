@@ -1108,7 +1108,7 @@ async def ai_exercise_archive_confirm_multi(callback: CallbackQuery, state: FSMC
     должно прятать, что именно уйдёт в архив, за одной цифрой в кнопке.
     """
     key = callback.data.split(":", 2)[2]
-    ids = (await state.get_data()).get("ai_archive", {}).get(key)
+    ids = ((await state.get_data()).get("ai_archive") or {}).get(key)
     if not ids:
         await callback.answer(i18n.t("ai.screen.list_stale"), show_alert=True)
         return
@@ -1134,7 +1134,7 @@ async def ai_exercise_archive_confirm_multi(callback: CallbackQuery, state: FSMC
 @router.callback_query(F.data.startswith("ai:exarchyesmulti:"))
 async def ai_exercise_archive_multi(callback: CallbackQuery, state: FSMContext):
     key = callback.data.split(":", 2)[2]
-    ids = (await state.get_data()).get("ai_archive", {}).get(key) or []
+    ids = ((await state.get_data()).get("ai_archive") or {}).get(key) or []
     archived = []
     for ex_id in ids:
         ex = await db.get_exercise(ex_id)
@@ -2193,7 +2193,9 @@ async def _handle_question(
             return
 
     data = await state.get_data()
-    history = data.get("ai_history", [])
+    # «Новый разговор» обнуляет ключи в None (а не удаляет), так что
+    # значение по умолчанию у get() тут не срабатывает.
+    history = data.get("ai_history") or []
 
     # The daily counter is charged only once there's an answer to show for it —
     # a provider outage shouldn't cost the user one of their questions.
