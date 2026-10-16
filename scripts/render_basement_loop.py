@@ -56,7 +56,10 @@ Python. Скрипт офлайновый, руками: в бот не импо
         --preview /tmp/anim          # плюс GIF-превью, кадры и сверка со скриншотом
 
 Выход — media/site/gym/scene-<язык>.mp4 (H.264, yuv420p, без звука,
-faststart) и scene-<язык>.webm (VP9); постер — прежние scene-<язык>.png.
+faststart), scene-<язык>.webm (VP9) и постер scene-<язык>.png — кадр 0 той
+же петли (256 цветов), чтобы на старте видео ничего не прыгало; он же — кадр
+для «уменьшения движения». Скриншоты симулятора остаются эталоном в
+iOS-репо (docs/marketing/menu-gym/screens) — с ними сверяет `--preview`.
 ffmpeg — системный или из imageio_ffmpeg (`--ffmpeg` — свой путь).
 """
 
@@ -1627,6 +1630,12 @@ def _save_strip(frames: list, path: str):
 # ----------------------------------------------------------- видео
 
 
+def write_poster(img: Image.Image, path: str):
+    """Постер — кадр 0 петли; 256 цветов без дизеринга, как прежний скриншот."""
+    img.quantize(256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).save(path, optimize=True)
+    print(f"{path}: {os.path.getsize(path) // 1024} KB")
+
+
 def video_frame(img: Image.Image) -> Image.Image:
     """Кадр для yuv420p: высота чётная — нижняя строка повторена (617 → 618);
     на странице видео кадрируется в те же 1110×617 (`object-fit: cover`)."""
@@ -1695,6 +1704,7 @@ def main(argv=None):
                 if args.preview:
                     images.append(img)
             base = os.path.join(args.out, f"scene-{lang}")
+            write_poster(overlay.compose(canvases[0]), base + ".png")
             encode(ffmpeg, tmp, base, args.crf_mp4, args.crf_webm)
             for ext in ("mp4", "webm"):
                 print(f"{base}.{ext}: {os.path.getsize(base + '.' + ext) // 1024} KB")
