@@ -149,7 +149,7 @@ async def test_lock_screen_and_gender_steps_show_in_onboarding_order(fresh_db):
     import acquisition
 
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
-    for step in ("onboarding_slide_1", "onboarding_slide_5", "onboarding_lock_screen", "onboarding_gender",
+    for step in ("onboarding_slide_1", "onboarding_slide_5", "onboarding_lock_screen", "onboarding_import", "onboarding_gender",
                  "onboarding_gender_female", "signin_shown"):
         await fresh_db.log_funnel_event(a, step, "ru")
     # iOS 16: экрана блокировки нет, после «Это ТЫ.» сразу «Твой пол».
