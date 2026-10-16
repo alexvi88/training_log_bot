@@ -343,7 +343,13 @@ def build_server() -> MCPServer:
             "except log_bodyweight, create_exercise, copy_program, and "
             "delete_bodyweight_log, which change the diary (renaming and other edits "
             "happen in the app or the bot). Start with get_training_overview — it shows "
-            "the units (kg/lb) and the exact exercise names the other tools need."
+            "the units (kg/lb) and the exact exercise names the other tools need. For "
+            "long time spans use get_full_workout_history rather than "
+            "list_recent_workouts. If get_exercise_progress returns no sessions, the "
+            "exercise has no logged entries yet: say so instead of inventing numbers. "
+            "Before create_exercise, check the athlete's list and the catalog for the "
+            "same movement. Write tools are for explicit requests from the athlete; "
+            "ids for delete_bodyweight_log come from get_bodyweight_history."
         ),
         website_url=site,
         icons=(
@@ -378,7 +384,7 @@ def build_server() -> MCPServer:
     async def get_training_overview() -> str:
         """Athlete summary: units, e1RM formula, stats (total workouts, this week, last 30
         days, days since last one, streak) and their exercise list with muscle group and
-        use count. Call this first."""
+        use count."""
         return await _call("get_training_overview")
 
     @tool("get_active_workout")
@@ -390,8 +396,7 @@ def build_server() -> MCPServer:
     @tool("list_recent_workouts")
     async def list_recent_workouts(limit: int = 5) -> str:
         """The most recent completed workouts (1-10, default 5): date, notes, and every
-        set (weight x reps) for each exercise. For questions about a long time span, use
-        get_full_workout_history instead."""
+        set (weight x reps) for each exercise."""
         return await _call("list_recent_workouts", limit=max(1, min(int(limit), 10)))
 
     @tool("get_full_workout_history")
@@ -404,7 +409,7 @@ def build_server() -> MCPServer:
     async def get_muscle_recovery() -> str:
         """How recovered each muscle group is: recovery percentage, when it was last
         trained, and how many days ago. 100% means ready for heavy work, below 85% means
-        it hasn't recovered yet. Use this for "what should I train today" questions."""
+        it hasn't recovered yet."""
         return await _call("get_muscle_recovery")
 
     @tool("get_weekly_volume_by_group")
@@ -416,9 +421,9 @@ def build_server() -> MCPServer:
     @tool("get_exercise_progress")
     async def get_exercise_progress(exercise_name: str) -> str:
         """Progress on a single exercise: sets by date, working weights, e1RM, records.
-        exercise_name is the exact name from get_training_overview. If total_sessions is
-        0 (sessions is an empty list), the exercise has no logged entries at all — don't
-        make up a date, sets, or e1RM for it; say plainly that there's no data yet."""
+        exercise_name: an exercise name exactly as listed in the training overview.
+        total_sessions 0 (an empty sessions list) means the exercise has no logged
+        entries."""
         return await _call("get_exercise_progress", exercise_name=exercise_name)
 
     @tool("list_exercise_catalog")
@@ -437,7 +442,7 @@ def build_server() -> MCPServer:
         """The athlete's saved programs. Without `name` — the list: program names, kind
         (multi-day program or standalone day) and how many days each has. With `name`
         — that one program in full: every day, its exercises, set schemes and
-        progression rules. Ask for the list first, then the program by its exact name."""
+        progression rules. name must match a program name exactly."""
         return await _call("get_saved_programs", name=name.strip() or None)
 
     @tool("compare_periods")
@@ -455,10 +460,8 @@ def build_server() -> MCPServer:
 
     @tool("log_bodyweight")
     async def log_bodyweight(weight: float) -> str:
-        """Log a body weight entry for today. The number is in the athlete's unit (see
-        `unit` in get_training_overview), no conversion is done. Call it only when the
-        athlete asks to log their weight. A wrong entry can be removed with
-        delete_bodyweight_log."""
+        """Log a body weight entry for today. weight is in the athlete's own unit
+        (kg or lb, as set in their diary); no conversion is done."""
         # The external client called this tool on purpose — that IS the
         # explicit request the in-bot guard (user_asked_to_log) asks for.
         return await _call("log_bodyweight", weight=weight, user_asked_to_log=True)
@@ -466,24 +469,20 @@ def build_server() -> MCPServer:
     @tool("create_exercise")
     async def create_exercise(name: str, group: str) -> str:
         """Add a custom exercise that's in neither the athlete's list nor the catalog —
-        adding never changes existing data. Check get_training_overview
-        and list_exercise_catalog first: if the movement already exists, use that one
-        instead of creating a second one under a slightly different name. group is the
-        exact muscle group name from get_training_overview or list_exercise_catalog."""
+        adding never changes existing data. group: a muscle group name exactly as listed
+        in the athlete's exercise list or the catalog."""
         return await _call("create_exercise", name=name, group=group)
 
     @tool("copy_program")
     async def copy_program(name: str, new_name: str | None = None) -> str:
         """Duplicate a saved program with all its days, exercises, and set schemes —
-        the original stays untouched. name is the exact source name
-        from get_saved_programs. Without new_name, a free name near the original is
-        picked automatically ("PPL (2)")."""
+        the original stays untouched. name: the source program's exact name. Without
+        new_name, a free name near the original is picked automatically ("PPL (2)")."""
         return await _call("copy_program", name=name, new_name=new_name)
 
     @tool("delete_bodyweight_log")
     async def delete_bodyweight_log(log_id: int) -> str:
-        """Delete one body weight entry. log_id is the exact id from
-        get_bodyweight_history — never guess it."""
+        """Delete one body weight entry by its id, as shown in the weigh-in history."""
         return await _call("delete_bodyweight_log", log_id=log_id)
 
     return mcp
