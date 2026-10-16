@@ -1861,7 +1861,7 @@ def _render_program(lang: str, page: Page, request) -> str:
         + _cta(lang, page.block, t("seo.program.cta_html", **_article_params(lang), name=_e(name)), request)
         + f"<h2>{_e(t('seo.program.more.h'))}</h2>" + program_cards(others, lang)
     )
-    title = t("seo.program.title", name=name)
+    title = t(f"seo.program.{key}.title")
     plan = {
         "@context": "https://schema.org", "@type": "ExercisePlan", "name": name, "description": description,
         "url": base_url(request) + url_for(page, lang), "inLanguage": lang,
