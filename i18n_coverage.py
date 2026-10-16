@@ -587,6 +587,11 @@ NEVER_LOCALIZED: dict[str, str] = {
         "seed_data.localized_exercise_name, каждое имя сверено с EXERCISE_TEMPLATES "
         "тестом tests/test_exercise_alternatives.py"
     ),
+    "exercise_muscles.py": (
+        "кириллица здесь — русская идентичность шаблонов каталога (ключи схемы "
+        "мышц), а не текст для показа; каждое имя сверено с EXERCISE_TEMPLATES "
+        "тестом tests/test_exercise_muscles.py"
+    ),
     "announcements.py": (
         "инструмент релизных рассылок: экран подтверждения видит только админ, "
         "а сам текст анонса — свободный ввод админа на каждый релиз, не литерал каталога"

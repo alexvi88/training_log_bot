@@ -35,6 +35,7 @@ import api_v1_common as common
 import db
 import exercise_descriptions
 import exercise_media
+import exercise_muscles
 import exercise_photos
 import i18n
 from api_v1_common import JSONResponse
@@ -111,6 +112,8 @@ async def get_exercise_media(request: Request) -> JSONResponse:
         "images": image_urls,
         "animation": animation_url,
         "has_media": bool(image_urls or animation_url),
+        # Та же схема мышц, что у превью шаблона (api_v1_templates._media_json).
+        "muscles": exercise_muscles.for_exercise(exercise),
     }
     return JSONResponse(body)
 
