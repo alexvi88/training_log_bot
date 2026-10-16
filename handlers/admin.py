@@ -14,7 +14,14 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, InlineKeyboardButton, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    FSInputFile,
+    InaccessibleMessage,
+    InlineKeyboardButton,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import account_deletion
@@ -629,11 +636,15 @@ ACTIVITY_PAGE_SIZE = 25
 # событий приходится куда больше времени наблюдения — короткая страница
 # заставляла бы листать через каждые несколько минут. Держим её длиннее.
 ACTIVITY_ALL_PAGE_SIZE = 80
-# Экран — одно сообщение (4096 символов у Telegram), а в базе строка может быть
-# длиной до activity_log.MAX_CONTENT_LEN. Показываем начало: для «что человек
-# ввёл» его хватает, а целиком длинная простыня всё равно вытеснила бы с экрана
-# соседние события — то есть контекст, ради которого лента и открыта.
-ACTIVITY_LINE_LIMIT = 120
+# Тексты в ленте — целиком: и что человек написал (до activity_log.MAX_CONTENT_LEN),
+# и расшифровка голосового, и ответ тренера. Раньше строка резалась до 120
+# символов, и владелец видел «Я бы **не переходил сразу** … Дли…» — ни вопроса,
+# ни ответа целиком. Страница, которая не влезает в одно сообщение Telegram,
+# уходит несколькими (ui.split_html), кнопки — под последним.
+ACTIVITY_CHUNK_LIMIT = 4000
+# Ответ тренера — markdown модели; в ленте он рендерится так же, как атлету
+# (formatting.ai_markdown_to_html), а не сырыми звёздочками.
+_ACTIVITY_MARKDOWN_KINDS = frozenset({activity_log.KIND_AI_REPLY})
 
 
 # Кто написал строку: человек, его тап или тренер в ответ.
@@ -676,9 +687,13 @@ def _activity_source(row) -> str:
 
 
 def _activity_content(row) -> str:
-    content = row["content"]
-    if len(content) > ACTIVITY_LINE_LIMIT:
-        content = content[: ACTIVITY_LINE_LIMIT - 1] + "…"
+    """Содержимое строки ленты в HTML — целиком, без обрезки.
+
+    Переводы строк — «⏎»: одно событие остаётся одной строкой ленты, и граница
+    между событиями всегда видна (по ней же ui.split_html режет страницу)."""
+    content = (row["content"] or "").strip()
+    markdown = row["kind"] in _ACTIVITY_MARKDOWN_KINDS
+    content = formatting.ai_markdown_to_html(content) if markdown else escape(content)
     return content.replace("\n", " ⏎ ")
 
 
@@ -692,15 +707,55 @@ def _activity_line(row) -> str:
 
 def _activity_line_all(row) -> str:
     """Та же строка, что и в ленте одного пользователя, но с автором — общая
-    лента иначе нечитаема — и в HTML, чтобы автора можно было выделить жирным."""
+    лента иначе нечитаема — и автор выделен жирным."""
     at = admin_time(row["created_at"])
     who = keyboards.admin_user_label(
         row["username"], keyboards.row_value(row, "email"), row["telegram_id"]
     )
     return (
         f"{at.strftime('%d.%m %H:%M')} {_activity_source(row)} {_activity_marker(row['kind'])} "
-        f"{escape(_activity_content(row))} — <b>{escape(who)}</b>"
+        f"{_activity_content(row)} — <b>{escape(who)}</b>"
     )
+
+
+async def _drop_activity_extras(callback: CallbackQuery, state: FSMContext) -> None:
+    """Убрать куски прошлой страницы ленты, кроме того, что под кнопками."""
+    data = await state.get_data()
+    extra = data.get("admin_activity_extra_ids") or []
+    if not extra:
+        return
+    await state.update_data(admin_activity_extra_ids=[])
+    chat_id = callback.message.chat.id
+    for message_id in extra:
+        with suppress(TelegramAPIError):
+            await callback.bot.delete_message(chat_id, message_id)
+
+
+async def _show_activity_text(
+    callback: CallbackQuery, state: FSMContext, text: str, reply_markup
+) -> None:
+    """Страница ленты — одним сообщением, а не влезла — несколькими подряд.
+
+    Кнопки — под последним куском: листают оттуда, где страница кончилась.
+    Куски прошлой страницы при перелистывании убираются, чтобы чат не копил
+    ленту дважды.
+    """
+    await _drop_activity_extras(callback, state)
+    chunks = ui.split_html(text, ACTIVITY_CHUNK_LIMIT)
+    if len(chunks) == 1:
+        await ui.safe_edit(callback, text, reply_markup=reply_markup, parse_mode="HTML")
+        return
+    message = callback.message
+    chat_id = message.chat.id
+    if not isinstance(message, InaccessibleMessage):
+        with suppress(TelegramAPIError):
+            await message.delete()
+    extra: list[int] = []
+    for chunk in chunks[:-1]:
+        sent = await callback.bot.send_message(chat_id, chunk, parse_mode="HTML")
+        extra.append(sent.message_id)
+    await callback.bot.send_message(chat_id, chunks[-1], reply_markup=reply_markup, parse_mode="HTML")
+    await state.update_data(admin_activity_extra_ids=extra)
 
 
 async def _show_activity_users(target: Message | CallbackQuery, state: FSMContext, page: int):
@@ -710,6 +765,8 @@ async def _show_activity_users(target: Message | CallbackQuery, state: FSMContex
     users = await db.list_users_with_event_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
     has_next = (page + 1) * USERS_PAGE_SIZE < total
     kb = keyboards.admin_activity_users_keyboard(users, page, has_next)
+    if isinstance(target, CallbackQuery):
+        await _drop_activity_extras(target, state)
     text = "👀 Что делают пользователи — выбери, чью ленту открыть:" if users else "Пользователей пока нет."
     if isinstance(target, CallbackQuery):
         await ui.safe_edit(target, text, reply_markup=kb)
@@ -731,13 +788,13 @@ async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target
         user["username"] if user else None, await db.get_user_email(target_user_id), target_user_id
     )
     if rows:
-        header = f"👀 {who} — {total} действий, свежие сверху:"
+        header = f"👀 {escape(who)} — {total} действий, свежие сверху:"
         text = header + "\n\n" + "\n".join(_activity_line(row) for row in rows)
     else:
-        text = f"👀 {who} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
+        text = f"👀 {escape(who)} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_feed_keyboard(target_user_id, page, has_next)
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    await _show_activity_text(callback, state, text, kb)
 
 
 SITE_FEED_PAGE_SIZE = 30
@@ -782,7 +839,7 @@ async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, pa
         text = f"👀 Действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_all_keyboard(page, has_next)
-    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await _show_activity_text(callback, state, text, kb)
 
 
 GROWTH_WINDOW_DAYS = 30

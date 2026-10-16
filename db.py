@@ -799,9 +799,10 @@ CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
 -- про итог.
 --
 -- content — то, что реально введено: текст сообщения, подпись к фото или
--- человекочитаемая надпись нажатой кнопки; подрезается на входе
--- (activity_log.MAX_CONTENT_LEN), чтобы простыня из буфера обмена не раздувала
--- базу. payload у кнопок — её callback_data, то есть чем нажатие было для бота.
+-- человекочитаемая надпись нажатой кнопки, у голосового — его расшифровка
+-- («🎤 голосовое: …», дописывается в ту же строку); ввод человека держит
+-- жёсткий потолок activity_log.MAX_CONTENT_LEN, ответ тренера пишется целиком.
+-- payload у кнопок — её callback_data, то есть чем нажатие было для бота.
 -- Живёт не вечно: prune_old_user_events чистит по ACTIVITY_RETENTION_DAYS в том
 -- же суточном джобе, что и cost_events.
 -- source — откуда пришло действие: 'tg' (бот) или 'ios' (REST-слой /v1). Лента
@@ -11153,23 +11154,53 @@ async def log_user_event(
     content: str,
     payload: Optional[str] = None,
     source: str = "tg",
-) -> None:
+) -> Optional[int]:
     """Одно действие человека в ленту. source — 'tg' (бот) или 'ios' (/v1).
+    Возвращает id строки — по нему вход дописывает расшифровку голосового.
 
     Умолчание стоит здесь, а не на местах вызова, ровно чтобы не трогать
     десятки уже написанных вызовов из бота: из Telegram приходит всё, что не
     сказало обратного, а сказать обратное есть кому только REST-слою /v1.
     """
     async with _write_lock:
-        await conn().execute(
+        cur = await conn().execute(
             "INSERT INTO user_events (telegram_id, kind, content, payload, source, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (telegram_id, kind, content, payload, source, now_iso()),
         )
+        event_id = cur.lastrowid
         await conn().commit()
     # Зеркало ревьюера админу (review_watch.py): после записи и вне замка, в
     # очередь, без сети; сама глотает свои сбои.
     await review_watch.on_event(telegram_id, kind, content, source)
+    return event_id
+
+
+async def update_user_event_content(event_id: int, content: str) -> None:
+    """Дописать строку ленты задним числом — расшифровка голосового ложится в
+    ту же строку, что и само голосовое (activity_log.record_voice_transcript)."""
+    async with _write_lock:
+        await conn().execute("UPDATE user_events SET content = ? WHERE id = ?", (content, event_id))
+        await conn().commit()
+
+
+async def update_latest_voice_event(
+    telegram_id: int, mark: str, content: str, within: dt.timedelta
+) -> bool:
+    """Свежая нерасшифрованная строка голосового этого человека → content.
+
+    Запасной путь, когда id строки неизвестен (вызов не из апдейта): ищем
+    последнюю строку ровно с пометкой `mark` не старше `within`. True — нашли."""
+    since = (_utc_now() - within).isoformat(timespec="seconds")
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE user_events SET content = ? WHERE id = ("
+            "SELECT id FROM user_events WHERE telegram_id = ? AND kind = 'message' "
+            "AND content = ? AND created_at >= ? ORDER BY id DESC LIMIT 1)",
+            (content, telegram_id, mark, since),
+        )
+        await conn().commit()
+    return cur.rowcount > 0
 
 
 async def count_unhandled_callbacks_by_prefix(since_iso: str) -> list[aiosqlite.Row]:

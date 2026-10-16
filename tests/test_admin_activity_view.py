@@ -54,14 +54,14 @@ async def test_coach_reply_lands_in_the_log(fresh_db):
     assert row["content"] == "Записал. Погнали дальше."
 
 
-async def test_long_coach_reply_is_truncated_like_any_other_event(fresh_db):
+async def test_long_coach_reply_is_stored_in_full(fresh_db):
     await fresh_db.get_or_create_user(111, "athlete")
 
     await activity_log.record_ai_reply(111, "х" * (activity_log.MAX_CONTENT_LEN + 500))
 
     (row,) = await fresh_db.list_user_events(111, limit=10)
-    assert len(row["content"]) == activity_log.MAX_CONTENT_LEN
-    assert row["content"].endswith("…")
+    assert len(row["content"]) == activity_log.MAX_CONTENT_LEN + 500
+    assert not row["content"].endswith("…")
 
 
 def test_bottom_keyboard_tap_reads_as_a_tap_not_as_typed_text(monkeypatch):

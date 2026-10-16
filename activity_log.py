@@ -23,11 +23,26 @@ REST-слой `/v1` (`api_v1_activity.py`), помечая их `source="ios"`; 
 пометка типа («🎤 голосовое»), для нажатия — надпись на кнопке, которую человек
 видел, и её callback_data. Файлы и фото сами по себе не сохраняются — только то,
 что человек ввёл, и след того, куда он нажал.
+
+Голосовое — исключение из «только пометка типа»: «🎤 голосовое» в ленте не
+отвечает на вопрос, что человек СКАЗАЛ, а это ровно то, ради чего лента открыта.
+Как только бот (или `/v1`) расшифровал запись, расшифровка ложится в ту же
+строку ленты: «🎤 голосовое: <текст>», а не распознал — «🎤 голосовое (не
+распознал)» (см. record_voice_transcript). Сам звук не хранится по-прежнему.
+В продуктовые события (product_metrics) расшифровка не попадает никогда — как и
+любой набранный текст.
+
+Тексты в ленте не режутся до «начала»: сообщение и расшифровка хранятся целиком
+до MAX_CONTENT_LEN, ответ тренера — целиком. В stdout строка та же, полная, с
+переводами строк, экранированными как «\\n» (log_text): одно действие — одна
+строка журнала.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import datetime as dt
 import logging
 
 from aiogram import BaseMiddleware
@@ -38,9 +53,21 @@ import product_metrics
 
 logger = logging.getLogger(__name__)
 
-# Простыня из буфера обмена (импорт CSV, длинная простыня для AI-тренера) не
-# должна раздувать базу — для «что человек ввёл» начала хватает с запасом.
-MAX_CONTENT_LEN = 1000
+# Жёсткий потолок того, что человек ввёл (сообщение, подпись, расшифровка
+# голосового): Telegram сам не пропускает сообщение длиннее 4096, так что
+# обычный текст доезжает до ленты целиком, а простыня из буфера обмена (CSV
+# импорта через /v1) не раздувает базу. Раньше было 1000 и «начала хватает» —
+# не хватало: владелец читал обрывки вопросов и не понимал, на что ответил тренер.
+# Ответ тренера этим потолком не режется — он наш и пишется целиком.
+MAX_CONTENT_LEN = 4000
+
+# Голосовое в ленте: пометка, расшифровка после двоеточия, или честное «не
+# распознал». Префикс общий у всех трёх — по нему строку голосового и находят.
+VOICE_MARK = "🎤 голосовое"
+VOICE_UNRECOGNIZED = f"{VOICE_MARK} (не распознал)"
+# Сколько после самого сообщения расшифровка ещё ищет свою строку, когда
+# контекста входа нет (см. record_voice_transcript).
+VOICE_MATCH_WINDOW = dt.timedelta(minutes=10)
 
 # Откуда пришло действие. Лента одна на оба клиента (см. db.user_events.source и
 # api_v1_activity.py): без пометки «начал тренировку» из приложения неотличимо
@@ -60,7 +87,18 @@ def process_log_line(
     строки, и айосные. Разные формы записи у бота и у REST-слоя превратили бы
     такой греп в два разных грепа, а сравнение источников — в ручную работу.
     """
-    return f"[{source}] user={telegram_id} | {action} | {detail} | {outcome}"
+    return (
+        f"[{source}] user={telegram_id} | {log_text(action)} | {log_text(detail)} | "
+        f"{log_text(outcome)}"
+    )
+
+
+def log_text(text: str | None) -> str:
+    """Текст целиком для строки журнала: до MAX_CONTENT_LEN, переводы строк —
+    «\\n», чтобы одно действие оставалось одной строкой `fly logs`."""
+    text = _cap(text or "")
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+
 
 KIND_MESSAGE = "message"
 KIND_CALLBACK = "callback"
@@ -103,7 +141,7 @@ KIND_AI_PROGRAM_OFFERED = "ai_program_offered"
 # Нетекстовые сообщения: сам файл не хранится, но факт «прислал голосовое» —
 # ровно та часть картины, которой иначе не видно.
 _MEDIA_MARKS = (
-    ("voice", "🎤 голосовое"),
+    ("voice", VOICE_MARK),
     ("video_note", "🎥 кружок"),
     ("photo", "🖼 фото"),
     ("document", "📎 файл"),
@@ -116,7 +154,8 @@ _MEDIA_MARKS = (
 )
 
 
-def _truncate(text: str) -> str:
+def _cap(text: str) -> str:
+    """Жёсткий потолок ввода — не «показать начало», а защита базы от простыни."""
     text = text.strip()
     if len(text) <= MAX_CONTENT_LEN:
         return text
@@ -132,7 +171,7 @@ def describe_message(message: Message) -> str:
             parts.append(mark)
             break
     if text:
-        parts.append(_truncate(text))
+        parts.append(_cap(text))
     return " ".join(parts) if parts else "(сообщение без текста)"
 
 
@@ -184,9 +223,10 @@ def message_props(message: Message, reply_button: bool) -> dict:
     return {"type": str(message.content_type or "unknown")[:32]}
 
 
-async def record_message(message: Message) -> None:
+async def record_message(message: Message) -> int | None:
+    """Входящее сообщение в ленту; id записанной строки (или None)."""
     if message.from_user is None:
-        return
+        return None
     label = _reply_button_label(message)
     await product_metrics.track(
         message.from_user.id,
@@ -196,8 +236,8 @@ async def record_message(message: Message) -> None:
     )
     if label is not None:
         await db.log_user_event(message.from_user.id, KIND_REPLY_BUTTON, label)
-        return
-    await db.log_user_event(message.from_user.id, KIND_MESSAGE, describe_message(message))
+        return None
+    return await db.log_user_event(message.from_user.id, KIND_MESSAGE, describe_message(message))
 
 
 async def record_callback(callback: CallbackQuery) -> None:
@@ -219,7 +259,7 @@ async def record_callback(callback: CallbackQuery) -> None:
         callback.from_user.id, getattr(message, "message_id", None) if message else None
     )
     await db.log_user_event(
-        callback.from_user.id, KIND_CALLBACK, _truncate(label or data or "(кнопка)"), data or None
+        callback.from_user.id, KIND_CALLBACK, _cap(label or data or "(кнопка)"), data or None
     )
 
 
@@ -248,7 +288,9 @@ async def record_ai_reply(user_id: int, text: str) -> None:
     (handlers/ai_trainer), а не из middleware: middleware видит входящие
     события, а это исходящее.
     """
-    await db.log_user_event(user_id, KIND_AI_REPLY, _truncate(text))
+    text = text.strip()
+    await db.log_user_event(user_id, KIND_AI_REPLY, text)
+    logger.info("%s", process_log_line(SOURCE_TG, user_id, text, KIND_AI_REPLY, "ok"))
 
 
 async def record_ai_failure(user_id: int, exc: BaseException) -> None:
@@ -260,7 +302,7 @@ async def record_ai_failure(user_id: int, exc: BaseException) -> None:
     пользовательской нельзя.
     """
     reason = "таймаут" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__
-    await db.log_user_event(user_id, KIND_AI_FAILED, _truncate(f"тренер не ответил: {reason}"))
+    await db.log_user_event(user_id, KIND_AI_FAILED, _cap(f"тренер не ответил: {reason}"))
 
 
 async def record_ai_program_offered(user_id: int, title: str) -> None:
@@ -274,7 +316,7 @@ async def record_ai_program_offered(user_id: int, title: str) -> None:
     await db.log_user_event(
         user_id,
         KIND_AI_PROGRAM_OFFERED,
-        _truncate(f"предложил программу: {title.strip() or 'без названия'}"),
+        _cap(f"предложил программу: {title.strip() or 'без названия'}"),
     )
 
 
@@ -288,13 +330,92 @@ async def record_recovered_callback(callback: CallbackQuery) -> None:
     )
 
 
+# Куда положить расшифровку голосового, которое сейчас обрабатывается. Ставит
+# вход: middleware бота (LogIncomingMessages — строка ленты уже записана, её id
+# известен) и middleware `/v1` (api_v1_activity.LogApiActions — строка
+# пишется ПОСЛЕ обработчика, расшифровка кладётся в слот и приклеивается к ней).
+# Изменяемый словарь, а не значение: Starlette зовёт обработчик в дочерней
+# задаче, и новое значение ContextVar оттуда наверх не вернулось бы, а
+# изменение общего словаря — возвращается.
+_voice_slot: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "activity_voice_slot", default=None
+)
+
+
+def open_voice_slot(**fields) -> tuple[dict, contextvars.Token]:
+    """Слот под расшифровку на время одного входа; закрывать — close_voice_slot."""
+    slot = dict(fields)
+    return slot, _voice_slot.set(slot)
+
+
+def close_voice_slot(token: contextvars.Token) -> None:
+    _voice_slot.reset(token)
+
+
+def voice_content(transcript: str | None, original: str = VOICE_MARK) -> str:
+    """Строка ленты для голосового: «🎤 голосовое: <текст>» или «(не распознал)».
+
+    original — то, что записал вход до расшифровки (у голосового с подписью это
+    «🎤 голосовое <подпись>»): пометку меняем, подпись оставляем.
+    """
+    text = (transcript or "").strip()
+    heard = f"{VOICE_MARK}: {text}" if text else VOICE_UNRECOGNIZED
+    if original.startswith(VOICE_MARK):
+        heard = heard + original[len(VOICE_MARK):]
+    return _cap(heard)
+
+
+async def record_voice_transcript(user_id: int | None, transcript: str | None) -> None:
+    """Расшифровка голосового — в ту же строку ленты, что и само голосовое.
+
+    None или пустая строка — «не распознал» (провайдер упал или запись немая).
+    Зовётся из ai_trainer.transcribe_voice — единственной точки расшифровки и у
+    бота (вопрос тренеру, подход голосом), и у `/v1` (`/ai/voice`,
+    `/workouts/{id}/sets/voice`), — так что новый путь голоса получает это сам.
+    Только в user_events: в product_metrics текст человека не кладётся никогда.
+    Никогда не бросает — лента не повод сорвать человеку подход.
+    """
+    if user_id is None:
+        return
+    try:
+        slot = _voice_slot.get()
+        source = SOURCE_TG
+        if slot is not None and slot.get("source") == SOURCE_IOS:
+            # /v1: строки ещё нет, её запишет LogApiActions после обработчика.
+            slot["user_id"] = user_id
+            slot["voice"] = voice_content(transcript)
+            return
+        if slot is not None and slot.get("user_id") == user_id and slot.get("event_id"):
+            content = voice_content(transcript, slot.get("content") or VOICE_MARK)
+            await db.update_user_event_content(slot["event_id"], content)
+        else:
+            # Контекста входа нет (вызов не из апдейта) — ищем свежую строку
+            # «🎤 голосовое» этого человека; не нашли — не выдумываем новую.
+            content = voice_content(transcript)
+            if not await db.update_latest_voice_event(
+                user_id, VOICE_MARK, content, VOICE_MATCH_WINDOW
+            ):
+                return
+        logger.info("%s", process_log_line(source, user_id, content, "voice_transcript", "ok"))
+    except Exception:
+        logger.exception("Failed to log voice transcript")
+
+
 class LogIncomingMessages(BaseMiddleware):
     """Каждое входящее сообщение — в user_events, ещё до фильтров и хендлеров."""
 
     async def __call__(self, handler, event, data):
+        token = None
         if isinstance(event, Message):
             try:
-                await record_message(event)
+                event_id = await record_message(event)
+                if getattr(event, "voice", None) is not None and event_id and event.from_user is not None:
+                    _, token = open_voice_slot(
+                        source=SOURCE_TG,
+                        user_id=event.from_user.id,
+                        event_id=event_id,
+                        content=describe_message(event),
+                    )
                 logger.info(
                     "%s",
                     process_log_line(
@@ -307,7 +428,11 @@ class LogIncomingMessages(BaseMiddleware):
                 )
             except Exception:
                 logger.exception("Failed to log user message")
-        return await handler(event, data)
+        try:
+            return await handler(event, data)
+        finally:
+            if token is not None:
+                close_voice_slot(token)
 
 
 class LogCallbackQueries(BaseMiddleware):

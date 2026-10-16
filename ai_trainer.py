@@ -36,6 +36,7 @@ from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
 from openai import APITimeoutError, AsyncOpenAI, AsyncStream
 
+import activity_log
 import ai_limits
 import analytics
 import coach_facts
@@ -870,11 +871,18 @@ async def transcribe_voice(
     client = _get_audio_client()
     seconds = _voice_seconds(file_obj, duration_seconds)
     # Провайдер не ответил (сеть, таймаут, 4xx) — исключение летит выше, квота не тратится.
-    response = await client.audio.transcriptions.create(
-        model=config.OPENAI_TRANSCRIBE_MODEL,
-        file=file_obj,
-        language=i18n.get_lang(),
-    )
+    # Лента /activity при этом получает «🎤 голосовое (не распознал)», а на
+    # успехе — саму расшифровку (activity_log.record_voice_transcript): здесь
+    # единственная точка расшифровки и у бота, и у /v1.
+    try:
+        response = await client.audio.transcriptions.create(
+            model=config.OPENAI_TRANSCRIBE_MODEL,
+            file=file_obj,
+            language=i18n.get_lang(),
+        )
+    except Exception:
+        await activity_log.record_voice_transcript(user_id, None)
+        raise
     if user_id is not None:
         try:
             await db.increment_ai_usage(user_id, ai_limits.KIND_VOICE)
@@ -888,7 +896,9 @@ async def transcribe_voice(
         )
     except Exception:
         logger.exception("failed to log transcription cost event")
-    return (response.text or "").strip()
+    transcript = (response.text or "").strip()
+    await activity_log.record_voice_transcript(user_id, transcript)
+    return transcript
 
 
 SYSTEM_PROMPT = """\
@@ -7249,7 +7259,7 @@ async def _explained_final_program(
         return cleaned, reasoning
     logger.info(
         "AI trainer: no explanation of the final program for user %s (%r), asking once more",
-        user_id, text[:200],
+        user_id, text,
     )
     if text:
         said: dict[str, Any] = {"role": "assistant", "content": text}
