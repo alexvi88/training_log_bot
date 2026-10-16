@@ -5,7 +5,16 @@
 import analytics
 import engagement
 import formatting
+import hall_of_fame_data
 import i18n
+
+
+def _home(tonnage: float, unit: str) -> str:
+    hof = hall_of_fame_data.HallOfFame(
+        total_workouts=42, tonnage_kg=tonnage, tonnage_equivalent=None,
+        best_week_streak=1, longest_workout_seconds=60, unit=unit,
+    )
+    return formatting.build_achievements_home(hof, hall_of_fame_data.HeadlineLifts(main=True), set(), [])
 
 NBSP = " "
 
@@ -33,20 +42,14 @@ def test_kg_tonnage_still_switches_to_tons():
 def test_hall_of_fame_lifetime_line_in_lb_has_no_tons():
     for lang, expected in (("en", "125,000lb"), ("ru", f"125{NBSP}000lb")):
         with i18n.use_lang(lang):
-            text = formatting.build_hall_of_fame(
-                total_workouts=42, tonnage_kg=125000, tonnage_equivalent=None,
-                best_week_streak=1, longest_workout_seconds=60, top_lifts=[], unit="lb",
-            )
+            text = _home(125000, "lb")
         assert expected in text
         assert "ton" not in text.lower() and "тонн" not in text
 
 
 def test_hall_of_fame_lifetime_line_in_kg_keeps_tons():
     with i18n.use_lang("en"):
-        text = formatting.build_hall_of_fame(
-            total_workouts=42, tonnage_kg=125000, tonnage_equivalent=None,
-            best_week_streak=1, longest_workout_seconds=60, top_lifts=[], unit="kg",
-        )
+        text = _home(125000, "kg")
     assert "125 tons" in text
 
 

@@ -1,7 +1,7 @@
 """Зал славы — сбор данных, отдельно от их рисования.
 
 Бот показывает зал славы текстом внутри экрана «🏆 Достижения»
-(handlers/history.py.build_hall_of_fame_text), приложение будет рисовать те же
+(handlers/history.py.build_achievements_home_text), приложение будет рисовать те же
 цифры нативно через `/v1`, а считаются они одинаково: личные рекорды по
 каждому упражнению, общий тоннаж со шуткой-эквивалентом, лучшая серия недель
 подряд, самая длинная тренировка, звание. Поэтому сбор живёт здесь, а не в
@@ -25,6 +25,7 @@ import analytics
 import config
 import db
 import formatting
+import seed_data
 import timeutil
 import view_builder
 
@@ -34,7 +35,7 @@ class HallOfFame:
     """Всё, из чего строится зал славы — и текст бота, и JSON приложения."""
 
     total_workouts: int
-    tonnage_kg: float  # в единицах пользователя, несмотря на имя (см. formatting.build_hall_of_fame)
+    tonnage_kg: float  # в единицах пользователя, несмотря на имя (см. formatting._lifetime_tonnage_str)
     tonnage_equivalent: Optional[str]
     best_week_streak: int
     longest_workout_seconds: float
@@ -121,7 +122,7 @@ async def collect(user_id: int, *, with_lifts: bool = True) -> HallOfFame:
     Пустая история (`total_workouts == 0`) не падает и не идёт отдельной
     веткой: все остальные поля у новичка честно нулевые/пустые, и вызывающий
     (бот или REST) сам решает, как это показать — бот печатает
-    `hall.empty` внутри formatting.build_hall_of_fame, а `/v1` отдаёт `null`
+    `hall.empty` внутри formatting.build_achievements_home, а `/v1` отдаёт `null`
     целиком, тем же приёмом, что и dashboard_data.collect.
     """
     user = await db.get_user(user_id)
@@ -154,3 +155,60 @@ async def collect(user_id: int, *, with_lifts: bool = True) -> HallOfFame:
         rank_gap=analytics.rank_gap(rank, total_workouts, tonnage_kg, per_week),
         per_week=per_week,
     )
+
+
+#: Сколько «самых частых» упражнений показывает шапка экрана «🏆 Достижения»,
+#: когда базовых движений у атлета нет.
+HEADLINE_FALLBACK_COUNT = 3
+
+
+@dataclass(frozen=True)
+class HeadlineLifts:
+    """Рекорды для главного экрана «🏆 Достижения» — не весь список, а то, что
+    атлет хочет увидеть с одного взгляда.
+
+    `main` — True, когда это базовые движения (seed_data.MAIN_LIFTS, по
+    идентичности); тогда у строк есть смысл показывать e1RM. False — у атлета
+    нет ни одного базового, и `lifts` — его самые частые упражнения: там
+    тренажёры и изоляция, у которых расчётный максимум ничего не говорит, и
+    экран показывает лучший подход как есть.
+    """
+
+    main: bool
+    #: те же кортежи, что HallOfFame.top_lifts: (имя, вес, повторы, e1RM)
+    lifts: list[tuple[str, float, int, float]] = field(default_factory=list)
+
+
+async def headline_lifts(user_id: int, hof: HallOfFame) -> HeadlineLifts:
+    """Отбор строк для шапки из уже собранного `hof.top_lifts`.
+
+    Базовое движение узнаётся по `exercises.original_name`
+    (seed_data.main_lift_identity), а не по имени на экране: имя локализовано
+    и переименовывается, идентичность — нет. Две копии одной идентичности
+    (бывает после импорта до объединения) дают одну строку — сильнейшую.
+    """
+    meta = await db.exercise_identities_with_sessions(user_id)
+    ids = hof.top_lift_ids + [None] * (len(hof.top_lifts) - len(hof.top_lift_ids))
+    best_main: dict[str, tuple[str, float, int, float]] = {}
+    for lift, ex_id in zip(hof.top_lifts, ids, strict=True):
+        if ex_id is None or lift[1] <= 0:
+            continue
+        identity = seed_data.main_lift_identity(meta.get(ex_id, (None, 0))[0])
+        if identity is None:
+            continue
+        held = best_main.get(identity)
+        if held is None or (lift[3], lift[1]) > (held[3], held[1]):
+            best_main[identity] = lift
+    if best_main:
+        return HeadlineLifts(
+            main=True,
+            lifts=[best_main[i] for i in seed_data.MAIN_LIFTS if i in best_main],
+        )
+    # sorted устойчива: при равном числе тренировок остаётся порядок top_lifts —
+    # сильнейшие первыми.
+    ranked = sorted(
+        zip(hof.top_lifts, ids, strict=True),
+        key=lambda pair: meta.get(pair[1], (None, 0))[1] if pair[1] is not None else 0,
+        reverse=True,
+    )
+    return HeadlineLifts(main=False, lifts=[lift for lift, _ in ranked[:HEADLINE_FALLBACK_COUNT]])

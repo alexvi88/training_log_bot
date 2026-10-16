@@ -67,18 +67,18 @@ def test_format_new_achievements():
 
 def test_build_achievements_screen_counts():
     text = formatting.build_achievements_screen({"first", "w10"})
-    assert f"2/{len(achievements.CATALOG)}" in text
+    assert f"2 из {len(achievements.CATALOG)}" in text
     assert "🔒" in text  # locked ones listed
 
 
-def test_earned_and_locked_badges_each_fold_regardless_of_length():
-    # This screen always folds both lists, short or long: it's reached to check
-    # the count or brag about one badge, not to read the list.
+def test_earned_and_locked_badges_fold_only_when_long():
+    # «Все ачивки» — отдельный экран, сюда приходят за списком: короткий список
+    # открытых не сворачивается, длинный закрытый — да.
     text = formatting.build_achievements_screen({"first"})
-    assert text.count("blockquote expandable") == 2  # one earned block, one locked block
-    first_fold, _, rest = text.partition("<blockquote expandable>")
-    assert "🔒" not in first_fold  # header only above the first fold, no content
-    assert "Первый шаг" in text
+    assert text.count("blockquote expandable") == 1  # only the long locked block
+    open_part, _, folded = text.partition("<blockquote expandable>")
+    assert "Первый шаг" in open_part
+    assert "🔒" not in open_part
     assert text.count("🔒") == len(achievements.CATALOG) - 1  # every remaining badge, none dropped
 
 

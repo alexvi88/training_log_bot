@@ -178,14 +178,17 @@ async def test_demotion_is_not_announced(fresh_db, user_id):
 
 
 async def test_hall_of_fame_shows_the_rank_first(fresh_db, user_id):
-    from handlers.history import build_hall_of_fame_text
+    from handlers.history import build_achievements_home_text
 
     db = fresh_db
     today = dt.date.today()
     for i in range(6):
         await _finished(db, user_id, today - dt.timedelta(days=i * 3), [(100.0, 10)] * 6)
 
-    text = await build_hall_of_fame_text(user_id)
+    text = await build_achievements_home_text(user_id)
 
-    assert "Звание:" in text
-    assert text.index("Звание:") < text.index("Всего тренировок")
+    assert text.startswith("🧱 Звание:")
+    # Под званием — полоска до следующего по той же оси, что и фраза рядом.
+    second = text.splitlines()[1]
+    assert second.startswith("▰") and "до звания" in second
+    assert text.index("Звание:") < text.index("📅")

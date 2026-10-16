@@ -390,25 +390,64 @@ async def _screen_history_item_card(db, user_id: int) -> str:
 
 
 async def _screen_achievements(db, user_id: int) -> str:
-    """Экран «🏅 Достижения» (formatting.build_achievements_screen) — сетка
-    открытых и запертых бейджей."""
-    import achievements
+    """«🏆 Все ачивки» (formatting.build_achievements_screen) — открытые и
+    запертые значки целиком, через настоящий хендлер."""
+    from handlers import history
 
-    earned = {achievements.CATALOG[0].code} if achievements.CATALOG else set()
-    return formatting.build_achievements_screen(earned)
+    await db.award_achievements(user_id, {"first", "club100"})
+    callback = _make_fake_callback(user_id, "ach:all")
+    await history.achievements_all_badges(callback, FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)))
+    return callback.message.answer.await_args.args[0]
+
+
+async def _seed_main_lifts(db, user_id: int) -> None:
+    """Копии базовых движений из каталога и тренажёр — тем же путём, каким их
+    заводит атлет (fork_exercise_from_template), с одной тренировкой."""
+    cur = await db.conn().execute(
+        "SELECT id, name FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name IN (?, ?, ?)",
+        ("Присед со штангой", "Жим штанги лёжа", "Жим в тренажёре"),
+    )
+    templates = await cur.fetchall()
+    workout_id = await db.create_workout(user_id)
+    for t in templates:
+        ex_id = await db.fork_exercise_from_template(user_id, t["id"])
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.append_set(block_id, ex_id, 0, 100.0, 5)
+    await db.finish_workout(workout_id)
+    await db.award_achievements(user_id, {"first", "club100"})
 
 
 async def _screen_hall_of_fame(db, user_id: int) -> str:
-    """Личные рекорды и лайфтайм-цифры над сеткой достижений
-    (formatting.build_hall_of_fame)."""
-    return formatting.build_hall_of_fame(
-        total_workouts=42,
-        tonnage_kg=15000.0,
-        tonnage_equivalent=formatting.format_tonnage_equivalent(15000.0),
-        best_week_streak=6,
-        longest_workout_seconds=5400,
-        top_lifts=[("Squat", 140.0, 5, 160.0)],
-    )
+    """Главный «🏆 Достижения» (formatting.build_achievements_home): звание с
+    полоской, три числа, рекорды в базовых, ближайшие и последние значки."""
+    from handlers import history
+
+    await _seed_main_lifts(db, user_id)
+    callback = _make_fake_callback(user_id, "menu:achievements")
+    await history.menu_achievements(callback, FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)))
+    return callback.message.answer.await_args.args[0]
+
+
+async def _screen_achievements_home_empty(db, user_id: int) -> str:
+    """Главный «🏆 Достижения» у новичка — пустые состояния всех блоков."""
+    from handlers import history
+
+    callback = _make_fake_callback(user_id, "menu:achievements")
+    await history.menu_achievements(callback, FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)))
+    return callback.message.answer.await_args.args[0]
+
+
+async def _screen_all_records(db, user_id: int) -> str:
+    """«🔥 Все рекорды» (formatting.build_records_page) плюс кнопки."""
+    from handlers import history
+
+    await _seed_main_lifts(db, user_id)
+    callback = _make_fake_callback(user_id, "ach:records:0")
+    await history.achievements_all_records(callback, FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)))
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    buttons = "\n".join(b.text for row in kb.inline_keyboard for b in row)
+    return callback.message.answer.await_args.args[0] + "\n" + buttons
 
 
 async def _screen_progress_screen(db, user_id: int) -> str:
@@ -1125,6 +1164,8 @@ SCREENS: list[tuple[str, object]] = [
     ("dashboard_menu", _screen_dashboard_menu),
     ("achievements", _screen_achievements),
     ("hall_of_fame", _screen_hall_of_fame),
+    ("achievements_home_empty", _screen_achievements_home_empty),
+    ("all_records", _screen_all_records),
     ("progress_screen", _screen_progress_screen),
     ("bodyweight_screen", _screen_bodyweight),
     ("history_item_card", _screen_history_item_card),

@@ -294,3 +294,108 @@ async def test_ai_trainer_command_reuses_same_flow(fresh_db, user_id):
         await persistent_menu.cmd_ai_trainer(message, state)
 
     assert await state.get_state() == AITrainerFlow.chatting.state
+
+
+# ---------- язык нижней клавиатуры ----------
+
+
+def _reply_labels(markup) -> list[str]:
+    return [b.text for row in markup.keyboard for b in row]
+
+
+async def _through_middlewares(refresh, message):
+    """Апдейт так, как его видит бот: сначала язык из users.lang
+    (SetUserLanguageMiddleware), затем сверка клавиатуры."""
+    from main import SetUserLanguageMiddleware
+
+    async def handler(event, data):
+        return await refresh(AsyncMock(return_value="handled"), event, data)
+
+    return await SetUserLanguageMiddleware()(handler, message, {})
+
+
+async def test_language_switch_from_settings_resends_the_keyboard_in_the_new_language(fresh_db, user_id):
+    """Скриншот владельца: английский экран, а внизу «Тренировка / Меню /
+    AI-тренер». Смена языка в настройках шлёт клавиатуру заново — на новом
+    языке — и запоминает, на каком она теперь."""
+    import i18n
+    from handlers import settings
+
+    await fresh_db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+    i18n.set_lang("ru")
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
+    callback.data = "settings:langset:en"
+    callback.message = MagicMock()
+    callback.message.text = "settings screen"
+    callback.message.answer = AsyncMock(return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id)))
+    callback.message.edit_text = AsyncMock()
+    callback.message.delete = AsyncMock()
+    callback.message.chat = SimpleNamespace(id=user_id)
+    callback.message.message_id = 1
+    callback.answer = AsyncMock()
+
+    await settings.settings_language_set(callback, await _make_state(user_id))
+
+    sent = [c for c in callback.message.answer.await_args_list
+            if isinstance(c.kwargs.get("reply_markup"), ReplyKeyboardMarkup)]
+    assert len(sent) == 1
+    assert _reply_labels(sent[0].kwargs["reply_markup"]) == [
+        i18n.t_in("en", "btn.persistent.workout"), i18n.t_in("en", "btn.persistent.menu"),
+        i18n.t_in("en", "btn.persistent.ai"),
+    ]
+    assert (await fresh_db.get_user(user_id))["reply_keyboard_lang"] == "en"
+
+
+async def test_language_changed_outside_the_bot_chat_is_caught_on_the_next_tap(fresh_db, user_id):
+    """Язык сменили мимо чата бота — из приложения (PATCH /v1/settings зовёт
+    db.set_user_lang) или слиянием с app-аккаунтом. Клавиатура в чате
+    осталась русской; первый же апдейт присылает её на новом языке — один
+    раз, а не на каждом тапе, и даже если процесс уже запомнил атлета
+    «сверенным» по-русски."""
+    import i18n
+
+    await fresh_db.update_user(
+        user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION, reply_keyboard_lang="ru"
+    )
+    refresh = RefreshPersistentMenuMiddleware()
+    message = _make_message(user_id)
+    await _through_middlewares(refresh, message)
+    message.answer.assert_not_awaited()
+
+    await fresh_db.set_user_lang(user_id, "en")
+
+    message = _make_message(user_id)
+    await _through_middlewares(refresh, message)
+    message.answer.assert_awaited_once()
+    text = message.answer.await_args.args[0]
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    assert _reply_labels(markup) == [
+        i18n.t_in("en", "btn.persistent.workout"), i18n.t_in("en", "btn.persistent.menu"),
+        i18n.t_in("en", "btn.persistent.ai"),
+    ]
+    assert not any("а" <= ch <= "я" for ch in text.lower())
+    assert (await fresh_db.get_user(user_id))["reply_keyboard_lang"] == "en"
+
+    message = _make_message(user_id)
+    await _through_middlewares(refresh, message)
+    message.answer.assert_not_awaited()
+
+
+async def test_keyboard_sent_before_language_was_tracked_counts_as_russian(fresh_db, user_id):
+    """NULL в reply_keyboard_lang — клавиатура ушла до того, как язык начали
+    запоминать, то есть русской: русскому атлету пересылать нечего,
+    англоязычному — один раз."""
+    await fresh_db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+    assert (await fresh_db.get_user(user_id))["reply_keyboard_lang"] is None
+
+    message = _make_message(user_id)
+    await _through_middlewares(RefreshPersistentMenuMiddleware(), message)
+    message.answer.assert_not_awaited()
+
+    await fresh_db.conn().execute("UPDATE users SET lang = 'en' WHERE telegram_id = ?", (user_id,))
+    await fresh_db.conn().commit()
+    message = _make_message(user_id)
+    await _through_middlewares(RefreshPersistentMenuMiddleware(), message)
+    message.answer.assert_awaited_once()
+    assert (await fresh_db.get_user(user_id))["reply_keyboard_lang"] == "en"

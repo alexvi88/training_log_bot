@@ -350,6 +350,32 @@ def rank_gap(
     return max(gaps, key=lambda g: g[0])[1]
 
 
+def rank_progress(
+    current: Rank, gap: Optional[RankGap], total_workouts: int, tonnage_kg: float, per_week: float
+) -> Optional[float]:
+    """Доля пути от текущего звания до следующего — для полоски под званием.
+
+    По той же оси, что назвал `gap` («ещё 17 тренировок»): полоска и фраза
+    рядом с ней обязаны говорить про одно и то же, иначе почти полная полоска
+    над «ещё 17 тренировок» читается как ошибка. Путь меряется от порога
+    текущего звания, а не от нуля: на «Станке» с 40 тренировками из 80 нужных
+    полоска с нуля стояла бы на половине в первый же день на ступени.
+    Нет следующего звания или нет недостачи — None, полоски нет.
+    """
+    nxt = next_rank(current)
+    if nxt is None or gap is None:
+        return None
+    if gap.axis == "workouts":
+        start, end, value = current.min_workouts, nxt.min_workouts, total_workouts
+    elif gap.axis == "tonnage":
+        start, end, value = current.min_tonnage_kg, nxt.min_tonnage_kg, tonnage_kg
+    else:
+        start, end, value = current.min_per_week, nxt.min_per_week, per_week
+    if end <= start:
+        return None
+    return min(max((value - start) / (end - start), 0.0), 1.0)
+
+
 @dataclass
 class GoldBook:
     """The three all-time-best sets of one exercise, each with its date.

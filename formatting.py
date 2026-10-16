@@ -2240,17 +2240,16 @@ def build_achievements_screen(
     ctx=None,  # achievements.AchievementContext | None
     unit: str = "kg",
 ) -> str:
-    """The full 🏅 badge grid: nearest-3 progress, everything unlocked, then
-    everything still locked.
+    """«🏆 Все ачивки» — весь каталог значков: открытые, затем ещё закрытые.
 
-    Both lists always fold on this screen specifically, short ones included:
-    it's reached from Progress purely to check a number or brag about a single
-    badge, so the header count (11/23) is the answer most taps are actually
-    after — the lists are supporting detail, not the point of the tap.
+    Это отдельный экран за кнопкой с главного «🏆 Достижения»
+    (build_achievements_home): там — счёт и по три ближайших и последних, а
+    закрытого списка нет вовсе. Сюда приходят именно за списком, поэтому
+    списки сворачиваются только когда длинные (collapsible_if_long), а не
+    всегда, как было, пока всё жило на одном экране.
 
-    `ctx` is optional so every existing caller/test that only has the earned
-    set keeps working; without it there is nothing to compute "how close" from,
-    so the «Ближайшие» block is simply skipped rather than guessed.
+    `ctx` — необязательный: с ним над списками появляется блок «Ближайшие»
+    (тот же, что на главном экране); без него — не угадываем.
     """
     import achievements
 
@@ -2264,11 +2263,12 @@ def build_achievements_screen(
             lines.append("")
             lines.append(i18n.t("achievements.nearest_header"))
             lines.append("\n".join(format_badge_progress(bp, unit) for bp in nearest))
-            lines.append("")
 
     if got:
+        lines.append("")
+        lines.append(i18n.t("achievements.earned_header", n=len(got)))
         lines.append(
-            collapsible(
+            collapsible_if_long(
                 "\n".join(f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}" for a in got)
             )
         )
@@ -2276,20 +2276,11 @@ def build_achievements_screen(
         lines.append("")
         lines.append(i18n.t("achievements.locked_header", n=len(locked)))
         lines.append(
-            collapsible(
+            collapsible_if_long(
                 "\n".join(f"🔒 {escape(a.title)} — {escape(a.goal)}" for a in locked)
             )
         )
     return "\n".join(lines)
-
-
-def format_duration_hm(seconds: float) -> str:
-    """Compact h/m for the Hall of Fame longest-workout line."""
-    minutes = int(seconds // 60)
-    h, m = divmod(minutes, 60)
-    if h:
-        return i18n.t("date.duration_h_m", h=h, m=m) if m else i18n.t("date.duration_h", h=h)
-    return i18n.t("date.duration_m", m=m)
 
 
 def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, unit_label: str) -> str:
@@ -2407,76 +2398,173 @@ def build_rank_ladder(
     return "\n".join(lines)
 
 
-def build_hall_of_fame(
-    total_workouts: int,
-    tonnage_kg: float,
-    tonnage_equivalent: str | None,
-    best_week_streak: int,
-    longest_workout_seconds: float,
-    top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm); weight 0 = bodyweight
-    unit: str = "kg",
-    max_chars: int | None = None,
-    rank=None,  # analytics.Rank | None
-    rank_gap=None,  # analytics.RankGap | None
-) -> str:
-    """Lifetime totals plus the user's best lifts, shown above the badge grid
-    on the '🏅 Достижения' screen — no heading of its own."""
-    u = unit_label(unit)
-    if total_workouts == 0:
-        return i18n.t("hall.empty")
+def _lifetime_tonnage_str(tonnage: float, unit: str) -> str:
+    """«548 тонн» / «800кг» / фунты — тоннаж за всё время для зала славы.
 
-    lines = []
-    if rank is not None:
-        lines.append(format_rank_line(rank, rank_gap, unit))
-    # Без слова после числа: подпись «Всего тренировок» его уже произнесла, и
-    # строка читалась как «Всего тренировок: 20 тренировок».
-    lines.append(i18n.t("hall.total_workouts", n=total_workouts))
-
-    # `tonnage_kg` arrives in the user's own unit despite the name — a ton is a
-    # ton, so convert before comparing against one (see format_tonnage).
-    lifetime_kg = to_kg(tonnage_kg, unit)
+    `tonnage` arrives in the user's own unit — a ton is a ton, so convert
+    before comparing against one (see format_tonnage).
+    """
+    lifetime_kg = to_kg(tonnage, unit)
     if unit == "lb":
-        tonnage_str = format_lb_tonnage(tonnage_kg)
-    elif lifetime_kg >= 1000:
+        return format_lb_tonnage(tonnage)
+    if lifetime_kg >= 1000:
         tons = round(lifetime_kg / 1000)
-        tonnage_str = i18n.t("tonnage.total", tons=str(tons), n=tons)
+        return i18n.t("tonnage.total", tons=str(tons), n=tons)
+    return f"{tonnage:.0f}{unit_label(unit)}"
+
+
+RANK_BAR_CELLS = 10
+
+
+def rank_progress_bar(fraction: float, cells: int = RANK_BAR_CELLS) -> str:
+    """«▰▰▰▰▰▰▰▱▱▱» — текстовая полоска пути до следующего звания.
+
+    Округление вниз, кроме самого края: полная полоска при недостаче в одну
+    тренировку читалась бы как «уже всё», а пустая у того, кто сделал хоть
+    что-то, — как «ничего не засчитал».
+    """
+    fraction = min(max(fraction, 0.0), 1.0)
+    filled = int(fraction * cells)
+    if fraction > 0 and filled == 0:
+        filled = 1
+    if fraction < 1 and filled == cells:
+        filled = cells - 1
+    return "▰" * filled + "▱" * (cells - filled)
+
+
+def _headline_lift_line(name: str, weight: float, reps: int, e1rm_value: float, unit: str, with_e1rm: bool) -> str:
+    """Строка рекорда на главном экране «🏆 Достижения».
+
+    e1RM — только у базовых движений (`with_e1rm`): у тренажёра и изоляции
+    расчётный максимум ничего не говорит, и там остаётся лучший подход как есть.
+    """
+    if weight <= 0:
+        return i18n.t("hall.reps_line", name=escape(name), reps=reps, n=reps)
+    best_set = format_set(weight, reps)
+    if with_e1rm and e1rm_value > 0:
+        return i18n.t(
+            "achievements.home.lift_e1rm",
+            name=escape(name), e1rm=f"{e1rm_value:.0f}{unit_label(unit)}", set=best_set,
+        )
+    return i18n.t("achievements.home.lift_set", name=escape(name), set=best_set)
+
+
+def build_achievements_home(
+    hof,  # hall_of_fame_data.HallOfFame
+    headline,  # hall_of_fame_data.HeadlineLifts
+    earned: set[str],
+    recent: list[tuple[str, "dt.date | None"]],  # (code, local day earned), newest first
+    ctx=None,  # achievements.AchievementContext | None
+    rank_fraction: float | None = None,
+) -> str:
+    """Главный экран «🏆 Достижения» — то, что видно с одного взгляда.
+
+    Раньше здесь было всё сразу: зал славы целиком, полный список рекордов
+    (свёрнутой цитатой, «показано 47 из 50»), ближайшие, открытые и весь
+    закрытый список, — стена текста, в которой ответ на вопрос «как я» тонул.
+    Теперь три коротких блока, а полные списки — за кнопками «Все рекорды»
+    (build_records_page) и «Все ачивки» (build_achievements_screen):
+
+    1. звание с полоской до следующего и одна строка из трёх чисел —
+       тренировки · тоннаж · лучшая серия; шутка-эквивалент тоннажа — своей
+       строкой. Самая длинная тренировка отсюда ушла: это не прогресс, а
+       курьёз, и её уже отмечает значок «Марафонец»;
+    2. рекорды только в базовых движениях (присед, жим лёжа, становая, жим
+       стоя — по идентичности, см. hall_of_fame_data.headline_lifts), с e1RM
+       и подходом, который его дал; базовых нет — три самых частых
+       упражнения лучшим подходом, без e1RM;
+    3. счёт значков, до трёх ближайших с остатком и до трёх последних с датой.
+    """
+    import achievements
+
+    unit = hof.unit
+    lines: list[str] = []
+    rank, gap = hof.rank, hof.rank_gap
+    if rank is not None:
+        lines.append(i18n.t("rank.line", emoji=rank.emoji, name=escape(rank.name)))
+        nxt = analytics.next_rank(rank)
+        if gap is not None and nxt is not None:
+            lines.append(i18n.t(
+                "achievements.home.rank_next",
+                bar=rank_progress_bar(rank_fraction or 0.0),
+                emoji=nxt.emoji, name=escape(nxt.name), gap=format_rank_gap(gap, unit),
+            ))
+
+    if hof.total_workouts == 0:
+        lines.append(i18n.t("hall.empty"))
     else:
-        tonnage_str = f"{tonnage_kg:.0f}{u}"
-    tonnage_line = i18n.t("hall.total_tonnage", tonnage=tonnage_str)
-    if tonnage_equivalent:
-        clause = tonnage_equivalent.rstrip(".")
-        clause = clause[:1].lower() + clause[1:]
-        tonnage_line += f"  ({clause})"
-    lines.append(tonnage_line)
+        stats = [
+            i18n.t("achievements.home.stat_workouts", n=hof.total_workouts),
+            i18n.t("achievements.home.stat_tonnage", tonnage=_lifetime_tonnage_str(hof.tonnage_kg, unit)),
+        ]
+        if hof.best_week_streak >= 2:
+            stats.append(i18n.t("achievements.home.stat_streak", n=hof.best_week_streak))
+        lines.append(" · ".join(stats))
+        if hof.tonnage_equivalent:
+            lines.append(f"<i>{hof.tonnage_equivalent}</i>")
+        if headline.lifts:
+            lines.append("")
+            lines.append(i18n.t(
+                "achievements.home.records_main" if headline.main else "achievements.home.records_top"
+            ))
+            lines.extend(
+                _headline_lift_line(name, w, r, e1, unit, with_e1rm=headline.main)
+                for name, w, r, e1 in headline.lifts
+            )
 
-    if best_week_streak >= 2:
-        lines.append(i18n.t("hall.best_streak", n=best_week_streak))
-    if longest_workout_seconds > 0:
-        lines.append(i18n.t("hall.longest_workout", duration=format_duration_hm(longest_workout_seconds)))
-
-    if not top_lifts:
-        return "\n".join(lines)
-
-    entries = [_hall_of_fame_lift(name, weight, reps, e1, u) for name, weight, reps, e1 in top_lifts]
     lines.append("")
-    lines.append(i18n.t("hall.personal_records"))
-    head = "\n".join(lines)
+    got = sum(1 for a in achievements.CATALOG if a.code in earned)
+    lines.append(i18n.t("achievements.home.header", got=got, total=len(achievements.CATALOG)))
+    nearest = achievements.nearest_progress(ctx, earned) if ctx is not None else []
+    if nearest:
+        lines.append(i18n.t("achievements.nearest_header"))
+        lines.extend(format_badge_progress(bp, unit) for bp in nearest)
+    shown = [(achievements.BY_CODE[c], day) for c, day in recent if c in achievements.BY_CODE][:3]
+    if shown:
+        if nearest:
+            lines.append("")
+        lines.append(i18n.t("achievements.recent_header"))
+        for a, day in shown:
+            when = f" · {format_day_month_ru(day)}" if day else ""
+            lines.append(f"{a.emoji} <b>{escape(a.title)}</b>{when}")
+    if not nearest and not shown:
+        # Новичок: ни прогресса, ни значков. Называем первый значок каталога
+        # его целью — это следующий шаг, а не «пока пусто».
+        first = next((a for a in achievements.CATALOG if a.code not in earned), None)
+        if first is not None:
+            lines.append(f"🔒 {escape(first.title)} — {escape(first.goal)}")
+    return "\n".join(lines)
 
-    # The whole list goes into one fold rather than being split into a visible
-    # head and a hidden tail: collapsed, the block already shows its first lines,
-    # so a manual split only adds a seam in the middle of one list.
-    def assemble(keep: list[str]) -> str:
-        text = f"{head}\n{collapsible_if_long(chr(10).join(keep))}"
-        if len(keep) < len(entries):
-            text += f"\n{i18n.t('hall.shown_of', kept=len(keep), total=len(entries))}"
-        return text
 
-    kept = entries
-    text = assemble(kept)
-    while max_chars is not None and len(kept) > 1 and telegram_length(text) > max_chars:
-        kept = kept[:-1]
-        text = assemble(kept)
-    return text
+RECORDS_PAGE_SIZE = 25
+
+
+def build_records_page(
+    top_lifts: list[tuple[str, float, int, float]],
+    unit: str = "kg",
+    page: int = 0,
+    page_size: int = RECORDS_PAGE_SIZE,
+) -> tuple[str, int]:
+    """«🔥 Все рекорды» — личный рекорд по каждому упражнению, постранично.
+
+    Тот же вид строки, что был в зале славы (_hall_of_fame_lift), но без
+    свёртки и без «показано 47 из 50»: на общем экране список обрезался под
+    лимит сообщения, и хвост рекордов было не увидеть вообще. Возвращает текст
+    и число страниц; `page` за краем прижимается к последней.
+    """
+    u = unit_label(unit)
+    header = i18n.t("hall.records_header")
+    if not top_lifts:
+        return f"{header}\n\n{i18n.t('hall.empty')}", 1
+    pages = max(1, -(-len(top_lifts) // page_size))
+    page = min(max(page, 0), pages - 1)
+    chunk = top_lifts[page * page_size:(page + 1) * page_size]
+    lines = [header, ""]
+    lines.extend(_hall_of_fame_lift(name, w, r, e1, u) for name, w, r, e1 in chunk)
+    if pages > 1:
+        lines.append("")
+        lines.append(i18n.t("hall.records_page", page=page + 1, pages=pages))
+    return "\n".join(lines), pages
 
 
 def _progress_session_block(session, is_bodyweight: bool, note: str | None = None) -> str:

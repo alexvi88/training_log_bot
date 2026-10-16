@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS users (
     show_extra_stats INTEGER NOT NULL DEFAULT 1,
     pushes_enabled INTEGER NOT NULL DEFAULT 1,
     reply_keyboard_version INTEGER NOT NULL DEFAULT 0,
+    -- На каком языке подписи нижней клавиатуры, отправленной в этот чат.
+    -- NULL — отправлена раньше, чем язык начали запоминать: тогда она была
+    -- русской (единственный язык бота до локализации). Разошёлся с `lang` —
+    -- RefreshPersistentMenuMiddleware (main.py) перешлёт клавиатуру.
+    reply_keyboard_lang TEXT,
     -- «Присылать комментарий тренера сразу после тренировки» — согласие на
     -- автоматический платный вызов модели после каждого финиша. С 2026-10
     -- новичку он ВЫКЛЮЧЕН (решение владельца): комментарий по умолчанию — по
@@ -1879,6 +1884,10 @@ async def _migrate_schema() -> None:
             await _conn.execute(
                 "ALTER TABLE users ADD COLUMN reply_keyboard_version INTEGER NOT NULL DEFAULT 0"
             )
+    if "reply_keyboard_lang" not in user_cols:
+        # Без бэкфилла: NULL читается как «русская» (см. схему выше), и
+        # перешлётся клавиатура только тем, у кого язык уже не русский.
+        await _conn.execute("ALTER TABLE users ADD COLUMN reply_keyboard_lang TEXT")
     if "tz_set_by_user" not in user_cols:
         # Ставил ли человек часовой пояс сам (см. handlers.settings.settings_timezone_set)
         # — в отличие от tz_offset, который у новичка теперь и так не ноль
@@ -7814,6 +7823,30 @@ async def list_all_sets_by_exercise_deduped(user_id: int) -> list[aiosqlite.Row]
     return await cur.fetchall()
 
 
+async def exercise_identities_with_sessions(user_id: int) -> dict[int, tuple[Optional[str], int]]:
+    """id упражнения → (идентичность каталога `original_name`, сколько
+    законченных тренировок в нём есть хоть один подход).
+
+    Для шапки экрана «🏆 Достижения» (hall_of_fame_data.headline_lifts): по
+    идентичности узнаются базовые движения, по числу тренировок — «самые
+    частые», если базовых у атлета нет. Тот же фильтр, что у
+    `list_all_sets_by_exercise_deduped`, — чтобы в выборку не попало
+    упражнение, которого нет среди рекордов.
+    """
+    cur = await conn().execute(
+        "SELECT e.id AS exercise_id, e.original_name, COUNT(DISTINCT w.id) AS sessions "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "  AND e.is_archived = 0 AND e.is_template = 0 "
+        "GROUP BY e.id",
+        (user_id,),
+    )
+    return {r["exercise_id"]: (r["original_name"], r["sessions"]) for r in await cur.fetchall()}
+
+
 async def list_sets_by_exercise_since(user_id: int, since: str) -> list[aiosqlite.Row]:
     """Подходы за последние недели, по всем упражнениям сразу, старые первыми —
     с именем упражнения, группой и RPE.
@@ -8457,7 +8490,9 @@ async def _has_content_data(telegram_id: int) -> bool:
 #   source/referrer_id — первое касание из deep link'а бота (acquisition.py):
 #     у app-only аккаунта их нет, бот-строке они принадлежат по праву;
 #   username — телеграмный, приходит свежим аргументом;
-#   reply_keyboard_version — версия клавиатуры, отправленной в ЭТОТ чат;
+#   reply_keyboard_version/reply_keyboard_lang — версия и язык клавиатуры,
+#     отправленной в ЭТОТ чат (язык из приложения при этом переезжает, и
+#     разница между ними — сигнал переслать клавиатуру);
 #   *_hint_shown, manual_sets_typed — одноразовые подсказки: показана хоть
 #     где-то — значит показана;
 #   rank_level_seen — объявленное звание: большее, чтобы не объявить повторно;
@@ -8482,6 +8517,7 @@ _MERGE_USER_COLUMN_SQL = {
 # Колонки, которые остаются у телеграм-строки без сравнения.
 _MERGE_USER_KEEP_TARGET_COLUMNS = frozenset({
     "telegram_id", "telegram_linked", "username", "reply_keyboard_version",
+    "reply_keyboard_lang",
 })
 
 
