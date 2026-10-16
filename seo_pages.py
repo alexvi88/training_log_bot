@@ -15,10 +15,13 @@ Store — так `/growth` видит и клики, и тех, кто дошё�
 редирект.
 
 Кнопка «скачать» зависит от устройства (по User-Agent, на сервере, поэтому
-`Vary: User-Agent`): iPhone и iPad — App Store первой, Android — бот, на
-компьютере — QR-код в App Store и кнопки. На английских страницах App Store
-главный везде, кроме Android. Обе ссылки есть в любом варианте — робот,
-который пришёл без браузерного User-Agent, видит обе.
+`Vary: User-Agent`). Главный продукт — приложение для iPhone: App Store
+первой кнопкой на любом устройстве, кроме Android (там приложения нет —
+главный бот). На компьютере рядом — QR-код в App Store, а бот — строкой
+помельче под кнопкой, как на iPhone. Язык страницы на это не влияет. Обе
+ссылки есть в любом варианте — робот, который пришёл без браузерного
+User-Agent, видит обе. Исключение одно — страница про сам бот (`telegram`):
+там первой идёт кнопка бота, App Store — строкой под ней.
 
 Висят на приложении MCP-сервера через `custom_route`, как /privacy
 (legal_pages.py). Картинки упражнений — уже публичный
@@ -472,33 +475,29 @@ def _w(value: float, unit_label: str) -> str:
 
 
 def _primary_store(lang: str, device: str) -> bool:
-    """Главная кнопка — App Store? iPhone — да; Android — нет; остальное —
-    по языку: на английских страницах главный App Store, на русских — бот."""
-    if device == "ios":
-        return True
-    if device == "android":
-        return False
-    return lang == "en"
+    """Главная кнопка — App Store? Везде, кроме Android: приложение для
+    iPhone — главный продукт, а на Android его нет. Язык не влияет —
+    параметр оставлен, чтобы политику можно было развести по языкам в
+    одном месте."""
+    return device != "android"
 
 
-def _cta_buttons(lang: str, block: str, device: str) -> str:
+def _cta_buttons(lang: str, block: str, device: str, *, bot_first: bool = False) -> str:
+    """Главная кнопка и запасной путь. Запасной — всегда строка помельче
+    под кнопкой (`alt-link`), а не вторая кнопка того же размера: выбор
+    между двумя одинаковыми кнопками — это отсутствие главной."""
     t = _t(lang)
-    bot = (f'<a class="btn{{cls}}" href="{_e(go_url("bot", block))}">{seo_design.icon("telegram")}'
+    bot = (f'<a class="btn primary" href="{_e(go_url("bot", block))}">{seo_design.icon("telegram")}'
            f'{_e(t("seo.cta.bot"))}</a>')
-    store_url = config.app_store_url()
-    if not store_url:
-        return '<div class=btn-row>' + bot.replace("{cls}", " primary") + "</div>"
-    store = (f'<a class="btn{{cls}}" href="{_e(go_url("appstore", block))}">{seo_design.icon("apple")}'
+    if not config.app_store_url():
+        return f"<div class=btn-row>{bot}</div>"
+    store = (f'<a class="btn primary" href="{_e(go_url("appstore", block))}">{seo_design.icon("apple")}'
              f'{_e(t("seo.cta.app_store"))}</a>')
-    if device == "ios":
-        return ('<div class=btn-row>' + store.replace("{cls}", " primary") + "</div>"
-                f'<p class=alt-link>{t("seo.cta.or_bot_html", href=_e(go_url("bot", block)))}</p>')
-    if device == "android":
-        return ('<div class=btn-row>' + bot.replace("{cls}", " primary") + "</div>"
+    if bot_first or not _primary_store(lang, device):
+        return (f"<div class=btn-row>{bot}</div>"
                 f'<p class=alt-link>{t("seo.cta.or_store_html", href=_e(go_url("appstore", block)))}</p>')
-    if _primary_store(lang, device):
-        return '<div class=btn-row>' + store.replace("{cls}", " primary") + bot.replace("{cls}", "") + "</div>"
-    return '<div class=btn-row>' + bot.replace("{cls}", " primary") + store.replace("{cls}", "") + "</div>"
+    return (f"<div class=btn-row>{store}</div>"
+            f'<p class=alt-link>{t("seo.cta.or_bot_html", href=_e(go_url("bot", block)))}</p>')
 
 
 def diary_target(lang: str, device: str) -> str:
@@ -514,10 +513,11 @@ def _qr(lang: str, block: str, request: Optional[Request]) -> str:
             f"<small>{_e(t('seo.cta.qr'))}</small></div>")
 
 
-def _cta(lang: str, block: str, text: str, request: Optional[Request]) -> str:
+def _cta(lang: str, block: str, text: str, request: Optional[Request], *, bot_first: bool = False) -> str:
     device = device_of(request)
     show_qr = device == "desktop" and bool(config.app_store_url())
-    body = (_qr(lang, block, request) if show_qr else "") + f"<div>{_cta_buttons(lang, block, device)}</div>"
+    body = ((_qr(lang, block, request) if show_qr else "")
+            + f"<div>{_cta_buttons(lang, block, device, bot_first=bot_first)}</div>")
     return (f'<div class="cta reveal"><p class=cta-text>{text}</p>'
             f'<div class="cta-body{" has-qr" if show_qr else ""}">{body}</div></div>')
 
@@ -1274,13 +1274,15 @@ def _render_feature(lang: str, page: Page, request) -> str:
     related = [(url_for(Page(f), lang), _strip_emoji(t(f"seo.{f}.card.title")), t(f"seo.{f}.card.text")) for f in FEATURES if f != key]
     faq = _faq_items(lang, FAQ[key]) if key in FAQ else []
     title, description = t(f"seo.{key}.title"), t(f"seo.{key}.description")
+    # Страница про сам бот — единственная, где бот первой кнопкой на любом устройстве.
+    bot_first = key == "telegram"
     body = (
         feature_head(t("seo.eyebrow.feature"), t(f"seo.{key}.h1"), t(f"seo.{key}.lead"), _feature_visual(lang, key),
-                     _cta_buttons(lang, page.block, device_of(request)))
+                     _cta_buttons(lang, page.block, device_of(request), bot_first=bot_first))
         + f"<div class=prose>{sections}</div>"
         + (_coach_examples(lang) if key == "ai-coach" else "")
         + (f"<div class=prose>{_faq_html(lang, faq)}</div>" if faq else "")
-        + _cta(lang, page.block, _e(t(f"seo.{key}.cta")), request)
+        + _cta(lang, page.block, _e(t(f"seo.{key}.cta")), request, bot_first=bot_first)
         + _cards(related)
     )
     ld = [_webpage_ld(lang, page, request, title, description)] + ([_faq_ld(faq)] if faq else [])
@@ -2015,7 +2017,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
 
 
 # Отметка в таблице сравнения: yes — есть (или бесплатно), part — частично
-# или за деньги, no — нет или не нашли в описании. Наша колонка — всегда по
+# или за деньги, no — нет. Наша колонка — всегда по
 # коду: всё бесплатно, тренер, импорт, видео.
 _VS_MARKS = {
     "us": {"price": "yes", "free": "yes", "ai": "yes", "import": "yes", "video": "yes"},

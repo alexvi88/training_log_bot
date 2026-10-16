@@ -429,6 +429,63 @@ async def test_result_cards_are_pngs_and_reject_bad_params():
         "I'm stronger than 68% of lifters on the platform at 83 kg — powerlifting total"
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node не установлен")
+async def test_goal_months_have_no_year_suffix():
+    """«ноябрь 2026», а не «ноябрь 2026 г.»: русский Intl дописывает «г.»,
+    поэтому месяцы — из каталога, как на карточке для сторис."""
+    responses = await _get_many(["/ru/tools/goal", "/en/tools/goal"])
+    for lang, want in (("ru", "ноябрь\u00a02026"), ("en", "November\u00a02026")):
+        html = responses[f"/{lang}/tools/goal"].text
+        assert "toLocaleDateString" not in html and "DateTimeFormat" not in html
+        mn = re.search(r"var MN=(\[.*?\]);(function month\(d\)\{.*?\})", html)
+        script = f"var MN={mn.group(1)};{mn.group(2)};console.log(JSON.stringify(month(new Date(2026, 10, 3))))"
+        got = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+        assert got == want and "г." not in got
+    text = seo_calcs.goal_card_text("ru", "100", "kg", "bench", 11, 2026, 12, 2026)
+    assert "ноябрь 2026 — декабрь 2026" in text and "г." not in text
+
+
+def test_no_site_page_formats_dates_with_intl():
+    import pathlib
+
+    for name in ("seo_pages.py", "seo_calcs.py", "seo_library.py", "seo_tools.py", "seo_template.py", "seo_design.py"):
+        source = (pathlib.Path(__file__).resolve().parent.parent / name).read_text(encoding="utf-8")
+        assert "toLocaleDateString" not in source and "DateTimeFormat" not in source, name
+
+
+# Оговорки «не нашёл в описании» вместо прямого «нет». Ссылка на справку
+# там, где факт есть («в справке Hevy сказано…»), — не оговорка.
+_HEDGES = re.compile(r"не нашёл|не нашли|не заявлен|в описании (?:приложения )?нет|[Nn]ot found|not listed|"
+                     r"[Dd]idn't find|(?:aren't|isn't|not) in the description")
+
+
+async def test_competitor_no_cells_say_no_plainly():
+    """Где у конкурента функции нет — в клетке «Нет», без «в описании не
+    нашёл»; источники — списком внизу страницы, как были."""
+    paths = [f"/{lang}/vs/{c}" for lang in ("ru", "en") for c in seo_pages.COMPETITORS]
+    paths += [f"/{lang}/alternatives/{c}" for lang in ("ru", "en") for c in seo_pages.ALTERNATIVES]
+    responses = await _get_many(paths)
+    for c in seo_pages.COMPETITORS:
+        for row, mark in seo_pages._VS_MARKS[c].items():
+            for lang in ("ru", "en"):
+                cell = i18n.t_in(lang, f"seo.vs.{c}.{row}_html")
+                if mark == "no" and row not in ("price", "free"):
+                    assert cell.split(",")[0] in ("Нет", "No"), (c, row, lang, cell)
+                if mark != "yes":
+                    assert not _HEDGES.search(cell), (c, row, lang, cell)
+    for path, resp in responses.items():
+        table = re.search(r"<table>.*?</table>", resp.text, re.S)
+        if table:
+            assert not _HEDGES.search(table.group(0)), path
+        if "/vs/" in path:
+            assert re.search(r"<section><h2>[^<]+</h2><ul class=muted><li><a href=\"https://", resp.text), path
+    for lang in ("ru", "en"):
+        assert not _HEDGES.search(i18n.t_in(lang, "seo.vs.mark.no"))
+        assert not _HEDGES.search(i18n.t_in(lang, "seo.alt.app.strong.what_html"))
+        # Своё «до 20 секунд» — из того же потолка, что держат бот и /v1.
+        assert str(config.MAX_VIDEO_SECONDS) in responses[f"/{lang}/vs/hevy"].text.split("<table>", 1)[1].split("</table>", 1)[0]
+
+
 async def test_log_cta_follows_the_device(monkeypatch):
     monkeypatch.setattr(config, "APP_STORE_URL", STORE)
     iphone = await _get("/go/diary?f=rm1_log", headers={"User-Agent": UA_IPHONE, "Referer": f"{HOST}/ru/tools/1rm"})

@@ -205,10 +205,13 @@ def tool_goal(lang: str, embed: bool = False) -> tuple[str, str, str]:
         + ("" if embed else sp._log_cta(lang, "goal", "seo.tool.goal.log_cta")) + "</div>"
     )
     script = (
-        f"var LANG={json.dumps(lang)},NOW={sp._js_str(t('seo.tool.goal.now', max='{max}'))},"
+        f"var NOW={sp._js_str(t('seo.tool.goal.now', max='{max}'))},"
         f"DONEALREADY={sp._js_str(t('seo.tool.goal.already'))},LONG={sp._js_str(t('seo.tool.goal.too_long'))},"
         f"TOO={sp._js_str(t('seo.tool.1rm.too_many', max=config.E1RM_MAX_REPS))},WEEK={sp._js_str(t('seo.tool.goal.week', n='{n}'))};"
-        "function month(d){return d.toLocaleDateString(LANG,{month:'long',year:'numeric'});}"
+        # Месяц и год — из каталога, а не Intl: русский Intl дописывает «г.»
+        # («ноябрь 2026 г.»), а на карточке для сторис те же слова без него.
+        f"var MN={json.dumps([t(f'seo.month_nom.{m}') for m in range(1, 13)], ensure_ascii=False)};"
+        "function month(d){return MN[d.getMonth()]+'\u00a0'+d.getFullYear();}"
         "function addWeeks(w){var d=new Date();d.setDate(d.getDate()+7*w);return d;}"
         "document.querySelectorAll('[name=mode]').forEach(function(el){el.addEventListener('change',function(){"
         "$('setrow').hidden=this.value!=='set';$('maxrow').hidden=this.value!=='max';});});"
