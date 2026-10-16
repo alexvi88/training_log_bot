@@ -1986,6 +1986,10 @@
     "excludedWorkoutIds": {
      "type": "[Int]",
      "optional": true
+    },
+    "bodyweightExercise": {
+     "type": "Bool",
+     "optional": true
     }
    },
    "custom_init": true
@@ -2041,6 +2045,10 @@
     "tonnage": {
      "type": "Double",
      "optional": true
+    },
+    "maxReps": {
+     "type": "Int",
+     "optional": true
     }
    }
   },
@@ -2058,6 +2066,10 @@
     "bestE1Rm": {
      "type": "Double",
      "optional": false
+    },
+    "bestReps": {
+     "type": "Int",
+     "optional": true
     }
    }
   },
@@ -5488,5 +5500,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "bb3b6c186205dd6c1ed4faa9cb233132ef4b524a"
+ "_ios_commit": "1129fbfdfc8795b3655817281c90cbde8722230a"
 }
