@@ -97,6 +97,20 @@ EX_FACTS: dict[str, tuple[str, int]] = {
     "dips": ("bars", 2), "push-up": ("bodyweight", 1),
     "cable-crossover": ("cable", 1), "dumbbell-fly": ("dumbbells", 1),
     "bulgarian-split-squat": ("dumbbells", 2), "dumbbell-lunge": ("dumbbells", 1),
+    "incline-dumbbell-press": ("dumbbells", 1), "lateral-raise": ("dumbbells", 1),
+    "goblet-squat": ("kettlebell", 1), "back-extension": ("bench", 1), "standing-calf-raise": ("machine", 1),
+    "one-arm-dumbbell-row": ("dumbbells", 1), "good-morning": ("barbell", 3), "plank": ("bodyweight", 1),
+    "hanging-leg-raise": ("bar", 2), "decline-bench-press": ("barbell", 2), "close-grip-bench-press": ("barbell", 2),
+    "machine-chest-press": ("machine", 1), "pec-deck": ("machine", 1), "rope-pushdown": ("cable", 1),
+    "overhead-cable-extension": ("cable", 1), "triceps-kickback": ("dumbbells", 1), "bench-dips": ("bench", 1),
+    "ez-bar-curl": ("ez_bar", 1), "incline-dumbbell-curl": ("dumbbells", 1), "concentration-curl": ("dumbbells", 1),
+    "preacher-curl": ("ez_bar", 1), "arnold-press": ("dumbbells", 2), "face-pull": ("cable", 1),
+    "rear-delt-fly": ("dumbbells", 1), "upright-row": ("barbell", 2), "front-raise": ("dumbbells", 1),
+    "machine-shoulder-press": ("machine", 1), "t-bar-row": ("barbell", 2), "rack-pull": ("barbell", 2),
+    "straight-arm-pulldown": ("cable", 1), "inverted-row": ("bodyweight", 1), "hack-squat": ("machine", 2),
+    "leg-extension": ("machine", 1), "step-up": ("dumbbells", 1), "barbell-lunge": ("barbell", 2),
+    "crunch": ("bodyweight", 1), "cable-crunch": ("cable", 1), "ab-wheel-rollout": ("wheel", 3),
+    "side-plank": ("bodyweight", 1),
 }
 
 GLOSSARY: tuple[str, ...] = (

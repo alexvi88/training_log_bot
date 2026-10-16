@@ -911,11 +911,7 @@ def page_h1(page: Page, lang: str) -> str:
 def screen_picture(lang: str, name: str, alt: str, *, eager: bool = False) -> str:
     """Снимок приложения: AVIF/WebP 720px, если есть (scripts/gen_site_screens.py),
     иначе JPEG 540px."""
-    for screen, w, h in seo_static.SCREENS[lang]:
-        if screen == name:
-            break
-    else:
-        raise KeyError(name)
+    w, h = next((sw, sh) for screen, sw, sh in seo_static.SCREENS[lang] if screen == name)
     jpg = seo_static.asset_url(f"screens/{lang}-{name}.jpg")
     attrs = "fetchpriority=high" if eager else "loading=lazy"
     img = f'<img src="{jpg}" alt="{_e(alt)}" width={w} height={h} {attrs} decoding=async>'
@@ -1593,7 +1589,11 @@ def _render_tool(lang: str, page: Page, request) -> str:
     others = [(url_for(Page("tool", s), lang), t(f"seo.tool.{s}.short"), t(f"seo.tool.{s}.card")) for s in TOOLS if s != tool]
     chart = (f"<section class=reveal><h2>{_e(t('seo.tool.rpe.chart_h'))}</h2>{_rpe_table_html(lang)}</section>"
              if tool == "rpe" else "")
-    how_params = dict(_article_params(lang), max=config.E1RM_MAX_REPS, gl_source=GL_SOURCE,
+    import seo_library
+
+    pct = seo_tools.percentile_data()
+    how_params = dict(seo_library.link_params(lang), max=config.E1RM_MAX_REPS, gl_source=GL_SOURCE,
+                      meets=pct["meets"], built=human_date(pct["built"], lang),
                       dots_href=url_for(Page("tool", "wilks"), lang),
                       strength_href=url_for(Page("strength"), lang), rpe_href=url_for(Page("tool", "rpe"), lang))
     title, description = t(f"seo.tool.{tool}.title"), t(f"seo.tool.{tool}.description")
@@ -2303,7 +2303,6 @@ async def go_bot_route(request: Request) -> Response:
 async def go_diary_route(request: Request) -> Response:
     """«Запиши в дневник» под калькулятором: куда — решает устройство (как
     главная кнопка страницы), язык — по странице, с которой пришли."""
-    block = _block_arg(request)
     referer_path = urlsplit(request.headers.get("referer") or "").path
     lang = "en" if referer_path.startswith("/en") else "ru"
     target = diary_target(lang, device_of(request))
