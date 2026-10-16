@@ -29,7 +29,9 @@ kill_timeout = 60
   TEST_USER_ID = "8789172252"
   # Ссылка на приложение в App Store — строкой рядом с t.me в приглашении и
   # визитке (config.APP_STORE_URL). Пока не задана, строки нет вовсе.
-  # APP_STORE_URL = "https://apps.apple.com/app/id<номер из App Store Connect>"
+  # С provider token (pt=) — иначе метки кампаний (ct=you_story у сторис «ТЫ»)
+  # не видны в App Store Connect → Analytics → Campaigns, см. GROWTH.md.
+  # APP_STORE_URL = "https://apps.apple.com/app/apple-store/id<номер>?pt=<provider token>&mt=8"
 
 [deploy]
   # С volume второй машины рядом не поднять: старая гасится, новая
