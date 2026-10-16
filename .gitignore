@@ -20,3 +20,4 @@ coverage.xml
 # клип приходится несколько отбракованных дублей плюс сырое видео до сборки
 # петли. В репозиторий едет только готовый media/exercises/<slug>_demo.mp4.
 media/exercises/_demo_work/
+seo_shots/

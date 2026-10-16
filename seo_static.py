@@ -52,7 +52,7 @@ _TYPES = {
     ".jpg": "image/jpeg", ".png": "image/png", ".ico": "image/x-icon", ".woff": "font/woff",
     ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml",
 }
-_SAFE = re.compile(r"^[a-z0-9][a-z0-9_./-]{0,120}$")
+_SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]{0,120}$")
 
 # Скриншоты на главной: (экран, ширина, высота) — у каждого языка свой прогон.
 SCREENS = {

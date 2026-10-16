@@ -1363,7 +1363,7 @@ def _strength_method(lang: str) -> str:
     shares = seo_tools.LIFT_SHARE
     params = {
         "dots_href": url_for(Page("tool", "wilks"), lang),
-        "thresholds": " · ".join(f"{n} {int(th)}" for n, (_k, th) in zip(_level_names(lang), seo_tools.LEVELS)),
+        "thresholds": " · ".join(f"{n} {int(th)}" for n, (_k, th) in zip(_level_names(lang), seo_tools.LEVELS, strict=True)),
         "m_squat": _num(shares["m"]["squat"] * 100), "m_bench": _num(shares["m"]["bench"] * 100), "m_dead": _num(shares["m"]["deadlift"] * 100),
         "f_squat": _num(shares["f"]["squat"] * 100), "f_bench": _num(shares["f"]["bench"] * 100), "f_dead": _num(shares["f"]["deadlift"] * 100),
         "src_dots": STRENGTH_SOURCES[0], "src_data": STRENGTH_SOURCES[1],
