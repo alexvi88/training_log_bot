@@ -151,6 +151,9 @@ _DELOAD_TRIAL = ("Coleman et al. (2024). Gaining more from doing less? The effec
                  "supervised resistance training on muscular adaptations. PeerJ", "https://peerj.com/articles/16777")
 _DELOAD_SURVEY = ("Rogerson et al. (2024). Deloading practices in strength and physique sports: a cross-sectional survey. "
                   "Sports Med Open", "https://sportsmedicine-open.springeropen.com/articles/10.1186/s40798-024-00691-y")
+_PROTEIN = ("Morton et al. (2018). A systematic review, meta-analysis and meta-regression of the effect of protein "
+            "supplementation on resistance training-induced gains in muscle mass and strength. Br J Sports Med",
+            "https://pubmed.ncbi.nlm.nih.gov/28698222/")
 _WARMUP_META = ("Fradkin, Zazryn, Smoliga (2010). Effects of warming-up on physical performance: a systematic review "
                 "with meta-analysis. J Strength Cond Res", "https://pubmed.ncbi.nlm.nih.gov/19996770/")
 _WARMUP_RT = ("Ribeiro et al. (2021). The effect of warm-up in resistance training and strength performance: "
@@ -160,7 +163,7 @@ GUIDE_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
     "how-to-keep-a-workout-log": (_PLOTKIN, _RIR),
     "progressive-overload": (_PLOTKIN, _FAILURE, _RIR),
     "rest-between-sets": (_REST_2016, _REST_2024),
-    "break-a-plateau": (_PELLAND, _DELOAD_TRIAL, _DELOAD_SURVEY, _FAILURE),
+    "break-a-plateau": (_PELLAND, _DELOAD_TRIAL, _DELOAD_SURVEY, _FAILURE, _PROTEIN),
     "sets-per-muscle-per-week": (_SCHOENFELD_2017, _PELLAND, _FREQ_2016),
     "estimate-1rm-safely": (_RIR,),
     "warm-up-before-lifting": (_WARMUP_META, _WARMUP_RT),
