@@ -426,7 +426,7 @@ async def test_result_cards_are_pngs_and_reject_bad_params():
     assert seo_calcs.goal_card_text("ru", "100", "kg", "bench", 3, 2027, 6, 2027) == \
         "Моя цель — 100 кг в упражнении «жим лёжа». Прогноз: март 2027 — июнь 2027"
     assert seo_calcs.pct_card_text("en", 68, "83", "m", "total") == \
-        "I'm stronger than 68% of lifters on the platform at 83 kg — powerlifting total"
+        "I'm stronger than 68% of competitive powerlifters at 83 kg — powerlifting total"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node не установлен")

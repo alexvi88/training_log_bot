@@ -263,6 +263,7 @@ def tool_percentile(lang: str, embed: bool = False) -> tuple[str, str, str]:
     result = (
         f'<div class=result aria-live=polite><div class=k id=cls>{sp._e(t("seo.tool.strength-percentile.result"))}</div>'
         '<div class=pct-list id=out></div><div class=note id=note></div>'
+        f'<p class=muted id=ctx>{sp._e(t("seo.tool.strength-percentile.context"))}</p><p class=muted id=cooper hidden></p>'
         + ("" if embed else sp._log_cta(lang, "strength-percentile", "seo.tool.log_cta_total")) + "</div>"
     )
     names = {k: t(f"seo.tool.strength-percentile.lift.{k}") for k in PCT_LIFTS}
@@ -271,16 +272,18 @@ def tool_percentile(lang: str, embed: bool = False) -> tuple[str, str, str]:
         f"STRONGER={sp._js_str(t('seo.tool.strength-percentile.stronger', p='{p}'))},"
         f"BELOW={sp._js_str(t('seo.tool.strength-percentile.below'))},TOP={sp._js_str(t('seo.tool.strength-percentile.top'))},"
         f"CLS={sp._js_str(t('seo.tool.strength-percentile.cls', cls='{cls}', n='{n}'))},"
-        f"EMPTY={sp._js_str(t('seo.tool.strength-percentile.empty'))};"
+        f"EMPTY={sp._js_str(t('seo.tool.strength-percentile.empty'))},"
+        f"COOPER={sp._js_str(t('seo.tool.strength-percentile.cooper', r='{r}'))};"
         "var LIFTS=['squat','bench','deadlift','total'];"
         "function run(){var u=val('unit'),k=u==='lb'?1/C.lbPerKg:1,s=val('sex'),bw=parseFloat($('bw').value)*k,v={},rows=[],best=null,cls=null,n=0;"
         "LIFTS.forEach(function(l){var x=parseFloat($('v_'+l).value);if(x>0)v[l]=x*k;});"
         "if(!v.total&&v.squat&&v.bench&&v.deadlift)v.total=v.squat+v.bench+v.deadlift;"
-        "if(!(bw>0)||!Object.keys(v).length){$('out').innerHTML='';$('note').textContent=EMPTY;share('','');done(0);return;}"
+        "if(!(bw>0)||!Object.keys(v).length){$('out').innerHTML='';$('note').textContent=EMPTY;$('cooper').hidden=true;share('','');done(0);return;}"
         "LIFTS.forEach(function(l){if(!v[l])return;var r=percentile(P,v[l],s,bw,l);if(!r)return;cls=r[1];n=r[2];"
         "var p=Math.round(r[0]),txt=r[0]<=0?BELOW:r[0]>=100?TOP:STRONGER.replace('{p}',p);"
         "rows.push('<div class=pct><div class=pct-head><b>'+NAMES[l]+'</b><span>'+txt+'</span></div><div class=bar-track><div class=bar-fill style=\"width:'+Math.max(2,Math.min(100,r[0]))+'%\"></div></div></div>');"
         "if(!best||l==='total')best=[l,p];});"
+        "var cp=$('cooper');if(v.bench&&bw>0){cp.textContent=COOPER.replace('{r}',String(Math.round(v.bench/bw*100)/100));cp.hidden=false;}else{cp.hidden=true;}"
         "$('out').innerHTML=rows.join('');$('note').textContent=cls?CLS.replace('{cls}',cls).replace('{n}',n):'';"
         "if(best){share('pct','p='+Math.max(1,Math.min(99,best[1]))+'&cls='+encodeURIComponent(cls)+'&sex='+s+'&lift='+best[0]);}"
         "done(rows.length>0);}"
