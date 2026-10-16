@@ -555,3 +555,18 @@ async def test_english_pages_of_phase_three_have_no_cyrillic():
     responses = await _get_many(paths)
     for path, resp in responses.items():
         assert not _CYRILLIC.search(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
+
+
+def test_og_wrap_keeps_number_and_unit_together():
+    """«1.9 т» в карточке не разрывается: перенос только по обычным пробелам."""
+    from PIL import Image, ImageDraw
+
+    import seo_static
+
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    font = seo_static._font(64)
+    text = "Поднял за тренировку 1.9 т"
+    width = int(draw.textlength("Поднял за тренировку 1.9", font=font)) + 2
+    lines = seo_static._wrap(draw, text, font, width)
+    assert "т" not in [line.strip() for line in lines]
+    assert any("1.9 т" in line for line in lines)

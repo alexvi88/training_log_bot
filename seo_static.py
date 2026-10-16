@@ -172,7 +172,9 @@ def _font(size: int, *, pixel: bool = False):
 
 
 def _wrap(draw, text: str, font, width: int) -> list[str]:
-    words = text.split()
+    # Только обычные пробелы: str.split() режет и по неразрывному, и «1.9 т»
+    # переносилось бы с единицей на отдельной строке.
+    words = [w for w in re.split(r"[ \t\n]+", text) if w]
     lines: list[str] = []
     line = ""
     for word in words:
