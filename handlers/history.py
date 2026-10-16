@@ -273,29 +273,57 @@ async def hist_calendar_day(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) -> str:
-    """Текст зала славы для экрана «🏆 Достижения» — обёртка над
-    hall_of_fame_data.collect, тем же приёмом, что и у /v1: расчёт один на
-    бота и на REST-эндпоинт api_v1_achievements.hall_of_fame, здесь остаётся
-    только рендер текста."""
+def _origin_suffix(data: str) -> str:
+    """Хвост «:prog» у экранов достижений — откуда пришли (см. menu_achievements).
+
+    «:card» дальше главного экрана не едет: карточку тренировки главный экран
+    уже не тронул (пришёл отдельным сообщением), а вложенные экраны правят
+    именно его — «назад» с них просто возвращает главный экран на место."""
+    return ":prog" if data.endswith(":prog") else ""
+
+
+async def _recent_badges(user_id: int, user) -> list[tuple[str, dt.date | None]]:
+    """Значки, новые первыми, с местным днём получения (как и история —
+    по часам атлета, а не по UTC)."""
+    dated: list[tuple[str, str]] = sorted(
+        (await db.list_achievement_dates(user_id)).items(), key=lambda kv: kv[1], reverse=True
+    )
+    out: list[tuple[str, dt.date | None]] = []
+    for code, earned_at in dated:
+        try:
+            day = timeutil.to_user_local(dt.datetime.fromisoformat(earned_at), user).date()
+        except (TypeError, ValueError):
+            day = None
+        out.append((code, day))
+    return out
+
+
+async def build_achievements_home_text(user_id: int) -> str:
+    """Текст главного экрана «🏆 Достижения» — данные из
+    hall_of_fame_data.collect (тот же расчёт, что у /v1), рендер —
+    formatting.build_achievements_home."""
     hof = await hall_of_fame_data.collect(user_id)
-    return formatting.build_hall_of_fame(
-        total_workouts=hof.total_workouts,
-        tonnage_kg=hof.tonnage_kg,
-        tonnage_equivalent=hof.tonnage_equivalent,
-        best_week_streak=hof.best_week_streak,
-        longest_workout_seconds=hof.longest_workout_seconds,
-        top_lifts=hof.top_lifts,
-        unit=hof.unit,
-        rank=hof.rank,
-        rank_gap=hof.rank_gap,
-        max_chars=max_chars,
+    headline = await hall_of_fame_data.headline_lifts(user_id, hof)
+    user = await db.get_user(user_id)
+    earned = await db.list_achievement_codes(user_id)
+    ctx = await achievement_sync.aggregate_context(user_id)
+    fraction = None
+    if hof.rank is not None:
+        fraction = analytics.rank_progress(
+            hof.rank, hof.rank_gap, hof.total_workouts,
+            formatting.to_kg(hof.tonnage_kg, hof.unit), hof.per_week,
+        )
+    return formatting.build_achievements_home(
+        hof, headline, earned, await _recent_badges(user_id, user), ctx, rank_fraction=fraction,
     )
 
 
 @router.callback_query(F.data.startswith("menu:achievements"))
 async def menu_achievements(callback: CallbackQuery, state: FSMContext):
-    """'🏆 Достижения' — экран зала славы и значков одним куском.
+    """'🏆 Достижения' — звание, три числа, рекорды в базовых, счёт значков.
+
+    Полные списки — за кнопками «Все рекорды» (ach:records) и «Все ачивки»
+    (ach:all); раньше они жили здесь же и превращали экран в стену текста.
 
     Входы: главное меню и карточка тренировки, — и «назад» обязано вести туда,
     откуда пришли. Откуда пришли, помним хвостом callback_data, а не
@@ -311,34 +339,69 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     # history, and Telegram spins the tapped button until the callback is answered
     # (and gives up entirely after ~10s).
     await callback.answer()
-    earned = await db.list_achievement_codes(callback.from_user.id)
-    ctx = await achievement_sync.aggregate_context(callback.from_user.id)
-    user = await db.get_user(callback.from_user.id)
-    ach_text = formatting.build_achievements_screen(earned, ctx, unit=user["unit"])
-    # Records and badges share one message, and the record list is the open-ended
-    # half (one line per exercise ever logged), so it gets whatever room the fixed
-    # badge grid leaves — otherwise a long-time user's screen overflows the 4096
-    # cap and ui.safe_edit deletes it without putting anything back.
-    budget = formatting.MESSAGE_LIMIT - formatting.telegram_length(ach_text) - 2
-    hof_text = await build_hall_of_fame_text(callback.from_user.id, max_chars=budget)
-    text = hof_text + "\n\n" + ach_text
+    text = await build_achievements_home_text(callback.from_user.id)
     from_progress = callback.data.endswith(":prog")
+    suffix = _origin_suffix(callback.data)
     # С карточки законченной тренировки экран приходит ОТДЕЛЬНЫМ сообщением:
     # карточка — единственное место, где тренировка показана целиком, и удалять
     # её под достижениями значит терять итог навсегда. Из меню и из прогресса
     # экран по-прежнему заменяет собой предыдущий.
     from_card = callback.data.endswith(":card")
     kb = InlineKeyboardBuilder()
-    kb.button(text=i18n.t("history.ranks_button"), callback_data="rank:ladder" + (":prog" if from_progress else ""))
-    kb.button(text=i18n.t("btn.invite_friend"), callback_data="invite:show")
+    kb.row(
+        InlineKeyboardButton(text=i18n.t("achievements.btn.all_records"), callback_data=f"ach:records:0{suffix}"),
+        InlineKeyboardButton(text=i18n.t("achievements.btn.all_badges"), callback_data=f"ach:all{suffix}"),
+    )
+    kb.row(InlineKeyboardButton(text=i18n.t("history.ranks_button"), callback_data="rank:ladder" + suffix))
+    kb.row(InlineKeyboardButton(text=i18n.t("btn.invite_friend"), callback_data="invite:show"))
     # hist:menu — существующая ручка «в главное меню» (hist_to_menu ниже зовёт
     # _show_main_menu); отдельной заводить незачем, а свежая строка вроде
     # «menu:back» была бы кнопкой, которую никто не слушает.
-    kb.button(text=i18n.t("btn.back"), callback_data="prog:groups" if from_progress else "hist:menu")
-    kb.adjust(1)
+    kb.row(InlineKeyboardButton(
+        text=i18n.t("btn.back"), callback_data="prog:groups" if from_progress else "hist:menu"
+    ))
     await ui.safe_edit(
         callback, text, reply_markup=kb.as_markup(), parse_mode="HTML", delete=not from_card
     )
+
+
+@router.callback_query(F.data.startswith("ach:records"))
+async def achievements_all_records(callback: CallbackQuery, state: FSMContext):
+    """«🔥 Все рекорды» — рекорд по каждому упражнению, постранично
+    (formatting.build_records_page). callback_data: ach:records:<страница>[:prog]."""
+    await state_scaffold.clear_state_keep_workout(state)
+    await callback.answer()
+    parts = callback.data.split(":")
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    suffix = _origin_suffix(callback.data)
+    hof = await hall_of_fame_data.collect(callback.from_user.id)
+    text, pages = formatting.build_records_page(hof.top_lifts, hof.unit, page)
+    page = min(page, pages - 1)
+    kb = InlineKeyboardBuilder()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.page_prev"), callback_data=f"ach:records:{page - 1}{suffix}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.page_next"), callback_data=f"ach:records:{page + 1}{suffix}"))
+    if nav:
+        kb.row(*nav)
+    kb.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="menu:achievements" + suffix))
+    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("ach:all"))
+async def achievements_all_badges(callback: CallbackQuery, state: FSMContext):
+    """«🏆 Все ачивки» — открытые и ещё закрытые значки целиком
+    (formatting.build_achievements_screen)."""
+    await state_scaffold.clear_state_keep_workout(state)
+    await callback.answer()
+    user = await db.get_user(callback.from_user.id)
+    earned = await db.list_achievement_codes(callback.from_user.id)
+    text = formatting.build_achievements_screen(earned, unit=user["unit"])
+    kb = InlineKeyboardBuilder()
+    kb.button(text=i18n.t("btn.back"), callback_data="menu:achievements" + _origin_suffix(callback.data))
+    kb.adjust(1)
+    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "invite:show")

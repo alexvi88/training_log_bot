@@ -31,6 +31,40 @@ from handlers.ai_trainer import ai_keyboard, intro_presets
 router = Router(name="persistent_menu")
 
 
+def keyboard_lang(user) -> str:
+    """Язык подписей нижней клавиатуры, которая сейчас висит в чате атлета.
+
+    NULL в `users.reply_keyboard_lang` — клавиатура ушла раньше, чем язык
+    начали запоминать, то есть по-русски: другого языка у бота тогда не было.
+    """
+    return user["reply_keyboard_lang"] or i18n.DEFAULT_LANG
+
+
+def keyboard_is_current(user) -> bool:
+    """Клавиатура в чате — последней версии и на языке атлета.
+
+    Язык меняют пять мест (настройки бота, PATCH /v1/settings из
+    приложения, догадки на первом входе, выбор на онбординге) плюс слияние с
+    app-аккаунтом, которое переносит язык из приложения, а клавиатура живёт в
+    чате с теми подписями, с какими её отправили. Сверка здесь, а не у
+    каждого из них: забытое место оставляло английский бот с «Тренировка /
+    Меню / AI-тренер» внизу.
+    """
+    return (
+        user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION
+        and keyboard_lang(user) == user["lang"]
+    )
+
+
+async def mark_keyboard_sent(user_id: int) -> None:
+    """Запомнить, что в чат ушла клавиатура текущей версии на текущем языке."""
+    await db.update_user(
+        user_id,
+        reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION,
+        reply_keyboard_lang=i18n.get_lang(),
+    )
+
+
 async def attach_silently(message: Message, user_id: int) -> None:
     """Give a brand-new user the keyboard under the input field without the
     "⌨️ Обновил меню" notice RefreshPersistentMenuMiddleware sends.
@@ -71,7 +105,7 @@ async def attach_silently(message: Message, user_id: int) -> None:
             ),
             reply_markup=keyboards.persistent_menu(),
         )
-    await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+    await mark_keyboard_sent(user_id)
 
 
 class _MessageAsCallback:

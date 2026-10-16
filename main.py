@@ -308,7 +308,11 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
 
     def __init__(self) -> None:
         super().__init__()
-        self._up_to_date_ids: set[int] = set()
+        # user_id → язык, на котором его клавиатура уже сверена. Язык, а не
+        # просто «сверен»: сменил язык из приложения (PATCH /v1/settings) —
+        # кэш процесса бота об этом не знает, а язык апдейта (его ставит
+        # SetUserLanguageMiddleware из users.lang раньше этой) — уже другой.
+        self._up_to_date: dict[int, str] = {}
 
     async def __call__(self, handler, event, data):
         target = event.message if isinstance(event, CallbackQuery) else event
@@ -317,21 +321,28 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
         return await handler(event, data)
 
     async def _catch_up(self, user_id: int, target: Message) -> None:
-        if user_id in self._up_to_date_ids:
+        if self._up_to_date.get(user_id) == i18n.get_lang():
             return
         user = await db.get_user(user_id)
         if user is None:
             return
-        if user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
-            self._up_to_date_ids.add(user_id)
+        if persistent_menu.keyboard_is_current(user):
+            self._up_to_date[user_id] = user["lang"]
             return
+        # Новая раскладка — «обновил меню»; та же раскладка на другом языке —
+        # подсказка с новыми подписями: человек сменил язык и видит, что
+        # кнопки внизу теперь говорят на нём же.
+        outdated = user["reply_keyboard_version"] < keyboards.PERSISTENT_MENU_VERSION
+        text = i18n.t("main.persistent_menu_refreshed") if outdated else i18n.t(
+            "persistent_menu.attach_hint",
+            workout=i18n.t("btn.persistent.workout"),
+            menu=i18n.t("btn.persistent.menu"),
+            ai=i18n.t("btn.persistent.ai"),
+        )
         with suppress(TelegramBadRequest):
-            await target.answer(
-                i18n.t("main.persistent_menu_refreshed"),
-                reply_markup=keyboards.persistent_menu(),
-            )
-        await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
-        self._up_to_date_ids.add(user_id)
+            await target.answer(text, reply_markup=keyboards.persistent_menu())
+        await persistent_menu.mark_keyboard_sent(user_id)
+        self._up_to_date[user_id] = i18n.get_lang()
 
 
 def setup_routers(dp: Dispatcher) -> None:

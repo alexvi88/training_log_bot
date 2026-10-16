@@ -290,7 +290,7 @@ LOCALIZED: list[str] = [
     "coach_greeting.py",
     # Сбор зала славы для обоих потребителей — бота (handlers/history.py) и
     # /v1 (api_v1_hall_of_fame.py). Своих литералов не держит: текст собирают
-    # formatting.build_hall_of_fame/format_tonnage_equivalent по текущему языку.
+    # formatting.build_achievements_home/format_tonnage_equivalent по текущему языку.
     "hall_of_fame_data.py",
     # Поиск по истории упражнения для обоих потребителей — бота
     # (handlers/history.py.hist_search) и /v1 (api_v1.search_workouts). Своих
