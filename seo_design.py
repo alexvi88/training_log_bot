@@ -511,7 +511,7 @@ body.embed .tool { margin-top: 0; }
 .story-side { display: none; }
 @media (min-width: 900px) {
   .story { grid-template-columns: 1fr 300px; gap: var(--s7); align-items: start; }
-  .steps-story { gap: 38vh; padding: 12vh 0 30vh; }
+  .steps-story { gap: 26vh; padding: 8vh 0 18vh; }
   .step-shot { display: none; }
   .story-side { display: block; position: sticky; top: 96px; }
   .story-phone { width: 270px; margin-left: auto; }
@@ -540,6 +540,8 @@ body.embed .tool { margin-top: 0; }
 /* feature pages: text left, visual right */
 .feature-head { display: grid; gap: var(--s5); align-items: center; }
 @media (min-width: 940px) { .feature-head { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: var(--s7); } }
+.feature-text .btn-row { margin-top: var(--s5); }
+.feature-text .alt-link { margin-top: var(--s3); }
 .feature-visual { display: grid; justify-items: center; }
 .feature-visual .chat { width: 100%; max-width: 440px; }
 .feature-visual .phone { width: 236px; }

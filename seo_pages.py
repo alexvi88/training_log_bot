@@ -1244,10 +1244,10 @@ def _feature_visual(lang: str, key: str) -> str:
     return f"<div class=phone>{screen_picture(lang, name, t(f'seo.home.shot.{name}.alt'), eager=True)}</div>"
 
 
-def feature_head(eyebrow: str, h1: str, lead: str, visual: str) -> str:
-    """Шапка страницы-рассказа: текст слева, картинка справа (на широком экране)."""
+def feature_head(eyebrow: str, h1: str, lead: str, visual: str, actions: str = "") -> str:
+    """Шапка страницы-рассказа: текст и кнопки слева, картинка справа (на широком экране)."""
     return (f"<div class=feature-head><div class=feature-text><span class=eyebrow>{_e(eyebrow)}</span>"
-            f"<h1>{_e(h1)}</h1><p class=lead>{_e(lead)}</p></div><div class=feature-visual>{visual}</div></div>")
+            f"<h1>{_e(h1)}</h1><p class=lead>{_e(lead)}</p>{actions}</div><div class=feature-visual>{visual}</div></div>")
 
 
 def _icon_h2(icon: str, text: str) -> str:
@@ -1267,7 +1267,8 @@ def _render_feature(lang: str, page: Page, request) -> str:
     faq = _faq_items(lang, FAQ[key]) if key in FAQ else []
     title, description = t(f"seo.{key}.title"), t(f"seo.{key}.description")
     body = (
-        feature_head(t("seo.eyebrow.feature"), t(f"seo.{key}.h1"), t(f"seo.{key}.lead"), _feature_visual(lang, key))
+        feature_head(t("seo.eyebrow.feature"), t(f"seo.{key}.h1"), t(f"seo.{key}.lead"), _feature_visual(lang, key),
+                     _cta_buttons(lang, page.block, device_of(request)))
         + f"<div class=prose>{sections}</div>"
         + (_coach_examples(lang) if key == "ai-coach" else "")
         + (f"<div class=prose>{_faq_html(lang, faq)}</div>" if faq else "")
@@ -1317,7 +1318,8 @@ def _render_import(lang: str, page: Page, request) -> str:
     faq = _faq_items(lang, FAQ["import"])
     title, description = t(f"seo.import.{src}.title"), t(f"seo.import.{src}.description")
     body = (
-        feature_head(t("seo.eyebrow.import"), t(f"seo.import.{src}.h1"), t(f"seo.import.{src}.lead"), _csv_visual(lang))
+        feature_head(t("seo.eyebrow.import"), t(f"seo.import.{src}.h1"), t(f"seo.import.{src}.lead"), _csv_visual(lang),
+                     _cta_buttons(lang, page.block, device_of(request)))
         + "<div class=prose>"
         f"<section class=reveal>{_icon_h2('import', t(f'seo.import.{src}.export.h'))}{t(f'seo.import.{src}.export_html')}</section>"
         f"<section class=reveal>{_icon_h2('telegram', t('seo.import.bot.h'))}{t('seo.import.bot_html', **params)}</section>"
