@@ -56,6 +56,7 @@ import db
 import i18n
 import legal_pages
 import mcp_oauth
+import seo_pages
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +242,9 @@ def build_server() -> MCPServer:
     # /coach/<код> — страница приглашения тренера и AASA для Universal Links
     # (см. coach_invite_page.py).
     coach_invite_page.register_routes(mcp)
+    # Публичные страницы для поиска: /ru/..., /en/..., sitemap и robots
+    # (см. seo_pages.py).
+    seo_pages.register_routes(mcp)
 
     @mcp.tool()
     async def get_training_overview() -> str:

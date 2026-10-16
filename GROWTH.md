@@ -193,6 +193,51 @@ platform `ios`): `you_story_open` (source `menu`|`finish`) → `you_story_share`
 Черновик — `docs/vc_article_draft.md`. Перед публикацией подставить реальные
 числа: их видно в `/check_users` и `/growth`.
 
+## 3½. Публичные страницы для поиска
+
+Вечный бесплатный трафик — поиск: «как перенести тренировки из Hevy»,
+«калькулятор 1ПМ», «программа 5×5». Страницы отдаёт сам сервер бота
+(`seo_pages.py`, математика калькуляторов — `seo_tools.py`), каждая на двух
+языках: `/ru/...` и `/en/...`, пары связаны `hreflang`, голый `/` уводит на
+язык браузера.
+
+| Раздел | Адреса | Метка в бота |
+|---|---|---|
+| Главная, AI-тренер, разбор видео, бот в Telegram | `/`, `/ai-coach`, `/video-review`, `/telegram` | `src_seo_home`, `_ai`, `_video`, `_tg` |
+| Переезд | `/import/hevy`, `/import/strong`, `/import/csv` | `src_seo_imp_hevy`, `_imp_strng`, `_imp_csv` |
+| Калькуляторы | `/tools/1rm`, `/tools/plates`, `/tools/wilks` | `src_seo_rm1`, `_plates`, `_wilks` |
+| Программы | `/programs`, `/programs/<key>` (весь `seed_data.WORKOUT_PROGRAMS`) | `src_seo_progs`, `_prog` |
+| Техника | `/exercises`, `/exercises/<адрес>` (`seo_pages.EXERCISES`) | `src_seo_exs`, `_ex` |
+| Сравнения | `/vs/hevy`, `/vs/strong` | `src_seo_vs_hevy`, `_vs_strng` |
+
+Метка — по разделу, а не по странице: ссылка `t.me/<бот>?start=src_seo_<блок>`
+целиком влезает в 48 символов (держит `tests/test_seo_pages.py`). В `/growth`
+они видны как обычные источники `src_seo_*`.
+
+Тексты — ключи `seo.*` в `locales/*.json`, данные (программы, упражнения,
+описания техники) — через те же локализаторы, что у бота. Сравнения с Hevy и
+Strong — факты «по данным на октябрь 2026» со ссылками на источники; цены у
+конкурентов меняются — перепроверяй их раз в квартал и правь дату.
+
+Настройки окружения:
+
+- `SITE_BASE_URL` — свой домен сайта (`https://athletediary.app`). Из него
+  собираются canonical, hreflang, `sitemap.xml` и строка Sitemap в
+  `robots.txt`. Пусто — адрес сервера (`PUBLIC_BASE_URL`/`MCP_PUBLIC_URL`).
+  Страницы отвечают на любом хосте; `PUBLIC_BASE_URL` эта настройка не
+  трогает — на нём Universal Links приглашения тренера и OAuth MCP.
+- `GOOGLE_SITE_VERIFICATION` — значение метатега из Search Console, ставится
+  на все страницы. Или `GOOGLE_SITE_VERIFICATION_FILE=google<токен>.html` —
+  сервер отдаст файл по адресу `/<имя>`.
+- `BOT_USERNAME` — имя бота для ссылок, пока бот не спросил его у Telegram
+  сам (по умолчанию `lightweight_log_bot`).
+- `APP_STORE_URL` — с ним появляется кнопка App Store и смарт-баннер Safari
+  (`apple-itunes-app`, номер берётся из `/id<число>` в ссылке).
+
+После запуска домена: добавить сайт в Search Console и Яндекс Вебмастер,
+отправить `<домен>/sitemap.xml`. Аналитики на страницах нет — ни счётчиков,
+ни cookies, поэтому политика конфиденциальности их не касается.
+
 ## 4. Дальше — закупка
 
 Порядок и суммы обсуждались отдельно; коротко:

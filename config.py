@@ -1168,6 +1168,33 @@ def public_base_url() -> str | None:
     return base if base.startswith("https://") else None
 
 
+# Свой домен публичных страниц (seo_pages.py) — https://athletediary.app. Из
+# него собираются абсолютные адреса: canonical, hreflang, sitemap.xml и строка
+# Sitemap в robots.txt. Пусто — адрес сервера (public_base_url). Сами страницы
+# отвечают на любом хосте, PUBLIC_BASE_URL эта настройка не трогает: на нём
+# висят Universal Links приглашения тренера и OAuth MCP.
+SITE_BASE_URL = os.getenv("SITE_BASE_URL", "").strip().rstrip("/")
+
+
+def site_base_url() -> str | None:
+    """https-адрес сайта без слэша на конце: SITE_BASE_URL или адрес сервера."""
+    if SITE_BASE_URL.startswith("https://"):
+        return SITE_BASE_URL
+    return public_base_url()
+
+
+# Имя бота для ссылок с публичных страниц (seo_pages.py), пока бот ещё не
+# спросил его у Telegram сам (handlers.sharing.get_bot_username). Прод-бот
+# назван в GROWTH.md, той же строкой — в приложении (TelegramLink.botUsername).
+BOT_USERNAME = os.getenv("BOT_USERNAME", "lightweight_log_bot").strip().lstrip("@")
+
+# Подтверждение сайта в Google Search Console (seo_pages.py). Метатег —
+# значение `content` из Search Console; файл — имя вида `google<токен>.html`,
+# сервер отдаёт его по адресу `/<имя>`. Пусто — ни тега, ни файла.
+GOOGLE_SITE_VERIFICATION = os.getenv("GOOGLE_SITE_VERIFICATION", "").strip()
+GOOGLE_SITE_VERIFICATION_FILE = os.getenv("GOOGLE_SITE_VERIFICATION_FILE", "").strip()
+
+
 # Team ID аккаунта разработчика Apple для apple-app-site-association
 # (Universal Links: `<адрес>/coach/<код>` открывает приложение, а не Safari).
 # Это тот же Team ID, что подписывает пуши (APNS_TEAM_ID, он же
