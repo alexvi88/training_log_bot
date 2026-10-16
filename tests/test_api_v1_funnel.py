@@ -128,9 +128,49 @@ async def test_growth_shows_app_funnel_by_step(fresh_db):
         await fresh_db.log_funnel_event(a, step, "en")
     await fresh_db.log_funnel_event(b, "onboarding_slide_1", "ru")
     text = acquisition.format_app_funnel(await fresh_db.app_funnel(30), 30)
-    assert "слайд 1: 2 (100%) (en 1, ru 1)" in text
-    assert "слайд 3: 1 (50%) (en 1)" in text
+    assert "слайд 1 «ПРИВЕТ АТЛЕТ!»: 2 (100%) (en 1, ru 1)" in text
+    assert "слайд 3 «Не знаешь, что делать в зале?»: 1 (50%) (en 1)" in text
     assert "вошёл: 1 (50%) (en 1)" in text
-    assert "слайд 2 (локскрин, iOS 17+): 0 (0%)" in text
+    assert "слайд 2 «Рекорды…»: 0 (0%)" in text
     empty = acquisition.format_app_funnel([], 30)
     assert "не было" in empty
+
+
+def test_admin_funnel_shows_exactly_the_whitelist():
+    # Шаг, принятый ручкой, но забытый в /growth, копился бы невидимо.
+    import acquisition
+
+    shown = [step for step, _ in acquisition.APP_FUNNEL_STEPS]
+    assert len(shown) == len(set(shown))
+    assert set(shown) == api_v1_funnel.STEPS
+
+
+async def test_lock_screen_and_gender_steps_show_in_onboarding_order(fresh_db):
+    import acquisition
+
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    for step in ("onboarding_slide_1", "onboarding_slide_5", "onboarding_lock_screen", "onboarding_gender",
+                 "onboarding_gender_female", "signin_shown"):
+        await fresh_db.log_funnel_event(a, step, "ru")
+    # iOS 16: экрана блокировки нет, после «Это ТЫ.» сразу «Твой пол».
+    for step in ("onboarding_slide_1", "onboarding_slide_5", "onboarding_gender", "onboarding_gender_none"):
+        await fresh_db.log_funnel_event(b, step, "en")
+    text = acquisition.format_app_funnel(await fresh_db.app_funnel(30), 30)
+    lines = text.splitlines()
+    order = [next(i for i, line in enumerate(lines) if line.lstrip().startswith(title.strip()))
+             for _, title in acquisition.APP_FUNNEL_STEPS]
+    assert order == sorted(order)
+    assert "экран блокировки (только iOS 17+): 1 (50%) (ru 1)" in text
+    assert "«Твой пол»: 2 (100%) (en 1, ru 1)" in text
+    assert "↳ «Начать», пол: женский: 1 (50%) (ru 1)" in text
+    assert "↳ «Начать», пол: не указан: 1 (50%) (en 1)" in text
+    assert "↳ «Начать», пол: мужской: 0 (0%)" in text
+
+
+async def test_old_app_steps_still_accepted(fresh_db):
+    # Старые сборки шлют только slide_1..5 и шаги входа — им ничего не меняется.
+    install = str(uuid.uuid4())
+    client = _client()
+    for step in ("onboarding_slide_1", "onboarding_slide_5", "signin_shown"):
+        resp = await client.post("/funnel", json={"install_id": install, "step": step})
+        assert resp.status_code == 200, resp.text

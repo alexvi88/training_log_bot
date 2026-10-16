@@ -46,6 +46,16 @@ STEPS = frozenset(
         "onboarding_slide_3",
         "onboarding_slide_4",
         "onboarding_slide_5",
+        # Шаги после пятого слайда названы по содержанию, а не по номеру:
+        # экран блокировки есть только на iOS 17+, и номер «Твой пол»
+        # зависит от системы. Старые сборки их не шлют — им ничего не меняется.
+        "onboarding_lock_screen",
+        "onboarding_gender",
+        # Выбор на «Твой пол» при «Начать» — отдельным шагом на значение:
+        # у ручки нет свойств, строка в базе — пара (установка, шаг).
+        "onboarding_gender_male",
+        "onboarding_gender_female",
+        "onboarding_gender_none",
         "push_priming",
         "signin_shown",
         "signin_tapped",
