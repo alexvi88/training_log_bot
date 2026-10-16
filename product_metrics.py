@@ -113,7 +113,30 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # видно, читают ли раздел те, кто выключил пуши, и что в нём открывают.
     "inbox_open": frozenset(),
     "inbox_item_open": frozenset({"category"}),
+    # Сторис «ТЫ» (GymYouStorySheet в приложении): открыл превью → нажал
+    # «Поделиться» → системный лист закрылся. source menu|finish — карточка
+    # «ТЫ» в подвале или итог тренировки; activity — тип действия iOS
+    # (UIActivity.ActivityType.rawValue: com.apple.UIKit.activity.SaveToCameraRoll,
+    # id расширения мессенджера) или cancelled. Установки по ссылке из сторис
+    # (ct=you_story) — в App Store Connect, не здесь (GROWTH.md).
+    "you_story_open": frozenset({"source"}),
+    "you_story_share": frozenset({"source"}),
+    "you_story_shared": frozenset({"source", "activity"}),
 }
+
+# Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
+# Прочее значение выкидывается, а не схлопывается в «other»: новый источник
+# сначала заводится здесь.
+PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
+    ("you_story_open", "source"): frozenset({"menu", "finish"}),
+    ("you_story_share", "source"): frozenset({"menu", "finish"}),
+    ("you_story_shared", "source"): frozenset({"menu", "finish"}),
+}
+
+# Тип действия системного листа iOS — reverse-DNS id (точки, регистр), а не
+# наш токен; длиннее потолка — обрезается.
+_ACTIVITY = re.compile(r"[A-Za-z0-9._-]+")
+_MAX_ACTIVITY_LEN = 100
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")
 _MAX_VERSION_LEN = 32
@@ -154,11 +177,26 @@ def clean_props(event: str, props: Any) -> Optional[dict]:
                 and 0 <= value <= _MAX_SESSION_SECONDS
             ):
                 out[key] = int(value)
+        elif key == "activity":
+            activity = clean_activity(value)
+            if activity:
+                out[key] = activity
         else:
             token = clean_token(value)
-            if token:
+            allowed_values = PROP_VALUES.get((event, key))
+            if token and (allowed_values is None or token in allowed_values):
                 out[key] = token
     return out
+
+
+def clean_activity(value: Any) -> Optional[str]:
+    """Тип действия из системного листа iOS: `com.apple.UIKit.activity.Mail`,
+    id расширения, `cancelled`. Не текст человека — id задаёт разработчик
+    приложения; всё, что не похоже на такой id, выкидывается."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()[:_MAX_ACTIVITY_LEN]
+    return value if _ACTIVITY.fullmatch(value) else None
 
 
 def clean_version(value: Any) -> Optional[str]:
