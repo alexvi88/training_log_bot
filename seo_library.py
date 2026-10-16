@@ -522,9 +522,8 @@ def _render_pair(lang: str, page: Page, request) -> str:
                    if any(sp._exercise_url_for_identity(i) in (a, b) for _d, exs in p["days"] for i, _s in exs)]
     progs_html = ""
     if in_programs:
-        cards = [(sp.url_for(Page("program", p["key"]), lang), sp._strip_emoji(seed_data.localized_program_name(p["key"], lang)),
-                  seed_data.localized_program_meta(p["key"], lang)) for p in in_programs]
-        progs_html = f"<section class=reveal><h2>{sp._e(t('seo.pair.programs.h'))}</h2>{sp._cards(cards)}</section>"
+        progs_html = (f"<section class=reveal><h2>{sp._e(t('seo.pair.programs.h'))}</h2>"
+                      f"{sp.program_cards([p['key'] for p in in_programs], lang)}</section>")
     others = [(x, y) for x, y in PAIRS if (x, y) != (a, b) and {x, y} & {a, b}]
     others_html = ""
     if others:

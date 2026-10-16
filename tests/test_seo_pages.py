@@ -555,8 +555,8 @@ async def test_strength_pages_show_tables_and_lb_on_english_only():
     ru = responses["/ru/strength/deadlift/women"].text
     assert "In pounds" in en and "В фунтах" not in ru
     row = seo_tools.strength_table("bench", "m")[6]
-    assert f"<tr><th scope=row>{row[0]:g}<span class=u>kg</span></th>" in en
-    assert f"<td class=num>{row[1][2]:g}<span class=u>kg</span></td>" in en
+    assert f"<tr><th scope=row>{row[0]:g}\u00a0<span class=u>kg</span></th>" in en
+    assert f"<td class=num>{row[1][2]:g}\u00a0<span class=u>kg</span></td>" in en
     # Методика названа честно: своя шкала, DOTS, допущение о долях, источники.
     for html in (en, ru, responses["/en/strength"].text):
         assert seo_pages.STRENGTH_SOURCES[0] in html and seo_pages.STRENGTH_SOURCES[1] in html

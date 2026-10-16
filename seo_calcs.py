@@ -86,8 +86,8 @@ def tool_tonnage(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "OBJ.forEach(function(o){var n=Math.round(kg/o.kg);if(n>=2&&n<=40)c.push([o,n]);});"
         "if(!c.length){var f=OBJ.filter(function(o){return o.kg<=kg;});if(!f.length)return '';var o=f[f.length-1];c=[[o,Math.max(1,Math.round(kg/o.kg))]];}"
         "var o=c[0][0],n=c[0][1],cat=PR.select(n),noun=o.f[cat]||o.f.other;"
-        "return EQ.replace('{count}',n).replace('{noun}',noun).replace('{emoji}',o.e);}"
-        "function tonText(total,u){if(u==='kg'&&total>=1000)return fmt(total/1000)+'<span class=u>'+TON+'</span>';return fu(total,u);}"
+        "return EQ.replace('{count}',n).replace('{noun}',noun).replace('{emoji}','').trim();}"
+        "function tonText(total,u){if(u==='kg'&&total>=1000)return fmt(total/1000)+'\u00a0<span class=u>'+TON+'</span>';return fu(total,u);}"
         "var n=1;function rowHtml(i){return document.querySelector('#rows .set-row').outerHTML.replace(/(w|r|s)1/g,'$1'+i);}"
         "$('add').addEventListener('click',function(){if(n>=30)return;n++;var d=document.createElement('div');d.innerHTML=rowHtml(n);"
         "var el=d.firstChild;el.querySelectorAll('input').forEach(function(x){x.addEventListener('input',run);});$('rows').appendChild(el);run();});"
@@ -96,7 +96,7 @@ def tool_tonnage(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "r=parseInt($('r'+i).value,10)||0,s=parseInt($('s'+i).value,10)||0;if(r>0&&s>0){tot+=w*r*s;sets+=s;reps+=r*s;}}"
         "if(!(tot>0)){$('tot').textContent=$('ns').textContent=$('nr').textContent=$('avg').textContent='—';$('eq').textContent='';done(0);return;}"
         "$('tot').innerHTML=tonText(tot,u);$('ns').textContent=sets;$('nr').textContent=reps;$('avg').innerHTML=fu(tot/reps,u);"
-        "$('eq').textContent=equiv(tot,u);done(1);}"
+        "$('eq').textContent=equiv(tot,u);done(1);share('tonnage','v='+Math.round(tot)+'&u='+u);}"
         "bind(run);"
     )
     return form, result, script
@@ -190,7 +190,6 @@ def tool_goal(lang: str, embed: bool = False) -> tuple[str, str, str]:
         f'<th class=num>{sp._e(t("seo.tool.goal.col_slow"))}</th><th class=num>{sp._e(t("seo.tool.goal.col_fast"))}</th>'
         '</tr></thead><tbody id=ms></tbody></table></div>'
         f'<p class=muted>{sp._e(t("seo.tool.goal.honest"))}</p>'
-        f'<div class=btn-row><a class="btn small" id=card href="#" target=_blank rel=noopener hidden>{sp._e(t("seo.tool.card"))}</a></div>'
         + ("" if embed else sp._log_cta(lang, "goal", "seo.tool.goal.log_cta")) + "</div>"
     )
     script = (
@@ -204,7 +203,7 @@ def tool_goal(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "function run(){var u=val('unit'),k=u==='lb'?1/C.lbPerKg:1,mode=val('mode'),cur=0;"
         "if(mode==='set'){var w=parseFloat($('w').value),r=parseInt($('r').value,10)||1;if(w>0){cur=e1rm(w,r,'epley',null);if(!cur){$('when').textContent='—';$('note').textContent=TOO;$('ms').innerHTML='';done(0);return;}}}"
         "else{cur=parseFloat($('m').value)||0;}"
-        "var tg=parseFloat($('target').value),fr=parseInt(val('freq'),10),lv=val('level'),card=$('card');card.hidden=true;"
+        "var tg=parseFloat($('target').value),fr=parseInt(val('freq'),10),lv=val('level');share('','');"
         "if(!(cur>0)||!(tg>0)){$('when').textContent='—';$('note').textContent='';$('ms').innerHTML='';done(0);return;}"
         "$('note').innerHTML=NOW.replace('{max}',fu(cur,u));"
         "if(cur>=tg){$('when').textContent=DONEALREADY;$('ms').innerHTML='';done(1);return;}"
@@ -217,7 +216,7 @@ def tool_goal(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "+fu(slow[wk],u)+'</td><td class=num>'+fu(fast[wk],u)+'</td></tr>');if(rows.length>=12)break;}"
         "$('ms').innerHTML=rows.join('');"
         "var end=d2||d1,q='w='+encodeURIComponent(fmt(tg))+'&u='+u+'&lift='+val('lift')+'&m1='+(d1.getMonth()+1)+'&y1='+d1.getFullYear()"
-        "+'&m2='+(end.getMonth()+1)+'&y2='+end.getFullYear();card.href='/og/card/'+LANG+'/goal.png?'+q;card.hidden=false;done(1);}"
+        "+'&m2='+(end.getMonth()+1)+'&y2='+end.getFullYear();share('goal',q);done(1);}"
         "bind(run);"
     )
     return form, result, script
@@ -244,7 +243,6 @@ def tool_percentile(lang: str, embed: bool = False) -> tuple[str, str, str]:
     result = (
         f'<div class=result aria-live=polite><div class=k id=cls>{sp._e(t("seo.tool.strength-percentile.result"))}</div>'
         '<div class=pct-list id=out></div><div class=note id=note></div>'
-        f'<div class=btn-row><a class="btn small" id=card href="#" target=_blank rel=noopener hidden>{sp._e(t("seo.tool.card"))}</a></div>'
         + ("" if embed else sp._log_cta(lang, "strength-percentile", "seo.tool.log_cta_total")) + "</div>"
     )
     names = {k: t(f"seo.tool.strength-percentile.lift.{k}") for k in PCT_LIFTS}
@@ -258,13 +256,13 @@ def tool_percentile(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "function run(){var u=val('unit'),k=u==='lb'?1/C.lbPerKg:1,s=val('sex'),bw=parseFloat($('bw').value)*k,v={},rows=[],best=null,cls=null,n=0;"
         "LIFTS.forEach(function(l){var x=parseFloat($('v_'+l).value);if(x>0)v[l]=x*k;});"
         "if(!v.total&&v.squat&&v.bench&&v.deadlift)v.total=v.squat+v.bench+v.deadlift;"
-        "if(!(bw>0)||!Object.keys(v).length){$('out').innerHTML='';$('note').textContent=EMPTY;$('card').hidden=true;done(0);return;}"
+        "if(!(bw>0)||!Object.keys(v).length){$('out').innerHTML='';$('note').textContent=EMPTY;share('','');done(0);return;}"
         "LIFTS.forEach(function(l){if(!v[l])return;var r=percentile(P,v[l],s,bw,l);if(!r)return;cls=r[1];n=r[2];"
         "var p=Math.round(r[0]),txt=r[0]<=0?BELOW:r[0]>=100?TOP:STRONGER.replace('{p}',p);"
         "rows.push('<div class=pct><div class=pct-head><b>'+NAMES[l]+'</b><span>'+txt+'</span></div><div class=bar-track><div class=bar-fill style=\"width:'+Math.max(2,Math.min(100,r[0]))+'%\"></div></div></div>');"
         "if(!best||l==='total')best=[l,p];});"
         "$('out').innerHTML=rows.join('');$('note').textContent=cls?CLS.replace('{cls}',cls).replace('{n}',n):'';"
-        "if(best){$('card').href='/og/card/'+LANG+'/pct.png?p='+Math.max(1,Math.min(99,best[1]))+'&cls='+encodeURIComponent(cls)+'&sex='+s+'&lift='+best[0];$('card').hidden=false;}"
+        "if(best){share('pct','p='+Math.max(1,Math.min(99,best[1]))+'&cls='+encodeURIComponent(cls)+'&sex='+s+'&lift='+best[0]);}"
         "done(rows.length>0);}"
         "bind(run);"
     )
@@ -293,7 +291,7 @@ def goal_card_text(lang: str, weight: str, unit: str, lift: str, m1: int, y1: in
     first = f"{t(f'seo.month_nom.{m1}')} {y1}"
     last = f"{t(f'seo.month_nom.{m2}')} {y2}"
     when = first if (m1, y1) == (m2, y2) else f"{first} — {last}"
-    return t("seo.tool.goal.card", weight=f"{weight}{unit_label}", lift=t(f"seo.tool.goal.card_lift.{lift}"), when=when)
+    return t("seo.tool.goal.card", weight=f"{weight}\u00a0{unit_label}", lift=t(f"seo.tool.goal.card_lift.{lift}"), when=when)
 
 
 def pct_card_text(lang: str, p: int, cls: str, sex: str, lift: str) -> str:
@@ -305,10 +303,15 @@ def pct_card_text(lang: str, p: int, cls: str, sex: str, lift: str) -> str:
 async def card_route(request: Request) -> Response:
     lang = request.path_params.get("lang", "")
     kind = request.path_params.get("kind", "")
-    if lang not in sp.LANGS or kind not in ("goal", "pct"):
+    if lang not in sp.LANGS or kind not in CARD_KINDS:
         return PlainTextResponse("Not found", status_code=404)
     t = sp._t(lang)
-    if kind == "goal":
+    if kind in ("rm1", "dots", "tonnage", "level"):
+        made = simple_card(lang, kind, request)
+        if made is None:
+            return PlainTextResponse("Bad card", status_code=400)
+        title, key, footer = made
+    elif kind == "goal":
         weight = _q(request, "w", _NUM)
         unit = _q(request, "u", _INT, ("kg", "lb"))
         lift = _q(request, "lift", _INT, GOAL_LIFTS)
@@ -334,6 +337,37 @@ async def card_route(request: Request) -> Response:
         footer = t("seo.tool.strength-percentile.card_footer", host=_host())
     data = await asyncio.to_thread(seo_static.og_png, key, title, t("bot.name"), footer)
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+CARD_KINDS = ("goal", "pct", "rm1", "dots", "tonnage", "level")
+
+
+def simple_card(lang: str, kind: str, request: Request) -> Optional[tuple[str, str, str]]:
+    """(текст, ключ кэша, подвал) для карточек «мой результат» простых калькуляторов."""
+    t = sp._t(lang)
+    footer = t("seo.tool.card_footer", host=_host())
+    if kind == "level":
+        level = _q(request, "l", _INT)
+        lift = _q(request, "lift", _INT, ("bench", "squat", "deadlift"))
+        if level is None or lift is None or not 0 <= int(level) < len(seo_tools.LEVELS):
+            return None
+        name = t(f"seo.strength.level.{seo_tools.LEVELS[int(level)][0]}")
+        return t("seo.tool.card.level", level=name, lift=t(f"seo.tool.goal.card_lift.{lift}")), f"card-level-{lang}-{level}-{lift}", footer
+    value = _q(request, "v", _NUM)
+    if value is None or float(value) <= 0 or float(value) > (200000 if kind == "tonnage" else 2000):
+        return None
+    if kind == "dots":
+        return t("seo.tool.card.dots", v=f"{float(value):g}"), f"card-dots-{lang}-{float(value):g}", footer
+    unit = _q(request, "u", _INT, ("kg", "lb"))
+    if unit is None:
+        return None
+    unit_label = t("seo.tool.unit_kg") if unit == "kg" else t("seo.tool.unit_lb")
+    number = float(value)
+    if kind == "tonnage" and unit == "kg" and number >= 1000:
+        shown = f"{number / 1000:.1f}".rstrip("0").rstrip(".") + "\u00a0" + t("seo.tool.unit_t")
+    else:
+        shown = f"{number:g}\u00a0{unit_label}"
+    return t(f"seo.tool.card.{kind}", v=shown), f"card-{kind}-{lang}-{number:g}-{unit}", footer
 
 
 def _host() -> str:

@@ -467,7 +467,7 @@ def _num(value: float) -> str:
 
 def _w(value: float, unit_label: str) -> str:
     """Вес для таблицы: число вплотную к единице (TONE_OF_VOICE), зазор — стилем."""
-    return f"{_num(round(value, 1))}<span class=u>{_e(unit_label)}</span>"
+    return f"{_num(round(value, 1))}\u00a0<span class=u>{_e(unit_label)}</span>"
 
 
 def _primary_store(lang: str, device: str) -> bool:
@@ -498,6 +498,12 @@ def _cta_buttons(lang: str, block: str, device: str) -> str:
     if _primary_store(lang, device):
         return '<div class=btn-row>' + store.replace("{cls}", " primary") + bot.replace("{cls}", "") + "</div>"
     return '<div class=btn-row>' + bot.replace("{cls}", " primary") + store.replace("{cls}", "") + "</div>"
+
+
+def diary_target(lang: str, device: str) -> str:
+    """Куда ведёт кнопка «запиши в дневник»: туда же, куда главная кнопка
+    страницы на этом устройстве (iPhone — App Store, Android — бот)."""
+    return "appstore" if config.app_store_url() and _primary_store(lang, device) else "bot"
 
 
 def _qr(lang: str, block: str, request: Optional[Request]) -> str:
@@ -652,12 +658,12 @@ def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
         '<footer class=site-foot><div class=wrap><div class=foot-grid>'
         f'<div class=foot-about><a class=brand href="{url_for(Page("home"), lang)}">'
         f'<img src="{seo_static.asset_url("icons/favicon-32.png")}" alt="" width=30 height=30><span>{_e(t("bot.name"))}</span></a>'
-        f"<p>{_e(t('seo.footer.about'))}</p>{_cta_buttons(lang, page.block, device_of(request))}</div>"
-        f"<div><h4>{_e(t('seo.footer.product'))}</h4>{links(product)}</div>"
-        f"<div><h4>{_e(t('seo.footer.tools'))}</h4>{links(tools)}</div>"
-        f"<div><h4>{_e(t('seo.footer.library'))}</h4>{links(library)}</div>"
-        f"<div><h4>{_e(t('seo.footer.compare'))}</h4>{links(compare)}</div>"
-        f"<div><h4>{_e(t('seo.footer.moving'))}</h4>{links(moving)}</div>"
+        f"<p>{_e(t('seo.footer.about'))}</p></div>"
+        f"<div><h2 class=foot-h>{_e(t('seo.footer.product'))}</h2>{links(product)}</div>"
+        f"<div><h2 class=foot-h>{_e(t('seo.footer.tools'))}</h2>{links(tools)}</div>"
+        f"<div><h2 class=foot-h>{_e(t('seo.footer.library'))}</h2>{links(library)}</div>"
+        f"<div><h2 class=foot-h>{_e(t('seo.footer.compare'))}</h2>{links(compare)}</div>"
+        f"<div><h2 class=foot-h>{_e(t('seo.footer.moving'))}</h2>{links(moving)}</div>"
         "</div><div class=foot-bottom>"
         f'<span>{_e(t("seo.brand"))} · <a href="{url_for(page, other)}" hreflang={other} lang={other}>{_e(t("seo.footer.other_lang"))}</a>'
         f' · <time datetime="{page_updated(page)}">{_e(t("seo.updated", date=human_date(page_updated(page), lang)))}</time></span>'
@@ -669,7 +675,8 @@ def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
 
 
 def _css() -> str:
-    return seo_design.CSS.replace("__PIXEL__", seo_static.asset_url("fonts/pixel.woff"))
+    return (seo_design.CSS.replace("__PIXEL2__", seo_static.asset_url("fonts/pixel.woff2"))
+            .replace("__PIXEL__", seo_static.asset_url("fonts/pixel.woff")))
 
 
 def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, description: str,
@@ -706,7 +713,7 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         f'<link rel=icon type="image/png" sizes="32x32" href="{seo_static.asset_url("icons/favicon-32.png")}">',
         '<link rel=apple-touch-icon href="/apple-touch-icon.png">',
         f'<link rel=manifest href="/site.webmanifest?lang={lang}">',
-        f'<link rel=preload href="{seo_static.asset_url("fonts/pixel.woff")}" as=font type="font/woff" crossorigin>',
+        f'<link rel=preload href="{seo_static.asset_url("fonts/pixel.woff2")}" as=font type="font/woff2" crossorigin>',
     ]
     app_id = app_store_id()
     if app_id:
@@ -733,7 +740,7 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         f"<nav class=head-nav aria-label=\"{_e(t('seo.nav.label'))}\">{_nav_links(lang, page)}</nav>"
         f'<div class=head-end><a class=lang href="{url_for(page, other)}" hreflang={other} lang={other}>{other.upper()}</a>'
         f"{_head_cta(lang, page.block, device)}</div></div>"
-        f'<nav class=sub-nav aria-label="{_e(t("seo.nav.label"))}">{_nav_links(lang, page)}</nav></div></header>'
+        f'<nav class=sub-nav aria-label="{_e(t("seo.nav.label_mobile"))}">{_nav_links(lang, page)}</nav></div></header>'
     )
     if page.kind == "home":
         inner = body
@@ -743,43 +750,77 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         inner = f"<div class=prose>{_crumbs_html(lang, page)}{body}</div>"
     cls = "" if page.kind == "home" else " class=page"
     return ("".join(head) + f"<body{cls}>{header}<main id=main><div class=wrap>{inner}</div></main>"
-            f"{_footer(lang, page, request)}</body></html>")
+            f"{_footer(lang, page, request)}<script>{_PAGE_JS}</script></body></html>")
+
+
+# Мелочи всей страницы: активный раздел в мобильной ленте разделов — в поле
+# зрения; запятая в числовых полях — точка (на русской клавиатуре запятая).
+_PAGE_JS = (
+    "(function(){var a=document.querySelector('.sub-nav [aria-current]');if(a&&a.scrollIntoView)"
+    "{var n=a.parentNode;n.scrollLeft=a.offsetLeft-(n.clientWidth-a.offsetWidth)/2;}"
+    "document.querySelectorAll('input[inputmode=decimal],input[inputmode=numeric]').forEach(function(el){"
+    "el.addEventListener('input',function(){if(el.value.indexOf(',')>=0)el.value=el.value.replace(/,/g,'.');},true);});})();"
+)
+
+
+def grid_class(count: int) -> str:
+    """Колонки сетки по числу карточек: две — пополам, кратно трём — по три."""
+    if count in (2, 4):
+        return "grid g2"
+    if count % 3 == 0 or count >= 5:
+        return "grid g3"
+    return "grid"
+
+
+def card(href: str, title: str, meta: str, icon: Optional[str] = None, badge: Optional[str] = None,
+         extra: str = "") -> str:
+    """Одна карточка на весь сайт: значок (если есть), заголовок, подпись,
+    стрелка; бейдж — уровень программы и подобное."""
+    ic = f"<span class=ic>{seo_design.icon(icon)}</span>" if icon else ""
+    badge_html = f"<em class=badge>{_e(badge)}</em>" if badge else ""
+    return (f'<a class="card reveal" href="{href}">{ic}<span class=arrow>{seo_design.icon("arrow")}</span>'
+            f"{badge_html}<b>{_e(_strip_emoji(title))}</b><span>{_e(meta)}</span>{extra}</a>")
 
 
 def _cards(items: list[tuple[str, str, str]]) -> str:
     """(href, заголовок, подпись) → сетка карточек."""
-    return "<div class=grid>" + "".join(
-        f'<a class="card reveal" href="{href}"><span class=arrow>{seo_design.icon("arrow")}</span>'
-        f"<b>{_e(title)}</b><span>{_e(text)}</span></a>"
-        for href, title, text in items
-    ) + "</div>"
+    return f"<div class='{grid_class(len(items))}'>" + "".join(card(h, title, text) for h, title, text in items) + "</div>"
 
 
 def _icon_cards(items: list[tuple[str, str, str, str]]) -> str:
     """(href, значок, заголовок, подпись) → карточки со своим значком у каждой."""
-    return "<div class=grid>" + "".join(
-        f'<a class="card reveal" href="{href}"><span class=ic>{seo_design.icon(ic)}</span>'
-        f"<b>{_e(title)}</b><span>{_e(text)}</span></a>"
-        for href, ic, title, text in items
-    ) + "</div>"
+    return f"<div class='{grid_class(len(items))}'>" + "".join(card(h, title, text, ic) for h, ic, title, text in items) + "</div>"
+
+
+def program_card(key: str, lang: str) -> str:
+    """Карточка программы: бейдж уровня, «N дней», остальная подпись."""
+    meta = seed_data.localized_program_meta(key, lang)
+    badge, _sep, rest = meta.partition(" · ")
+    days = len(seed_data.PROGRAM_BY_KEY[key]["days"])
+    line = _t(lang)("seo.program.card_days", n=days) + (f" · {rest}" if rest else "")
+    return card(url_for(Page("program", key), lang), seed_data.localized_program_name(key, lang), line, badge=badge)
+
+
+def program_cards(keys: list[str], lang: str) -> str:
+    return f"<div class='{grid_class(len(keys))}'>" + "".join(program_card(k, lang) for k in keys) + "</div>"
 
 
 def _article_params(lang: str) -> dict[str, Any]:
     t = _t(lang)
     return {
-        "ai": _e(t("btn.ai_coach")),
-        "video": _e(t("ai.screen.preset.video_hint.label")),
-        "programs": _e(t("btn.programs")),
-        "ready": _e(t("btn.ready_programs")),
-        "settings": _e(t("btn.settings")),
-        "import_btn": _e(t("btn.import_csv")),
+        "ai": _e(_strip_emoji(t("btn.ai_coach"))),
+        "video": _e(_strip_emoji(t("ai.screen.preset.video_hint.label"))),
+        "programs": _e(_strip_emoji(t("btn.programs"))),
+        "ready": _e(_strip_emoji(t("btn.ready_programs"))),
+        "settings": _e(_strip_emoji(t("btn.settings"))),
+        "import_btn": _e(_strip_emoji(t("btn.import_csv"))),
         "seconds": config.MAX_VIDEO_SECONDS,
         "videos": config.AI_VIDEO_DAILY_LIMIT,
         "questions": config.AI_QUESTION_DAILY_LIMIT,
         "days": config.IMPORT_UNDO_DAYS,
-        "import_history": _e(t("btn.import_history")),
-        "upload": _e(t("btn.upload_all")),
-        "add": _e(t("btn.add_for_myself_plus")),
+        "import_history": _e(_strip_emoji(t("btn.import_history"))),
+        "upload": _e(_strip_emoji(t("btn.upload_all"))),
+        "add": _e(_strip_emoji(t("btn.add_for_myself_plus"))),
     }
 
 
@@ -795,7 +836,7 @@ def _faq_items(lang: str, ids: tuple[str, ...]) -> list[tuple[str, str]]:
 
 def _faq_html(lang: str, items: list[tuple[str, str]]) -> str:
     t = _t(lang)
-    return (f'<section class=reveal><h2>{_e(t("seo.faq.h"))}</h2><div class=faq>'
+    return (f'<section class=reveal><span class=eyebrow>{_e(t("seo.faq.eyebrow"))}</span><h2>{_e(t("seo.faq.h"))}</h2><div class=faq>'
             + "".join(f"<details><summary>{_e(q)}</summary><div class=a><p>{a}</p></div></details>" for q, a in items)
             + "</div></section>")
 
@@ -867,20 +908,93 @@ def page_h1(page: Page, lang: str) -> str:
 # ---------- главная ----------
 
 
+def screen_picture(lang: str, name: str, alt: str, *, eager: bool = False) -> str:
+    """Снимок приложения: AVIF/WebP 720px, если есть (scripts/gen_site_screens.py),
+    иначе JPEG 540px."""
+    for screen, w, h in seo_static.SCREENS[lang]:
+        if screen == name:
+            break
+    else:
+        raise KeyError(name)
+    jpg = seo_static.asset_url(f"screens/{lang}-{name}.jpg")
+    attrs = "fetchpriority=high" if eager else "loading=lazy"
+    img = f'<img src="{jpg}" alt="{_e(alt)}" width={w} height={h} {attrs} decoding=async>'
+    if not seo_static.site_file(f"screens/{lang}-{name}-720.webp"):
+        return img
+    sources = "".join(f'<source type="image/{fmt}" srcset="{seo_static.asset_url(f"screens/{lang}-{name}-720.{fmt}")} 720w, {jpg} 540w" '
+                      'sizes="(max-width: 600px) 64vw, 252px">' for fmt in ("avif", "webp"))
+    return f"<picture>{sources}{img}</picture>"
+
+
+def coach_picture(alt: str) -> str:
+    src = seo_static.asset_url("coach.jpg")
+    return (f'<picture><source type="image/avif" srcset="{seo_static.asset_url("coach.avif")}">'
+            f'<source type="image/webp" srcset="{seo_static.asset_url("coach.webp")}">'
+            f'<img src="{src}" alt="{_e(alt)}" width=720 height=720 fetchpriority=high decoding=async></picture>')
+
+
+# Демо «живого» подхода в шапке главной: прошлые подходы этого упражнения —
+# (вес, повторы); рекорд считается от лучшего из них той же формулой Эпли,
+# что у бота (analytics.e1rm).
+LIVE_HISTORY = ((80.0, 8), (90.0, 6))
+
+
+def _live(lang: str, block: str, device: str) -> str:
+    t = _t(lang)
+    name = seed_data.localized_exercise_name(_identity_for_media_slug(_DEMO_SLUG), lang)
+    unit = _e(t("seo.tool.unit_kg"))
+    rows = "".join(f"<li><span>{_num(w)}\u00a0<span class=u>{unit}</span> × {r}</span>{seo_design.icon('check')}</li>"
+                   for w, r in LIVE_HISTORY)
+    best = max(seo_tools.e1rm(w, r) for w, r in LIVE_HISTORY)
+    target = diary_target(lang, device)
+    script = (
+        "(function(){var f=document.getElementById('live');if(!f)return;var inp=f.querySelector('input'),list=f.querySelector('ol'),"
+        f"out=f.querySelector('.live-out'),U={_js_str(t('seo.tool.unit_kg'))},T={_js_str(t('seo.tool.unit_t'))},"
+        f"BEST={best!r},HIST={json.dumps([list(x) for x in LIVE_HISTORY])},MAXR={config.E1RM_MAX_REPS},"
+        f"REC={_js_str(t('seo.home.live.record', e1rm='{e1rm}'))},OK={_js_str(t('seo.home.live.logged', gap='{gap}'))},"
+        f"HUH={_js_str(t('seo.home.live.huh'))},TON={_js_str(t('seo.home.live.tonnage', tonnage='{tonnage}'))},"
+        f"E1={_js_str(t('seo.home.live.e1rm', e1rm='{e1rm}'))};"
+        "function f1(x){var r=Math.round(x*10)/10;return r%1===0?r.toFixed(0):r.toFixed(1);}"
+        "function kg(x){return f1(x)+'\u00a0'+U;}"
+        "function e1(w,r){return r<=1?w:w*(1+r/30);}"
+        "f.addEventListener('submit',function(ev){ev.preventDefault();"
+        "var m=inp.value.replace(',','.').match(/^\\s*(\\d+(?:\\.\\d+)?)\\s*(?:[x×х*]|\\s)\\s*(\\d{1,3})\\s*$/i);"
+        "if(!m){out.hidden=false;out.innerHTML='<p>'+HUH+'</p>';return;}"
+        "var w=parseFloat(m[1]),r=parseInt(m[2],10);if(!(w>0)||!(r>0)||w>1000||r>100){out.hidden=false;out.innerHTML='<p>'+HUH+'</p>';return;}"
+        "HIST.push([w,r]);var li=document.createElement('li');li.className='new';li.innerHTML='<span>'+f1(w)+'\u00a0<span class=u>'+U+'</span> × '+r+'</span>';"
+        "list.appendChild(li);var ton=HIST.reduce(function(a,s){return a+s[0]*s[1];},0),e=r>MAXR?0:e1(w,r),line;"
+        "if(e>BEST+1e-9){line=REC.replace('{e1rm}',kg(e));BEST=e;li.classList.add('rec');}else{line=OK.replace('{gap}',kg(Math.max(0,BEST-e)));}"
+        "out.hidden=false;out.innerHTML='<p class=coach-line>'+line+'</p><p class=nums><span>'+TON.replace('{tonnage}',ton>=1000?f1(ton/1000)+T:kg(ton))"
+        "+'</span><span>'+E1.replace('{e1rm}',kg(BEST))+'</span></p>';out.appendChild(document.getElementById('live-cta').content.cloneNode(true));"
+        "inp.value='';inp.placeholder='100 8';});})();"
+    )
+    cta = (f'<template id=live-cta><a class="btn primary small" href="{_e(go_url(target, block))}">'
+           f'{seo_design.icon("check")}{_e(t("seo.home.live.cta"))}</a></template>')
+    return (
+        f'<form class=live id=live aria-label="{_e(t("seo.home.live.label"))}"><div class=live-ex>{_e(name)}'
+        f'<small>{_e(t("seo.home.live.hint"))}</small></div><ol>{rows}</ol>'
+        f'<div class=input><input type=text inputmode=decimal enterkeyhint=send autocomplete=off value="100 8" '
+        f'aria-label="{_e(t("seo.home.live.input"))}">'
+        f'<button class=send type=submit aria-label="{_e(t("seo.home.live.send"))}">{seo_design.icon("send")}</button></div>'
+        f"<div class=live-out aria-live=polite hidden></div>{cta}</form><script>{script}</script>"
+    )
+
+
 def _hero(lang: str, page: Page, request) -> str:
     t = _t(lang)
-    screen, w, h = seo_static.SCREENS[lang][0]
+    device = device_of(request)
     return (
         "<div class=hero>"
-        f'<div class=hero-in><span class=eyebrow>{_e(t("seo.home.eyebrow"))}</span>'
+        f'<div class=hero-text><span class=eyebrow>{_e(t("seo.home.eyebrow"))}</span>'
         f"<h1>{_e(t('seo.home.h1'))}</h1><p class=lead>{t('seo.home.lead_html')}</p>"
-        f"<div style=\"margin-top:28px\">{_cta_buttons(lang, page.block, device_of(request))}</div>"
+        + _live(lang, page.block, device)
+        + f"<div class=hero-cta>{_cta_buttons(lang, page.block, device)}</div>"
         "<ul class=trust>"
         + "".join(f"<li>{seo_design.icon('check')}{_e(t(f'seo.home.trust.{k}'))}</li>" for k in ("free", "platforms", "import"))
         + "</ul></div>"
-        '<div class="stage hero-in d2"><div class=glow></div>'
-        f'<div class=coach><img src="{seo_static.asset_url("coach.jpg")}" alt="{_e(t("seo.home.coach_alt"))}" width=720 height=720 fetchpriority=high></div>'
-        f'<div class=phone><img src="{seo_static.asset_url(f"screens/{lang}-{screen}.jpg")}" alt="{_e(t(f"seo.home.shot.{screen}.alt"))}" width={w} height={h} fetchpriority=high></div>'
+        '<div class="stage hero-in"><div class=glow></div>'
+        f'<div class=coach>{coach_picture(t("seo.home.coach_alt"))}</div>'
+        f'<div class=phone>{screen_picture(lang, "progress", t("seo.home.shot.progress.alt"), eager=True)}</div>'
         f'<span class="chip c1">{t("seo.home.chip1_html")}</span>'
         f'<span class="chip c2">{t("seo.home.chip2_html")}</span>'
         "</div></div>"
@@ -894,9 +1008,9 @@ def _demo(lang: str) -> str:
     return (
         f'<div class=demo role=img aria-label="{_e(t("seo.home.demo_label"))}">'
         f"<div class=ex>{_e(name)}</div><div class=rows>"
-        f"<div><span>80{unit} × 8</span><span>✓</span></div>"
-        f"<div><span>90{unit} × 6</span><span>✓</span></div>"
-        f"<div class=new><span>100{unit} × 8</span><span>🔥 {_e(t('seo.home.demo_record'))}</span></div></div>"
+        f"<div><span>80\u00a0{unit} × 8</span><span>✓</span></div>"
+        f"<div><span>90\u00a0{unit} × 6</span><span>✓</span></div>"
+        f"<div class=new><span>100\u00a0{unit} × 8</span><span>{seo_design.icon('flame')}{_e(t('seo.home.demo_record'))}</span></div></div>"
         f"<div class=input><div class=field><span class=typed>100 8</span></div>"
         f'<div class=send>{seo_design.icon("send")}</div></div></div>'
     )
@@ -916,32 +1030,72 @@ def _bento(lang: str) -> str:
     t = _t(lang)
 
     def tile(cls: str, ic: str, key: str, extra: str = "", href: Optional[str] = None) -> str:
-        more = f'<a class=more href="{href}">{_e(t("seo.home.more"))} →</a>' if href else ""
+        title = t(f"seo.home.b.{key}.h")
+        more = (f'<a class=more href="{href}" aria-label="{_e(t("seo.home.more_about", what=title))}">'
+                f'{_e(t("seo.home.more"))} →</a>' if href else "")
         return (f'<div class="tile reveal {cls}"><span class=ic>{seo_design.icon(ic)}</span>'
-                f"<h3>{_e(t(f'seo.home.b.{key}.h'))}</h3><p>{_e(t(f'seo.home.b.{key}.p'))}</p>{more}{extra}</div>")
+                f"<h3>{_e(title)}</h3><p>{_e(t(f'seo.home.b.{key}.p'))}</p>{more}{extra}</div>")
 
     return (
         "<div class=bento>"
         + tile("b-wide hot", "type", "log", _demo(lang), url_for(Page("telegram"), lang))
         + tile("b-tall", "coach", "coach", _chat(lang), url_for(Page("ai-coach"), lang))
+        + "<div class=bento-rest>"
         + tile("b-third", "video", "video", "", url_for(Page("video-review"), lang))
         + tile("b-third", "trophy", "records", "", url_for(Page("tool", "1rm"), lang))
         + tile("b-third", "program", "programs", "", url_for(Page("programs"), lang))
         + tile("b-third", "import", "import", "", url_for(Page("import", "hevy"), lang))
         + tile("b-third", "phone", "everywhere", "", url_for(Page("telegram"), lang))
-        + "</div>"
+        + "</div></div>"
     )
 
 
-def _shots(lang: str) -> str:
+def _story(lang: str) -> str:
+    """«Одна тренировка»: шаги слева, телефон справа держится на месте и
+    меняет экран под шаг (IntersectionObserver). Без скрипта и при «меньше
+    движения» — первый экран и шаги текстом; на телефоне у каждого шага свой
+    снимок под текстом."""
     t = _t(lang)
-    figures = "".join(
-        f'<figure class=reveal><div class=phone><img src="{seo_static.asset_url(f"screens/{lang}-{name}.jpg")}" '
-        f'alt="{_e(t(f"seo.home.shot.{name}.alt"))}" width={w} height={h} loading=lazy decoding=async></div>'
-        f"<figcaption>{_e(t(f'seo.home.shot.{name}.cap'))}</figcaption></figure>"
-        for name, w, h in seo_static.SCREENS[lang]
+    screens = seo_static.SCREENS[lang]
+    steps, shots = [], []
+    for i, (name, _w, _h) in enumerate(screens):
+        alt = t(f"seo.home.shot.{name}.alt")
+        steps.append(
+            f'<li class="step reveal" data-i={i}><span class=step-n>{i + 1}</span>'
+            f"<h3>{_e(t(f'seo.home.story.{i + 1}.h'))}</h3><p>{_e(t(f'seo.home.story.{i + 1}.p'))}</p>"
+            f"<div class='phone step-shot'>{screen_picture(lang, name, alt)}</div></li>")
+        shots.append(f'<div class="screen{" on" if i == 0 else ""}" data-i={i}>{screen_picture(lang, name, alt)}</div>')
+    script = (
+        "(function(){var ph=document.querySelector('.story-phone');if(!ph||!('IntersectionObserver' in window))return;"
+        "var sc=ph.querySelectorAll('.screen'),st=document.querySelectorAll('.story .step');"
+        "var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;var i=e.target.dataset.i;"
+        "sc.forEach(function(s){s.classList.toggle('on',s.dataset.i===i);});st.forEach(function(s){s.classList.toggle('on',s.dataset.i===i);});});},"
+        "{rootMargin:'-45% 0px -45% 0px'});st.forEach(function(s){io.observe(s);});})();"
     )
-    return f"<div class=shots>{figures}</div>"
+    return (f"<div class=story><ol class=steps-story>{''.join(steps)}</ol>"
+            f"<div class=story-side><div class='phone story-phone'>{''.join(shots)}</div></div></div><script>{script}</script>")
+
+
+def _basement(lang: str) -> str:
+    """Полоса «неделя в подвале»: пиксельный тренер ходит по подвалу, на доске —
+    настоящие цифры за 7 дней (site_numbers). Нет цифр — нет и доски."""
+    import site_numbers
+
+    t = _t(lang)
+    data = site_numbers.cached()
+    board = ""
+    if data:
+        tons = data["kg"] / 1000
+        cells = (
+            (t("seo.home.week.workouts"), f"{int(data['workouts'])}"),
+            (t("seo.home.week.sets"), f"{int(data['sets'])}"),
+            (t("seo.home.week.tons"), f"{tons:.1f}" if tons < 100 else f"{tons:.0f}"),
+        )
+        board = (f'<div class=board role=group aria-label="{_e(t("seo.home.week.h"))}"><b class=board-h>{_e(t("seo.home.week.h"))}</b>'
+                 + "".join(f"<div><span class=board-n>{_e(v)}</span><small>{_e(k)}</small></div>" for k, v in cells)
+                 + f"<small class=board-note>{_e(t('seo.home.week.note'))}</small></div>")
+    return (f'<section class="basement reveal" aria-label="{_e(t("seo.home.week.label"))}"><div class=basement-floor>'
+            f"<span class=walker>{sprite('coach', 2)}</span><span class=walker-dog>{sprite('dog', 2)}</span></div>{board}</section>")
 
 
 def sprite(name: str, scale: int = 3, label: str = "") -> str:
@@ -990,14 +1144,14 @@ def _render_home(lang: str, page: Page, request) -> str:
     faq = _faq_items(lang, FAQ["home"])
 
     def head(key: str) -> str:
-        accent = sprite("curl", 1) if key == "features" else ""
-        return (f"<div class='sec-head reveal'>{accent}<span class=eyebrow>{_e(t(f'seo.home.{key}.eyebrow'))}</span>"
+        return (f"<div class='sec-head reveal'><span class=eyebrow>{_e(t(f'seo.home.{key}.eyebrow'))}</span>"
                 f"<h2>{_e(t(f'seo.home.{key}.h'))}</h2><p>{_e(t(f'seo.home.{key}.p'))}</p></div>")
 
     body = (
         _hero(lang, page, request)
         + f"<section>{head('features')}{_bento(lang)}</section>"
-        + f"<section>{head('shots')}{_shots(lang)}</section>"
+        + f"<section>{head('shots')}{_story(lang)}</section>"
+        + _basement(lang)
         + _gym(lang)
         + f"<section>{head('import')}{_icon_cards(imports)}</section>"
         + f"<section>{head('tools')}{_icon_cards(tools)}</section>"
@@ -1050,29 +1204,81 @@ def organization_ld(lang: str, request) -> dict:
 # ---------- статьи и переезд ----------
 
 
+# Значки разделов статьи-страницы — по порядку секций.
+_SECTION_ICONS = {
+    "ai-coach": ("program", "chart", "coach", "phone"),
+    "video-review": ("video", "phone", "coach", "bolt"),
+    "telegram": ("type", "trophy", "program", "bolt", "chart", "list", "coach", "import", "phone"),
+    "workout-log-app": ("type", "chart", "coach", "video", "program", "import", "phone"),
+}
+
+
+def _video_example(lang: str) -> str:
+    """Пример разбора видео — как его пишет тренер: что видно, что править
+    первым, чего с ракурса не видно. Подписан как пример."""
+    t = _t(lang)
+    return (f"<div class='review-card'><span class=badge>{_e(t('seo.video-review.example.badge'))}</span>"
+            f"<p class=review-ex>{_e(t('seo.video-review.example.exercise'))}</p>"
+            f"{t('seo.video-review.example.body_html')}</div>")
+
+
+def _csv_visual(lang: str) -> str:
+    """Шапка переезда: строки файла → подходы в дневнике (из того же примера,
+    что у шаблона дневника)."""
+    import seo_template
+
+    t = _t(lang)
+    rows = seo_template.example_rows(lang)[:3]
+    head = ",".join(seo_template.headers(lang)[:6])
+    lines = "\n".join(",".join(r[:6]) for r in rows)
+    sets = "".join(f"<li><span>{_e(r[2])}</span><span>{_e(r[4] or '—')}\u00a0<span class=u>{_e(t('seo.tool.unit_kg'))}</span> × {_e(r[5])}</span></li>"
+                   for r in rows)
+    return (f"<div class=csv-visual><pre><code>{_e(head)}\n{_e(lines)}</code></pre>"
+            f"<span class=csv-arrow>{seo_design.icon('arrow')}</span><ul>{sets}</ul></div>")
+
+
+def _feature_visual(lang: str, key: str) -> str:
+    t = _t(lang)
+    if key == "ai-coach":
+        return _chat(lang)
+    if key == "video-review":
+        return _video_example(lang)
+    name = "workout" if key == "telegram" else "progress"
+    return f"<div class=phone>{screen_picture(lang, name, t(f'seo.home.shot.{name}.alt'), eager=True)}</div>"
+
+
+def feature_head(eyebrow: str, h1: str, lead: str, visual: str) -> str:
+    """Шапка страницы-рассказа: текст слева, картинка справа (на широком экране)."""
+    return (f"<div class=feature-head><div class=feature-text><span class=eyebrow>{_e(eyebrow)}</span>"
+            f"<h1>{_e(h1)}</h1><p class=lead>{_e(lead)}</p></div><div class=feature-visual>{visual}</div></div>")
+
+
+def _icon_h2(icon: str, text: str) -> str:
+    return f"<h2 class=ic-h><span class=ic>{seo_design.icon(icon)}</span>{_e(text)}</h2>"
+
+
 def _render_feature(lang: str, page: Page, request) -> str:
     t = _t(lang)
     key = page.kind
     params = _article_params(lang)
+    icons = _SECTION_ICONS[key]
     sections = "".join(
-        f"<section class=reveal><h2>{_e(t(f'seo.{key}.s{i}.h'))}</h2>{t(f'seo.{key}.s{i}.p_html', **params)}</section>"
+        f"<section class=reveal>{_icon_h2(icons[(i - 1) % len(icons)], t(f'seo.{key}.s{i}.h'))}{t(f'seo.{key}.s{i}.p_html', **params)}</section>"
         for i in range(1, _ARTICLE_SECTIONS[key] + 1)
     )
     related = [(url_for(Page(f), lang), _strip_emoji(t(f"seo.{f}.card.title")), t(f"seo.{f}.card.text")) for f in FEATURES if f != key]
     faq = _faq_items(lang, FAQ[key]) if key in FAQ else []
     title, description = t(f"seo.{key}.title"), t(f"seo.{key}.description")
     body = (
-        f"<span class=eyebrow>{_e(t('seo.eyebrow.feature'))}</span>"
-        f"<h1>{_e(t(f'seo.{key}.h1'))}</h1><p class=lead>{_e(t(f'seo.{key}.lead'))}</p>"
-        + (_chat(lang) if key == "ai-coach" else "")
-        + sections
+        feature_head(t("seo.eyebrow.feature"), t(f"seo.{key}.h1"), t(f"seo.{key}.lead"), _feature_visual(lang, key))
+        + f"<div class=prose>{sections}</div>"
         + (_coach_examples(lang) if key == "ai-coach" else "")
-        + (_faq_html(lang, faq) if faq else "")
+        + (f"<div class=prose>{_faq_html(lang, faq)}</div>" if faq else "")
         + _cta(lang, page.block, _e(t(f"seo.{key}.cta")), request)
         + _cards(related)
     )
     ld = [_webpage_ld(lang, page, request, title, description)] + ([_faq_ld(faq)] if faq else [])
-    return _layout(lang, page, request, title=title, description=description, body=body, ld=ld)
+    return _layout(lang, page, request, title=title, description=description, body=body, ld=ld, wide=True)
 
 
 # Примеры разговоров с тренером на странице AI-тренера: что он умеет на
@@ -1114,18 +1320,18 @@ def _render_import(lang: str, page: Page, request) -> str:
     faq = _faq_items(lang, FAQ["import"])
     title, description = t(f"seo.import.{src}.title"), t(f"seo.import.{src}.description")
     body = (
-        f"<span class=eyebrow>{_e(t('seo.eyebrow.import'))}</span>"
-        f"<h1>{_e(t(f'seo.import.{src}.h1'))}</h1><p class=lead>{_e(t(f'seo.import.{src}.lead'))}</p>"
-        f"<section class=reveal><h2>{_e(t(f'seo.import.{src}.export.h'))}</h2>{t(f'seo.import.{src}.export_html')}</section>"
-        f"<section class=reveal><h2>{_e(t('seo.import.bot.h'))}</h2>{t('seo.import.bot_html', **params)}</section>"
-        f"<section class=reveal><h2>{_e(t('seo.import.app.h'))}</h2>{t('seo.import.app_html')}</section>"
-        f"<section class=reveal><h2>{_e(t('seo.import.what.h'))}</h2>{t('seo.import.what_html', **params)}</section>"
-        + _faq_html(lang, faq)
+        feature_head(t("seo.eyebrow.import"), t(f"seo.import.{src}.h1"), t(f"seo.import.{src}.lead"), _csv_visual(lang))
+        + "<div class=prose>"
+        f"<section class=reveal>{_icon_h2('import', t(f'seo.import.{src}.export.h'))}{t(f'seo.import.{src}.export_html')}</section>"
+        f"<section class=reveal>{_icon_h2('telegram', t('seo.import.bot.h'))}{t('seo.import.bot_html', **params)}</section>"
+        f"<section class=reveal>{_icon_h2('phone', t('seo.import.app.h'))}{t('seo.import.app_html')}</section>"
+        f"<section class=reveal>{_icon_h2('check', t('seo.import.what.h'))}{t('seo.import.what_html', **params)}</section>"
+        + _faq_html(lang, faq) + "</div>"
         + _cta(lang, page.block, _e(t("seo.import.cta")), request)
         + f"<h2>{_e(t('seo.import.more.h'))}</h2>" + _cards(others)
     )
     ld = [_webpage_ld(lang, page, request, title, description), _faq_ld(faq)]
-    return _layout(lang, page, request, title=title, description=description, body=body, ld=ld)
+    return _layout(lang, page, request, title=title, description=description, body=body, ld=ld, wide=True)
 
 
 # ---------- калькуляторы ----------
@@ -1153,23 +1359,31 @@ def _formula_seg(lang: str) -> str:
     return _seg("f", t("seo.tool.1rm.formula"), [("epley", "Epley"), ("brzycki", "Brzycki")], "epley")
 
 
-def _rpe_select(ident: str, label: str, blank: bool = True, default: str = "") -> str:
+def _rpe_select(ident: str, label: str, blank: bool = True, default: str = "", hint: str = "") -> str:
     opts = ('<option value="">—</option>' if blank else "") + "".join(
         f'<option{" selected" if v == default else ""}>{v}</option>' for v in ("10", "9.5", "9", "8.5", "8", "7.5", "7", "6.5", "6")
     )
-    return f"<label>{_e(label)}<select id={ident}>{opts}</select></label>"
+    small = f"<small class=hint>{_e(hint)}</small>" if hint else ""
+    return f"<label>{_e(label)}<select id={ident}>{opts}</select>{small}</label>"
 
 
 def _num_input(ident: str, label: str, value: str, step: str = "0.5", mode: str = "decimal", max_: str = "") -> str:
-    mx = f" max={max_}" if max_ else ""
-    return (f"<label>{_e(label)}<input id={ident} type=number inputmode={mode} min=0{mx} step={step} "
-            f"value={value}></label>")
+    """Числовое поле — текстом с цифровой клавиатурой: type=number на iPhone
+    не даёт запятую и прыгает от колёсика; запятую страница меняет на точку."""
+    del step, max_
+    return (f'<label>{_e(label)}<input id={ident} type=text inputmode={mode} autocomplete=off enterkeyhint=done '
+            f'pattern="[0-9]*[.,]?[0-9]*" value="{value}"></label>')
 
 
 def _log_cta(lang: str, tool: str, text_key: str = "seo.tool.log_cta") -> str:
+    """«Запиши в дневник» под результатом: /go/diary сам решит по устройству,
+    App Store или бот, — как главная кнопка страницы. Рядом — карточка
+    результата для сторис, если калькулятор её умеет (ссылку ставит скрипт)."""
     t = _t(lang)
-    return (f'<div class="log-cta btn-row"><a class="btn primary" href="{_e(go_url("bot", _BLOCKS[f"log:{tool}"]))}">'
-            f'{seo_design.icon("telegram")}{_e(t(text_key))}</a></div>')
+    return (f'<div class="log-cta btn-row"><a class="btn primary" href="{_e(go_url("diary", _BLOCKS[f"log:{tool}"]))}">'
+            f'{seo_design.icon("check")}{_e(t(text_key))}</a>'
+            f'<a class="btn small share" id=card href="#" target=_blank rel=noopener hidden>{seo_design.icon("image")}'
+            f'{_e(t("seo.tool.card"))}</a></div>')
 
 
 # Общие функции страницы калькулятора: значение поля или выбранной кнопки,
@@ -1177,9 +1391,11 @@ def _log_cta(lang: str, tool: str, text_key: str = "seo.tool.log_cta") -> str:
 _UI_JS = (
     "function $(i){return document.getElementById(i);}"
     "function val(n){var c=document.querySelector('[name=\"'+n+'\"]:checked');if(c)return c.value;var e=$(n);return e?e.value:'';}"
-    "function fu(x,u){return fmt(x)+'<span class=u>'+UNITS[u]+'</span>';}"
+    "function fu(x,u){return fmt(x)+'\u00a0<span class=u>'+UNITS[u]+'</span>';}"
     "function bind(f){document.querySelectorAll('form.calc input,form.calc select').forEach(function(el){el.addEventListener('input',f);el.addEventListener('change',f);});f();}"
     "function done(ok){var r=document.querySelector('.result');if(r)r.classList.toggle('ok',!!ok);}"
+    "function share(kind,q){var c=$('card');if(!c)return;if(!q){c.hidden=true;return;}"
+    "c.href='/og/card/'+document.documentElement.lang+'/'+kind+'.png?'+q;c.hidden=false;}"
 )
 
 
@@ -1189,7 +1405,7 @@ def _tool_1rm(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "<form class=calc onsubmit='return false'>"
         "<div class=row>" + _num_input("w", t("seo.tool.1rm.weight"), "100", "0.25")
         + _num_input("r", t("seo.tool.1rm.reps"), "5", "1", "numeric", "50") + "</div>"
-        "<div class=row>" + _rpe_select("rpe", t("seo.tool.1rm.rpe")) + _formula_seg(lang) + "</div>"
+        "<div class=row>" + _rpe_select("rpe", "RPE", hint=t("seo.tool.1rm.rpe_hint")) + _formula_seg(lang) + "</div>"
         + _unit_seg(lang) + "</form>"
     )
     kg = t("seo.tool.unit_kg")
@@ -1207,7 +1423,7 @@ def _tool_1rm(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "function run(){var w=parseFloat($('w').value),r=parseInt($('r').value,10),p=$('rpe').value,"
         "rpe=p===''?null:parseFloat(p),f=val('f'),u=val('unit'),out=$('out'),note=$('note'),tb=$('tbl');note.textContent='';"
         "if(!(w>0)||!(r>0)){out.textContent='—';tb.innerHTML='';done(0);return;}var m=e1rm(w,r,f,rpe);"
-        "if(!m){out.textContent='—';note.textContent=too;tb.innerHTML='';done(0);return;}out.innerHTML=fu(m,u);done(1);"
+        "if(!m){out.textContent='—';note.textContent=too;tb.innerHTML='';done(0);return;}out.innerHTML=fu(m,u);done(1);share('rm1','v='+fmt(m)+'&u='+u);"
         "tb.innerHTML=C.percents.map(function(pc){return '<tr><td>'+pc+'%</td><td class=num>'+fu(m*pc/100,u)+'</td></tr>';}).join('');}"
         "bind(run);"
     )
@@ -1238,7 +1454,7 @@ def _tool_wilks(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "function run(){var tot=parseFloat($('total').value),bw=parseFloat($('bw').value),s=val('sex'),u=val('unit'),k=u==='lb'?1/C.lbPerKg:1;"
         "var d=$('dots'),wk=$('wilks'),g=$('gl');$('note').textContent='';"
         "if(!(tot>0)||!(bw>0)){d.textContent=wk.textContent=g.textContent='—';done(0);return;}"
-        "d.textContent=dots(tot*k,bw*k,s).toFixed(2);wk.textContent=wilks(tot*k,bw*k,s).toFixed(2);"
+        "d.textContent=dots(tot*k,bw*k,s).toFixed(2);wk.textContent=wilks(tot*k,bw*k,s).toFixed(2);share('dots','v='+dots(tot*k,bw*k,s).toFixed(0));"
         "var gl=ipfGl(tot*k,bw*k,s,val('ev'),val('eq'));g.textContent=gl?gl.toFixed(2):'—';if(!gl)$('note').textContent=LOWBW;done(1);}"
         "bind(run);"
     )
@@ -1350,16 +1566,15 @@ def _calc_script(lang: str, script: str) -> str:
 def _embed_snippet(lang: str, tool: str, request) -> str:
     t = _t(lang)
     src = f"{base_url(request)}/embed/{lang}/{tool}"
-    height = 640 if tool == "1rm" else 600
-    code = (f'<iframe src="{src}" title="{t(f"seo.tool.{tool}.h1")}" width="100%" height="{height}" '
+    code = (f'<iframe src="{src}" title="{t(f"seo.tool.{tool}.h1")}" width="100%" height="640" '
             'style="border:0;border-radius:16px;max-width:560px" loading="lazy"></iframe>')
     return (
-        f'<div class="embed-box reveal"><h2>{_e(t("seo.embed.h"))}</h2><p class=muted>{_e(t("seo.embed.p"))}</p>'
-        f'<textarea readonly id=embed-code aria-label="{_e(t("seo.embed.h"))}">{_e(code)}</textarea>'
+        f'<details class=embed-box><summary>{_e(t("seo.embed.h"))}</summary><p class=muted>{_e(t("seo.embed.p"))}</p>'
+        f'<textarea readonly id=embed-code rows=4 aria-label="{_e(t("seo.embed.h"))}">{_e(code)}</textarea>'
         f'<div class=btn-row style="margin-top:12px"><button class="btn small" type=button id=embed-copy>{_e(t("seo.embed.copy"))}</button></div>'
         "<script>document.getElementById('embed-copy').addEventListener('click',function(){var a=document.getElementById('embed-code');a.select();"
         "if(navigator.clipboard){navigator.clipboard.writeText(a.value);}else{document.execCommand('copy');}this.textContent="
-        + _js_str(t("seo.embed.copied")) + ";});</script></div>"
+        + _js_str(t("seo.embed.copied")) + ";});</script></details>"
     )
 
 
@@ -1389,11 +1604,10 @@ def _render_tool(lang: str, page: Page, request) -> str:
         + f"<noscript><p class=muted>{_e(t('seo.tool.noscript'))}</p></noscript>"
         + chart
         + f"<div class=prose><section class=reveal><h2>{_e(t(f'seo.tool.{tool}.how.h'))}</h2>"
-        f"{t(f'seo.tool.{tool}.how_html', **how_params)}</section>"
-        + (_embed_snippet(lang, tool, request) if tool in EMBEDS else "")
-        + "</div>"
+        f"{t(f'seo.tool.{tool}.how_html', **how_params)}</section></div>"
         + _cta(lang, page.block, _e(t(f"seo.tool.{tool}.cta")), request)
-        + _cards(others)
+        + f"<h2 class=group-title>{_e(t('seo.tool.more.h'))}</h2>" + _cards(others)
+        + (_embed_snippet(lang, tool, request) if tool in EMBEDS else "")
         + _calc_script(lang, script)
     )
     return _layout(lang, page, request, title=title, description=description, body=body, wide=True,
@@ -1431,7 +1645,7 @@ def _strength_table(lang: str, lift: str, sex: str, unit: str) -> str:
         f"<tr><th scope=row>{_w(bw, unit_label)}</th>" + "".join(f"<td class=num>{_w(v, unit_label)}</td>" for v in values) + "</tr>"
         for bw, values in seo_tools.strength_table(lift, sex, unit)
     )
-    return (f'<div class=table-card><table><thead><tr><th>{_e(t("seo.strength.col_bw"))}</th>{head}</tr></thead>'
+    return (f'<div class="table-card scroll-x sticky-first"><table><thead><tr><th>{_e(t("seo.strength.col_bw"))}</th>{head}</tr></thead>'
             f"<tbody>{rows}</tbody></table></div>")
 
 
@@ -1460,9 +1674,9 @@ def _strength_tool(lang: str, lift: str = "bench", sex: str = "m") -> tuple[str,
         "w=parseFloat($('lw').value),r=parseInt($('lr').value,10)||1,out=$('lvl'),note=$('note');"
         "if(!(bw>0)||!(w>0)){out.textContent='—';note.textContent='';done(0);return;}var m=e1rm(w,r,'epley',null);"
         "if(!m){out.textContent='—';note.textContent=TOO;done(0);return;}"
-        "var sc=liftScore(m*k,lift,bw,s),i=levelIndex(sc);out.textContent=i<0?BELOW:NAMES[i];"
+        "var sc=liftScore(m*k,lift,bw,s),i=levelIndex(sc);out.textContent=i<0?BELOW:NAMES[i];share(i<0?'':'level',i<0?'':'l='+i+'&lift='+lift);"
         "var txt=SCORE.replace('{score}',Math.round(sc));if(i<C.levels.length-1){var nw=levelWeight(C.levels[i+1],lift,bw,s)/k;"
-        "txt+=' '+NEXT.replace('{weight}',fmt(nw)+UNITS[u]).replace('{level}',NAMES[i+1]);}else{txt+=' '+TOP;}note.textContent=txt;done(1);}"
+        "txt+=' '+NEXT.replace('{weight}',fmt(nw)+'\u00a0'+UNITS[u]).replace('{level}',NAMES[i+1]);}else{txt+=' '+TOP;}note.textContent=txt;done(1);}"
         "bind(run);"
     )
     return form, result, script
@@ -1528,9 +1742,9 @@ def _render_strength_lift(lang: str, page: Page, request) -> str:
         f"<span class=eyebrow>{_e(t('seo.eyebrow.strength'))}</span>"
         f"<h1>{_e(page_h1(page, lang))}</h1><p class=lead>{_e(t('seo.strength.lift_lead', lift=lift_name))}</p>"
         + _strength_tabs(lang, page)
-        + f"<section class=reveal style=\"margin-top:24px\"><h2>{_e(t('seo.strength.table.h'))}</h2>{tables}"
+        + f"<section class=reveal style=\"margin-top:24px\"><h2>{_e(t('seo.strength.tool.h'))}</h2><div class=tool>{form}{result}</div></section>"
+        + f"<section class=reveal><h2>{_e(t('seo.strength.table.h'))}</h2>{tables}"
         f"<p class=muted>{_e(t('seo.strength.table_note'))}</p></section>"
-        + f"<section class=reveal><h2>{_e(t('seo.strength.tool.h'))}</h2><div class=tool>{form}{result}</div></section>"
         + _strength_method(lang)
         + f'<p><a href="{url_for(Page("exercise", ex_url), lang)}">{_e(t("seo.strength.technique", lift=lift_name))} →</a></p>'
         + _cta(lang, page.block, _e(t("seo.strength.cta")), request)
@@ -1574,7 +1788,7 @@ def _render_programs(lang: str, page: Page, request) -> str:
     body = (
         f"<span class=eyebrow>{_e(t('seo.eyebrow.library'))}</span>"
         f"<h1>{_e(t('seo.programs.h1'))}</h1><p class=lead>{_e(t('seo.programs.lead'))}</p>"
-        + _cards(cards)
+        + program_cards([p["key"] for p in seed_data.WORKOUT_PROGRAMS], lang)
         + f"<section class='prose reveal'><h2>{_e(t('seo.programs.take.h'))}</h2>{t('seo.programs.take_html', **_article_params(lang))}</section>"
         + _cta(lang, page.block, _e(t("seo.programs.cta")), request)
     )
@@ -1599,17 +1813,13 @@ def _render_program(lang: str, page: Page, request) -> str:
             shown = _e(shown_name)
             url = _exercise_url_for_identity(identity)
             if url:
-                shown = f'<a href="{url_for(Page("exercise", url), lang)}">{shown}</a>'
+                shown = f'<a class=ex-link href="{url_for(Page("exercise", url), lang)}">{shown}</a>'
             rows.append(f"<li><span>{shown}</span><span>{_e(seed_data.localized_target(target, lang) or '')}</span></li>")
         days.append(
             f'<div class="day reveal"><h3><small>{_e(t("seo.program.day", n=i + 1))}</small>'
             f"{_e(seed_data.localized_program_day_name(key, i, lang))}</h3><ul>{''.join(rows)}</ul></div>"
         )
-    others = [
-        (url_for(Page("program", p["key"]), lang), _strip_emoji(seed_data.localized_program_name(p["key"], lang)),
-         seed_data.localized_program_meta(p["key"], lang))
-        for p in seed_data.WORKOUT_PROGRAMS if p["key"] != key
-    ]
+    others = [p["key"] for p in seed_data.WORKOUT_PROGRAMS if p["key"] != key]
     description = seed_data.localized_program_description(key, lang)
     body = (
         f"<span class=eyebrow>{_e(seed_data.localized_program_meta(key, lang))}</span>"
@@ -1617,7 +1827,7 @@ def _render_program(lang: str, page: Page, request) -> str:
         f"<section><h2>{_e(t('seo.program.days.h'))}</h2><div class=days>{''.join(days)}</div>"
         f"<p class=muted style=\"margin-top:16px\">{_e(t('seo.program.target_note'))}</p></section>"
         + _cta(lang, page.block, t("seo.program.cta_html", **_article_params(lang), name=_e(name)), request)
-        + f"<h2>{_e(t('seo.program.more.h'))}</h2>" + _cards(others)
+        + f"<h2>{_e(t('seo.program.more.h'))}</h2>" + program_cards(others, lang)
     )
     title = t("seo.program.title", name=name)
     plan = {
@@ -1677,10 +1887,13 @@ def _render_exercises(lang: str, page: Page, request) -> str:
     groups: dict[str, list[str]] = {}
     for url, slug in EXERCISES:
         groups.setdefault(_group_of(_identity_for_media_slug(slug)), []).append(_exercise_card(url, slug, lang, show_group=False))
-    order = list(dict.fromkeys(g for g, _n in seed_data.EXERCISE_TEMPLATES))
-    sections = "".join(
-        f"<h2 class=group-title>{_e(seed_data.localized_muscle_group_name(g, lang))}</h2><div class='grid ex-grid'>{''.join(groups[g])}</div>"
-        for g in order if g in groups
+    order = [g for g in dict.fromkeys(g for g, _n in seed_data.EXERCISE_TEMPLATES) if g in groups]
+    chips = "".join(f'<a href="#g-{seed_data.muscle_group_slug(g)}">{_e(seed_data.localized_muscle_group_name(g, lang))}</a>'
+                    for g in order)
+    sections = f'<nav class=group-chips aria-label="{_e(t("seo.exercises.groups"))}">{chips}</nav>' + "".join(
+        f"<h2 class=group-title id=g-{seed_data.muscle_group_slug(g)}>{_e(seed_data.localized_muscle_group_name(g, lang))}</h2>"
+        f"<div class='grid ex-grid'>{''.join(groups[g])}</div>"
+        for g in order
     )
     title, description = t("seo.exercises.title"), t("seo.exercises.description", count=len(EXERCISES))
     body = (
@@ -1692,6 +1905,36 @@ def _render_exercises(lang: str, page: Page, request) -> str:
     )
     return _layout(lang, page, request, title=title, description=description, body=body, wide=True,
                    ld=[_webpage_ld(lang, page, request, title, description, "CollectionPage")])
+
+
+def _exercise_aside(lang: str, page: Page, identity: str, request) -> str:
+    """Боковая колонка страницы техники (на широком экране — липкая): мышцы,
+    снаряд, порог входа, «запиши в дневник» и куда дальше."""
+    import seo_library
+
+    t = _t(lang)
+    url = page.arg
+    group = _group_of(identity)
+    target = seed_data.EXERCISE_MUSCLE_TARGET.get(identity)
+    muscles = t(f"seo.exf.{url}.muscles") if url in seo_library.EX_FACTS else ""
+    muscle_pages = [m for m, g, tg in seo_library.MUSCLES if g == group and (tg is None or tg == target)]
+    facts = [(t("seo.exercise.aside.group"), _e(_group_for(identity, lang)))]
+    if muscles:
+        facts.append((t("seo.exercise.aside.muscles"), _e(muscles)))
+    if url in seo_library.EX_FACTS:
+        equip, level = seo_library.EX_FACTS[url]
+        facts.append((t("seo.exercise.aside.equipment"), _e(t(f"seo.equip.{equip}"))))
+        facts.append((t("seo.exercise.aside.level"), f"<span class=lvl>{level}/3</span> {_e(t(f'seo.level.{level}'))}"))
+    rows = "".join(f"<dt>{_e(k)}</dt><dd>{v}</dd>" for k, v in facts)
+    links = [(url_for(Page("muscle", m), lang), t("seo.muscle.h1", name=seo_library.muscle_name(m, lang))) for m in muscle_pages]
+    links += [(url_for(Page("pair", seo_library.pair_slug(a, b)), lang),
+               t("seo.pair.h1", a=seo_library._ex_name(a, lang), b=seo_library._ex_name(b, lang)))
+              for a, b in seo_library.PAIRS if url in (a, b)]
+    links.append((url_for(Page("video-review"), lang), t("seo.exercise.aside.video")))
+    items = "".join(f'<li><a href="{href}">{_e(label)}</a></li>' for href, label in links)
+    return (f"<aside class=ex-aside><dl class=facts>{rows}</dl>"
+            f"<div class=aside-cta><p>{_e(t('seo.exercise.aside.log'))}</p>{_cta_buttons(lang, page.block, device_of(request))}</div>"
+            f"<h2 class=aside-h>{_e(t('seo.exercise.aside.more'))}</h2><ul class=links>{items}</ul></aside>")
 
 
 def _steps(identity: str, lang: str) -> list[str]:
@@ -1710,10 +1953,12 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         "<div class=frames>"
         "<figure>" + exercise_picture(slug, 1, t("seo.exercise.frame_start", name=name), sizes=frame_sizes, widths=(720,),
                                       width=720, height=540, lazy=False)
-        + f'<figcaption><b>1</b>{_e(t("seo.exercise.cap_start"))}</figcaption></figure>'
+        + f'<figcaption><b>1</b><span class=cap-long>{_e(t("seo.exercise.cap_start"))}</span>'
+        f'<span class=cap-short>{_e(t("seo.exercise.cap_start_short"))}</span></figcaption></figure>'
         "<figure>" + exercise_picture(slug, 2, t("seo.exercise.frame_end", name=name), sizes=frame_sizes, widths=(360, 720),
                                       width=720, height=540)
-        + f'<figcaption><b>2</b>{_e(t("seo.exercise.cap_end"))}</figcaption></figure>'
+        + f'<figcaption><b>2</b><span class=cap-long>{_e(t("seo.exercise.cap_end"))}</span>'
+        f'<span class=cap-short>{_e(t("seo.exercise.cap_end_short"))}</span></figcaption></figure>'
         "</div>"
     )
     steps = "".join(f"<li>{_e(s)}</li>" for s in _steps(identity, lang))
@@ -1721,9 +1966,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     programs = _program_pages_for(identity)
     in_programs = ""
     if programs:
-        cards = [(url_for(Page("program", k), lang), _strip_emoji(seed_data.localized_program_name(k, lang)),
-                  seed_data.localized_program_meta(k, lang)) for k in programs]
-        in_programs = f"<section class=reveal><h2>{_e(t('seo.exercise.programs.h'))}</h2>{_cards(cards)}</section>"
+        in_programs = f"<section class=reveal><h2>{_e(t('seo.exercise.programs.h'))}</h2>{program_cards(programs, lang)}</section>"
     group = _group_of(identity)
     related = [(u, s) for u, s in EXERCISES if u != page.arg and _group_of(_identity_for_media_slug(s)) == group][:6]
     related_html = ""
@@ -1731,13 +1974,16 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         related_html = (f"<section class=reveal><h2>{_e(t('seo.exercise.related.h', group=_group_for(identity, lang)))}</h2>"
                         f"<div class='grid ex-grid'>{''.join(_exercise_card(u, s, lang, show_group=False) for u, s in related)}</div></section>")
     lead = t(f"seo.ex.{slug}.lead")
-    body = (
+    main_col = (
         f"<span class=eyebrow>{_e(_group_for(identity, lang))}</span>"
         f"<h1>{_e(name)}</h1><p class=lead>{_e(lead)}</p>{frames}"
         f"<section class=reveal><h2>{_e(t('seo.exercise.setup.h'))}</h2><p>{_e(t(f'seo.ex.{slug}.setup'))}</p></section>"
         f"<section class=reveal><h2>{_e(t('seo.exercise.steps.h'))}</h2><ol class=steps>{steps}</ol></section>"
         f"<section class='mistakes reveal'><h2>{_e(t('seo.exercise.mistakes.h'))}</h2><ul>{mistakes}</ul></section>"
         + in_programs
+    )
+    body = (
+        f"<div class=ex-layout><div class=ex-main>{main_col}</div>{_exercise_aside(lang, page, identity, request)}</div>"
         + _cta(lang, page.block, _e(t("seo.exercise.cta")), request)
         + related_html
         + f'<p style="margin-top:32px"><a href="{url_for(Page("exercises"), lang)}">{_e(t("seo.exercise.all"))}</a></p>'
@@ -1754,34 +2000,54 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         "about": {"@type": "Thing", "name": name},
     }
     return _layout(lang, page, request, title=t("seo.exercise.title", name=name), description=lead, body=body,
-                   ld=[article])
+                   ld=[article], wide=True)
+
+
+# Отметка в таблице сравнения: yes — есть (или бесплатно), part — частично
+# или за деньги, no — нет или не нашли в описании. Наша колонка — всегда по
+# коду: всё бесплатно, тренер, импорт, видео.
+_VS_MARKS = {
+    "us": {"price": "yes", "free": "yes", "ai": "yes", "import": "yes", "video": "yes"},
+    "hevy": {"price": "part", "free": "part", "ai": "part", "import": "yes", "video": "no"},
+    "strong": {"price": "part", "free": "part", "ai": "no", "import": "no", "video": "no"},
+    "fitbod": {"price": "no", "free": "no", "ai": "yes", "import": "part", "video": "no"},
+    "jefit": {"price": "part", "free": "part", "ai": "yes", "import": "no", "video": "no"},
+}
+_MARK_GLYPH = {"yes": "✓", "part": "≈", "no": "✕"}
+
+
+def _mark(lang: str, kind: str) -> str:
+    return f'<span class="mark {kind}" role=img aria-label="{_e(_t(lang)(f"seo.vs.mark.{kind}"))}">{_MARK_GLYPH[kind]}</span>'
 
 
 def _render_vs(lang: str, page: Page, request) -> str:
     t = _t(lang)
     rival = page.arg
     params = _article_params(lang)
+    us_name, rival_name = t("seo.brand"), t(f"seo.vs.{rival}.name")
     rows = "".join(
         f"<tr><th scope=row>{_e(t(f'seo.vs.row.{row}'))}</th>"
-        f"<td>{t(f'seo.vs.us.{row}_html', **params)}</td><td>{t(f'seo.vs.{rival}.{row}_html')}</td></tr>"
+        f"<td class=us data-label=\"{_e(us_name)}\">{_mark(lang, _VS_MARKS['us'][row])}{t(f'seo.vs.us.{row}_html', **params)}</td>"
+        f"<td data-label=\"{_e(rival_name)}\">{_mark(lang, _VS_MARKS[rival][row])}{t(f'seo.vs.{rival}.{row}_html')}</td></tr>"
         for row in _VS_ROWS
     )
     sources = "".join(f'<li><a href="{_e(u)}" rel=nofollow>{_e(u)}</a></li>' for u in _VS_SOURCES[rival])
     faq = _faq_items(lang, FAQ[f"vs:{rival}"])
+    move_href = url_for(Page("import", rival if rival in IMPORT_SOURCES else "csv"), lang)
     title, description = t(f"seo.vs.{rival}.title"), t(f"seo.vs.{rival}.description")
     body = (
         f"<span class=eyebrow>{_e(t('seo.eyebrow.vs'))}</span>"
         f"<h1>{_e(t(f'seo.vs.{rival}.h1'))}</h1><p class=lead>{_e(t(f'seo.vs.{rival}.lead'))}</p>"
         f"<p class=muted>{_e(t('seo.vs.asof'))}</p>"
-        f"<div class='table-card vs'><table><thead><tr><th></th><th>{_e(t('seo.brand'))}</th>"
-        f"<th>{_e(t(f'seo.vs.{rival}.name'))}</th></tr></thead><tbody>{rows}</tbody></table></div>"
+        f"<div class='table-card vs cards-mobile'><table><thead><tr><th></th><th class=us>{_e(us_name)}</th>"
+        f"<th>{_e(rival_name)}</th></tr></thead><tbody>{rows}</tbody></table></div>"
         f"<section class=reveal><h2>{_e(t('seo.vs.choose.h'))}</h2>{t(f'seo.vs.{rival}.choose_html')}</section>"
         f"<section class=reveal><h2>{_e(t('seo.vs.move.h'))}</h2>"
-        f'<p>{t("seo.vs.move_html", href=url_for(Page("import", rival), lang), name=_e(t(f"seo.vs.{rival}.name")))}</p></section>'
+        f'<p>{t(f"seo.vs.{rival}.move_html" if rival not in IMPORT_SOURCES else "seo.vs.move_html", href=move_href, name=_e(rival_name))}</p></section>'
         + _faq_html(lang, faq)
         + _cta(lang, page.block, _e(t("seo.vs.cta")), request)
         + f"<section><h2>{_e(t('seo.vs.sources.h'))}</h2><ul class=muted>{sources}</ul>"
-        f"<p class=muted>{_e(t('seo.vs.disclaimer'))}</p></section>"
+        f"<p class=muted>{_e(t('seo.vs.disclaimer_one', name=rival_name))}</p></section>"
     )
     ld = [_webpage_ld(lang, page, request, title, description), _faq_ld(faq)]
     return _layout(lang, page, request, title=title, description=description, body=body, ld=ld)
@@ -1987,6 +2253,10 @@ async def _count(kind: str, page_key: str, lang: Optional[str], request: Request
 
 def _page_route(page: Page, lang: str):
     async def route(request: Request) -> HTMLResponse:
+        if page.kind == "home":
+            import site_numbers
+
+            await site_numbers.refresh()
         html = render(page, lang, request)
         await _count("view", url_for(page, lang), lang, request)
         return _html(html, lang)
@@ -2028,6 +2298,18 @@ async def go_bot_route(request: Request) -> Response:
     block = _block_arg(request)
     await _count("click", _click_page(request, block), None, request, target="bot")
     return RedirectResponse(bot_link(block), status_code=302, headers={"Cache-Control": "no-store", **_SECURITY})
+
+
+async def go_diary_route(request: Request) -> Response:
+    """«Запиши в дневник» под калькулятором: куда — решает устройство (как
+    главная кнопка страницы), язык — по странице, с которой пришли."""
+    block = _block_arg(request)
+    referer_path = urlsplit(request.headers.get("referer") or "").path
+    lang = "en" if referer_path.startswith("/en") else "ru"
+    target = diary_target(lang, device_of(request))
+    if target == "appstore":
+        return await go_appstore_route(request)
+    return await go_bot_route(request)
 
 
 async def go_appstore_route(request: Request) -> Response:
@@ -2147,6 +2429,7 @@ def register_routes(server: Any) -> None:
     server.custom_route("/", methods=["GET"])(root_route)
     server.custom_route("/go/bot", methods=["GET"])(go_bot_route)
     server.custom_route("/go/appstore", methods=["GET"])(go_appstore_route)
+    server.custom_route("/go/diary", methods=["GET"])(go_diary_route)
     server.custom_route("/sitemap.xml", methods=["GET"])(sitemap_route)
     server.custom_route("/robots.txt", methods=["GET"])(robots_route)
     server.custom_route("/llms.txt", methods=["GET"])(llms_route)
