@@ -210,8 +210,8 @@ ru: «Вырос ли мой жим за 3 месяца?», «Собери пр�
 > Telegram bot (/mcp). The code lasts 10 minutes and works once.
 >
 > **For reviewers:** open https://athletediary.app/mcp/demo-code, sign in with the test
-> credentials below, and you get a code for the demo account (pre-filled with ~10 weeks
-> of workouts). Then connect `https://athletediary.app/mcp` in Claude/ChatGPT and enter
+> credentials below, and you get a code for the demo account (pre-filled with 12 workouts
+> over the last four weeks). Then connect `https://athletediary.app/mcp` in Claude/ChatGPT and enter
 > that code on the consent page. Username: `<REVIEW_DEMO_USERNAME>`, password:
 > `<REVIEW_DEMO_PASSWORD>` (the same pair as App Review).
 
@@ -220,8 +220,9 @@ ru: «Вырос ли мой жим за 3 месяца?», «Собери пр�
 
 **Screenshots (3, PNG ≥ 1000px по ширине, ответ без вопроса в кадре):**
 
-1. Claude на вопрос «Did my bench progress in the last 3 months?» — таблица по месяцам с
-   e1RM и рекордом (демо-аккаунт).
+1. Claude на вопрос «How did my bench progress this month?» — таблица по датам с e1RM и
+   рекордом (в демо-аккаунте 12 тренировок за четыре недели — длинный срок на нём не
+   показать).
 2. ChatGPT собирает «4-day program» по истории — дни и упражнения атлета.
 3. Страница подтверждения «Athlete Diary — confirm access» с полем кода и списком того,
    что получает приложение (честность доступа — то, что смотрят ревьюеры).
