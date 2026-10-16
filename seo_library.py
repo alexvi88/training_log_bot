@@ -305,7 +305,7 @@ def _related(lang: str, names: tuple[str, ...]) -> str:
     t = sp._t(lang)
     items = "".join(f'<li><a href="{sp._e(href)}">{sp._e(label)}</a></li>'
                     for href, label in (_link_label(lang, n) for n in names))
-    return f"<section class=reveal><h2>{sp._e(t('seo.lib.related'))}</h2><ul class=links>{items}</ul></section>"
+    return f"<section class='reveal sub'><h2>{sp._e(t('seo.lib.related'))}</h2><ul class=links>{items}</ul></section>"
 
 
 def _updated_line(lang: str, page: Page) -> str:
@@ -324,6 +324,14 @@ def muscle_name(url: str, lang: str) -> str:
     return seed_data.localized_muscle_group_name(group, lang)
 
 
+def _second(name: str, lang: str) -> str:
+    """Второе имя в «A или B» — со строчной: «Жим лёжа или жим гантелей».
+    Аббревиатуры («EZ-гриф») и английский не трогаем."""
+    if lang == "ru" and len(name) > 1 and name[0].isupper() and name[1].islower():
+        return name[0].lower() + name[1:]
+    return name
+
+
 def _ex_name(url: str, lang: str) -> str:
     return seed_data.localized_exercise_name(sp._identity_for_media_slug(sp._EXERCISE_BY_URL[url]), lang)
 
@@ -337,7 +345,7 @@ def page_h1(page: Page, lang: str) -> str:
         return t("seo.muscle.h1", name=muscle_name(page.arg, lang))
     if k == "pair":
         a, b = pair_exercises(page.arg)
-        return t("seo.pair.h1", a=_ex_name(a, lang), b=_ex_name(b, lang))
+        return t("seo.pair.h1", a=_ex_name(a, lang), b=_second(_ex_name(b, lang), lang))
     if k == "term":
         return t(f"seo.term.{page.arg}.h1")
     if k == "guide":
@@ -446,7 +454,7 @@ def _render_muscle(lang: str, page: Page, request) -> str:
     programs_html = ""
     if prog_rows:
         programs_html = (
-            f"<section class=reveal><h2>{sp._e(t('seo.muscle.programs.h', name=name))}</h2>"
+            f"<section class='reveal sub'><h2>{sp._e(t('seo.muscle.programs.h', name=name))}</h2>"
             f"<div class=table-card><table><thead><tr><th>{sp._e(t('seo.muscle.col.program'))}</th>"
             f"<th class=num>{sp._e(t('seo.muscle.col.sets'))}</th><th class=num>{sp._e(t('seo.muscle.col.days'))}</th>"
             f"</tr></thead><tbody>{prog_rows}</tbody></table></div>"
@@ -457,11 +465,11 @@ def _render_muscle(lang: str, page: Page, request) -> str:
     if pairs:
         items = "".join(
             f'<li><a href="{sp.url_for(Page("pair", pair_slug(a, b)), lang)}">'
-            f"{sp._e(t('seo.pair.h1', a=_ex_name(a, lang), b=_ex_name(b, lang)))}</a></li>" for a, b in pairs)
-        pairs_html = f"<section class=reveal><h2>{sp._e(t('seo.muscle.pairs.h'))}</h2><ul class=links>{items}</ul></section>"
+            f"{sp._e(t('seo.pair.h1', a=_ex_name(a, lang), b=_second(_ex_name(b, lang), lang)))}</a></li>" for a, b in pairs)
+        pairs_html = f"<section class='reveal sub'><h2>{sp._e(t('seo.muscle.pairs.h'))}</h2><ul class=links>{items}</ul></section>"
     catalog_html = ""
     if catalog:
-        catalog_html = (f"<section class=reveal><h2>{sp._e(t('seo.muscle.catalog.h', n=len(catalog)))}</h2>"
+        catalog_html = (f"<section class='reveal sub'><h2>{sp._e(t('seo.muscle.catalog.h', n=len(catalog)))}</h2>"
                         f"<ul class=chips>{''.join(f'<li>{sp._e(n)}</li>' for n in catalog)}</ul>"
                         f"<p class=muted>{sp._e(t('seo.muscle.catalog.note'))}</p></section>")
     title = t(f"seo.mus.{url}.title")
@@ -470,7 +478,7 @@ def _render_muscle(lang: str, page: Page, request) -> str:
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.muscle'))}</span>"
         f"<h1>{sp._e(page_h1(page, lang))}</h1><p class=lead>{sp._e(t(f'seo.mus.{url}.lead'))}</p>"
         f"<section class='prose reveal'><h2>{sp._e(t('seo.muscle.about.h', name=name))}</h2>{t(f'seo.mus.{url}.about_html', **params)}</section>"
-        + (f"<section class=reveal><h2>{sp._e(t('seo.muscle.exercises.h', name=name))}</h2><div class=grid>{grid}</div></section>"
+        + (f"<section class='reveal sub'><h2>{sp._e(t('seo.muscle.exercises.h', name=name))}</h2><div class=grid>{grid}</div></section>"
            if grid else "")
         + catalog_html
         + f"<section class='mistakes reveal'><h2>{sp._e(t('seo.muscle.tips.h'))}</h2><ul>{tips}</ul></section>"
@@ -541,15 +549,15 @@ def _render_pair(lang: str, page: Page, request) -> str:
                    if any(sp._exercise_url_for_identity(i) in (a, b) for _d, exs in p["days"] for i, _s in exs)]
     progs_html = ""
     if in_programs:
-        progs_html = (f"<section class=reveal><h2>{sp._e(t('seo.pair.programs.h'))}</h2>"
+        progs_html = (f"<section class='reveal sub'><h2>{sp._e(t('seo.pair.programs.h'))}</h2>"
                       f"{sp.program_cards([p['key'] for p in in_programs], lang)}</section>")
     others = [(x, y) for x, y in PAIRS if (x, y) != (a, b) and {x, y} & {a, b}]
     others_html = ""
     if others:
         items = "".join(f'<li><a href="{sp.url_for(Page("pair", pair_slug(x, y)), lang)}">'
-                        f"{sp._e(t('seo.pair.h1', a=_ex_name(x, lang), b=_ex_name(y, lang)))}</a></li>" for x, y in others)
-        others_html = f"<section class=reveal><h2>{sp._e(t('seo.pair.more.h'))}</h2><ul class=links>{items}</ul></section>"
-    title = t("seo.pair.title", a=na, b=nb)
+                        f"{sp._e(t('seo.pair.h1', a=_ex_name(x, lang), b=_second(_ex_name(y, lang), lang)))}</a></li>" for x, y in others)
+        others_html = f"<section class='reveal sub'><h2>{sp._e(t('seo.pair.more.h'))}</h2><ul class=links>{items}</ul></section>"
+    title = t("seo.pair.title", a=na, b=_second(nb, lang))
     description = t(f"{key}.description")
     body = (
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.compare'))}</span>"
@@ -557,8 +565,8 @@ def _render_pair(lang: str, page: Page, request) -> str:
         + _updated_line(lang, page)
         + _pair_frames(lang, a, b)
         + _pair_table(lang, a, b)
-        + f"<div class=prose><section class=reveal><h2>{sp._e(t('seo.pair.diff.h'))}</h2>{t(f'{key}.diff_html', **params)}</section>"
-        + f"<section class=reveal><h2>{sp._e(t('seo.pair.both.h'))}</h2>{t(f'{key}.both_html', **params)}</section></div>"
+        + f"<div class=prose><section class='reveal sub'><h2>{sp._e(t('seo.pair.diff.h'))}</h2>{t(f'{key}.diff_html', **params)}</section>"
+        + f"<section class='reveal sub'><h2>{sp._e(t('seo.pair.both.h'))}</h2>{t(f'{key}.both_html', **params)}</section></div>"
         + progs_html
         + sp._cta(lang, page.block, sp._e(t("seo.pair.cta")), request)
         + others_html
@@ -578,7 +586,7 @@ def _render_pair(lang: str, page: Page, request) -> str:
 
 def _render_compare(lang: str, page: Page, request) -> str:
     t = sp._t(lang)
-    pair_cards = [(sp.url_for(Page("pair", pair_slug(a, b)), lang), t("seo.pair.h1", a=_ex_name(a, lang), b=_ex_name(b, lang)),
+    pair_cards = [(sp.url_for(Page("pair", pair_slug(a, b)), lang), t("seo.pair.h1", a=_ex_name(a, lang), b=_second(_ex_name(b, lang), lang)),
                    t(f"seo.pair.{pair_slug(a, b)}.card")) for a, b in PAIRS]
     apps = [(sp.url_for(Page("vs", c), lang), t(f"seo.vs.{c}.h1"), t(f"seo.vs.{c}.card")) for c in sp.COMPETITORS]
     apps += [(sp.url_for(Page("alternatives", c), lang), t(f"seo.alt.{c}.h1"), t(f"seo.alt.{c}.card")) for c in sp.ALTERNATIVES]
@@ -683,7 +691,7 @@ def _render_guide(lang: str, page: Page, request) -> str:
     slug = page.arg
     params = link_params(lang)
     sections = "".join(
-        f"<section class=reveal><h2>{sp._e(t(f'seo.guide.{slug}.s{i}.h'))}</h2>{t(f'seo.guide.{slug}.s{i}_html', **params)}</section>"
+        f"<section class='reveal sub'><h2>{sp._e(t(f'seo.guide.{slug}.s{i}.h'))}</h2>{t(f'seo.guide.{slug}.s{i}_html', **params)}</section>"
         for i in range(1, GUIDE_SECTIONS[slug] + 1))
     takeaways = "".join(f"<li>{sp._e(x)}</li>" for x in t(f"seo.guide.{slug}.takeaways", **params).split("\n") if x.strip())
     sources = GUIDE_SOURCES[slug]
@@ -746,9 +754,9 @@ def _render_alternatives(lang: str, page: Page, request) -> str:
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.compare'))}</span>"
         f"<h1>{sp._e(page_h1(page, lang))}</h1><p class=lead>{sp._e(t(f'seo.alt.{rival}.lead'))}</p>"
         f"<p class=muted>{sp._e(t('seo.vs.asof'))}</p>"
-        f"<section class=reveal><h2>{sp._e(t('seo.alt.why.h', name=t(f'seo.vs.{rival}.name')))}</h2>{t(f'seo.alt.{rival}.why_html', **params)}</section>"
+        f"<section class='reveal sub'><h2>{sp._e(t('seo.alt.why.h', name=t(f'seo.vs.{rival}.name')))}</h2>{t(f'seo.alt.{rival}.why_html', **params)}</section>"
         f"<ol class=alts>{''.join(items)}</ol>"
-        f"<section class=reveal><h2>{sp._e(t('seo.vs.move.h'))}</h2>{t(f'seo.alt.{rival}.move_html', **params)}</section>"
+        f"<section class='reveal sub'><h2>{sp._e(t('seo.vs.move.h'))}</h2>{t(f'seo.alt.{rival}.move_html', **params)}</section>"
         + sp._cta(lang, page.block, sp._e(t("seo.alt.cta")), request)
         + f"<section><h2>{sp._e(t('seo.vs.sources.h'))}</h2><ul class=muted>{sources_html}</ul>"
         f"<p class=muted>{sp._e(t('seo.alt.disclaimer'))}</p></section>"
@@ -793,13 +801,13 @@ def _render_template(lang: str, page: Page, request) -> str:
         f"<div class='btn-row downloads'>{downloads}</div>"
         f"<p class=muted>{sp._e(t(f'{key}.files_note'))}</p>"
         + upload
-        + f"<section class=reveal><h2>{sp._e(t(f'{key}.columns.h'))}</h2><div class=table-card><table><tbody>{col_rows}</tbody></table></div>"
+        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.columns.h'))}</h2><div class=table-card><table><tbody>{col_rows}</tbody></table></div>"
         f"<p class=muted>{t(f'{key}.columns_note_html', **params)}</p></section>"
-        + f"<section class=reveal><h2>{sp._e(t(f'{key}.example.h'))}</h2><div class=table-card><table><thead><tr>{ex_head}</tr></thead>"
+        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.example.h'))}</h2><div class=table-card><table><thead><tr>{ex_head}</tr></thead>"
         f"<tbody>{ex_rows}</tbody></table></div></section>"
-        + f"<section class=reveal><h2>{sp._e(t(f'{key}.excel.h'))}</h2>{t(f'{key}.excel_html', **params)}</section>"
-        + f"<section class=reveal><h2>{sp._e(t(f'{key}.sheets.h'))}</h2>{t(f'{key}.sheets_html', **params)}</section>"
-        + f"<section class=reveal><h2>{sp._e(t(f'{key}.why.h'))}</h2>{t(f'{key}.why_html', **params)}</section>"
+        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.excel.h'))}</h2>{t(f'{key}.excel_html', **params)}</section>"
+        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.sheets.h'))}</h2>{t(f'{key}.sheets_html', **params)}</section>"
+        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.why.h'))}</h2>{t(f'{key}.why_html', **params)}</section>"
         + sp._faq_html(lang, faq)
         + sp._cta(lang, page.block, sp._e(t(f"{key}.cta")), request)
     )
@@ -817,7 +825,7 @@ def _render_template(lang: str, page: Page, request) -> str:
 def _render_about(lang: str, page: Page, request) -> str:
     t = sp._t(lang)
     params = dict(link_params(lang), developer=sp.DEVELOPER)
-    sections = "".join(f"<section class=reveal><h2>{sp._e(t(f'seo.about.s{i}.h'))}</h2>{t(f'seo.about.s{i}_html', **params)}</section>"
+    sections = "".join(f"<section class='reveal sub'><h2>{sp._e(t(f'seo.about.s{i}.h'))}</h2>{t(f'seo.about.s{i}_html', **params)}</section>"
                        for i in range(1, 6))
     title, description = t("seo.about.title"), t("seo.about.description")
     body = (

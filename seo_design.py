@@ -77,6 +77,8 @@ h1 { font-size: clamp(36px, 6.4vw, 68px); margin: var(--s3) 0 var(--s4); }
 h2 { font-size: clamp(27px, 3.6vw, 40px); margin: 0 0 var(--s4); }
 h3 { font-size: 20px; letter-spacing: -.02em; line-height: 1.2; margin: 0 0 var(--s2); }
 .prose h2 { font-size: clamp(24px, 3vw, 30px); margin-top: var(--s7); }
+.sub > h2, .mistakes > h2 { font-size: clamp(24px, 3vw, 30px); }
+.eyebrow + h2, .prose .eyebrow + h2 { margin-top: 10px; }
 p, li { overflow-wrap: anywhere; }
 p { margin: 0 0 var(--s4); }
 .lead { font-size: clamp(18px, 2.1vw, 21px); line-height: 1.55; color: #f1dfd0; max-width: 680px; }
@@ -295,6 +297,8 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
 .result .k { font-size: 14px; font-weight: 600; color: var(--muted); }
 .big { margin: 10px 0 6px; font: clamp(30px, 6vw, 44px)/1.15 var(--pixel); color: var(--accent2); text-shadow: 0 0 30px rgba(255,138,61,.45); overflow-wrap: anywhere; }
 .big .u { font-size: .55em; }
+.note + .pair { margin-top: 16px; }
+.big-words { font-size: clamp(22px, 4.2vw, 30px); line-height: 1.25; overflow-wrap: normal; }
 .result .note { color: var(--muted); font-size: 15px; min-height: 1.5em; }
 .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: var(--s4); }
 .pair .big { font-size: clamp(17px, 3.9vw, 26px); white-space: nowrap; }
@@ -361,7 +365,9 @@ ul.chips a { color: var(--fg); text-decoration: none; }
 .takeaways ul { margin: 0; padding-left: 20px; }
 .takeaways li { margin: 6px 0; }
 .prose ul, .prose ol, section > ul, section > ol { padding-left: 22px; }
+.prose ol.crumbs, section > ol.crumbs, .prose ul.links, .prose ul.chips, section > ul.chips { padding-left: 0; }
 .prose li, section li { margin: 6px 0; }
+.prose .crumbs li, section .crumbs li, .prose ul.links li, section ul.links li { margin: 0; }
 blockquote { margin: var(--s4) 0; padding: var(--s3) var(--s4); border-left: 3px solid var(--accent); background: var(--glass); border-radius: 0 14px 14px 0; color: #ead6c6; }
 .sources { font-size: 14px; padding-left: 20px; }
 .sources a { color: var(--muted); }

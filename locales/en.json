@@ -4302,5 +4302,6 @@
   "seo.llms.ff.privacy": "The site uses no cookies or third-party trackers; the server counts visits without IP addresses. The account can be deleted entirely from settings.",
   "seo.llms.ff.units": "Kilograms or pounds are switched in settings and the history is recalculated; the e1RM formula is Epley or Brzycki.",
   "seo.llms.ff.export": "Full history export to CSV; CSV import from Hevy, Strong and any spreadsheet, plus workouts pasted as text from notes; an import can be undone for {days} days.",
-  "seo.llms.ff.developer": "Developer: Aleksandr Vilman (as listed on the App Store). Contact via the support page."
+  "seo.llms.ff.developer": "Developer: Aleksandr Vilman (as listed on the App Store). Contact via the support page.",
+  "seo.tool.tonnage.log_cta": "Log the workout — I'll add up the tonnage"
 }

@@ -95,11 +95,11 @@ def tool_tonnage(lang: str, embed: bool = False) -> tuple[str, str, str]:
         f'<div class=pair><div><div class=k>{sp._e(t("seo.tool.tonnage.total_sets"))}</div><div class=big id=ns>—</div></div>'
         f'<div><div class=k>{sp._e(t("seo.tool.tonnage.total_reps"))}</div><div class=big id=nr>—</div></div>'
         f'<div><div class=k>{sp._e(t("seo.tool.tonnage.avg"))}</div><div class=big id=avg>—</div></div></div>'
-        + ("" if embed else sp._log_cta(lang, "tonnage")) + "</div>"
+        + ("" if embed else sp._log_cta(lang, "tonnage", "seo.tool.tonnage.log_cta")) + "</div>"
     )
     script = (
         tonnage_prelude(lang) + TONNAGE_JS +
-        "function tonText(total,u){if(u==='kg'&&total>=1000)return fmt(total/1000)+'\u00a0<span class=u>'+TON+'</span>';return fu(total,u);}"
+        "function tonText(total,u){if(u==='kg'&&total>=1000)return fmt(total/1000)+'<span class=u>\u00a0'+TON+'</span>';return fu(total,u);}"
         "var n=1;function rowHtml(i){return document.querySelector('#rows .set-row').outerHTML.replace(/(w|r|s)1/g,'$1'+i);}"
         "$('add').addEventListener('click',function(){if(n>=30)return;n++;var d=document.createElement('div');d.innerHTML=rowHtml(n);"
         "var el=d.firstChild;el.querySelectorAll('input').forEach(function(x){x.addEventListener('input',run);});$('rows').appendChild(el);run();});"
@@ -197,7 +197,7 @@ def tool_goal(lang: str, embed: bool = False) -> tuple[str, str, str]:
     )
     result = (
         f'<div class=result aria-live=polite><div class=k>{sp._e(t("seo.tool.goal.result"))}</div>'
-        '<div class=big id=when>—</div><div class=note id=note></div>'
+        '<div class="big big-words" id=when>—</div><div class=note id=note></div>'
         f'<div class=table-card><table><thead><tr><th>{sp._e(t("seo.tool.goal.col_week"))}</th>'
         f'<th class=num>{sp._e(t("seo.tool.goal.col_slow"))}</th><th class=num>{sp._e(t("seo.tool.goal.col_fast"))}</th>'
         '</tr></thead><tbody id=ms></tbody></table></div>'
@@ -239,10 +239,15 @@ def tool_goal(lang: str, embed: bool = False) -> tuple[str, str, str]:
 PCT_LIFTS = ("squat", "bench", "deadlift", "total")
 
 
+# Пример при открытии: одно движение, чтобы ответ был виден сразу.
+PCT_EXAMPLE = {"bench": "100"}
+
+
 def tool_percentile(lang: str, embed: bool = False) -> tuple[str, str, str]:
     t = sp._t(lang)
     data = seo_tools.percentile_data()
-    inputs = "".join(sp._num_input(f"v_{k}", t(f"seo.tool.strength-percentile.lift.{k}"), "", "0.5") for k in PCT_LIFTS)
+    inputs = "".join(sp._num_input(f"v_{k}", t(f"seo.tool.strength-percentile.lift.{k}"), PCT_EXAMPLE.get(k, ""), "0.5")
+                     for k in PCT_LIFTS)
     form = (
         "<form class=calc onsubmit='return false'>"
         "<div class=row>" + sp._seg("sex", t("seo.tool.wilks.sex"), [("m", t("seo.tool.wilks.male")), ("f", t("seo.tool.wilks.female"))], "m")

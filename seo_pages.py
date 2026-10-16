@@ -466,8 +466,9 @@ def _num(value: float) -> str:
 
 
 def _w(value: float, unit_label: str) -> str:
-    """Вес для таблицы: число вплотную к единице (TONE_OF_VOICE), зазор — стилем."""
-    return f"{_num(round(value, 1))}\u00a0<span class=u>{_e(unit_label)}</span>"
+    """Вес: число и единица через неразрывный пробел (TONE_OF_VOICE, сайт).
+    Пробел внутри span единицы — в пиксельном шрифте он уменьшается вместе с ней."""
+    return f"{_num(round(value, 1))}<span class=u>\u00a0{_e(unit_label)}</span>"
 
 
 def _primary_store(lang: str, device: str) -> bool:
@@ -1387,7 +1388,7 @@ def _log_cta(lang: str, tool: str, text_key: str = "seo.tool.log_cta") -> str:
 _UI_JS = (
     "function $(i){return document.getElementById(i);}"
     "function val(n){var c=document.querySelector('[name=\"'+n+'\"]:checked');if(c)return c.value;var e=$(n);return e?e.value:'';}"
-    "function fu(x,u){return fmt(x)+'\u00a0<span class=u>'+UNITS[u]+'</span>';}"
+    "function fu(x,u){return fmt(x)+'<span class=u>\u00a0'+UNITS[u]+'</span>';}"
     "function bind(f){document.querySelectorAll('form.calc input,form.calc select').forEach(function(el){el.addEventListener('input',f);el.addEventListener('change',f);});f();}"
     "function done(ok){var r=document.querySelector('.result');if(r)r.classList.toggle('ok',!!ok);}"
     "function share(kind,q){var c=$('card');if(!c)return;if(!q){c.hidden=true;return;}"
