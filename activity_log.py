@@ -175,6 +175,14 @@ def describe_message(message: Message) -> str:
     return " ".join(parts) if parts else "(сообщение без текста)"
 
 
+def is_plain_text(content: str) -> bool:
+    """Запись KIND_MESSAGE — набранный текст, а не пометка вложения
+    (describe_message: «🎤 голосовое», «🖼 фото …», «(сообщение без текста)»)."""
+    if not content or content == "(сообщение без текста)":
+        return False
+    return not content.startswith(tuple(mark for _, mark in _MEDIA_MARKS))
+
+
 def button_label(callback: CallbackQuery) -> str | None:
     """Надпись нажатой кнопки — по callback_data ищем её в клавиатуре экрана.
 

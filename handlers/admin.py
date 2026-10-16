@@ -1518,6 +1518,178 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext):
 
 
 
+# ---------- /ai_retry: ответить на вопрос, на котором тренер сорвался ----------
+#
+# Источник — лента user_events, а не ai_chat_messages: в вечный лог диалога
+# сорвавшийся ход не пишется вовсе (вопрос и ответ ложатся туда парой только
+# после ответа), а в ленте есть и сам вопрос (middleware пишет его до
+# обработчика), и KIND_AI_FAILED сразу за ним.
+
+AI_RETRY_LOOKBACK_DAYS = 7
+_AI_RETRY_KINDS = (
+    activity_log.KIND_MESSAGE,
+    activity_log.KIND_REPLY_BUTTON,
+    activity_log.KIND_CALLBACK,
+    activity_log.KIND_AI_REPLY,
+    activity_log.KIND_AI_FAILED,
+)
+
+
+async def find_failed_ai_question(telegram_id: int) -> Optional[dict]:
+    """Последний сбой тренера за AI_RETRY_LOOKBACK_DAYS, после которого ответа
+    не было, и вопрос перед ним. None — такого сбоя нет.
+
+    question=None — сбой есть, но повторить нечего: ход начала кнопка, голос или
+    фото (их в ленте нет, только пометка), тогда в asked — что это было.
+    """
+    now = dt.datetime.fromisoformat(db.now_iso())
+    since = (now - dt.timedelta(days=AI_RETRY_LOOKBACK_DAYS)).isoformat(timespec="seconds")
+    rows = await db.list_user_events_since(telegram_id, since, _AI_RETRY_KINDS)
+    failed_at = None
+    for i in range(len(rows) - 1, -1, -1):
+        kind = rows[i]["kind"]
+        if kind == activity_log.KIND_AI_REPLY:
+            return None  # после последнего сбоя тренер уже отвечал
+        if kind == activity_log.KIND_AI_FAILED:
+            failed_at = i
+            break
+    if failed_at is None:
+        return None
+    failed = rows[failed_at]
+    found = {
+        "failed_id": failed["id"], "failed_at": failed["created_at"], "reason": failed["content"],
+        "question": None, "asked": None, "asked_at": None,
+    }
+    for row in reversed(rows[:failed_at]):
+        if row["kind"] in (activity_log.KIND_AI_REPLY, activity_log.KIND_AI_FAILED):
+            break
+        found["asked"], found["asked_at"] = row["content"], row["created_at"]
+        content = (row["content"] or "").strip()
+        if (
+            row["kind"] == activity_log.KIND_MESSAGE
+            and activity_log.is_plain_text(content)
+            and not content.startswith("/")
+        ):
+            found["question"] = content
+        break
+    return found
+
+
+async def _resolve_athlete(arg: str) -> Optional[int]:
+    arg = arg.strip()
+    if arg.lstrip("-").isdigit():
+        user_id = int(arg)
+        return user_id if await db.get_user(user_id) is not None else None
+    return await db.find_user_id_by_username(arg)
+
+
+async def _athlete_label(user_id: int) -> str:
+    user = await db.get_user(user_id)
+    if user is None:
+        return str(user_id)
+    return keyboards.admin_user_label(user["username"], keyboards.row_value(user, "email"), user_id)
+
+
+@router.message(Command("ai_retry"))
+async def cmd_ai_retry(message: Message, state: FSMContext, command: CommandObject | None = None):
+    """Найти у атлета вопрос, на который тренер не ответил (сбой у нас), и после
+    подтверждения ответить обычным ходом тренера — без списания квоты."""
+    if not _is_admin(message.from_user.id):
+        return
+    arg = (command.args if command else None) or ""
+    if not arg.strip():
+        await message.answer(
+            "Кому ответить: <code>/ai_retry 123456789</code> или <code>/ai_retry @username</code>",
+            parse_mode="HTML",
+        )
+        return
+    user_id = await _resolve_athlete(arg)
+    if user_id is None:
+        await message.answer(f"Не нашёл атлета {escape(arg.strip())} — проверь id или @ник.", parse_mode="HTML")
+        return
+    label = escape(await _athlete_label(user_id))
+    found = await find_failed_ai_question(user_id)
+    if found is None:
+        await message.answer(
+            f"У {label} за {AI_RETRY_LOOKBACK_DAYS} дн. нет вопроса без ответа — тренер ответил на всё.",
+            parse_mode="HTML",
+        )
+        return
+    failed_at = admin_time(found["failed_at"]).strftime("%d.%m %H:%M")
+    if found["question"] is None:
+        what = escape(_trim(found["asked"], 200)) if found["asked"] else "не нашёл, что он прислал"
+        await message.answer(
+            f"У {label} сбой тренера {failed_at}, но вопрос был не текстом ({what}) — "
+            "повторить его я не могу.",
+            parse_mode="HTML",
+        )
+        return
+    user = await db.get_user(user_id)
+    lang = (user["lang"] if user is not None else None) or i18n.DEFAULT_LANG
+    asked_at = admin_time(found["asked_at"]).strftime("%d.%m %H:%M")
+    truncated = len(found["question"]) >= activity_log.MAX_CONTENT_LEN
+    await message.answer(
+        f"🔁 Вопрос без ответа у {label}\n"
+        f"Спросил: {asked_at}, сбой: {failed_at} ({escape(found['reason'])})\n\n"
+        f"<blockquote>{escape(_trim(found['question'], 1500))}</blockquote>\n"
+        + ("Вопрос в ленте обрезан — тренер получит только начало.\n" if truncated else "")
+        + f"Ответить от тренера? Уйдёт атлету в чат на его языке ({lang}), квоту не спишу.",
+        parse_mode="HTML",
+        reply_markup=keyboards.yes_no_keyboard(
+            f"admin:air:go:{user_id}:{found['failed_id']}", "admin:air:no",
+            yes_text="Ответить", no_text="Отмена",
+        ),
+    )
+
+
+@router.callback_query(F.data == "admin:air:no")
+async def ai_retry_cancel(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await ui.safe_edit(callback, "Отменил — атлету ничего не ушло.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:air:go:"))
+async def ai_retry_confirm(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    from handlers import ai_trainer as ai_handler
+
+    try:
+        user_id, failed_id = (int(part) for part in callback.data.split(":")[3:5])
+    except ValueError:
+        await callback.answer("Кнопка битая — начни заново через /ai_retry", show_alert=True)
+        return
+    found = await find_failed_ai_question(user_id)
+    if found is None or found["failed_id"] != failed_id or found["question"] is None:
+        await callback.answer("Уже неактуально: тренер ответил или сбой сменился. Запусти /ai_retry заново.", show_alert=True)
+        return
+    label = escape(await _athlete_label(user_id))
+    await callback.answer("Отвечаю…")
+    await ui.safe_edit(callback, f"⏳ Тренер отвечает {label}…", parse_mode="HTML")
+    logger.info("admin /ai_retry: answering user %s (failed event %s)", user_id, failed_id)
+    try:
+        answer = await ai_handler.retry_failed_question(callback.bot, state.storage, user_id, found["question"])
+    except ai_handler.RetryBusy:
+        result = "⏳ Атлет прямо сейчас ждёт другой ответ тренера — повтори через минуту."
+    except ai_handler.RetryBlocked as exc:
+        result = f"🛑 Не отправил: стоп по деньгам ({escape(str(exc))})."
+    except TelegramForbiddenError:
+        logger.info("admin /ai_retry: user %s blocked the bot", user_id)
+        result = f"⚠️ Не отправил: {label} заблокировал бота."
+    except Exception as exc:
+        logger.exception("admin /ai_retry: failed for user %s", user_id)
+        result = f"⚠️ Не отправил: {escape(type(exc).__name__)}: {escape(_trim(str(exc), 300))}"
+    else:
+        logger.info("admin /ai_retry: answered user %s, %d chars", user_id, len(answer))
+        result = f"✅ Ответ отправлен {label}."
+    with suppress(TelegramAPIError):
+        await callback.message.answer(result, parse_mode="HTML")
+
+
 # ---------- разовые релизные рассылки (announcements.py) ----------
 #
 # Механизм сам присылает админу анонс после разворота и ждёт добра — здесь

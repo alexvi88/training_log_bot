@@ -11254,6 +11254,36 @@ async def count_user_events(telegram_id: int) -> int:
     return count
 
 
+async def list_user_events_since(telegram_id: int, since_iso: str, kinds: Iterable[str]) -> list[aiosqlite.Row]:
+    """Действия одного пользователя из бота с момента since_iso — по порядку,
+    старые сверху; только перечисленные виды (админский /ai_retry ищет по ним
+    вопрос, на котором тренер сорвался)."""
+    kinds = tuple(kinds)
+    if not kinds:
+        return []
+    marks = ", ".join("?" for _ in kinds)
+    cur = await conn().execute(
+        "SELECT id, kind, content, created_at FROM user_events "
+        f"WHERE telegram_id = ? AND source = 'tg' AND created_at >= ? AND kind IN ({marks}) "
+        "ORDER BY id",
+        (telegram_id, since_iso, *kinds),
+    )
+    return await cur.fetchall()
+
+
+async def find_user_id_by_username(username: str) -> Optional[int]:
+    """telegram_id по нику (без «@», без учёта регистра) — для админских команд."""
+    name = username.strip().lstrip("@")
+    if not name:
+        return None
+    cur = await conn().execute(
+        "SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?) ORDER BY telegram_id LIMIT 1",
+        (name,),
+    )
+    row = await cur.fetchone()
+    return row["telegram_id"] if row else None
+
+
 async def list_user_events(telegram_id: int, limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
     """Действия одного пользователя, свежие сверху."""
     cur = await conn().execute(
