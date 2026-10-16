@@ -95,8 +95,15 @@ CONSENT_FAILURE_LIMIT_TOTAL = 60
 # анонимный флуд может нарастить oauth_clients за часы — прополка неиспользуемых
 # регистраций идёт раз в сутки (db.purge_expired_oauth). Окно и предел — те же
 # порядки, что и у CONSENT_FAILURE_*, тот же класс защиты.
+#
+# Предел на адрес — шестьдесят, а не десять. Claude и ChatGPT регистрируются
+# заново на КАЖДОЕ новое подключение (DCR), и все их регистрации приходят с
+# немногих адресов их облака (у Anthropic — 160.79.104.0/21): с листингом в
+# каталоге десять за десять минут на адрес означали бы «коннектор не
+# подключается» у одиннадцатого атлета подряд. Шестьдесят — всё ещё грубый
+# предохранитель от флуда с одного адреса, а не потолок для живых людей.
 REGISTER_RATE_LIMIT_WINDOW = 600
-REGISTER_RATE_LIMIT_PER_IP = 10
+REGISTER_RATE_LIMIT_PER_IP = 60
 
 # `client_id` статического токена. Токен выпускает бот, а не приложение, так что
 # клиента у него нет — но `AccessToken.client_id` обязателен, и осмысленное
@@ -123,9 +130,13 @@ def auth_settings(resource_path: str) -> AuthSettings:
     по которому клиент и находит, куда идти авторизовываться.
     """
     base = public_base_url()
+    site = config.site_base_url()
     return AuthSettings(
         issuer_url=base,
         resource_server_url=f"{base}{resource_path}",
+        # Публичная инструкция по подключению (legal_pages, /connect) — её
+        # просят каталоги коннекторов, и она же попадает в метаданные OAuth.
+        service_documentation_url=f"{site}/connect" if site else None,
         # Динамическая регистрация обязательна: ни Claude, ни ChatGPT не дают
         # человеку вписать client_id руками — они регистрируются сами.
         client_registration_options=ClientRegistrationOptions(enabled=True),

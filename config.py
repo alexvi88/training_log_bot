@@ -1033,6 +1033,25 @@ def mcp_available() -> bool:
     return MCP_ENABLED and bool(MCP_PUBLIC_URL)
 
 
+# --- MCP в публичных каталогах коннекторов (docs/MCP_LISTING.md) ------------
+#
+# Каталоги проверяют, что домен коннектора наш, файлом под /.well-known/ на
+# нём (mcp_wellknown.py). Значения выдаёт сам каталог или ключ владельца —
+# в репозитории их нет, сервер только отдаёт то, что задано. Пусто — 404.
+#
+# Официальный MCP Registry, вход `mcp-publisher login http --domain
+# athletediary.app`: строка `v=MCPv1; k=ed25519; p=<публичный ключ base64>`
+# по адресу /.well-known/mcp-registry-auth. Публичная половина ключа — не
+# секрет, закрытая остаётся у владельца.
+MCP_REGISTRY_AUTH = os.getenv("MCP_REGISTRY_AUTH", "").strip()
+# Каталог приложений ChatGPT: токен со шага Domain verification портала
+# OpenAI, по адресу /.well-known/openai-apps-challenge — ровно токен, без JSON.
+OPENAI_APPS_CHALLENGE = os.getenv("OPENAI_APPS_CHALLENGE", "").strip()
+# Glama: заявка на свой коннектор — /.well-known/glama.json с почтой
+# аккаунта Glama в `maintainers` (почта должна совпасть с аккаунтом).
+GLAMA_MAINTAINER_EMAIL = os.getenv("GLAMA_MAINTAINER_EMAIL", "").strip()
+
+
 # Bundle id iOS-приложения (training_log_bot_ios/project.yml,
 # PRODUCT_BUNDLE_IDENTIFIER) — он же "audience" в identity token от Sign In
 # with Apple: без сверки с ним чужой токен, выпущенный Apple для другого

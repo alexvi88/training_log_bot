@@ -40,12 +40,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from typing import Any, Iterator, Optional
 
 import uvicorn
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import Icon, ToolAnnotations
 
 import ai_trainer
 import api_v1
@@ -56,6 +58,7 @@ import db
 import i18n
 import legal_pages
 import mcp_oauth
+import mcp_wellknown
 import seo_pages
 
 logger = logging.getLogger(__name__)
@@ -117,6 +120,96 @@ WRITE_TOOLS = frozenset({
 
 EXPOSED_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
 
+# Публичное имя коннектора — то, что видят в каталогах Claude/ChatGPT и в
+# официальном MCP Registry (server.json в корне, docs/MCP_LISTING.md).
+SERVER_NAME = "athlete-diary"
+SERVER_TITLE = "Athlete Diary"
+SERVER_VERSION = "1.1.0"
+
+
+# Аннотации инструментов (MCP ToolAnnotations). Каталог коннекторов Claude
+# требует у каждого инструмента `title` и `readOnlyHint` или `destructiveHint`,
+# каталог ChatGPT — явные readOnlyHint, destructiveHint и openWorldHint у всех.
+# По ним клиент решает, звать ли без подтверждения: чтение — молча, удаление —
+# всегда с вопросом. Поэтому ставим все четыре явно, а не полагаемся на
+# умолчания спецификации (там destructiveHint по умолчанию true).
+#
+# openWorldHint=False у всех: инструменты ходят только в дневник самого атлета,
+# ничего не публикуют и не трогают чужое.
+def _read_only(title: str) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title, read_only_hint=True, destructive_hint=False,
+        idempotent_hint=True, open_world_hint=False,
+    )
+
+
+def _write(title: str, *, destructive: bool, idempotent: bool) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title, read_only_hint=False, destructive_hint=destructive,
+        idempotent_hint=idempotent, open_world_hint=False,
+    )
+
+
+# Аннотация на каждый выставленный инструмент — по имени, рядом с белыми
+# списками: tests/test_mcp_server.py сверяет, что ключи совпадают с
+# EXPOSED_TOOLS и что readOnlyHint совпадает с READ_ONLY_TOOLS.
+TOOL_ANNOTATIONS: dict[str, ToolAnnotations] = {
+    "get_training_overview": _read_only("Training overview"),
+    "get_active_workout": _read_only("Current workout"),
+    "list_recent_workouts": _read_only("Recent workouts"),
+    "get_full_workout_history": _read_only("Full workout history"),
+    "get_muscle_recovery": _read_only("Muscle recovery"),
+    "get_weekly_volume_by_group": _read_only("Weekly volume by muscle group"),
+    "get_exercise_progress": _read_only("Exercise progress"),
+    "list_exercise_catalog": _read_only("Exercise catalog"),
+    "get_bodyweight_history": _read_only("Body weight history"),
+    "get_saved_programs": _read_only("Saved programs"),
+    "compare_periods": _read_only("Compare two periods"),
+    "get_program_adherence": _read_only("Program adherence"),
+    # Добавление новой строки: ничего существующего не портит. Повтор
+    # log_bodyweight пишет второе взвешивание — не идемпотентно; повтор
+    # create_exercise с тем же именем отвечает «уже есть» — идемпотентно;
+    # copy_program без new_name каждый раз берёт новое свободное имя.
+    "log_bodyweight": _write("Log body weight", destructive=False, idempotent=False),
+    "create_exercise": _write("Create custom exercise", destructive=False, idempotent=True),
+    "copy_program": _write("Copy a saved program", destructive=False, idempotent=False),
+    # Удаление — destructive, клиент спросит человека. Повтор с тем же id
+    # ничего не удаляет второй раз — идемпотентно.
+    "delete_bodyweight_log": _write("Delete a body weight entry", destructive=True, idempotent=True),
+}
+
+# Потолок вызовов инструментов на атлета. Ридеры дешёвые, но
+# get_full_workout_history собирает до двухсот тренировок, а модель в цикле
+# умеет звать одно и то же десятками раз. Шестьдесят в минуту живой разговор
+# не задевает (обычный вопрос — два-пять вызовов), а зациклившийся клиент
+# упирается в честную ошибку вместо того, чтобы грузить процесс бота.
+# Память процесса, а не база: это предохранитель, не учёт, и рестарт его
+# обнуляет без вреда.
+TOOL_CALLS_PER_MINUTE = 60
+_TOOL_CALL_WINDOW = 60.0
+_tool_calls: dict[int, list[float]] = {}
+
+
+class RateLimited(Exception):
+    """Слишком много вызовов подряд. Наружу уходит как ошибка вызова."""
+
+
+def _allow_call(user_id: int, now: Optional[float] = None) -> bool:
+    moment = time.monotonic() if now is None else now
+    window_start = moment - _TOOL_CALL_WINDOW
+    hits = [t for t in _tool_calls.get(user_id, []) if t > window_start]
+    if len(hits) >= TOOL_CALLS_PER_MINUTE:
+        _tool_calls[user_id] = hits
+        return False
+    hits.append(moment)
+    _tool_calls[user_id] = hits
+    return True
+
+
+async def _user_lang(user_id: int) -> str:
+    user = await db.get_user(user_id)
+    return user["lang"] if user is not None else i18n.DEFAULT_LANG
+
 # Инструменту нечего сказать про кнопку, которой здесь нет — см. WRITE_TOOLS.
 #
 # Без имени конкретного экрана: первая версия говорила «поправить можно в
@@ -135,9 +228,7 @@ async def _mcp_write_note(user_id: int) -> str:
     апдейтом Telegram, никакая middleware контекст не выставляла, и полагаться
     на i18n.get_lang() тут значило бы отдать язык предыдущего вызова.
     """
-    user = await db.get_user(user_id)
-    lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
-    return i18n.t_in(lang, "mcp.write_note")
+    return i18n.t_in(await _user_lang(user_id), "mcp.write_note")
 
 
 class Unauthorized(Exception):
@@ -160,11 +251,16 @@ def _user_id() -> int:
         # негодный, user_id нет, и спросить язык не у кого. Тот же приём, что на
         # экране выбора языка в онбординге (screen.onboarding_language.title):
         # когда сигнала нет, честнее показать оба языка, чем угадать один.
+        #
+        # Путей за новым кодом два, и называем оба: у аккаунта, заведённого
+        # через Apple, бота нет — ему «набери /mcp» тупик.
         raise Unauthorized(
-            "Access expired. Open the bot, send /mcp and connect it again — "
-            "via connector or token.\n"
-            "Нужен действующий доступ. Открой бота, набери /mcp и подключи его "
-            "заново — коннектором или токеном."
+            "Access expired. Connect Athlete Diary again: get a new code in the "
+            "iPhone app (Profile → Connect to Claude and ChatGPT) or in the "
+            "Telegram bot (/mcp).\n"
+            "Нужен действующий доступ. Подключи дневник заново: новый код — в "
+            "приложении (Профиль → «Подключить к Claude и ChatGPT») или в боте "
+            "(/mcp)."
         )
     return int(token.subject)
 
@@ -200,8 +296,18 @@ async def _call(tool_name: str, **arguments: Any) -> str:
         # что кто-то добавит вызов мимо белого списка.
         raise ValueError(f"tool {tool_name} is not exposed over MCP")
     user_id = _user_id()
+    if not _allow_call(user_id):
+        logger.info("MCP tool %s for user %s: rate limited", tool_name, user_id)
+        raise RateLimited(
+            i18n.t_in(await _user_lang(user_id), "mcp.error.rate_limited", n=TOOL_CALLS_PER_MINUTE)
+        )
     logger.info("MCP tool %s for user %s", tool_name, user_id)
-    raw = await ai_trainer.execute_tool(user_id, tool_name, arguments)
+    # Язык атлета — явно, из базы: MCP-вызов приходит не апдейтом и не через
+    # /v1, контекст языка никто не выставил, и без этого каталог упражнений,
+    # имена групп и подписи внутри ответа ехали бы на языке по умолчанию
+    # (русском) англоязычному атлету.
+    with i18n.use_lang(await _user_lang(user_id)):
+        raw = await ai_trainer.execute_tool(user_id, tool_name, arguments)
     if tool_name not in WRITE_TOOLS:
         return raw
     payload = json.loads(raw)
@@ -221,18 +327,30 @@ def build_server() -> MCPServer:
     we need, because that same method also accepts the static token — one
     verification path for both kinds.
     """
+    site = config.site_base_url()
     mcp = MCPServer(
-        name="training-log",
-        title="Training Log",
-        instructions=(
-            "Training data for one Telegram bot user: workout and set history, exercise "
-            "progress, weekly volume by muscle group, body weight, and saved programs. "
-            "Almost everything is read-only — except log_bodyweight, create_exercise, "
-            "copy_program, and delete_bodyweight_log: these write immediately, without "
-            "confirmation (renaming and other edits are bot-only). Start with get_training_overview — it shows the units (kg/lb) and "
-            "the exact exercise names the other tools need."
+        name=SERVER_NAME,
+        title=SERVER_TITLE,
+        description=(
+            "Your own Athlete Diary workout log: history, progress, records, "
+            "muscle volume, body weight and programs."
         ),
-        version="1.0.0",
+        instructions=(
+            "The signed-in athlete's own Athlete Diary workout log: workout and set "
+            "history, exercise progress and e1RM, weekly volume by muscle group, muscle "
+            "recovery, body weight, and saved programs. Almost everything is read-only — "
+            "except log_bodyweight, create_exercise, copy_program, and "
+            "delete_bodyweight_log, which change the diary (renaming and other edits "
+            "happen in the app or the bot). Start with get_training_overview — it shows "
+            "the units (kg/lb) and the exact exercise names the other tools need."
+        ),
+        website_url=site,
+        icons=(
+            [Icon(src=f"{site}/site/icons/icon-512.png", mime_type="image/png", sizes=["512x512"])]
+            if site
+            else None
+        ),
+        version=SERVER_VERSION,
         auth_server_provider=mcp_oauth.TrainingLogOAuthProvider(),
         auth=mcp_oauth.auth_settings(MCP_PATH),
     )
@@ -245,47 +363,56 @@ def build_server() -> MCPServer:
     # Публичные страницы для поиска: /ru/..., /en/..., sitemap и robots
     # (см. seo_pages.py).
     seo_pages.register_routes(mcp)
+    # Файлы подтверждения домена для каталогов коннекторов (MCP Registry,
+    # ChatGPT, Glama) и карточка сервера (см. mcp_wellknown.py).
+    mcp_wellknown.register_routes(mcp)
 
-    @mcp.tool()
+    def tool(name: str):
+        """`@mcp.tool` с заголовком и аннотациями из TOOL_ANNOTATIONS — у
+        каждого инструмента они обязаны быть, и забыть их тут негде."""
+        annotations = TOOL_ANNOTATIONS[name]
+        return mcp.tool(name=name, title=annotations.title, annotations=annotations)
+
+    @tool("get_training_overview")
     async def get_training_overview() -> str:
-        """User summary: units, e1RM formula, stats (total workouts, this week, last 30
+        """Athlete summary: units, e1RM formula, stats (total workouts, this week, last 30
         days, days since last one, streak) and their exercise list with muscle group and
         use count. Call this first."""
         return await _call("get_training_overview")
 
-    @mcp.tool()
+    @tool("get_active_workout")
     async def get_active_workout() -> str:
         """The current unfinished workout: when it started, what's logged so far, and
-        exercise notes. An empty result means the user isn't training right now."""
+        exercise notes. An empty result means the athlete isn't training right now."""
         return await _call("get_active_workout")
 
-    @mcp.tool()
+    @tool("list_recent_workouts")
     async def list_recent_workouts(limit: int = 5) -> str:
         """The most recent completed workouts (1-10, default 5): date, notes, and every
         set (weight x reps) for each exercise. For questions about a long time span, use
         get_full_workout_history instead."""
         return await _call("list_recent_workouts", limit=max(1, min(int(limit), 10)))
 
-    @mcp.tool()
+    @tool("get_full_workout_history")
     async def get_full_workout_history() -> str:
         """The full workout history (up to the last 200) — for questions about a long
         time span: trends over six months, monthly volume, finding old workouts."""
         return await _call("get_full_workout_history")
 
-    @mcp.tool()
+    @tool("get_muscle_recovery")
     async def get_muscle_recovery() -> str:
         """How recovered each muscle group is: recovery percentage, when it was last
         trained, and how many days ago. 100% means ready for heavy work, below 85% means
         it hasn't recovered yet. Use this for "what should I train today" questions."""
         return await _call("get_muscle_recovery")
 
-    @mcp.tool()
+    @tool("get_weekly_volume_by_group")
     async def get_weekly_volume_by_group() -> str:
         """Volume (working sets) by muscle group for the current and previous week —
         where the load is lopsided and what's falling short."""
         return await _call("get_weekly_volume_by_group")
 
-    @mcp.tool()
+    @tool("get_exercise_progress")
     async def get_exercise_progress(exercise_name: str) -> str:
         """Progress on a single exercise: sets by date, working weights, e1RM, records.
         exercise_name is the exact name from get_training_overview. If total_sessions is
@@ -293,68 +420,69 @@ def build_server() -> MCPServer:
         make up a date, sets, or e1RM for it; say plainly that there's no data yet."""
         return await _call("get_exercise_progress", exercise_name=exercise_name)
 
-    @mcp.tool()
+    @tool("list_exercise_catalog")
     async def list_exercise_catalog() -> str:
-        """The bot's exercise catalog by muscle group — what could be suggested beyond
-        what the user already does."""
+        """The built-in exercise catalog by muscle group — what could be suggested
+        beyond what the athlete already does."""
         return await _call("list_exercise_catalog")
 
-    @mcp.tool()
+    @tool("get_bodyweight_history")
     async def get_bodyweight_history() -> str:
         """Weigh-in history: date and body weight."""
         return await _call("get_bodyweight_history")
 
-    @mcp.tool()
+    @tool("get_saved_programs")
     async def get_saved_programs(name: str = "") -> str:
-        """The user's saved programs. Without `name` — the list: program names, kind
+        """The athlete's saved programs. Without `name` — the list: program names, kind
         (multi-day program or standalone day) and how many days each has. With `name`
         — that one program in full: every day, its exercises, set schemes and
         progression rules. Ask for the list first, then the program by its exact name."""
         return await _call("get_saved_programs", name=name.strip() or None)
 
-    @mcp.tool()
+    @tool("compare_periods")
     async def compare_periods(days: int = 90) -> str:
         """What changed across all exercises: the last N days against the previous N
         (default 90) — workouts, sets, best e1RM, and tonnage in each window plus the
         difference, and separately, exercises that were dropped or newly started."""
         return await _call("compare_periods", days=max(7, min(int(days), 365)))
 
-    @mcp.tool()
+    @tool("get_program_adherence")
     async def get_program_adherence() -> str:
         """How closely actual workouts match the saved program: what's being done on
         plan, what's being skipped, what's been added on top."""
         return await _call("get_program_adherence")
 
-    @mcp.tool()
+    @tool("log_bodyweight")
     async def log_bodyweight(weight: float) -> str:
-        """Log a body weight entry — writes immediately, no confirmation. The number is
-        in the user's unit (see `unit` in get_training_overview), no conversion is done.
-        Fixing or removing the entry is bot-only, in the Weight Log screen."""
+        """Log a body weight entry for today. The number is in the athlete's unit (see
+        `unit` in get_training_overview), no conversion is done. Call it only when the
+        athlete asks to log their weight. A wrong entry can be removed with
+        delete_bodyweight_log."""
         # The external client called this tool on purpose — that IS the
         # explicit request the in-bot guard (user_asked_to_log) asks for.
         return await _call("log_bodyweight", weight=weight, user_asked_to_log=True)
 
-    @mcp.tool()
+    @tool("create_exercise")
     async def create_exercise(name: str, group: str) -> str:
-        """Add a custom exercise that's in neither the user's list nor the catalog —
-        writes immediately, adding never breaks anything. Check get_training_overview
+        """Add a custom exercise that's in neither the athlete's list nor the catalog —
+        adding never changes existing data. Check get_training_overview
         and list_exercise_catalog first: if the movement already exists, use that one
         instead of creating a second one under a slightly different name. group is the
         exact muscle group name from get_training_overview or list_exercise_catalog."""
         return await _call("create_exercise", name=name, group=group)
 
-    @mcp.tool()
+    @tool("copy_program")
     async def copy_program(name: str, new_name: str | None = None) -> str:
         """Duplicate a saved program with all its days, exercises, and set schemes —
-        writes immediately, a copy never breaks anything. name is the exact source name
+        the original stays untouched. name is the exact source name
         from get_saved_programs. Without new_name, a free name near the original is
         picked automatically ("PPL (2)")."""
         return await _call("copy_program", name=name, new_name=new_name)
 
-    @mcp.tool()
+    @tool("delete_bodyweight_log")
     async def delete_bodyweight_log(log_id: int) -> str:
-        """Remove one body weight entry — writes immediately. log_id is the exact id
-        from get_bodyweight_history, don't guess it."""
+        """Delete one body weight entry. log_id is the exact id from
+        get_bodyweight_history — never guess it."""
         return await _call("delete_bodyweight_log", log_id=log_id)
 
     return mcp

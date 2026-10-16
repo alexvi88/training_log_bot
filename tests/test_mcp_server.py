@@ -196,7 +196,7 @@ async def test_log_bodyweight_writes_and_hides_the_undo_button_note(fresh_db, us
     # Не «Дневник веса»/«Дневник еды» конкретно: этот текст общий на все шесть
     # WRITE_TOOLS, включая create_exercise и copy_program, у которых таких
     # экранов нет вовсе.
-    assert "в самом боте" in text
+    assert "в приложении или в боте" in text
     logs = await fresh_db.list_bodyweight_logs(user_id)
     assert [log["weight"] for log in logs] == [78.4]
 
