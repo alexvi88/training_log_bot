@@ -312,11 +312,15 @@ def test_server_json_matches_the_server():
 
 @pytest.fixture
 def demo_secrets(monkeypatch):
+    """Пара каталогов задана; пара App Review — тоже, но другая: страница
+    обязана пускать только первую."""
     import review_demo
 
-    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "reviewer")
-    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "s3cret-pass")
-    monkeypatch.setattr(config, "MCP_DEMO_CODE_ENABLED", True)
+    monkeypatch.setattr(config, "CATALOG_DEMO_USERNAME", "reviewer")
+    monkeypatch.setattr(config, "CATALOG_DEMO_PASSWORD", "s3cret-pass")
+    monkeypatch.setattr(config, "CATALOG_DEMO_LANG", "en")
+    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "appreview")
+    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "apple-pass")
     monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
     monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
     review_demo.reset_failures()
@@ -324,15 +328,20 @@ def demo_secrets(monkeypatch):
     review_demo.reset_failures()
 
 
-async def test_demo_code_page_is_absent_without_demo_secrets(monkeypatch):
+async def test_demo_code_page_is_absent_without_catalog_secrets(monkeypatch):
+    """Даже с заданной парой App Review: без CATALOG_DEMO_* страницы нет."""
     import mcp_oauth
 
-    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "")
-    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "")
-    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
-    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
-    status, _, _ = await _asgi(mcp_server.build_app(), "GET", mcp_oauth.DEMO_CODE_PATH)
-    assert status == 404
+    monkeypatch.setattr(config, "CATALOG_DEMO_USERNAME", "")
+    monkeypatch.setattr(config, "CATALOG_DEMO_PASSWORD", "")
+    monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "appreview")
+    monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "apple-pass")
+    for method in ("GET", "POST"):
+        status, _, _ = await _asgi(
+            mcp_server.build_app(), method, mcp_oauth.DEMO_CODE_PATH,
+            form={"username": "appreview", "password": "apple-pass"} if method == "POST" else None,
+        )
+        assert status == 404
 
 
 async def test_reviewer_gets_a_code_that_the_consent_page_accepts(fresh_db, demo_secrets):
@@ -367,6 +376,9 @@ async def test_reviewer_gets_a_code_that_the_consent_page_accepts(fresh_db, demo
         window_seconds=600, window_limit_per_ip=10, window_limit_total=60,
     )
     assert verdict == "ok"
+    # Код — от аккаунта каталогов, не от App Review.
+    assert user_id == await fresh_db.resolve_auth_identity("review_demo", "reviewer")
+    assert await fresh_db.resolve_auth_identity("review_demo", "appreview") is None
     # Это демо-аккаунт с историей — ревьюеру есть что спросить.
     workouts = await fresh_db.conn().execute(
         "SELECT COUNT(*) FROM workouts WHERE user_id = ?", (user_id,)
@@ -374,9 +386,27 @@ async def test_reviewer_gets_a_code_that_the_consent_page_accepts(fresh_db, demo
     assert (await workouts.fetchone())[0] > 0
 
 
-async def test_demo_code_page_is_off_by_default(monkeypatch, demo_secrets):
+async def test_demo_code_page_rejects_app_review_credentials(fresh_db, demo_secrets):
+    """Пара App Review на странице каталогов — 401, и аккаунт App Review не
+    заводится и не трогается."""
+    import mcp_oauth
+    import review_demo
+
+    status, _, _ = await _asgi(
+        mcp_server.build_app(), "POST", mcp_oauth.DEMO_CODE_PATH,
+        form={"username": "appreview", "password": "apple-pass"},
+    )
+    assert status == 401
+    assert await fresh_db.resolve_auth_identity(review_demo.PROVIDER, "appreview") is None
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) FROM users")
+    assert (await cur.fetchone())[0] == 0
+
+
+async def test_demo_code_page_is_absent_when_catalog_login_collides(monkeypatch, demo_secrets):
+    """Логин каталогов совпал с логином App Review — это ошибка настройки, а
+    не «тот же аккаунт»: страницы нет."""
     import mcp_oauth
 
-    monkeypatch.setattr(config, "MCP_DEMO_CODE_ENABLED", False)
+    monkeypatch.setattr(config, "CATALOG_DEMO_USERNAME", "appreview")
     status, _, _ = await _asgi(mcp_server.build_app(), "GET", mcp_oauth.DEMO_CODE_PATH)
     assert status == 404

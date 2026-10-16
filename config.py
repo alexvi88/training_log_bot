@@ -1068,10 +1068,20 @@ APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "com.trainingdiary.ios")
 # вписывают в App Store Connect → App Review Information.
 REVIEW_DEMO_USERNAME = os.getenv("REVIEW_DEMO_USERNAME", "")
 REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
-# Страница /mcp/demo-code (код коннектора для ревьюеров каталогов) входит
-# демо-аккаунтом App Review. Выключена, пока владелец не решит пустить туда
-# ревьюеров каталогов: аккаунт — витрина для Apple.
-MCP_DEMO_CODE_ENABLED = os.getenv("MCP_DEMO_CODE_ENABLED", "false").lower() == "true"
+# Демо-аккаунт для ревьюеров каталогов AI-коннекторов (Claude, ChatGPT):
+# страница /mcp/demo-code (mcp_oauth.demo_code_route, catalog_demo.py) входит
+# ТОЛЬКО этой парой и выдаёт код связывания для этого аккаунта. Демо App Review
+# (REVIEW_DEMO_*) туда не пускается: это витрина для Apple, и чужие ревьюеры не
+# должны ни видеть её, ни менять. Обе переменные или ни одной — без пары
+# страницы нет (404); логин не должен совпадать ни с одним другим демо-логином
+# (иначе catalog_demo_available() — False). Вход по паролю в приложении
+# (POST /v1/auth/password) эту пару не принимает. Значения — только через
+# `fly secrets set` (docs/MCP_LISTING.md), их же вписывают в формы заявок
+# Claude и OpenAI. CATALOG_DEMO_LANG — язык аккаунта (ревьюеры читают
+# по-английски).
+CATALOG_DEMO_USERNAME = os.getenv("CATALOG_DEMO_USERNAME", "")
+CATALOG_DEMO_PASSWORD = os.getenv("CATALOG_DEMO_PASSWORD", "")
+CATALOG_DEMO_LANG = os.getenv("CATALOG_DEMO_LANG", "en")
 
 # Второй демо-аккаунт — для прогона скриншотов (screenshots.yml в iOS-репо).
 # Тот же вход и та же демо-история, но отдельный аккаунт: прогон начинает и
@@ -1146,6 +1156,18 @@ def demo_accounts() -> list[tuple[str, str]]:
 def review_demo_available() -> bool:
     """Включён ли вход по паролю хотя бы для одного демо-аккаунта."""
     return bool(demo_accounts())
+
+
+def catalog_demo_available() -> bool:
+    """Задана ли пара CATALOG_DEMO_* и не совпадает ли её логин с логином
+    другого демо-аккаунта. Совпадение — не «тот же аккаунт», а ошибка
+    настройки: личность ключуется логином, и страница для ревьюеров каталогов
+    выдала бы им код от аккаунта App Review или прогона скриншотов."""
+    user = CATALOG_DEMO_USERNAME.strip()
+    if not user or not CATALOG_DEMO_PASSWORD.strip():
+        return False
+    others = {REVIEW_DEMO_USERNAME.strip(), WALK_DEMO_USERNAME.strip(), newbie_demo_username()}
+    return user not in others
 
 
 # --- Общий чат сообщества --------------------------------------------------

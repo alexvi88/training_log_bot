@@ -118,16 +118,20 @@ def reset_failures() -> None:
     _failures.clear()
 
 
-def check_credentials(username: str, password: str) -> Optional[str]:
+def check_credentials(
+    username: str, password: str, accounts: Optional[list[tuple[str, str]]] = None
+) -> Optional[str]:
     """Логин демо-аккаунта, к которому подошла пара, или None. Сравнение за
     постоянное время: и логин, и пароль сравниваются всегда и со всеми
     заданными парами — без короткого замыкания, чтобы по времени ответа нельзя
-    было угадать даже правильный логин."""
+    было угадать даже правильный логин. `accounts` — свой список пар (демо
+    каталогов коннекторов, catalog_demo.py); без него — пары входа по паролю
+    в приложении (config.demo_accounts)."""
     # strip(): пароль копируют из App Store Connect, и вместе с ним в поле
     # легко попадает пробел или перевод строки; логин — по той же причине.
     username, password = username.strip(), password.strip()
     matched: Optional[str] = None
-    for demo_user, demo_password in config.demo_accounts():
+    for demo_user, demo_password in (config.demo_accounts() if accounts is None else accounts):
         demo_user, demo_password = demo_user.strip(), demo_password.strip()
         user_ok = hmac.compare_digest(username.encode("utf-8"), demo_user.encode("utf-8"))
         pass_ok = hmac.compare_digest(password.encode("utf-8"), demo_password.encode("utf-8"))

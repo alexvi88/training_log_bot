@@ -23,7 +23,7 @@ mcp.so. Здесь — требования (сверены 16.10.2026, исто
 | Условия | `https://athletediary.app/terms` |
 | Поддержка | `https://athletediary.app/support`, `athletediary.app@gmail.com` |
 | Иконка | `https://athletediary.app/site/icons/icon-512.png` (512×512, PNG, иконка приложения) |
-| Код для ревьюеров | `https://athletediary.app/mcp/demo-code` (логин/пароль демо-аккаунта App Review) |
+| Код для ревьюеров | `https://athletediary.app/mcp/demo-code` (логин/пароль демо-аккаунта каталогов, `CATALOG_DEMO_*`) |
 | Карточка сервера | `https://athletediary.app/.well-known/mcp/server-card.json` |
 
 Старый адрес `https://training-log-bot.fly.dev/mcp` тем же процессом отвечает дальше
@@ -62,7 +62,7 @@ mcp.so. Здесь — требования (сверены 16.10.2026, исто
 | 20 | Политика конфиденциальности: что собирается, зачем, кому, сроки, контакты; про данные в AI-приложениях | Claude, ChatGPT | ✅ `/privacy` обновлена (раздел «Кому передаётся» → AI-приложения) |
 | 21 | Публичная документация (как подключить, что умеет) | Claude (к дате публикации), ChatGPT | ✅ `/connect` ru/en |
 | 22 | Контакт поддержки | Claude, ChatGPT | ✅ `/support`, e-mail |
-| 23 | Тестовый аккаунт с данными для ревьюера | Claude, ChatGPT | ✅ `/mcp/demo-code` + демо-аккаунт App Review (`REVIEW_DEMO_*`) |
+| 23 | Тестовый аккаунт с данными для ревьюера | Claude, ChatGPT | ✅ `/mcp/demo-code` + свой демо-аккаунт каталогов (`CATALOG_DEMO_*`, `catalog_demo.py`), не App Review |
 | 24 | Подтверждение домена: Registry — `/.well-known/mcp-registry-auth` | Registry (HTTP-вход) | ✅ из `MCP_REGISTRY_AUTH`, иначе 404 |
 | 25 | Подтверждение домена: ChatGPT — `/.well-known/openai-apps-challenge` (ровно токен) | ChatGPT | ✅ из `OPENAI_APPS_CHALLENGE`, иначе 404 |
 | 26 | Заявка на листинг Glama — `/.well-known/glama.json` | Glama | ✅ из `GLAMA_MAINTAINER_EMAIL`, иначе 404 |
@@ -211,9 +211,16 @@ ru: «Вырос ли мой жим за 3 месяца?», «Собери пр�
 >
 > **For reviewers:** open https://athletediary.app/mcp/demo-code, sign in with the test
 > credentials below, and you get a code for the demo account (pre-filled with 12 workouts
-> over the last four weeks). Then connect `https://athletediary.app/mcp` in Claude/ChatGPT and enter
-> that code on the consent page. Username: `<REVIEW_DEMO_USERNAME>`, password:
-> `<REVIEW_DEMO_PASSWORD>` (the same pair as App Review).
+> over the last four weeks, body weight entries, a two-day program and a training
+> profile). Then connect `https://athletediary.app/mcp` in Claude/ChatGPT and enter
+> that code on the consent page. Username: `<CATALOG_DEMO_USERNAME>`, password:
+> `<CATALOG_DEMO_PASSWORD>`.
+
+В форму заявки (и Claude, и OpenAI) идут значения `CATALOG_DEMO_USERNAME` и
+`CATALOG_DEMO_PASSWORD` — **не** пара App Review: страница `/mcp/demo-code` пару
+`REVIEW_DEMO_*` не принимает (401), а вход по паролю в приложении не принимает пару
+каталогов. Аккаунт ревьюеров каталогов свой, отдельный: демо App Review остаётся
+витриной для Apple, и пишущие инструменты коннектора его не касаются.
 
 **Logo:** `media/site/icons/icon-512.png` (иконка приложения; если каталог просит
 1024×1024 — `training_log_bot_ios/TrainingLog/Resources/Assets.xcassets/AppIcon.appiconset`).
@@ -256,8 +263,20 @@ ru: «Вырос ли мой жим за 3 месяца?», «Собери пр�
    = `https://athletediary.app/mcp`;
    `curl -si https://athletediary.app/mcp -X POST` → `401` и `WWW-Authenticate`;
    `curl -s https://athletediary.app/connect` → страница.
-4. Убедиться, что `REVIEW_DEMO_USERNAME`/`REVIEW_DEMO_PASSWORD` заданы в проде (они же для
-   App Review) и что `https://athletediary.app/mcp/demo-code` открывается.
+4. Завести демо-аккаунт ревьюеров каталогов — свою пару секретов (логин не совпадает с
+   `REVIEW_DEMO_USERNAME`/`WALK_DEMO_USERNAME`, иначе страницы нет):
+   ```sh
+   PW=$(openssl rand -base64 24)
+   fly secrets set -a training-log-bot CATALOG_DEMO_USERNAME=connector-review CATALOG_DEMO_PASSWORD="$PW"
+   ```
+   Язык аккаунта — `CATALOG_DEMO_LANG` (по умолчанию `en`, задавать не нужно). Эти же
+   логин и пароль — в формы заявок Claude и OpenAI. Проверить: `https://athletediary.app/mcp/demo-code`
+   открывается (без пары — 404), первый вход заводит и заполняет аккаунт (12 тренировок,
+   вес тела, программа «Strength A/B», профиль), повторный — тот же аккаунт без дублей.
+   Квот на вопросы у аккаунта нет (`ai_limits.quota_exempt`), суточный потолок по
+   деньгам и 60 вызовов/мин коннектора — держат. Аккаунт исключён из цифр сайта, пуша
+   «Как тебе дневник?» и таблиц игр (провайдер `review_demo`). Выключить —
+   `fly secrets unset -a training-log-bot CATALOG_DEMO_USERNAME CATALOG_DEMO_PASSWORD`.
 5. Самому пройти подключение в claude.ai (Settings → Connectors → Add custom connector →
    `https://athletediary.app/mcp`) и в ChatGPT (Developer mode), вызвать каждый инструмент
    (Claude портал просит это подтвердить).

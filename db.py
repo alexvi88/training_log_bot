@@ -2916,6 +2916,21 @@ async def is_walk_demo(telegram_id: int) -> bool:
     return await cur.fetchone() is not None
 
 
+async def is_catalog_demo(telegram_id: int) -> bool:
+    """Демо-аккаунт ревьюеров каталогов AI-коннекторов (CATALOG_DEMO_USERNAME,
+    catalog_demo.py). Провайдер тот же `review_demo`, что у остальных
+    демо-входов по паролю, — поэтому все отсечки по провайдеру (сайт, пуши,
+    таблицы игр) накрывают его сами; отличает его логин."""
+    if not config.catalog_demo_available():
+        return False
+    cur = await conn().execute(
+        "SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'review_demo' "
+        "AND provider_user_id = ?",
+        (telegram_id, config.CATALOG_DEMO_USERNAME.strip()),
+    )
+    return await cur.fetchone() is not None
+
+
 async def set_user_first_name(telegram_id: int, first_name: Optional[str]) -> None:
     """Имя из профиля Telegram (см. колонку users.first_name). Пустое — NULL.
     Пишет только если изменилось: зовётся на апдейтах, а запись под общим
@@ -5624,6 +5639,20 @@ async def create_finished_workout(
         )
         await conn().commit()
         return cur.lastrowid
+
+
+async def set_workout_routine(workout_id: int, routine_id: int) -> None:
+    """Привязать уже записанную тренировку к дню программы (routine_id и
+    program_id дня) — задним числом, как если бы её начали с этого дня. Нужна
+    заполнению демо-аккаунта каталогов (catalog_demo.py): иначе
+    get_program_adherence видел бы программу, по которой не тренировались."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET routine_id = ?, "
+            "program_id = (SELECT program_id FROM routines WHERE id = ?) WHERE id = ?",
+            (routine_id, routine_id, workout_id),
+        )
+        await conn().commit()
 
 
 async def update_workout_date(workout_id: int, started_at: str, finished_at: Optional[str]) -> None:
