@@ -180,16 +180,20 @@ a.card:hover .arrow { color: var(--accent2); transform: translateX(3px); }
 .tile a.more { display: inline-block; margin-top: var(--s3); font-weight: 600; text-decoration: none; }
 
 /* set-in-one-line demo */
-.demo { margin-top: var(--s5); padding: var(--s4); border-radius: 18px; background: #f7f0ea; color: #2a1d17; max-width: 460px; box-shadow: 0 30px 60px -30px rgba(0,0,0,.8); }
+.demo { margin-top: var(--s5); padding: var(--s4); border-radius: 18px; background: #f7f0ea; color: #2a1d17; box-shadow: 0 30px 60px -30px rgba(0,0,0,.8); }
+/* set-in-one-line tile: text left, demo right on wide screens */
+@media (min-width: 960px) { .tile.b-wide { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); grid-template-rows: auto auto auto 1fr; column-gap: var(--s6); align-items: start; }
+  .tile.b-wide > .demo { grid-column: 2; grid-row: 1 / span 4; margin-top: 0; align-self: center; } }
 .demo .ex { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: #6b3d2c; }
 .demo .ex::before { content: ""; border-left: 7px solid #e08a2e; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
 .demo .rows { margin: 10px 0; display: grid; gap: 4px; font: 600 16px/1.5 ui-monospace, Menlo, monospace; }
 .demo .rows div { display: flex; justify-content: space-between; padding: 2px 4px; border-bottom: 1px dashed rgba(42,29,23,.12); }
 .demo .new { color: #a14a16; }
 .demo .input { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.demo .field { flex: 1; height: 46px; display: flex; align-items: center; padding: 0 14px; border-radius: 12px; background: #ede3da; font: 600 18px ui-monospace, Menlo, monospace; overflow: hidden; }
+.demo .field { flex: 1; min-width: 0; height: 46px; display: flex; align-items: center; padding: 0 14px; border-radius: 12px; background: #ede3da; font: 600 18px ui-monospace, Menlo, monospace; overflow: hidden; }
 .demo .typed { display: inline-block; overflow: hidden; white-space: nowrap; width: 5ch; border-right: 2px solid #e08a2e; }
-.demo .send { width: 46px; height: 46px; border-radius: 12px; background: #e08a2e; display: grid; place-items: center; color: #fff; }
+.demo .send { flex: none; width: 46px; height: 46px; padding: 0; border-radius: 50%; background: #e08a2e; display: grid; place-items: center; color: #fff; }
+.demo .send svg { display: block; width: 24px; height: 24px; stroke-width: 2.4; }
 @media (prefers-reduced-motion: no-preference) {
   .demo .typed { animation: type 7s steps(5) infinite, caret .8s step-end infinite; }
   .demo .new { animation: logged 7s ease infinite; }
@@ -382,7 +386,9 @@ _ICON_PATHS = {
     "program": '<rect x="4" y="4" width="16" height="17" rx="3"/><path d="M8 2v4M16 2v4M8 11h8M8 15h5"/>',
     "import": '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
     "phone": '<rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/>',
-    "send": '<path d="m4 12 16-8-6 16-2.5-6.5L4 12Z"/>',
+    # Как кнопка «отправить» в приложении (arrow.up в круге): стрелка
+    # симметрична, её центр — центр viewBox, оптический сдвиг не нужен.
+    "send": '<path d="M12 19V5"/><path d="m6 11 6-6 6 6"/>',
     "bolt": '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/>',
     "check": '<path d="m5 12 4.5 4.5L19 7"/>',
     "calc": '<rect x="5" y="3" width="14" height="18" rx="3"/><path d="M8 7h8M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01"/>',
