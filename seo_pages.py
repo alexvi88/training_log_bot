@@ -1524,15 +1524,30 @@ def _group_for(identity: str, lang: str) -> str:
     return seed_data.localized_muscle_group_name(group, lang) if group else ""
 
 
-def _exercise_card(url: str, slug: str, lang: str) -> str:
+def exercise_picture(slug: str, frame: int, alt: str, *, sizes: str, widths: tuple[int, ...],
+                     width: int, height: int, lazy: bool = True) -> str:
+    """Кадр упражнения для сайта: <picture> с AVIF и WebP из media/site/ex
+    (scripts/gen_site_exercise_images.py) — 4:3, не шире исходника. Мелкие
+    превью бота (240px, для строк списка в приложении) сайт не берёт."""
+
+    def srcset(fmt: str) -> str:
+        return ", ".join(f"{seo_static.asset_url(f'ex/{slug}_{frame}-{w}.{fmt}')} {w}w" for w in widths)
+
+    loading = " loading=lazy" if lazy else ""
+    return (f'<picture><source type="image/avif" srcset="{srcset("avif")}" sizes="{sizes}">'
+            f'<img src="{seo_static.asset_url(f"ex/{slug}_{frame}-{widths[-1]}.webp")}" srcset="{srcset("webp")}" sizes="{sizes}" '
+            f'alt="{_e(alt)}" width={width} height={height}{loading} decoding=async></picture>')
+
+
+def _exercise_card(url: str, slug: str, lang: str, show_group: bool = True) -> str:
+    """Карточка упражнения: один кадр — конечное положение."""
     identity = _identity_for_media_slug(slug)
     name = seed_data.localized_exercise_name(identity, lang)
-    thumb = os.path.join(exercise_media.THUMBS_DIR, f"{slug}_1.jpg")
-    src = _media_url(f"{slug}_1.jpg", thumb=os.path.isfile(thumb))
+    pic = exercise_picture(slug, 2, name, sizes="(max-width: 600px) 50vw, 280px", widths=(360, 720), width=360, height=270)
+    group = f"<span>{_e(_group_for(identity, lang))}</span>" if show_group else ""
     return (
-        f'<a class="card thumb-card reveal" href="{url_for(Page("exercise", url), lang)}">'
-        f'<img src="{src}" alt="{_e(name)}" loading=lazy decoding=async width=240 height=180>'
-        f"<b>{_e(name)}</b><span>{_e(_group_for(identity, lang))}</span></a>"
+        f'<a class="card thumb-card reveal" href="{url_for(Page("exercise", url), lang)}">{pic}'
+        f"<b>{_e(name)}</b>{group}</a>"
     )
 
 
@@ -1540,10 +1555,10 @@ def _render_exercises(lang: str, page: Page, request) -> str:
     t = _t(lang)
     groups: dict[str, list[str]] = {}
     for url, slug in EXERCISES:
-        groups.setdefault(_group_of(_identity_for_media_slug(slug)), []).append(_exercise_card(url, slug, lang))
+        groups.setdefault(_group_of(_identity_for_media_slug(slug)), []).append(_exercise_card(url, slug, lang, show_group=False))
     order = list(dict.fromkeys(g for g, _n in seed_data.EXERCISE_TEMPLATES))
     sections = "".join(
-        f"<h2 class=group-title>{_e(seed_data.localized_muscle_group_name(g, lang))}</h2><div class=grid>{''.join(groups[g])}</div>"
+        f"<h2 class=group-title>{_e(seed_data.localized_muscle_group_name(g, lang))}</h2><div class='grid ex-grid'>{''.join(groups[g])}</div>"
         for g in order if g in groups
     )
     title, description = t("seo.exercises.title"), t("seo.exercises.description", count=len(EXERCISES))
@@ -1569,12 +1584,15 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     identity = _identity_for_media_slug(slug)
     name = seed_data.localized_exercise_name(identity, lang)
     base = base_url(request)
+    frame_sizes = "(max-width: 760px) 50vw, 370px"
     frames = (
         "<div class=frames>"
-        f'<figure><img src="{_media_url(f"{slug}_1.jpg")}" alt="{_e(t("seo.exercise.frame_start", name=name))}" width=400 height=300>'
-        f'<figcaption><b>1</b>{_e(t("seo.exercise.cap_start"))}</figcaption></figure>'
-        f'<figure><img src="{_media_url(f"{slug}_2.jpg")}" alt="{_e(t("seo.exercise.frame_end", name=name))}" width=400 height=300 loading=lazy>'
-        f'<figcaption><b>2</b>{_e(t("seo.exercise.cap_end"))}</figcaption></figure>'
+        "<figure>" + exercise_picture(slug, 1, t("seo.exercise.frame_start", name=name), sizes=frame_sizes, widths=(720,),
+                                      width=720, height=540, lazy=False)
+        + f'<figcaption><b>1</b>{_e(t("seo.exercise.cap_start"))}</figcaption></figure>'
+        "<figure>" + exercise_picture(slug, 2, t("seo.exercise.frame_end", name=name), sizes=frame_sizes, widths=(360, 720),
+                                      width=720, height=540)
+        + f'<figcaption><b>2</b>{_e(t("seo.exercise.cap_end"))}</figcaption></figure>'
         "</div>"
     )
     steps = "".join(f"<li>{_e(s)}</li>" for s in _steps(identity, lang))
@@ -1590,7 +1608,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     related_html = ""
     if related:
         related_html = (f"<section class=reveal><h2>{_e(t('seo.exercise.related.h', group=_group_for(identity, lang)))}</h2>"
-                        f"<div class=grid>{''.join(_exercise_card(u, s, lang) for u, s in related)}</div></section>")
+                        f"<div class='grid ex-grid'>{''.join(_exercise_card(u, s, lang, show_group=False) for u, s in related)}</div></section>")
     lead = t(f"seo.ex.{slug}.lead")
     body = (
         f"<span class=eyebrow>{_e(_group_for(identity, lang))}</span>"

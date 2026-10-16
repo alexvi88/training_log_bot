@@ -137,7 +137,12 @@ a.card:hover { color: var(--fg); border-color: var(--line2); background: var(--g
 .card .arrow { position: absolute; right: 20px; top: 22px; color: var(--dim); transition: transform .2s ease, color .2s ease; }
 a.card:hover .arrow { color: var(--accent2); transform: translateX(3px); }
 .thumb-card { padding: var(--s3); }
-.thumb-card img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 12px; margin-bottom: var(--s3); background: #000; }
+.thumb-card picture { display: block; margin-bottom: var(--s3); }
+.thumb-card img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; object-position: center 60%; border-radius: 12px; background: #2a1810;
+  box-shadow: inset 0 0 0 1px rgba(255,214,186,.14); }
+.ex-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+@media (max-width: 600px) { .ex-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+  .ex-grid .thumb-card { padding: 8px; } .ex-grid .thumb-card b { font-size: 15px; padding: 0 4px 4px; } }
 .thumb-card b, .thumb-card span { padding: 0 6px; }
 .thumb-card span { margin-bottom: 4px; }
 .group-title { font-size: 22px; margin: var(--s7) 0 var(--s2); }
@@ -302,7 +307,8 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
 /* exercises and programs */
 .frames { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin: var(--s5) 0; }
 .frames figure { margin: 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); background: var(--glass); }
-.frames img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; background: #000; }
+.frames picture { display: block; }
+.frames img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; object-position: center 60%; background: #2a1810; }
 .frames figcaption { padding: 10px 14px; font-size: 14px; color: var(--muted); }
 .frames figcaption b { font: 9px var(--pixel); color: var(--accent2); margin-right: 8px; }
 ol.steps { counter-reset: st; list-style: none; padding: 0; display: grid; gap: var(--s3); }
