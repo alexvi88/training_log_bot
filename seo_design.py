@@ -163,7 +163,8 @@ a.card:hover .arrow { color: var(--accent2); transform: translateX(3px); }
 .chip { position: absolute; display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 14px; font-size: 14px; font-weight: 650;
   background: rgba(23,14,11,.82); border: 1px solid var(--line2); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 20px 40px -20px rgba(0,0,0,.8); }
 .chip b { font: 12px/1 var(--pixel); color: var(--accent2); }
-.chip.c1 { left: 0; bottom: 18%; }
+/* c1 sits over the empty middle of the screenshot, not over the input row */
+.chip.c1 { left: 0; top: 60%; }
 .chip.c2 { right: 2%; bottom: 6%; }
 
 /* bento */
@@ -275,6 +276,12 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
 .result .note { color: var(--muted); font-size: 15px; min-height: 1.5em; }
 .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: var(--s4); }
 .pair .big { font-size: clamp(17px, 3.9vw, 26px); white-space: nowrap; }
+@media (max-width: 520px) {
+  .pair { grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+  .pair > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+  .pair .big { margin: 4px 0; font-size: 24px; }
+  .row:has(> fieldset) { grid-template-columns: minmax(0, 1fr); }
+}
 .log-cta { display: none; margin-top: var(--s4); }
 .result.ok .log-cta { display: flex; }
 .bar-viz { margin: var(--s3) 0; }
