@@ -658,6 +658,35 @@ body.embed .tool { margin-top: 0; }
 /* a two-line button label reads from its icon, not centred away from it */
 @media (max-width: 520px) { .log-cta .btn { justify-content: flex-start; text-align: left; padding-left: 18px; padding-right: 18px; } }
 @media print { .reveal, .hero-in { animation: none !important; } .site-head, .cta, .site-foot { display: none; } body { background: #fff; color: #000; } }
+/* wave 4: exercise alternatives, splits, muscle × equipment */
+ol.swaps { list-style: none; padding: 0; margin: var(--s5) 0; display: grid; gap: var(--s3); }
+li.swap { margin: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--s4); align-items: start; padding: var(--s4); border-radius: var(--r); background: var(--glass); border: 1px solid var(--line); }
+.swap-pic img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; object-position: center 60%; border-radius: 12px; background: #2a1810; }
+.swap .alt-head h2 { font-size: 21px !important; }
+.swap .alt-head h2 a { color: var(--fg); text-decoration: none; }
+.swap .alt-head h2 a:hover { text-decoration: underline; }
+ul.swap-diff { margin: 0; padding-left: 18px; color: var(--muted); font-size: 15px; }
+ul.swap-diff li { margin: 4px 0; }
+.swap-links { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: var(--s3) 0 0; font-weight: 600; font-size: 15px; }
+@media (max-width: 600px) { li.swap { grid-template-columns: 104px minmax(0, 1fr); gap: var(--s3); padding: var(--s3); }
+  .swap .alt-head { gap: 8px; } .swap .alt-head h2 { font-size: 17px !important; } .swap .alt-n { width: 26px; height: 26px; font-size: 9px; } }
+ul.reasons { list-style: none; padding-left: 0; }
+ul.reasons li { margin: 0 0 10px; }
+.variant { margin-top: var(--s7); }
+.variant > h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.variant .badge, .day .badge { display: inline-block; padding: 3px 9px; border-radius: 8px; font: 600 12px/1.6 var(--display); font-style: normal; color: var(--accent2); background: rgba(255,138,61,.12); border: 1px solid rgba(255,138,61,.3); }
+.variant .badge.tpl { color: var(--muted); background: var(--glass); border-color: var(--line2); }
+.variant-grid { display: grid; gap: var(--s4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); margin-top: var(--s4); }
+.variant-grid h3 { margin: 0 0 var(--s3); }
+.week td.muted { color: var(--dim); }
+.card.static { cursor: default; }
+form.calc textarea { font: 500 16px/1.55 var(--display); color: var(--fg); background-color: rgba(0,0,0,.28); border: 1px solid var(--line2);
+  border-radius: 12px; padding: 12px 14px; width: 100%; min-height: 280px; resize: vertical; }
+form.calc textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,61,.25); }
+.five31 td, .five31 th { white-space: nowrap; line-height: 1.35; }
+.five31 th[scope=row] { white-space: normal; }
+@media (max-width: 600px) { .five31 th, .five31 td { padding-left: 8px; padding-right: 8px; } }
+.five31 td small { display: block; color: var(--dim); font-size: 12px; }
 """
 
 _ICON_PATHS = {

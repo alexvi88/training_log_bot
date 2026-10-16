@@ -76,6 +76,10 @@ PAIRS: tuple[tuple[str, str], ...] = (
     ("cable-crossover", "dumbbell-fly"),
     ("deadlift", "trap-bar-deadlift"),
     ("bulgarian-split-squat", "dumbbell-lunge"),
+    ("hack-squat", "back-squat"),
+    ("leg-press", "hack-squat"),
+    ("barbell-row", "t-bar-row"),
+    ("deadlift", "rack-pull"),
 )
 
 # Снаряд и порог входа у упражнений из пар: (снаряд, сложность 1–3).
@@ -111,22 +115,55 @@ EX_FACTS: dict[str, tuple[str, int]] = {
     "leg-extension": ("machine", 1), "step-up": ("dumbbells", 1), "barbell-lunge": ("barbell", 2),
     "crunch": ("bodyweight", 1), "cable-crunch": ("cable", 1), "ab-wheel-rollout": ("wheel", 3),
     "side-plank": ("bodyweight", 1),
+    # Четвёртая волна.
+    "dumbbell-shrug": ("dumbbells", 1), "barbell-shrug": ("barbell", 1), "hanging-knee-raise": ("bar", 1),
+    "wrist-curl": ("barbell", 1), "reverse-wrist-curl": ("barbell", 1), "cable-lateral-raise": ("cable", 1),
+    "cable-curl": ("cable", 1), "triceps-dips": ("bars", 2), "overhead-dumbbell-extension": ("dumbbells", 1),
+    "reverse-crunch": ("bodyweight", 1), "reverse-pec-deck": ("machine", 1), "dumbbell-skull-crusher": ("dumbbells", 1),
+    "bicycle-crunch": ("bodyweight", 1), "close-grip-lat-pulldown": ("cable", 1), "rope-hammer-curl": ("cable", 1),
+    "russian-twist": ("bodyweight", 1), "machine-bicep-curl": ("machine", 1), "smith-machine-bench-press": ("machine", 1),
+    "machine-row": ("machine", 1), "reverse-curl": ("barbell", 1), "lying-leg-raise": ("bodyweight", 1),
+    "hammer-strength-chest-press": ("machine", 1), "smith-machine-squat": ("machine", 2),
+    "standing-dumbbell-press": ("dumbbells", 2), "ab-crunch-machine": ("machine", 1), "decline-crunch": ("bench", 1),
+    "decline-dumbbell-press": ("dumbbells", 1), "underhand-lat-pulldown": ("cable", 1), "seated-barbell-press": ("barbell", 2),
+    "close-grip-push-up": ("bodyweight", 1), "pallof-press": ("cable", 1), "incline-dumbbell-fly": ("dumbbells", 1),
+    "reverse-grip-barbell-row": ("barbell", 2), "seated-calf-raise": ("machine", 1), "close-grip-dumbbell-press": ("dumbbells", 1),
+    "cable-wood-chop": ("cable", 1), "chest-supported-dumbbell-row": ("dumbbells", 1), "dumbbell-pullover": ("dumbbells", 2),
+    "hip-abduction-machine": ("machine", 1), "hip-adduction-machine": ("machine", 1), "dead-bug": ("bodyweight", 1),
+    "jm-press": ("barbell", 3), "sit-up": ("bodyweight", 1), "bodyweight-glute-bridge": ("bodyweight", 1),
+    "cable-glute-kickback": ("cable", 1), "bent-over-dumbbell-row": ("dumbbells", 2), "zottman-curl": ("dumbbells", 1),
+    "standing-leg-curl": ("machine", 1), "reverse-hyperextension": ("machine", 1), "kettlebell-swing": ("kettlebell", 2),
+    "bodyweight-squat": ("bodyweight", 1), "walking-lunge": ("barbell", 2), "reverse-lunge": ("dumbbells", 1),
+    "dumbbell-squat": ("dumbbells", 1), "deficit-deadlift": ("barbell", 3), "box-squat": ("barbell", 2),
+    "floor-press": ("barbell", 2), "assisted-pull-up": ("bar", 1), "dumbbell-stiff-leg-deadlift": ("dumbbells", 2),
+    "weighted-pull-up": ("bar", 3),
 }
 
 GLOSSARY: tuple[str, ...] = (
     "e1rm", "rpe", "rir", "tonnage", "double-progression", "superset", "drop-set",
     "warm-up-set", "working-set", "plateau", "deload", "hypertrophy",
+    "pr", "1rm", "amrap", "training-to-failure", "volume", "frequency", "training-max", "linear-progression",
+    "compound-exercise",
 )
 
 GUIDES: tuple[str, ...] = (
     "how-to-keep-a-workout-log", "progressive-overload", "rest-between-sets", "break-a-plateau",
     "sets-per-muscle-per-week", "estimate-1rm-safely", "warm-up-before-lifting",
     "switch-from-hevy-or-strong", "choose-a-program", "film-your-set",
+    # Четвёртая волна: понятия и программы.
+    "compound-vs-isolation", "strength-vs-hypertrophy", "how-long-should-a-workout-be", "first-week-in-the-gym",
+    "common-gym-mistakes", "strength-training-after-40", "beginner-gains", "junk-volume",
+    "beginner-gym-program", "muscle-gain-program", "gym-program-for-women", "increase-bench-press",
+    "reps-for-muscle-growth", "training-frequency",
 )
 GUIDE_SECTIONS = {
     "how-to-keep-a-workout-log": 6, "progressive-overload": 6, "rest-between-sets": 6, "break-a-plateau": 7,
     "sets-per-muscle-per-week": 6, "estimate-1rm-safely": 6, "warm-up-before-lifting": 6,
     "switch-from-hevy-or-strong": 6, "choose-a-program": 6, "film-your-set": 6,
+    **{g: 8 for g in ("compound-vs-isolation", "strength-vs-hypertrophy", "how-long-should-a-workout-be",
+                      "first-week-in-the-gym", "common-gym-mistakes", "strength-training-after-40", "beginner-gains",
+                      "junk-volume", "beginner-gym-program", "muscle-gain-program", "gym-program-for-women",
+                      "increase-bench-press", "reps-for-muscle-growth", "training-frequency")},
 }
 
 # Исследования, на которые опирается статья там, где названо число. Подпись —
@@ -159,6 +196,27 @@ _WARMUP_META = ("Fradkin, Zazryn, Smoliga (2010). Effects of warming-up on physi
 _WARMUP_RT = ("Ribeiro et al. (2021). The effect of warm-up in resistance training and strength performance: "
               "a systematic review. Motricidade", "https://revistas.rcaap.pt/motricidade/article/view/21143")
 
+_LOAD_2017 = ("Schoenfeld, Grgic, Ogborn, Krieger (2017). Strength and hypertrophy adaptations between low- vs. high-load "
+              "resistance training: a systematic review and meta-analysis. J Strength Cond Res",
+              "https://pubmed.ncbi.nlm.nih.gov/28834797/")
+_GENTIL_2015 = ("Gentil, Soares, Bottaro (2015). Single vs. multi-joint resistance exercises: effects on muscle strength and "
+                "hypertrophy. Asian J Sports Med", "https://brieflands.com/articles/asjsm-21609.html")
+_FAILURE_GRGIC = ("Grgic, Schoenfeld, Orazem, Sabol (2022). Effects of resistance training performed to repetition failure or "
+                  "non-failure on muscular strength and hypertrophy: a systematic review and meta-analysis. J Sport Health Sci",
+                  "https://vuir.vu.edu.au/42420/")
+_FREQ_STRENGTH = ("Grgic et al. (2018). Effect of resistance training frequency on gains in muscular strength: a systematic "
+                  "review and meta-analysis. Sports Med", "https://vuir.vu.edu.au/37695/")
+_FREQ_2019 = ("Grgic, Schoenfeld, Latella (2019). Resistance training frequency and skeletal muscle hypertrophy: a review of "
+              "available evidence. J Sci Med Sport", "https://pubmed.ncbi.nlm.nih.gov/30236847/")
+_SARIC = ("Šarić et al. (2019). Resistance training frequencies of 3 and 6 times per week produce similar muscular adaptations "
+          "in resistance-trained men. J Strength Cond Res", "https://pubmed.ncbi.nlm.nih.gov/30363041/")
+_NSCA_OLDER = ("Fragala et al. (2019). Resistance training for older adults: position statement from the National Strength and "
+               "Conditioning Association. J Strength Cond Res", "https://pubmed.ncbi.nlm.nih.gov/31343601/")
+_BORDE = ("Borde, Hortobágyi, Granacher (2015). Dose-response relationships of resistance training in healthy old adults: "
+          "a systematic review and meta-analysis. Sports Med", "https://pmc.ncbi.nlm.nih.gov/articles/PMC4656698/")
+_ROBERTS = ("Roberts, Nuckols, Krieger (2020). Sex differences in resistance training: a systematic review and meta-analysis. "
+            "J Strength Cond Res", "https://pubmed.ncbi.nlm.nih.gov/32218059/")
+
 GUIDE_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
     "how-to-keep-a-workout-log": (_PLOTKIN, _RIR),
     "progressive-overload": (_PLOTKIN, _FAILURE, _RIR),
@@ -170,6 +228,20 @@ GUIDE_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
     "switch-from-hevy-or-strong": (),
     "choose-a-program": (_FREQ_2016, _PELLAND, _SCHOENFELD_2017),
     "film-your-set": (),
+    "compound-vs-isolation": (_GENTIL_2015, _SCHOENFELD_2017, _PELLAND,),
+    "strength-vs-hypertrophy": (_LOAD_2017, _SCHOENFELD_2017, _REST_2016,),
+    "how-long-should-a-workout-be": (_REST_2016, _REST_2024, _SCHOENFELD_2017,),
+    "first-week-in-the-gym": (_WARMUP_META, _RIR,),
+    "common-gym-mistakes": (_PLOTKIN, _FAILURE, _REST_2016,),
+    "strength-training-after-40": (_NSCA_OLDER, _BORDE, _WARMUP_META,),
+    "beginner-gains": (_LOAD_2017, _SCHOENFELD_2017, _PLOTKIN,),
+    "junk-volume": (_PELLAND, _FAILURE, _FAILURE_GRGIC, _SCHOENFELD_2017,),
+    "beginner-gym-program": (_FREQ_2016, _SCHOENFELD_2017, _PLOTKIN,),
+    "muscle-gain-program": (_SCHOENFELD_2017, _PELLAND, _PROTEIN, _LOAD_2017,),
+    "gym-program-for-women": (_ROBERTS, _SCHOENFELD_2017, _LOAD_2017,),
+    "increase-bench-press": (_FREQ_STRENGTH, _LOAD_2017, _PLOTKIN,),
+    "reps-for-muscle-growth": (_LOAD_2017, _FAILURE, _FAILURE_GRGIC, _PLOTKIN,),
+    "training-frequency": (_FREQ_2016, _FREQ_2019, _SARIC, _FREQ_STRENGTH, _PELLAND,),
 }
 
 # Ссылки «читать дальше» у термина: имена плейсхолдеров link_params.
@@ -186,6 +258,15 @@ TERM_LINKS: dict[str, tuple[str, ...]] = {
     "plateau": ("guide_break_a_plateau", "term_deload", "term_double_progression"),
     "deload": ("guide_break_a_plateau", "term_plateau", "programs"),
     "hypertrophy": ("guide_sets_per_muscle_per_week", "muscles", "guide_rest_between_sets"),
+    "pr": ("rm1", "term_e1rm", "guide_progressive_overload"),
+    "1rm": ("rm1", "term_e1rm", "guide_estimate_1rm_safely", "strength"),
+    "amrap": ("t531", "term_rpe", "term_training_to_failure"),
+    "training-to-failure": ("term_rir", "guide_junk_volume", "term_rpe"),
+    "volume": ("guide_sets_per_muscle_per_week", "vol", "term_tonnage"),
+    "frequency": ("guide_training_frequency", "splits", "split_full_body_vs_split"),
+    "training-max": ("t531", "term_1rm", "rm1"),
+    "linear-progression": ("prog_strength5x5", "term_double_progression", "guide_beginner_gains"),
+    "compound-exercise": ("guide_compound_vs_isolation", "exercises", "term_volume"),
 }
 
 GUIDE_LINKS: dict[str, tuple[str, ...]] = {
@@ -199,13 +280,32 @@ GUIDE_LINKS: dict[str, tuple[str, ...]] = {
     "switch-from-hevy-or-strong": ("import_hevy", "import_strong", "template", "vs_hevy"),
     "choose-a-program": ("programs", "ai", "guide_sets_per_muscle_per_week", "muscles"),
     "film-your-set": ("video", "exercises", "ai"),
+    "compound-vs-isolation": ("term_compound_exercise", "exercises", "muscles", "guide_sets_per_muscle_per_week"),
+    "strength-vs-hypertrophy": ("rm1", "term_hypertrophy", "guide_reps_for_muscle_growth", "programs"),
+    "how-long-should-a-workout-be": ("timer", "term_superset", "guide_rest_between_sets", "splits"),
+    "first-week-in-the-gym": ("guide_beginner_gym_program", "warmup", "exercises", "telegram"),
+    "common-gym-mistakes": ("guide_progressive_overload", "video", "guide_how_to_keep_a_workout_log", "term_deload"),
+    "strength-training-after-40": ("guide_beginner_gym_program", "warmup", "guide_rest_between_sets", "term_rpe"),
+    "beginner-gains": ("goal", "term_linear_progression", "guide_beginner_gym_program", "rm1"),
+    "junk-volume": ("term_training_to_failure", "term_working_set", "vol", "guide_sets_per_muscle_per_week"),
+    "beginner-gym-program": ("guide_first_week_in_the_gym", "programs", "split_3_day", "guide_beginner_gains"),
+    "muscle-gain-program": ("guide_sets_per_muscle_per_week", "splits", "guide_reps_for_muscle_growth", "vol"),
+    "gym-program-for-women": ("prog_glutes3", "prog_fullbody3", "muscles", "guide_beginner_gym_program"),
+    "increase-bench-press": ("ex_bench_press", "rm1", "t531", "video"),
+    "reps-for-muscle-growth": ("guide_strength_vs_hypertrophy", "term_rir", "guide_junk_volume", "rm1"),
+    "training-frequency": ("split_full_body_vs_split", "splits", "term_frequency", "guide_sets_per_muscle_per_week"),
 }
 
 # Альтернативы: id приложений в списке; «us» — всегда первыми.
 ALT_APPS = {
     "hevy": ("us", "strong", "fitbod", "jefit", "boostcamp", "sheet"),
     "strong": ("us", "hevy", "fitbod", "jefit", "boostcamp", "sheet"),
+    "fitbod": ("us", "hevy", "strong", "jefit", "boostcamp", "sheet"),
+    "jefit": ("us", "hevy", "strong", "fitbod", "boostcamp", "sheet"),
 }
+# Приложение против приложения (без нас в заголовке): факты — те же строки и
+# источники, что у страниц /vs/<приложение>.
+APP_PAIRS: tuple[tuple[str, str], ...] = (("hevy", "strong"),)
 ALT_SOURCES = {
     "boostcamp": ("https://www.boostcamp.app/pro", "https://www.boostcamp.app/features"),
 }
@@ -218,6 +318,7 @@ def pages() -> list[Page]:
     out += [Page("compare")] + [Page("pair", pair_slug(a, b)) for a, b in PAIRS]
     out += [Page("glossary")] + [Page("term", term) for term in GLOSSARY]
     out += [Page("guides")] + [Page("guide", g) for g in GUIDES]
+    out += [Page("apps", pair_slug(a, b)) for a, b in APP_PAIRS]
     return out
 
 
@@ -275,6 +376,22 @@ def link_params(lang: str) -> dict[str, str]:
         out[f"mus_{_ph(url)}"] = u(Page("muscle", url))
     for a, b in PAIRS:
         out[f"cmp_{_ph(a)}__{_ph(b)}"] = u(Page("pair", pair_slug(a, b)))
+    import seo_plans
+
+    out["splits"] = u(Page("splits"))
+    for split in seo_plans.SPLIT_PAGES:
+        out[f"split_{_ph(split)}"] = u(Page("split", split))
+    for w in seo_plans.WORKOUTS:
+        out[f"wkt_{_ph(w)}"] = u(Page("workout", w))
+    out["t531"] = u(Page("tool", "531"))
+    out["vol"] = u(Page("tool", "weekly-volume"))
+    out["strength_total"] = u(Page("strength_lift", "total", "men"))
+    for app in sp.ALTERNATIVES:
+        out[f"alt_{app}"] = u(Page("alternatives", app))
+    for a, b in APP_PAIRS:
+        out[f"apps_{_ph(a)}__{_ph(b)}"] = u(Page("apps", pair_slug(a, b)))
+    for url, _slug in sp.EXERCISES:
+        out[f"swap_{_ph(url)}"] = u(Page("exercise_alt", url))
     out.update(sp._article_params(lang))
     return out  # type: ignore[return-value]
 
@@ -289,6 +406,22 @@ def _link_label(lang: str, name: str) -> tuple[str, str]:
     if name.startswith("guide_"):
         guide = next(x for x in GUIDES if _ph(x) == name[6:])
         return href, t(f"seo.guide.{guide}.h1")
+    if name.startswith("split_"):
+        import seo_plans
+
+        split = next(x for x in seo_plans.SPLIT_PAGES if _ph(x) == name[6:])
+        return href, t(f"seo.split.{split}.h1")
+    if name.startswith("wkt_"):
+        import seo_plans
+
+        w = next(x for x in seo_plans.WORKOUTS if _ph(x) == name[4:])
+        return href, t(f"seo.wkt.{w}.h1")
+    if name.startswith("ex_"):
+        url = next(u for u, _s in sp.EXERCISES if _ph(u) == name[3:])
+        return href, _ex_name(url, lang)
+    if name.startswith("prog_"):
+        key = next(p["key"] for p in seed_data.WORKOUT_PROGRAMS if _ph(p["key"]) == name[5:])
+        return href, sp._strip_emoji(seed_data.localized_program_name(key, lang))
     labels = {
         "rm1": "seo.tool.1rm.short", "warmup": "seo.tool.warmup.short",
         "rpe": "seo.tool.rpe.short", "tonnage": "seo.tool.tonnage.short", "timer": "seo.tool.rest-timer.short",
@@ -296,7 +429,9 @@ def _link_label(lang: str, name: str) -> tuple[str, str]:
         "exercises": "seo.exercises.h1", "muscles": "seo.nav.muscles", "template": "seo.template.workout-log.short",
         "import_hevy": "seo.import.hevy.short", "import_strong": "seo.import.strong.short", "vs_hevy": "seo.vs.hevy.short",
         "video": "seo.video-review.h1", "ai": "seo.ai-coach.h1", "telegram": "seo.telegram.h1", "tools": "seo.nav.tools",
-        "guides": "seo.nav.guides",
+        "guides": "seo.nav.guides", "splits": "seo.splits.h1", "t531": "seo.tool.531.short",
+        "vol": "seo.tool.weekly-volume.short", "strength": "seo.strength.short", "wilks": "seo.tool.wilks.short",
+        "glossary": "seo.glossary.short", "compare": "seo.compare.short", "import_csv": "seo.import.csv.short",
     }
     return href, sp._strip_emoji(t(labels[name]))
 
@@ -354,7 +489,15 @@ def page_h1(page: Page, lang: str) -> str:
         return t(f"seo.alt.{page.arg}.h1")
     if k == "template":
         return t(f"seo.template.{page.arg}.h1")
-    raise ValueError(k)
+    if k == "apps":
+        return t(f"seo.apps.{page.arg}.h1")
+    if k == "exercise_alt":
+        import seo_swaps
+
+        return seo_swaps.page_h1(page, lang)
+    import seo_plans
+
+    return seo_plans.page_h1(page, lang)
 
 
 # ---------- мышцы ----------
@@ -436,6 +579,8 @@ def _render_muscles(lang: str, page: Page, request) -> str:
 
 
 def _render_muscle(lang: str, page: Page, request) -> str:
+    import seo_plans
+
     t = sp._t(lang)
     url = page.arg
     name = muscle_name(url, lang)
@@ -484,6 +629,7 @@ def _render_muscle(lang: str, page: Page, request) -> str:
         + f"<section class='mistakes reveal'><h2>{sp._e(t('seo.muscle.tips.h'))}</h2><ul>{tips}</ul></section>"
         + programs_html
         + pairs_html
+        + seo_plans.equip_links(url, lang)
         + sp._cta(lang, page.block, sp._e(t("seo.muscle.cta", name=name)), request)
         + f'<p style="margin-top:32px"><a href="{sp.url_for(Page("muscles"), lang)}">{sp._e(t("seo.muscle.all"))}</a></p>'
     )
@@ -590,11 +736,16 @@ def _render_compare(lang: str, page: Page, request) -> str:
                    t(f"seo.pair.{pair_slug(a, b)}.card")) for a, b in PAIRS]
     apps = [(sp.url_for(Page("vs", c), lang), t(f"seo.vs.{c}.h1"), t(f"seo.vs.{c}.card")) for c in sp.COMPETITORS]
     apps += [(sp.url_for(Page("alternatives", c), lang), t(f"seo.alt.{c}.h1"), t(f"seo.alt.{c}.card")) for c in sp.ALTERNATIVES]
+    apps += [(sp.url_for(Page("apps", pair_slug(a, b)), lang), t(f"seo.apps.{pair_slug(a, b)}.h1"),
+              t(f"seo.apps.{pair_slug(a, b)}.card")) for a, b in APP_PAIRS]
+    plans = [(sp.url_for(Page("split", "full-body-vs-split"), lang), t("seo.split.full-body-vs-split.h1"),
+              t("seo.split.full-body-vs-split.card"))]
     title, description = t("seo.compare.title"), t("seo.compare.description")
     body = (
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.compare'))}</span>"
         f"<h1>{sp._e(t('seo.compare.h1'))}</h1><p class=lead>{sp._e(t('seo.compare.lead'))}</p>"
         f"<h2 class=group-title>{sp._e(t('seo.compare.exercises.h'))}</h2>" + sp._cards(pair_cards)
+        + f"<h2 class=group-title>{sp._e(t('seo.compare.plans.h'))}</h2>" + sp._cards(plans)
         + f"<h2 class=group-title>{sp._e(t('seo.compare.apps.h'))}</h2>" + sp._cards(apps)
         + sp._cta(lang, page.block, sp._e(t("seo.compare.cta")), request)
     )
@@ -769,6 +920,47 @@ def _render_alternatives(lang: str, page: Page, request) -> str:
     return sp._layout(lang, page, request, title=title, description=description, body=body, ld=[ld])
 
 
+# ---------- приложение против приложения ----------
+
+
+def _render_apps(lang: str, page: Page, request) -> str:
+    """Hevy против Strong: те же сверенные строки, что в /vs/<приложение>,
+    обе колонки — чужие; наша — отдельным абзацем ниже, не в таблице."""
+    t = sp._t(lang)
+    a, b = next((x, y) for x, y in APP_PAIRS if pair_slug(x, y) == page.arg)
+    params = link_params(lang)
+    names = {app: t(f"seo.vs.{app}.name") for app in (a, b)}
+    rows = "".join(
+        f"<tr><th scope=row>{sp._e(t(f'seo.vs.row.{row}'))}</th>"
+        + "".join(f"<td data-label=\"{sp._e(names[app])}\">{sp._mark(lang, sp._VS_MARKS[app][row])}{t(f'seo.vs.{app}.{row}_html')}</td>"
+                  for app in (a, b)) + "</tr>"
+        for row in sp._VS_ROWS)
+    sources = "".join(f'<li><a href="{sp._e(u)}" rel=nofollow>{sp._e(u)}</a></li>'
+                      for u in dict.fromkeys(list(sp._VS_SOURCES[a]) + list(sp._VS_SOURCES[b])))
+    key = f"seo.apps.{page.arg}"
+    title, description = t(f"{key}.title"), t(f"{key}.description")
+    body = (
+        f"<span class=eyebrow>{sp._e(t('seo.eyebrow.vs'))}</span>"
+        f"<h1>{sp._e(page_h1(page, lang))}</h1><p class=lead>{sp._e(t(f'{key}.lead'))}</p>"
+        f"<p class=muted>{sp._e(t('seo.vs.asof'))}</p>"
+        f"<div class='table-card vs cards-mobile'><table><thead><tr><th></th><th>{sp._e(names[a])}</th>"
+        f"<th>{sp._e(names[b])}</th></tr></thead><tbody>{rows}</tbody></table></div>"
+        f"<section class='reveal sub'><h2>{sp._e(t('seo.vs.choose.h'))}</h2>{t(f'{key}.choose_html', **params)}</section>"
+        f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.move.h'))}</h2>{t(f'{key}.move_html', **params)}</section>"
+        f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.us.h'))}</h2>{t(f'{key}.us_html', **params)}</section>"
+        + sp._cta(lang, page.block, sp._e(t("seo.vs.cta")), request)
+        + f"<section class='reveal sub'><h2>{sp._e(t('seo.lib.related'))}</h2><ul class=links>"
+        + "".join(f'<li><a href="{sp.url_for(Page(k, app), lang)}">{sp._e(t(f"seo.{prefix}.{app}.h1"))}</a></li>'
+                  for app in (a, b) for k, prefix in (("vs", "vs"), ("alternatives", "alt")))
+        + "</ul></section>"
+        + f"<section><h2>{sp._e(t('seo.vs.sources.h'))}</h2><ul class=muted>{sources}</ul>"
+        f"<p class=muted>{sp._e(t('seo.alt.disclaimer'))}</p></section>"
+    )
+    ld = sp._webpage_ld(lang, page, request, title, description, extra={
+        "about": [{"@type": "SoftwareApplication", "name": names[a]}, {"@type": "SoftwareApplication", "name": names[b]}]})
+    return sp._layout(lang, page, request, title=title, description=description, body=body, ld=[ld])
+
+
 # ---------- шаблон дневника ----------
 
 
@@ -840,12 +1032,21 @@ def _render_about(lang: str, page: Page, request) -> str:
                       ld=[ld, sp.organization_ld(lang, request)])
 
 
+def renderers() -> dict:
+    """Рендеры этой части и четвёртой (seo_plans, seo_swaps) — одним словарём."""
+    import seo_plans
+    import seo_swaps
+
+    return {**RENDERERS, **seo_plans.RENDERERS, **seo_swaps.RENDERERS}
+
+
 RENDERERS = {
     "muscles": _render_muscles, "muscle": _render_muscle,
     "compare": _render_compare, "pair": _render_pair,
     "glossary": _render_glossary, "term": _render_term,
     "guides": _render_guides, "guide": _render_guide,
     "alternatives": _render_alternatives, "template": _render_template, "about": _render_about,
+    "apps": _render_apps,
 }
 
 
