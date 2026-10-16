@@ -2,7 +2,7 @@
   "mcpServers": {
     "training-log": {
       "type": "http",
-      "url": "${TRAINING_LOG_MCP_URL:-https://training-log-bot.fly.dev/mcp}",
+      "url": "${TRAINING_LOG_MCP_URL:-https://athletediary.app/mcp}",
       "headers": {
         "Authorization": "Bearer ${TRAINING_LOG_MCP_TOKEN}"
       }

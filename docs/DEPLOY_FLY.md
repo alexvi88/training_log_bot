@@ -23,15 +23,18 @@ fly volumes create data --region fra --size 3 -a training-log-bot
 fly secrets set -a training-log-bot \
   TG_TOKEN=... ADMIN_ID=... \
   OPENAI_API_KEY=... NOVITA_API_KEY=... \
-  APNS_KEY_ID=... APNS_TEAM_ID=... APNS_ENV=production \
-  MCP_PUBLIC_URL=https://training-log-bot.fly.dev
+  APNS_KEY_ID=... APNS_TEAM_ID=... APNS_ENV=production
 fly secrets set -a training-log-bot APNS_KEY_P8="$(cat AuthKey_XXXX.p8)"
 ```
 
 Всё, что в Amvera задано сверх этого (лимиты `AI_*`, `ENGAGEMENT_*` и т.п.),
 переносится так же. `MCP_PUBLIC_URL` — без него HTTP-сервер не поднимается
-(`config.mcp_available`), а приложению он нужен. Когда будет свой домен —
-поменять на него.
+(`config.mcp_available`), а приложению он нужен. Он и `PUBLIC_BASE_URL` теперь
+лежат несекретными в `[env]` `fly.toml` (коннектор — `https://athletediary.app`,
+приложение и Universal Links — `https://training-log-bot.fly.dev`). Если
+`MCP_PUBLIC_URL` когда-то задавали через `fly secrets` — снять его
+(`fly secrets unset MCP_PUBLIC_URL`): секрет перекрывает `[env]`, и коннектор
+остался бы на старом адресе.
 
 ### Отзыв токенов Sign in with Apple при удалении аккаунта
 
@@ -143,7 +146,8 @@ fly secrets set -a training-log-bot WALK_DEMO_USERNAME=screenshots WALK_DEMO_PAS
 - Автодеплой включён (`.github/workflows/fly-deploy.yml`, push в main);
   и добавить секрет репозитория `FLY_API_TOKEN` (`fly tokens create deploy`).
 - Свой домен: `fly certs add api.<домен>` + CNAME на `training-log-bot.fly.dev`,
-  затем `MCP_PUBLIC_URL` и адрес в приложении — на домен.
+  затем `MCP_PUBLIC_URL` и адрес в приложении — на домен. Коннектор уже
+  переехал на `athletediary.app` (тот же процесс, DNS смотрит на Fly).
 
 ## Грабли переезда
 
