@@ -37,8 +37,7 @@ exercise_descriptions.get_description): русское имя упражнени
 Посещение считает сервер (site_stats.py) — без адреса клиента и без связи с
 аккаунтом; политика конфиденциальности это описывает.
 
-Встраиваемые калькуляторы (`/embed/<язык>/1rm`, `/embed/<язык>/plates`) —
-единственные адреса, которые разрешено показывать в чужом iframe
+Встраиваемый калькулятор (`/embed/<язык>/1rm`) — единственный адрес, которые разрешено показывать в чужом iframe
 (`frame-ancestors *`); у всех остальных `frame-ancestors 'none'`.
 """
 
@@ -158,8 +157,12 @@ _EXERCISE_BY_URL = dict(EXERCISES)
 _DEMO_SLUG = "barbell_bench_press_medium_grip"
 
 IMPORT_SOURCES = ("hevy", "strong", "csv")
-TOOLS = ("1rm", "plates", "warmup", "rpe", "wilks")
-EMBEDS = ("1rm", "plates")
+TOOLS = ("1rm", "warmup", "rpe", "wilks")
+EMBEDS = ("1rm",)
+# Убранные адреса: 301 туда, где теперь то же самое (калькулятор блинов
+# снят — раскладку на сторону показывает разминка).
+REMOVED_TOOLS = {"plates": "/tools"}
+REMOVED_EMBEDS = {"plates": "1rm"}
 COMPETITORS = ("hevy", "strong")
 FEATURES = ("ai-coach", "video-review", "telegram")
 # Нормативы: адрес → ключ упражнения в seo_tools.LIFT_SHARE и адрес техники.
@@ -183,12 +186,10 @@ _BLOCKS = {
     "import:csv": "imp_csv",
     "tools": "tools",
     "tool:1rm": "rm1",
-    "tool:plates": "plates",
     "tool:wilks": "wilks",
     "tool:warmup": "warmup",
     "tool:rpe": "rpe",
     "log:1rm": "rm1_log",
-    "log:plates": "plt_log",
     "log:wilks": "wlk_log",
     "log:warmup": "wu_log",
     "log:rpe": "rpe_log",
@@ -969,7 +970,7 @@ def _render_import(lang: str, page: Page, request) -> str:
 
 # ---------- калькуляторы ----------
 
-_TOOL_ICONS = {"1rm": "calc", "plates": "plates", "warmup": "warmup", "rpe": "gauge", "wilks": "trophy"}
+_TOOL_ICONS = {"1rm": "calc", "warmup": "warmup", "rpe": "gauge", "wilks": "trophy"}
 
 
 def _seg(name: str, legend: str, options: list[tuple[str, str]], checked: str) -> str:
@@ -1048,56 +1049,6 @@ def _tool_1rm(lang: str, embed: bool = False) -> tuple[str, str, str]:
         "if(!m){out.textContent='—';note.textContent=too;tb.innerHTML='';done(0);return;}out.innerHTML=fu(m,u);done(1);"
         "tb.innerHTML=C.percents.map(function(pc){return '<tr><td>'+pc+'%</td><td class=num>'+fu(m*pc/100,u)+'</td></tr>';}).join('');}"
         "bind(run);"
-    )
-    return form, result, script
-
-
-def _tool_plates(lang: str, embed: bool = False) -> tuple[str, str, str]:
-    t = _t(lang)
-    checks = "".join(
-        f'<div class=checks data-unit={unit}{"" if unit == "kg" else " hidden"}>' + "".join(
-            f'<label><input type=checkbox value="{_num(p)}"'
-            f'{" checked" if p in seo_tools.DEFAULT_PLATES[unit] else ""}>{_num(p)}</label>'
-            for p in seo_tools.PLATES[unit]
-        ) + "</div>"
-        for unit in ("kg", "lb")
-    )
-    form = (
-        "<form class=calc onsubmit='return false'>" + _unit_seg(lang)
-        + "<div class=row>" + _num_input("target", t("seo.tool.plates.target"), "100", "0.25")
-        + _num_input("bar", t("seo.tool.plates.bar"), "20", "0.5") + "</div>"
-        f'<fieldset><legend>{_e(t("seo.tool.plates.available"))}</legend>{checks}</fieldset>'
-        "</form>"
-    )
-    result = (
-        f'<div class=result aria-live=polite><div class=k>{_e(t("seo.tool.plates.per_side"))}</div>'
-        '<div class=bar-viz id=viz></div><div class=plates id=plates></div><div class=note id=note></div>'
-        + ("" if embed else _log_cta(lang, "plates")) + "</div>"
-    )
-    bars = {u: seo_tools.BARS[u][0] for u in ("kg", "lb")}
-    colors = {u: {_num(k): v for k, v in c.items()} for u, c in seo_design.PLATE_COLORS.items()}
-    script = (
-        f"var BARS={json.dumps(bars)},COLORS={json.dumps(colors)};"
-        "var EMPTY=" + _js_str(t("seo.tool.plates.empty")) + ",GOT=" + _js_str(t("seo.tool.plates.got", total="{total}")) + ";"
-        "function pkg(p,u){return u==='lb'?p/C.lbPerKg:p;}"
-        "function col(p,u){return (COLORS[u]||{})[fmt(p)]||'#bbb';}"
-        "function barSvg(pl,u){var W=640,H=170,cy=85,s='<svg viewBox=\"0 0 '+W+' '+H+'\" aria-hidden=true>';"
-        "s+='<rect x=8 y='+(cy-5)+' width='+(W-16)+' height=10 rx=5 fill=\"#8d8d8d\"/>';"
-        "s+='<rect x=150 y='+(cy-9)+' width=14 height=18 rx=3 fill=\"#b5b5b5\"/><rect x='+(W-164)+' y='+(cy-9)+' width=14 height=18 rx=3 fill=\"#b5b5b5\"/>';"
-        "var xr=W-150,xl=150;pl.forEach(function(p){var k=pkg(p,u),h=k>=10?150:k>=5?104:k>=2.5?80:k>=1.25?62:48,"
-        "th=k>=25?24:k>=20?21:k>=15?18:k>=10?15:k>=5?12:9,c=col(p,u);"
-        "s+='<rect x='+xr+' y='+(cy-h/2)+' width='+th+' height='+h+' rx=3 fill=\"'+c+'\" stroke=\"rgba(0,0,0,.45)\"/>';"
-        "s+='<rect x='+(xl-th)+' y='+(cy-h/2)+' width='+th+' height='+h+' rx=3 fill=\"'+c+'\" stroke=\"rgba(0,0,0,.45)\"/>';xr+=th+2;xl-=th+2;});"
-        "return s+'</svg>';}"
-        "function shown(){var u=val('unit');document.querySelectorAll('.checks').forEach(function(s){s.hidden=s.dataset.unit!==u;});return u;}"
-        "function run(){var u=shown(),tg=parseFloat($('target').value),b=parseFloat($('bar').value)||0,list=[],box=$('plates'),note=$('note');"
-        "document.querySelectorAll('.checks[data-unit=\"'+u+'\"] input:checked').forEach(function(i){list.push(parseFloat(i.value));});"
-        "box.innerHTML='';note.textContent='';$('viz').innerHTML='';if(!(tg>0)){done(0);return;}var res=platesPerSide(tg,b,list);"
-        "$('viz').innerHTML=barSvg(res.plates,u);"
-        "if(!res.plates.length){box.textContent=EMPTY;}else{box.innerHTML=res.plates.map(function(p){return '<span class=plate><i style=\"background:'+col(p,u)+'\"></i>'+fu(p,u)+'</span>';}).join('');}"
-        "if(Math.abs(res.total-tg)>1e-9){note.innerHTML=GOT.replace('{total}',fu(res.total,u));}done(res.plates.length>0);}"
-        "document.querySelectorAll('[name=unit]').forEach(function(el){el.addEventListener('change',function(){$('bar').value=BARS[this.value];"
-        "$('target').value=this.value==='lb'?225:100;});});bind(run);"
     )
     return form, result, script
 
@@ -1213,7 +1164,7 @@ def _tool_rpe(lang: str, embed: bool = False) -> tuple[str, str, str]:
 
 
 _TOOLS: dict[str, Callable[..., tuple[str, str, str]]] = {
-    "1rm": _tool_1rm, "plates": _tool_plates, "wilks": _tool_wilks, "warmup": _tool_warmup, "rpe": _tool_rpe,
+    "1rm": _tool_1rm, "wilks": _tool_wilks, "warmup": _tool_warmup, "rpe": _tool_rpe,
 }
 
 
@@ -1258,7 +1209,7 @@ def _render_tool(lang: str, page: Page, request) -> str:
     chart = (f"<section class=reveal><h2>{_e(t('seo.tool.rpe.chart_h'))}</h2>{_rpe_table_html(lang)}</section>"
              if tool == "rpe" else "")
     how_params = dict(_article_params(lang), max=config.E1RM_MAX_REPS, gl_source=GL_SOURCE,
-                      dots_href=url_for(Page("tool", "wilks"), lang), plates_href=url_for(Page("tool", "plates"), lang),
+                      dots_href=url_for(Page("tool", "wilks"), lang),
                       strength_href=url_for(Page("strength"), lang), rpe_href=url_for(Page("tool", "rpe"), lang))
     title, description = t(f"seo.tool.{tool}.title"), t(f"seo.tool.{tool}.description")
     body = (
@@ -1524,15 +1475,30 @@ def _group_for(identity: str, lang: str) -> str:
     return seed_data.localized_muscle_group_name(group, lang) if group else ""
 
 
-def _exercise_card(url: str, slug: str, lang: str) -> str:
+def exercise_picture(slug: str, frame: int, alt: str, *, sizes: str, widths: tuple[int, ...],
+                     width: int, height: int, lazy: bool = True) -> str:
+    """Кадр упражнения для сайта: <picture> с AVIF и WebP из media/site/ex
+    (scripts/gen_site_exercise_images.py) — 4:3, не шире исходника. Мелкие
+    превью бота (240px, для строк списка в приложении) сайт не берёт."""
+
+    def srcset(fmt: str) -> str:
+        return ", ".join(f"{seo_static.asset_url(f'ex/{slug}_{frame}-{w}.{fmt}')} {w}w" for w in widths)
+
+    loading = " loading=lazy" if lazy else ""
+    return (f'<picture><source type="image/avif" srcset="{srcset("avif")}" sizes="{sizes}">'
+            f'<img src="{seo_static.asset_url(f"ex/{slug}_{frame}-{widths[-1]}.webp")}" srcset="{srcset("webp")}" sizes="{sizes}" '
+            f'alt="{_e(alt)}" width={width} height={height}{loading} decoding=async></picture>')
+
+
+def _exercise_card(url: str, slug: str, lang: str, show_group: bool = True) -> str:
+    """Карточка упражнения: один кадр — конечное положение."""
     identity = _identity_for_media_slug(slug)
     name = seed_data.localized_exercise_name(identity, lang)
-    thumb = os.path.join(exercise_media.THUMBS_DIR, f"{slug}_1.jpg")
-    src = _media_url(f"{slug}_1.jpg", thumb=os.path.isfile(thumb))
+    pic = exercise_picture(slug, 2, name, sizes="(max-width: 600px) 50vw, 280px", widths=(360, 720), width=360, height=270)
+    group = f"<span>{_e(_group_for(identity, lang))}</span>" if show_group else ""
     return (
-        f'<a class="card thumb-card reveal" href="{url_for(Page("exercise", url), lang)}">'
-        f'<img src="{src}" alt="{_e(name)}" loading=lazy decoding=async width=240 height=180>'
-        f"<b>{_e(name)}</b><span>{_e(_group_for(identity, lang))}</span></a>"
+        f'<a class="card thumb-card reveal" href="{url_for(Page("exercise", url), lang)}">{pic}'
+        f"<b>{_e(name)}</b>{group}</a>"
     )
 
 
@@ -1540,10 +1506,10 @@ def _render_exercises(lang: str, page: Page, request) -> str:
     t = _t(lang)
     groups: dict[str, list[str]] = {}
     for url, slug in EXERCISES:
-        groups.setdefault(_group_of(_identity_for_media_slug(slug)), []).append(_exercise_card(url, slug, lang))
+        groups.setdefault(_group_of(_identity_for_media_slug(slug)), []).append(_exercise_card(url, slug, lang, show_group=False))
     order = list(dict.fromkeys(g for g, _n in seed_data.EXERCISE_TEMPLATES))
     sections = "".join(
-        f"<h2 class=group-title>{_e(seed_data.localized_muscle_group_name(g, lang))}</h2><div class=grid>{''.join(groups[g])}</div>"
+        f"<h2 class=group-title>{_e(seed_data.localized_muscle_group_name(g, lang))}</h2><div class='grid ex-grid'>{''.join(groups[g])}</div>"
         for g in order if g in groups
     )
     title, description = t("seo.exercises.title"), t("seo.exercises.description", count=len(EXERCISES))
@@ -1569,12 +1535,15 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     identity = _identity_for_media_slug(slug)
     name = seed_data.localized_exercise_name(identity, lang)
     base = base_url(request)
+    frame_sizes = "(max-width: 760px) 50vw, 370px"
     frames = (
         "<div class=frames>"
-        f'<figure><img src="{_media_url(f"{slug}_1.jpg")}" alt="{_e(t("seo.exercise.frame_start", name=name))}" width=400 height=300>'
-        f'<figcaption><b>1</b>{_e(t("seo.exercise.cap_start"))}</figcaption></figure>'
-        f'<figure><img src="{_media_url(f"{slug}_2.jpg")}" alt="{_e(t("seo.exercise.frame_end", name=name))}" width=400 height=300 loading=lazy>'
-        f'<figcaption><b>2</b>{_e(t("seo.exercise.cap_end"))}</figcaption></figure>'
+        "<figure>" + exercise_picture(slug, 1, t("seo.exercise.frame_start", name=name), sizes=frame_sizes, widths=(720,),
+                                      width=720, height=540, lazy=False)
+        + f'<figcaption><b>1</b>{_e(t("seo.exercise.cap_start"))}</figcaption></figure>'
+        "<figure>" + exercise_picture(slug, 2, t("seo.exercise.frame_end", name=name), sizes=frame_sizes, widths=(360, 720),
+                                      width=720, height=540)
+        + f'<figcaption><b>2</b>{_e(t("seo.exercise.cap_end"))}</figcaption></figure>'
         "</div>"
     )
     steps = "".join(f"<li>{_e(s)}</li>" for s in _steps(identity, lang))
@@ -1590,7 +1559,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     related_html = ""
     if related:
         related_html = (f"<section class=reveal><h2>{_e(t('seo.exercise.related.h', group=_group_for(identity, lang)))}</h2>"
-                        f"<div class=grid>{''.join(_exercise_card(u, s, lang) for u, s in related)}</div></section>")
+                        f"<div class='grid ex-grid'>{''.join(_exercise_card(u, s, lang, show_group=False) for u, s in related)}</div></section>")
     lead = t(f"seo.ex.{slug}.lead")
     body = (
         f"<span class=eyebrow>{_e(_group_for(identity, lang))}</span>"
@@ -1910,6 +1879,13 @@ def verification_file_name() -> Optional[str]:
     return name if re.fullmatch(r"google[0-9a-zA-Z]+\.html", name) else None
 
 
+def _moved(target: str):
+    async def route(request: Request) -> Response:
+        return RedirectResponse(target, status_code=301, headers={"Cache-Control": "public, max-age=86400"})
+
+    return route
+
+
 def register_routes(server: Any) -> None:
     for page in pages():
         for lang in LANGS:
@@ -1917,6 +1893,11 @@ def register_routes(server: Any) -> None:
     for tool in EMBEDS:
         for lang in LANGS:
             server.custom_route(f"/embed/{lang}/{tool}", methods=["GET"])(_embed_route(tool, lang))
+    for lang in LANGS:
+        for tool, target in REMOVED_TOOLS.items():
+            server.custom_route(f"/{lang}/tools/{tool}", methods=["GET"])(_moved(f"/{lang}{target}"))
+        for tool, target in REMOVED_EMBEDS.items():
+            server.custom_route(f"/embed/{lang}/{tool}", methods=["GET"])(_moved(f"/embed/{lang}/{target}"))
     server.custom_route("/", methods=["GET"])(root_route)
     server.custom_route("/go/bot", methods=["GET"])(go_bot_route)
     server.custom_route("/go/appstore", methods=["GET"])(go_appstore_route)

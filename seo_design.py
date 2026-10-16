@@ -137,7 +137,12 @@ a.card:hover { color: var(--fg); border-color: var(--line2); background: var(--g
 .card .arrow { position: absolute; right: 20px; top: 22px; color: var(--dim); transition: transform .2s ease, color .2s ease; }
 a.card:hover .arrow { color: var(--accent2); transform: translateX(3px); }
 .thumb-card { padding: var(--s3); }
-.thumb-card img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 12px; margin-bottom: var(--s3); background: #000; }
+.thumb-card picture { display: block; margin-bottom: var(--s3); }
+.thumb-card img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; object-position: center 60%; border-radius: 12px; background: #2a1810;
+  box-shadow: inset 0 0 0 1px rgba(255,214,186,.14); }
+.ex-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+@media (max-width: 600px) { .ex-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+  .ex-grid .thumb-card { padding: 8px; } .ex-grid .thumb-card b { font-size: 15px; padding: 0 4px 4px; } }
 .thumb-card b, .thumb-card span { padding: 0 6px; }
 .thumb-card span { margin-bottom: 4px; }
 .group-title { font-size: 22px; margin: var(--s7) 0 var(--s2); }
@@ -163,7 +168,8 @@ a.card:hover .arrow { color: var(--accent2); transform: translateX(3px); }
 .chip { position: absolute; display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 14px; font-size: 14px; font-weight: 650;
   background: rgba(23,14,11,.82); border: 1px solid var(--line2); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 20px 40px -20px rgba(0,0,0,.8); }
 .chip b { font: 12px/1 var(--pixel); color: var(--accent2); }
-.chip.c1 { left: 0; bottom: 18%; }
+/* c1 sits over the empty middle of the screenshot, not over the input row */
+.chip.c1 { left: 0; top: 60%; }
 .chip.c2 { right: 2%; bottom: 6%; }
 
 /* bento */
@@ -270,18 +276,19 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
   background: radial-gradient(500px 220px at 100% 0%, rgba(255,138,61,.2), transparent 70%), var(--bg2); box-shadow: 0 30px 60px -40px rgba(255,106,43,.7); }
 .result .k { font-size: 14px; font-weight: 600; color: var(--muted); }
 .big { margin: 10px 0 6px; font: clamp(30px, 6vw, 44px)/1.15 var(--pixel); color: var(--accent2); text-shadow: 0 0 30px rgba(255,138,61,.45); overflow-wrap: anywhere; }
-.big .u, td .u, .plate .u { margin-left: .14em; }
+.big .u, td .u { margin-left: .14em; }
 .big .u { font-size: .55em; }
 .result .note { color: var(--muted); font-size: 15px; min-height: 1.5em; }
 .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: var(--s4); }
 .pair .big { font-size: clamp(17px, 3.9vw, 26px); white-space: nowrap; }
+@media (max-width: 520px) {
+  .pair { grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+  .pair > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+  .pair .big { margin: 4px 0; font-size: 24px; }
+  .row:has(> fieldset) { grid-template-columns: minmax(0, 1fr); }
+}
 .log-cta { display: none; margin-top: var(--s4); }
 .result.ok .log-cta { display: flex; }
-.bar-viz { margin: var(--s3) 0; }
-.bar-viz svg { width: 100%; height: auto; display: block; }
-.plates { display: flex; flex-wrap: wrap; gap: 6px; }
-.plate { display: inline-flex; align-items: center; padding: 6px 11px; border-radius: 9px; background: var(--glass2); border: 1px solid var(--line2); font-weight: 700; font-variant-numeric: tabular-nums; }
-.plate i { width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; }
 .steps-out { counter-reset: ws; display: grid; gap: 6px; margin: var(--s3) 0 0; padding: 0; list-style: none; }
 .steps-out li { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--glass2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .steps-out li::before { counter-increment: ws; content: counter(ws); font: 10px var(--pixel); color: var(--accent2); }
@@ -295,7 +302,8 @@ legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; colo
 /* exercises and programs */
 .frames { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin: var(--s5) 0; }
 .frames figure { margin: 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); background: var(--glass); }
-.frames img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; background: #000; }
+.frames picture { display: block; }
+.frames img { display: block; width: 100%; height: auto; aspect-ratio: 4/3; object-fit: cover; object-position: center 60%; background: #2a1810; }
 .frames figcaption { padding: 10px 14px; font-size: 14px; color: var(--muted); }
 .frames figcaption b { font: 9px var(--pixel); color: var(--accent2); margin-right: 8px; }
 ol.steps { counter-reset: st; list-style: none; padding: 0; display: grid; gap: var(--s3); }
@@ -409,13 +417,3 @@ _ICON_PATHS = {
 def icon(name: str) -> str:
     return ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
             f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{_ICON_PATHS[name]}</svg>')
-
-
-# Цвета блинов — как у соревновательных блинов IWF (кг); фунтовые красятся
-# по тому же порядку.
-PLATE_COLORS = {
-    "kg": {25.0: "#d7263d", 20.0: "#2160d8", 15.0: "#f2c230", 10.0: "#2f9e44", 5.0: "#f1f1f1",
-           2.5: "#d7263d", 1.25: "#b9b9b9", 0.5: "#d0d0d0", 0.25: "#dedede"},
-    "lb": {55.0: "#d7263d", 45.0: "#2160d8", 35.0: "#f2c230", 25.0: "#2f9e44", 10.0: "#f1f1f1",
-           5.0: "#d7263d", 2.5: "#b9b9b9", 1.25: "#d0d0d0"},
-}

@@ -296,11 +296,11 @@ async def test_calculator_result_offers_to_log_the_set():
 
 
 async def test_only_embeds_may_be_framed():
-    responses = await _get_many(["/en/tools/1rm", "/embed/en/1rm", "/embed/ru/plates", "/ru"])
+    responses = await _get_many(["/en/tools/1rm", "/embed/en/1rm", "/embed/ru/1rm", "/ru"])
     for path in ("/en/tools/1rm", "/ru"):
         assert responses[path].headers["content-security-policy"] == "frame-ancestors 'none'"
         assert responses[path].headers["x-frame-options"] == "DENY"
-    for path in ("/embed/en/1rm", "/embed/ru/plates"):
+    for path in ("/embed/en/1rm", "/embed/ru/1rm"):
         resp = responses[path]
         assert resp.status_code == 200
         assert resp.headers["content-security-policy"] == "frame-ancestors *"
@@ -575,6 +575,19 @@ def test_e1rm_is_the_bot_formula(formula, rpe):
             assert seo_tools.e1rm(weight, reps, formula, rpe) == analytics.e1rm(weight, reps, formula, rpe)
 
 
+async def test_removed_plate_calculator_redirects_permanently():
+    responses = await _get_many(["/ru/tools/plates", "/en/tools/plates", "/embed/ru/plates", "/embed/en/plates"])
+    expected = {"/ru/tools/plates": "/ru/tools", "/en/tools/plates": "/en/tools",
+                "/embed/ru/plates": "/embed/ru/1rm", "/embed/en/plates": "/embed/en/1rm"}
+    for path, target in expected.items():
+        assert responses[path].status_code == 301, path
+        assert responses[path].headers["location"] == target
+    sitemap = (await _get("/sitemap.xml")).text
+    assert "/tools/plates" not in sitemap and "plates" not in seo_pages.TOOLS
+
+
+# Раскладка на сторону осталась в разминке (подписи «на сторону»), поэтому
+# математика блинов и её JS-двойник проверяются по-прежнему.
 def test_plates_finds_exact_set_with_fewest_plates():
     assert seo_tools.plates_per_side(80, 20, (25, 20, 15, 10)) == ([20.0, 10.0], 80.0)
     assert seo_tools.plates_per_side(100, 20, seo_tools.DEFAULT_PLATES["kg"]) == ([25.0, 15.0], 100.0)
