@@ -799,9 +799,10 @@ CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
 -- про итог.
 --
 -- content — то, что реально введено: текст сообщения, подпись к фото или
--- человекочитаемая надпись нажатой кнопки; подрезается на входе
--- (activity_log.MAX_CONTENT_LEN), чтобы простыня из буфера обмена не раздувала
--- базу. payload у кнопок — её callback_data, то есть чем нажатие было для бота.
+-- человекочитаемая надпись нажатой кнопки, у голосового — его расшифровка
+-- («🎤 голосовое: …», дописывается в ту же строку); ввод человека держит
+-- жёсткий потолок activity_log.MAX_CONTENT_LEN, ответ тренера пишется целиком.
+-- payload у кнопок — её callback_data, то есть чем нажатие было для бота.
 -- Живёт не вечно: prune_old_user_events чистит по ACTIVITY_RETENTION_DAYS в том
 -- же суточном джобе, что и cost_events.
 -- source — откуда пришло действие: 'tg' (бот) или 'ios' (REST-слой /v1). Лента
@@ -11153,23 +11154,53 @@ async def log_user_event(
     content: str,
     payload: Optional[str] = None,
     source: str = "tg",
-) -> None:
+) -> Optional[int]:
     """Одно действие человека в ленту. source — 'tg' (бот) или 'ios' (/v1).
+    Возвращает id строки — по нему вход дописывает расшифровку голосового.
 
     Умолчание стоит здесь, а не на местах вызова, ровно чтобы не трогать
     десятки уже написанных вызовов из бота: из Telegram приходит всё, что не
     сказало обратного, а сказать обратное есть кому только REST-слою /v1.
     """
     async with _write_lock:
-        await conn().execute(
+        cur = await conn().execute(
             "INSERT INTO user_events (telegram_id, kind, content, payload, source, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (telegram_id, kind, content, payload, source, now_iso()),
         )
+        event_id = cur.lastrowid
         await conn().commit()
     # Зеркало ревьюера админу (review_watch.py): после записи и вне замка, в
     # очередь, без сети; сама глотает свои сбои.
     await review_watch.on_event(telegram_id, kind, content, source)
+    return event_id
+
+
+async def update_user_event_content(event_id: int, content: str) -> None:
+    """Дописать строку ленты задним числом — расшифровка голосового ложится в
+    ту же строку, что и само голосовое (activity_log.record_voice_transcript)."""
+    async with _write_lock:
+        await conn().execute("UPDATE user_events SET content = ? WHERE id = ?", (content, event_id))
+        await conn().commit()
+
+
+async def update_latest_voice_event(
+    telegram_id: int, mark: str, content: str, within: dt.timedelta
+) -> bool:
+    """Свежая нерасшифрованная строка голосового этого человека → content.
+
+    Запасной путь, когда id строки неизвестен (вызов не из апдейта): ищем
+    последнюю строку ровно с пометкой `mark` не старше `within`. True — нашли."""
+    since = (_utc_now() - within).isoformat(timespec="seconds")
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE user_events SET content = ? WHERE id = ("
+            "SELECT id FROM user_events WHERE telegram_id = ? AND kind = 'message' "
+            "AND content = ? AND created_at >= ? ORDER BY id DESC LIMIT 1)",
+            (content, telegram_id, mark, since),
+        )
+        await conn().commit()
+    return cur.rowcount > 0
 
 
 async def count_unhandled_callbacks_by_prefix(since_iso: str) -> list[aiosqlite.Row]:
@@ -11221,6 +11252,64 @@ async def count_user_events(telegram_id: int) -> int:
     )
     (count,) = await cur.fetchone()
     return count
+
+
+async def list_user_events_since(telegram_id: int, since_iso: str, kinds: Iterable[str]) -> list[aiosqlite.Row]:
+    """Действия одного пользователя из бота с момента since_iso — по порядку,
+    старые сверху; только перечисленные виды (админский /ai_retry ищет по ним
+    вопрос, на котором тренер сорвался)."""
+    kinds = tuple(kinds)
+    if not kinds:
+        return []
+    marks = ", ".join("?" for _ in kinds)
+    cur = await conn().execute(
+        "SELECT id, kind, content, created_at FROM user_events "
+        f"WHERE telegram_id = ? AND source = 'tg' AND created_at >= ? AND kind IN ({marks}) "
+        "ORDER BY id",
+        (telegram_id, since_iso, *kinds),
+    )
+    return await cur.fetchall()
+
+
+async def find_user_id_by_username(username: str) -> Optional[int]:
+    """telegram_id по нику (без «@», без учёта регистра) — для админских команд."""
+    name = username.strip().lstrip("@")
+    if not name:
+        return None
+    cur = await conn().execute(
+        "SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?) ORDER BY telegram_id LIMIT 1",
+        (name,),
+    )
+    row = await cur.fetchone()
+    return row["telegram_id"] if row else None
+
+
+async def search_users_for_admin(query: str, limit: int = 10) -> tuple[list[dict], int]:
+    """Атлеты, у которых ник, имя из Telegram или почта входа содержат `query`
+    (без «@» и без учёта регистра, кириллица тоже) — для поиска в админке.
+
+    Возвращает первые `limit` совпадений (больше сообщений тренеру — выше) и
+    сколько совпало всего. Сравнение — в Python: LOWER у SQLite знает только
+    ASCII, а имена бывают русские; админская выборка редкая, таблица целиком —
+    дешевле, чем своя функция сравнения в соединении.
+    """
+    needle = query.strip().lstrip("@").casefold()
+    if not needle:
+        return [], 0
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.username, u.first_name, "
+        "(SELECT i.email FROM auth_identities i WHERE i.user_id = u.telegram_id "
+        "AND i.email IS NOT NULL ORDER BY i.created_at LIMIT 1) AS email, "
+        "(SELECT COUNT(*) FROM ai_chat_messages m WHERE m.telegram_id = u.telegram_id) AS ai_message_count "
+        "FROM users u"
+    )
+    found = [
+        dict(row)
+        for row in await cur.fetchall()
+        if any(needle in (row[col] or "").casefold() for col in ("username", "first_name", "email"))
+    ]
+    found.sort(key=lambda r: (-r["ai_message_count"], r["telegram_id"]))
+    return found[:limit], len(found)
 
 
 async def list_user_events(telegram_id: int, limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
@@ -11638,13 +11727,22 @@ async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10
 
 
 async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
-    """Просмотры людей (не роботов), сложенные по 10 минутам: в одном окне
-    одна строка на (страница, источник, устройство) с числом — чтобы лента
-    /activity не тонула в обновлениях одной страницы."""
+    """Просмотры сайта, сложенные по 10 минутам: у людей в одном окне одна
+    строка на (страница, источник, устройство) с числом — чтобы лента
+    /activity не тонула в обновлениях одной страницы; роботы — одна строка на
+    робота в окне (crawler, сколько страниц), как в логе процесса, а не по
+    странице: обход ClaudeBot — это сотни адресов подряд."""
     cur = await conn().execute(
-        "SELECT substr(created_at, 1, 15) AS bucket, page, referrer, device, COUNT(*) AS n "
+        "SELECT * FROM ("
+        "SELECT substr(created_at, 1, 15) AS bucket, page, referrer, device, NULL AS crawler, COUNT(*) AS n "
         "FROM site_events WHERE kind = 'view' AND device <> 'bot' "
-        "GROUP BY bucket, page, referrer, device ORDER BY bucket DESC, n DESC, page LIMIT ? OFFSET ?",
+        "GROUP BY bucket, page, referrer, device "
+        "UNION ALL "
+        "SELECT substr(created_at, 1, 15) AS bucket, '' AS page, '' AS referrer, 'bot' AS device, "
+        "COALESCE(crawler, '?') AS crawler, COUNT(*) AS n "
+        "FROM site_events WHERE kind = 'view' AND device = 'bot' "
+        "GROUP BY bucket, COALESCE(crawler, '?')"
+        ") ORDER BY bucket DESC, crawler IS NOT NULL, n DESC, page LIMIT ? OFFSET ?",
         (limit, offset),
     )
     return await cur.fetchall()
@@ -11652,8 +11750,10 @@ async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.R
 
 async def count_site_visit_buckets() -> int:
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device <> 'bot' "
-        "GROUP BY substr(created_at, 1, 15), page, referrer, device)"
+        "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        "GROUP BY substr(created_at, 1, 15), page, referrer, device)) + "
+        "(SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device = 'bot' "
+        "GROUP BY substr(created_at, 1, 15), COALESCE(crawler, '?')))"
     )
     (count,) = await cur.fetchone()
     return count

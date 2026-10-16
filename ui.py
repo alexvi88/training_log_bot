@@ -161,6 +161,73 @@ def fit_to_limit(text: str, limit: int, parse_mode=None) -> str:
     return head + note
 
 
+def _open_tag_stack(html: str, stack: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Стек открытых тегов после `html` — с полным текстом открывающего тега
+    (`<a href="…">` надо открыть заново вместе с его атрибутами)."""
+    stack = list(stack)
+    for match in _TAG_RE.finditer(html):
+        name = match.group(2).lower()
+        if match.group(1):
+            if any(open_name == name for open_name, _ in stack):
+                while stack.pop()[0] != name:
+                    pass
+        else:
+            stack.append((name, match.group(0)))
+    return stack
+
+
+def split_html(text: str, limit: int = TEXT_LIMIT) -> list[str]:
+    """Длинный HTML-текст → несколько сообщений, каждое не длиннее `limit`, без потерь.
+
+    В отличие от fit_to_limit ничего не выбрасывает: для экранов, где важен
+    каждый символ (лента /activity — что человек написал и что ответил
+    тренер). Режем по строкам; строку длиннее лимита — посередине, но никогда
+    внутри тега или &-сущности (_hard_cut). Тег, открытый на границе куска,
+    закрывается в конце куска и открывается заново в начале следующего — иначе
+    Telegram ответит «can't parse entities» и не примет ни один из них.
+    """
+    if _length(text, True) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    used = 0
+    stack: list[tuple[str, str]] = []  # открытые на начало текущего куска
+
+    def flush() -> None:
+        nonlocal current, used, stack
+        tail = _open_tag_stack(current, stack)
+        prefix = "".join(tag for _, tag in stack)
+        chunks.append(prefix + current + "".join(f"</{name}>" for name, _ in reversed(tail)))
+        stack = tail
+        current = ""
+        used = 0
+
+    for line in text.split("\n"):
+        sep = 1 if current else 0
+        if current and used + sep + _length(line, True) > limit:
+            flush()
+            sep = 0
+        while used + sep + _length(line, True) > limit:
+            # Сама строка не влезает: режем её, не попадая внутрь тега/сущности.
+            room = limit - used - sep
+            head = _hard_cut(line, room, True) if room > 0 else ""
+            if not head:
+                if current:
+                    flush()
+                    sep = 0
+                    continue
+                head = line[:1]  # страховка от вечного цикла: лимит меньше символа
+            current += "\n" * sep + head
+            flush()
+            sep = 0
+            line = line[len(head):]
+        current += "\n" * sep + line
+        used = _length(current, True)
+    if current:
+        flush()
+    return [chunk for chunk in chunks if formatting.strip_tags(chunk).strip()] or chunks[:1]
+
+
 async def _edit_text(message: Message, text: str, reply_markup, parse_mode) -> Message | None:
     """Edit in place; None means "couldn't — fall back to delete and resend"."""
     try:

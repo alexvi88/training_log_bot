@@ -54,7 +54,10 @@ _OG_MEMORY_LIMIT = 48
 _TYPES = {
     ".jpg": "image/jpeg", ".png": "image/png", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2",
     ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".webp": "image/webp", ".avif": "image/avif",
+    ".mp4": "video/mp4", ".webm": "video/webm",
 }
+# Адрес у них с версией (`asset_url`), поэтому кэш — на год.
+_IMMUTABLE = (".woff", ".woff2", ".jpg", ".png", ".svg", ".webp", ".avif", ".mp4", ".webm")
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]{0,120}$")
 
 # Скриншоты на главной: (экран, ширина, высота) — у каждого языка свой прогон.
@@ -66,16 +69,19 @@ SCREENS = {
 THEME_COLOR = "#120b09"
 
 # Пиксельный подвал с вкладки «Меню» приложения (iOS-репозиторий,
-# docs/marketing/menu-gym): настоящая сцена со скриншота симулятора и
-# спрайты, извлечённые из кода (raw, 1:1), склеенные в ленты кадров. Макеты
-# оттуда (папка mockups, с плашкой «макет») сюда не берутся.
+# docs/marketing/menu-gym): настоящая сцена со скриншота симулятора
+# (`scene-<язык>.png` — постер и кадр для «уменьшения движения»), она же
+# живой петлёй (`scene-<язык>.mp4`/`.webm`, scripts/render_basement_loop.py —
+# порт рисовалки и шага зала из Swift), и спрайты из кода, склеенные в ленты
+# кадров. Макеты оттуда (папка mockups, с плашкой «макет») сюда не берутся.
 SCENE_SIZE = (1110, 617)
-# Лента кадров: (файл, ширина кадра, высота, кадров).
+# Лента кадров: (файл, ширина кадра, высота, кадров, мс на кадр — как в приложении).
 SPRITES = {
-    "curl": ("gym/athlete_curl.png", 28, 77, 2),
-    "coach": ("gym/coach_idle.png", 58, 100, 4),
-    "dog": ("gym/dog_run.png", 33, 28, 4),
-    "stand": ("gym/athlete_stand.png", 28, 77, 1),
+    "curl": ("gym/athlete_curl.png", 38, 76, 2, 312),        # полповтора, повтор — 625 мс
+    "coach": ("gym/coach_idle.png", 58, 100, 4, 600),
+    "coach_walk": ("gym/coach_walk.png", 55, 100, 4, 160),   # `coachWalkFrame`
+    "dog": ("gym/dog_run.png", 33, 28, 4, 90),                # `dogTrotStep`
+    "stand": ("gym/athlete_stand.png", 28, 77, 1, 0),
 }
 
 
@@ -105,7 +111,7 @@ def asset_url(rel: str) -> str:
 def _file_response(path: str) -> Response:
     ext = os.path.splitext(path)[1]
     return FileResponse(path, media_type=_TYPES[ext], headers={
-        "Cache-Control": "public, max-age=31536000, immutable" if ext in (".woff", ".woff2", ".jpg", ".png", ".svg", ".webp", ".avif") else "public, max-age=86400",
+        "Cache-Control": "public, max-age=31536000, immutable" if ext in _IMMUTABLE else "public, max-age=86400",
         "X-Content-Type-Options": "nosniff",
         "Access-Control-Allow-Origin": "*",
     })

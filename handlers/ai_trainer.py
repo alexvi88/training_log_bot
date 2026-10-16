@@ -8,11 +8,13 @@ import secrets
 import time
 from contextlib import suppress
 from html import escape
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -2122,8 +2124,17 @@ async def _handle_question(
     scenario: Optional[str] = None,
     progress_stages: Optional[Sequence[str]] = None,
     question_kind: Optional[str] = None,
-) -> None:
+    retry_prefix: Optional[str] = None,
+) -> Optional[str]:
     """Общая логика для текстовых и фото-вопросов: запрос к модели, история, отправка ответа.
+
+    Возвращает текст ответа, если он дошёл до чата, иначе None.
+
+    retry_prefix — повтор вопроса, на котором тренер сорвался (админский
+    /ai_retry, см. retry_failed_question): строка-извинение встаёт над ответом,
+    дневная квота не проверяется и не списывается (сбой был наш), HARD-стоп по
+    деньгам держит как всегда, а сбой не показывается атлету второй раз —
+    исключение уходит вызывающей стороне, она отчитывается админу.
 
     question — то, что реально уходит модели на этот ход (текст +, если есть, фото).
     history_question — облегчённая версия для ai_history/БД: фото туда не попадают
@@ -2178,11 +2189,17 @@ async def _handle_question(
             )
             return
     asked_today = await db.get_ai_question_count_today(user_id)
+    if retry_prefix is not None:
+        # Повтор после нашего сбоя: личная квота атлета ни при чём, а потолок по
+        # деньгам — при чём (у вопроса SOFT не выключает ничего, держит HARD).
+        block = await ai_limits.hard_stop_block()
+        if block is not None:
+            raise RetryBlocked(block.log)
     # Дневная квота вопросов и суточный стоп по деньгам — одной проверкой (см.
     # ai_limits.check). С той же клавиатурой, что у обычных ответов чата:
     # сообщение о лимите становится нижним экраном переписки, и без кнопок из
     # него оставался только выход через нижнее меню.
-    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    block = None if retry_prefix is not None else await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
     if block is not None:
         logger.info("AI question blocked for user %s: %s", user_id, block.log)
         await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id, client=client))
@@ -2336,6 +2353,12 @@ async def _handle_question(
         # так же, как удавшийся ответ, после которого человек просто ушёл.
         with suppress(Exception):
             await activity_log.record_ai_failure(user_id, exc)
+        if retry_prefix is not None:
+            # Атлет уже раз видел «не смог» — второй раз без его вопроса не
+            # показываем: убираем «думаю…», а причину узнаёт админ.
+            with suppress(TelegramAPIError):
+                await placeholder.delete()
+            raise
         error_text = i18n.t("ai.screen.answer_failed")
         error_kb = await ai_keyboard(user_id, client=client)
         try:
@@ -2360,14 +2383,15 @@ async def _handle_question(
     # свой потолок (см. db.try_increment_ai_question_count). Списание
     # по-прежнему ПОСЛЕ ответа: сорвавшийся у провайдера запрос не должен
     # стоить человеку вопроса.
-    await db.try_increment_ai_question_count(
-        user_id, config.AI_QUESTION_DAILY_LIMIT,
-        kind=question_kind or ("video" if video_context else "photo" if image_data_url else "text"),
-    )
+    if retry_prefix is None:
+        await db.try_increment_ai_question_count(
+            user_id, config.AI_QUESTION_DAILY_LIMIT,
+            kind=question_kind or ("video" if video_context else "photo" if image_data_url else "text"),
+        )
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
-    show_quota = 0 < left <= _QUOTA_WARN_AT and not await ai_limits.quota_exempt(user_id)
+    show_quota = retry_prefix is None and 0 < left <= _QUOTA_WARN_AT and not await ai_limits.quota_exempt(user_id)
     quota_text = i18n.t("ai.screen.quota_left", left=left) if show_quota else ""
     quota_html = f"\n\n<i>{quota_text}</i>" if show_quota else ""
     quota_md = f"\n\n_{quota_text}_" if show_quota else ""
@@ -2487,7 +2511,10 @@ async def _handle_question(
         actions=actions,
         client=client,
     )
-    chunks = formatting.split_for_telegram(answer, TG_CHUNK)
+    # Извинение повтора — только на экране: в истории и в логах ответ остаётся
+    # ответом, иначе следующий ход тренер читал бы своё же «прости» как реплику.
+    shown = f"{retry_prefix}\n\n{answer}" if retry_prefix else answer
+    chunks = formatting.split_for_telegram(shown, TG_CHUNK)
     # Rich — только ради того, чего обычное сообщение передать не может:
     # таблицы и заголовка. Rich-сообщение Telegram рисует с воздухом между
     # абзацами, и обычный ответ тренера на три абзаца в такой вёрстке просто
@@ -2513,6 +2540,74 @@ async def _handle_question(
         goal=history_question,
         scenario=scenario,
     )
+    return answer
+
+
+class RetryBlocked(Exception):
+    """Повтор не состоялся до вызова модели: HARD-стоп по деньгам."""
+
+
+class RetryBusy(Exception):
+    """У атлета прямо сейчас в полёте другой вопрос тренеру."""
+
+
+class _ChatScreen:
+    """Чат атлета в форме Message — для хода, который начала не его реплика.
+
+    Админский повтор (/ai_retry) отвечает в чужой чат: сообщения от атлета под
+    рукой нет, а _handle_question ждёт форму Message (answer, answer_rich,
+    reply, bot, chat). message_id — только идентификатор черновика стрима
+    (_DraftStreamer), реакцию на него никто не ставит: user_id передан явно.
+    """
+
+    def __init__(self, bot, chat_id: int) -> None:
+        self.bot = bot
+        self.chat = SimpleNamespace(id=chat_id, type="private")
+        self.from_user = None
+        self.message_id = secrets.randbelow(2**31 - 2) + 1
+
+    async def answer(self, text: str, **kwargs):
+        return await self.bot.send_message(self.chat.id, text, **kwargs)
+
+    async def reply(self, text: str, **kwargs):
+        return await self.bot.send_message(self.chat.id, text, **kwargs)
+
+    async def answer_rich(self, **kwargs):
+        return await self.bot.send_rich_message(chat_id=self.chat.id, **kwargs)
+
+
+async def retry_failed_question(bot, storage, user_id: int, question: str) -> str:
+    """Ответить атлету на вопрос, на котором тренер сорвался, — обычным ходом.
+
+    Тот же _handle_question, что у живого вопроса: история из FSM атлета
+    (ключ его личного чата в общем хранилище), ai_trainer.ask с его user_id,
+    цена в cost_events, ответ в ai_history, ai_chat_messages и ленту. Язык —
+    из users.lang явно: апдейт пришёл от админа, и контекст выставлен под
+    него. Квоту не списывает (см. retry_prefix). Вернёт текст ответа; любой
+    сбой — исключением, атлету второй раз «не смог» не показывается.
+    """
+    if not _try_claim_busy(user_id):
+        raise RetryBusy(user_id)
+    try:
+        state = FSMContext(
+            storage=storage, key=StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
+        )
+        user = await db.get_user(user_id)
+        lang = (user["lang"] if user is not None else None) or i18n.DEFAULT_LANG
+        with i18n.use_lang(lang):
+            answer = await _handle_question(
+                _ChatScreen(bot, user_id), state, question, history_question=question,
+                user_id=user_id, retry_prefix=i18n.t("ai.screen.retry_prefix"),
+            )
+        if answer is None:
+            raise RuntimeError("answer was not delivered")
+        # Ответ лёг под кнопками тренера — следующая реплика атлета должна
+        # уйти тренеру же. Чужое состояние (идёт тренировка) не трогаем.
+        if await state.get_state() is None:
+            await state.set_state(AITrainerFlow.chatting)
+        return answer
+    finally:
+        _busy.discard(user_id)
 
 
 # ---------- опросник перед сборкой программы (ask_setup_questions) ----------

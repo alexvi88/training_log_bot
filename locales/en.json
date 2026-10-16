@@ -1842,6 +1842,7 @@
   "ai.screen.busy": "One sec, still working on your last request. Try again in a minute",
   "ai.screen.comment_failed": "⚠️ Couldn't get a comment — try again.",
   "ai.screen.answer_failed": "⚠️ Couldn't get an answer — try again.",
+  "ai.screen.retry_prefix": "Sorry for the delay — that one was on me. Here's my answer:",
   "ai.screen.quota_left": "Questions left today: {left}",
   "ai.screen.limit_grab_ready_program": "Meanwhile, grab a ready-made one in “✨ Ready-made programs”.",
   "ai.screen.list_stale": "Don't remember this list anymore — ask the coach again",

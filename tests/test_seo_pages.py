@@ -455,9 +455,76 @@ def test_pixel_assets_stay_light_and_contain_no_mockups():
         total = sum(os.path.getsize(os.path.join(gym, f)) for f in files
                     if not f.startswith("scene-") or f == f"scene-{lang}.png")
         assert total < 150_000, total
-    for rel, w, h, frames in seo_static.SPRITES.values():
+        # живая петля — у каждого языка своя доска; браузер качает одну из двух
+        for ext in ("mp4", "webm"):
+            assert os.path.getsize(os.path.join(gym, f"scene-{lang}.{ext}")) <= 400 * 1024, (lang, ext)
+    for rel, w, h, frames, step_ms in seo_static.SPRITES.values():
         with Image.open(os.path.join(seo_static.SITE_DIR, rel)) as im:
             assert im.size == (w * frames, h), rel
+        assert frames == 1 or step_ms > 0, rel
+
+
+async def test_basement_loop_is_served_as_video_with_ranges():
+    """Петля подвала отдаётся своим типом, с кэшем на год и по кусками
+    (Range): Safari без 206 видео не играет."""
+    responses = await _get_many(["/site/gym/scene-en.mp4", "/site/gym/scene-ru.webm"])
+    mp4, webm = responses["/site/gym/scene-en.mp4"], responses["/site/gym/scene-ru.webm"]
+    assert mp4.status_code == 200 and mp4.headers["content-type"] == "video/mp4"
+    assert webm.status_code == 200 and webm.headers["content-type"] == "video/webm"
+    assert "immutable" in mp4.headers["cache-control"] and mp4.headers["x-content-type-options"] == "nosniff"
+    assert mp4.content[4:8] == b"ftyp" and webm.content[:4] == b"\x1aE\xdf\xa3"
+    # faststart: индекс (moov) — до данных (mdat), видео стартует до конца загрузки
+    assert mp4.content.index(b"moov") < mp4.content.index(b"mdat")
+    part = await _get("/site/gym/scene-en.mp4", headers={"Range": "bytes=0-99"})
+    assert part.status_code == 206 and len(part.content) == 100
+
+
+async def test_gym_section_plays_the_loop_with_poster_and_reduced_motion():
+    responses = await _get_many(["/ru", "/en"])
+    for lang in ("ru", "en"):
+        html = responses[f"/{lang}"].text
+        scene = html[html.index("<figure class=scene>"):]
+        scene = scene[:scene.index("</script>")]
+        video = scene[:scene.index("</video>")]
+        for attr in ("autoplay", "muted", "loop", "playsinline", "preload=metadata", "width=1110", "height=617",
+                     f'poster="/site/gym/scene-{lang}.png?v=', "aria-label="):
+            assert attr in video, (lang, attr)
+        webm = video.index(f'src="/site/gym/scene-{lang}.webm?v=')
+        mp4 = video.index(f'src="/site/gym/scene-{lang}.mp4?v=')
+        assert webm < mp4 and "type=video/webm" in video and "type=video/mp4" in video
+        # без движения — скриншот, а видео на паузе
+        assert f'<img class=scene-still src="/site/gym/scene-{lang}.png?v=' in scene and 'alt="' in scene
+        assert "prefers-reduced-motion: reduce" in scene and "pause()" in scene
+        assert "scene-dog" not in html  # собака теперь бегает в самой петле
+        for src in re.findall(r'src="(/site/gym/scene-[^"?]+)', scene):
+            assert seo_static.site_file(src.removeprefix("/site/")), src
+    import seo_design
+
+    reduced = seo_design.CSS[seo_design.CSS.index("@media (prefers-reduced-motion: reduce) { .scene"):]
+    assert ".scene-video { display: none; }" in reduced.split("\n")[0]
+    assert ".scene-still { display: block; }" in reduced.split("\n")[0]
+
+
+async def test_basement_band_walkers_stay_on_the_floor():
+    """Полоса «неделя в подвале»: тренер и собака ходят по полу и разворачиваются
+    у его края (пол — свой контейнер), а не уходят под доску; атлет с
+    гантелями работает; кадры — из лент с шагом приложения."""
+    import seo_design
+
+    html = (await _get("/en")).text
+    band = html[html.index('<section class="basement'):]
+    band = band[:band.index("</section>")]
+    floor = band[:band.index("</div>", band.index("basement-floor"))]
+    for cls, name in (("lifter", "curl"), ("walker", "coach_walk"), ("walker-dog", "dog")):
+        rel, w, h, frames, step_ms = seo_static.SPRITES[name]
+        assert f"<span class={cls}>" in floor and rel in floor, cls
+        assert f"animation-duration:{step_ms * frames}ms" in floor, cls
+    css = seo_design.CSS
+    rule = css[css.index(".basement-floor {"):]
+    assert "container-type: inline-size" in rule[:rule.index("}")]
+    pace = css[css.index("@keyframes pace"):]
+    pace = pace[:pace.index("}\n  }")]
+    assert "scaleX(-1)" in pace and "var(--path)" in pace
 
 
 async def test_indexnow_key_file_only_when_set(monkeypatch):
@@ -838,8 +905,8 @@ async def test_visits_and_clicks_are_counted_without_ip_or_full_referrer(fresh_d
     assert "Роботы: Googlebot 1" in block
     assert "Пришли в бота по ссылкам сайта: 2, из них первую тренировку закрыли 1 (rm1_log 2)" in block
 
-    feed = await fresh_db.site_visits_feed()
-    assert len(feed) == 1 and await fresh_db.count_site_visit_buckets() == 1
+    feed = [r for r in await fresh_db.site_visits_feed() if r["crawler"] is None]
+    assert len(feed) == 1
     line = site_stats.format_feed_line(feed[0])
     assert re.fullmatch(r"🌐 \d\d\.\d\d \d\d:\d0 · /ru/tools/1rm · google · iOS", line)
 
@@ -848,9 +915,15 @@ async def test_feed_folds_repeated_views_into_one_line(fresh_db):
     for _ in range(3):
         await fresh_db.record_site_event("view", "/en", "en", "direct", "desktop")
     await fresh_db.record_site_event("view", "/en", "en", "direct", "bot", "GPTBot")
+    await fresh_db.record_site_event("view", "/en/guides", "en", "direct", "bot", "GPTBot")
+    await fresh_db.record_site_event("view", "/ru", "ru", "direct", "bot", "ClaudeBot")
     feed = await fresh_db.site_visits_feed()
-    assert len(feed) == 1 and feed[0]["n"] == 3
+    assert await fresh_db.count_site_visit_buckets() == len(feed) == 3
+    assert feed[0]["n"] == 3
     assert site_stats.format_feed_line(feed[0]).endswith("· компьютер ×3")
+    bots = [site_stats.format_feed_line(r) for r in feed[1:]]
+    assert any(re.fullmatch(r"🤖 \d\d\.\d\d \d\d:\d0 · GPTBot · 2 стр\.", b) for b in bots)
+    assert any(b.endswith("· ClaudeBot · 1 стр.") for b in bots)
     assert "Пришли в бота по ссылкам сайта: 0" in site_stats.format_growth_block(await fresh_db.site_stats(7), "7 дн.", [])
 
 

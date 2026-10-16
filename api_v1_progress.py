@@ -18,7 +18,9 @@ progress_data.chart_series — один расчёт на бота и на пр�
     признак, по которому решает бот (SessionStats.is_bodyweight_mode);
   - `metric_label`, `comparison.text` — готовые локализованные строки. Довод
     тот же, что у достижений и сводки: формулировка живёт в locales/*.json
-    одним экземпляром, а не вторым — в уже установленной версии приложения.
+    одним экземпляром, а не вторым — в уже установленной версии приложения;
+  - `bodyweight_exercise` и `max_reps` у точки — для вкладки «Макс. повторы»
+    в приложении: у подтягиваний и брусьев она открывается первой.
 
 Поэтому сборка обёрнута в i18n.use_lang(user["lang"]) — как в
 api_v1_achievements и api_v1_dashboard. Без обёртки языком ответа стал бы тот,
@@ -108,7 +110,12 @@ def _records_json(book: Optional[analytics.GoldBook], is_bodyweight: bool) -> Op
     summary = progress_data.best_set_json(book, is_bodyweight)
     if summary is None:
         return None
-    return {key: summary[key] for key in ("best_weight", "best_set", "best_e1rm")}
+    records = {key: summary[key] for key in ("best_weight", "best_set", "best_e1rm")}
+    # Лучшие повторы в одном подходе за всю историю — рекорд упражнения своим
+    # весом (подтягивания, брусья): приложение ставит его на место «лучшего
+    # веса», когда по умолчанию на графике «Макс. повторы».
+    records["best_reps"] = book.max_reps
+    return records
 
 
 def _comparison_json(
@@ -159,6 +166,7 @@ async def series_payload(
     `authed_user_id`. Своего `use_lang` здесь нет нарочно.
     """
     excluded = set(excluded)
+    exercise = await db.get_exercise(exercise_id)
     sessions = await progress_data.load_sessions(exercise_id, owner["e1rm_formula"])
     # Тренировка, ждущая окна «Вернуть», выпадает до всех расчётов — из точек,
     # тренда, рекордов и сравнения разом (см. query_excluded_workouts).
@@ -183,6 +191,14 @@ async def series_payload(
         # в metric_label. null, а не пустая строка, по той же причине, что у
         # подписи плитки в api_v1_dashboard: клиент решает по наличию.
         "unit": None if series.is_bodyweight else formatting.unit_label(owner["unit"]),
+        # Упражнение своим весом по каталогу (exercises.bodyweight_load —
+        # подтягивания, брусья, отжимания; ставится из
+        # seed_data.BODYWEIGHT_TEMPLATES). Это признак УПРАЖНЕНИЯ, а не
+        # истории — в отличие от `metric`: подтягивания с поясом или с
+        # записанным весом тела идут в e1RM, но главный вопрос у них всё равно
+        # «сколько раз подтянулся». По нему приложение открывает график на
+        # «Макс. повторы» (`max_reps` у точки).
+        "bodyweight_exercise": bool(exercise) and (exercise["bodyweight_load"] or "none") != "none",
         "points": [
             {
                 # Местный день атлета, а не UTC-дата строки: приложение
@@ -213,6 +229,11 @@ async def series_payload(
                 # (analytics.SessionStats.tonnage).
                 "max_weight": round(max((x.weight for x in s.sets), default=0.0), 1),
                 "tonnage": round(s.tonnage, 1),
+                # Лучшие повторы в одном подходе этой тренировки — вкладка
+                # «Макс. повторы». Считаются по всем подходам, с весом и
+                # без (0×12 и +10×6 → 12), тем же max_reps_in_set, что
+                # `value` в режиме повторов.
+                "max_reps": s.max_reps_in_set,
                 "note": notes.get(s.workout_id),
             }
             for s, value in zip(shown, values, strict=True)

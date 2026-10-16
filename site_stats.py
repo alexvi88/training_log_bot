@@ -166,9 +166,12 @@ def device_label(device: str) -> str:
 
 
 def format_feed_line(row: Any) -> str:
-    """«🌐 15.10 14:20 · /ru/tools/1rm · google · iOS ×3» — время в UTC, окно 10 минут."""
+    """«🌐 15.10 14:20 · /ru/tools/1rm · google · iOS ×3» — время в UTC, окно 10 минут.
+    Робот — одной строкой на окно: «🤖 15.10 14:20 · ClaudeBot · 37 стр.»."""
     bucket = str(row["bucket"])
     when = f"{bucket[8:10]}.{bucket[5:7]} {bucket[11:13]}:{bucket[14:15]}0"
+    if row["crawler"] is not None:
+        return f"🤖 {when} · {row['crawler']} · {row['n']} стр."
     times = f" ×{row['n']}" if row["n"] > 1 else ""
     return f"🌐 {when} · {row['page']} · {row['referrer']} · {device_label(row['device'])}{times}"
 
