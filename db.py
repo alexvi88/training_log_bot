@@ -833,6 +833,26 @@ CREATE TABLE IF NOT EXISTS funnel_events (
 );
 CREATE INDEX IF NOT EXISTS idx_funnel_events_created ON funnel_events (created_at);
 
+-- Посещения публичного сайта (seo_pages.py, site_stats.py): просмотр
+-- страницы, клик по кнопке «в бота» или «в App Store», показ встроенного
+-- калькулятора. Без cookies, без адреса клиента и без связи с аккаунтом:
+-- страница, язык, домен источника (не полный адрес), вид устройства, имя
+-- поискового робота, utm_source и куда вёл клик. Живёт столько же, сколько
+-- продуктовые события (ANALYTICS_RETENTION_DAYS, prune_old_site_events).
+CREATE TABLE IF NOT EXISTS site_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    page TEXT NOT NULL,
+    lang TEXT,
+    referrer TEXT NOT NULL,
+    device TEXT NOT NULL,
+    crawler TEXT,
+    utm TEXT,
+    target TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_site_events_created ON site_events (created_at);
+
 -- Продуктовая аналитика (analytics.py): события с постоянным машинным именем
 -- и свойствами — то, по чему строятся графики. Не user_events: там лента для
 -- чтения глазами (фраза, введённый текст), она меняется вместе с формулировками
@@ -11480,6 +11500,80 @@ async def analytics_event_users(since: str) -> list[aiosqlite.Row]:
         (since,),
     )
     return await cur.fetchall()
+
+
+async def record_site_event(
+    kind: str, page: str, lang: Optional[str], referrer: str, device: str,
+    crawler: Optional[str] = None, utm: Optional[str] = None, target: Optional[str] = None,
+) -> None:
+    """Одна строка site_events (см. схему): ни адреса, ни id, ни cookies."""
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO site_events (kind, page, lang, referrer, device, crawler, utm, target, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, page, lang, referrer, device, crawler, utm, target, now_iso()),
+        )
+        await conn().commit()
+
+
+async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10) -> dict[str, Any]:
+    """Сводка сайта для /growth: просмотры людей по страницам, источникам и
+    устройствам, обходы роботов по именам, клики по кнопкам."""
+    since, until = _growth_window(days, day)
+    window = "created_at >= ? AND (? IS NULL OR created_at < ?)"
+    args = (since, until, until)
+
+    async def rows(sql: str, extra: tuple = ()) -> list[aiosqlite.Row]:
+        cur = await conn().execute(sql, args + extra)
+        return await cur.fetchall()
+
+    human = f"kind = 'view' AND device <> 'bot' AND {window}"
+    views = (await rows(f"SELECT COUNT(*) FROM site_events WHERE {human}"))[0][0]
+    return {
+        "views": views,
+        "pages": [(r[0], r[1]) for r in await rows(
+            f"SELECT page, COUNT(*) n FROM site_events WHERE {human} GROUP BY page ORDER BY n DESC, page LIMIT ?", (top,))],
+        "referrers": [(r[0], r[1]) for r in await rows(
+            f"SELECT referrer, COUNT(*) n FROM site_events WHERE {human} GROUP BY referrer ORDER BY n DESC, referrer LIMIT ?", (top,))],
+        "devices": [(r[0], r[1]) for r in await rows(
+            f"SELECT device, COUNT(*) n FROM site_events WHERE {human} GROUP BY device ORDER BY n DESC, device")],
+        "crawlers": [(r[0], r[1]) for r in await rows(
+            f"SELECT crawler, COUNT(*) n FROM site_events WHERE kind = 'view' AND device = 'bot' AND {window} "
+            "GROUP BY crawler ORDER BY n DESC, crawler")],
+        "clicks": {r[0]: r[1] for r in await rows(
+            f"SELECT target, COUNT(*) n FROM site_events WHERE kind = 'click' AND device <> 'bot' AND {window} GROUP BY target")},
+        "embeds": (await rows(f"SELECT COUNT(*) FROM site_events WHERE kind = 'embed' AND device <> 'bot' AND {window}"))[0][0],
+    }
+
+
+async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
+    """Просмотры людей (не роботов), сложенные по 10 минутам: в одном окне
+    одна строка на (страница, источник, устройство) с числом — чтобы лента
+    /activity не тонула в обновлениях одной страницы."""
+    cur = await conn().execute(
+        "SELECT substr(created_at, 1, 15) AS bucket, page, referrer, device, COUNT(*) AS n "
+        "FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        "GROUP BY bucket, page, referrer, device ORDER BY bucket DESC, n DESC, page LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def count_site_visit_buckets() -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        "GROUP BY substr(created_at, 1, 15), page, referrer, device)"
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def prune_old_site_events(retention_days: int) -> int:
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM site_events WHERE created_at < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
 
 
 async def prune_old_analytics_events(retention_days: int) -> int:

@@ -1729,7 +1729,22 @@ def admin_activity_users_keyboard(users, page: int, has_next: bool) -> InlineKey
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text=i18n.t("btn.all_users"), callback_data="admin:aca:0"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.site_visits"), callback_data="admin:acs:0"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="admin:menu"))
+    return b.as_markup()
+
+
+def admin_site_feed_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Лента посещений сайта: «⬅️ раньше / позже ➡️» и назад к списку людей."""
+    b = InlineKeyboardBuilder()
+    nav = []
+    if has_next:
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.earlier"), callback_data=f"admin:acs:{page + 1}"))
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.later"), callback_data=f"admin:acs:{page - 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_users"), callback_data="admin:acb"))
     return b.as_markup()
 
 

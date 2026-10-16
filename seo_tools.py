@@ -14,7 +14,17 @@
   если точного нет — ближайший снизу;
 - Wilks — классические коэффициенты (до пересмотра 2020 года), DOTS —
   опубликованные коэффициенты IPF/OpenPowerlifting. Вес тела зажимается в
-  те же границы, что у распространённых реализаций.
+  те же границы, что у распространённых реализаций;
+- IPF GL (Goodlift) — 100 ÷ (A − B·e^(−C·вес)), коэффициенты — таблица IPF
+  2020 в той же записи, что у OpenPowerlifting (crates/coefficients/src/
+  goodlift.rs), там же опубликованные примеры IPF, которыми их сверяет тест;
+- разминка — своя лесенка процентов от рабочего веса, округлённая вниз до
+  шага, который собирается блинами;
+- таблица RPE — не чужая таблица, а та же формула e1RM, развёрнутая
+  обратно: % от максимума = 1 ÷ e1RM(1кг, повторы, RPE);
+- нормативы силы — своя шкала по DOTS (пороги `LEVELS`), разложенная на
+  одно упражнение долей в сумме (`LIFT_SHARE`): медианы по выступлениям в
+  классическом троеборье (данные OpenPowerlifting, общественное достояние).
 
 `tests/test_seo_pages.py` сверяет Python с ботом и гоняет `CALC_JS` в node
 на тех же входах.
@@ -23,6 +33,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Iterable, Optional
 
 import analytics
@@ -37,6 +48,46 @@ WILKS_BW_LIMITS = {"m": (40.0, 201.9), "f": (26.51, 154.53)}
 DOTS_MEN = (-307.75076, 24.0900756, -0.1918759221, 0.0007391293, -0.000001093)
 DOTS_WOMEN = (-57.96288, 13.6175032, -0.1126655495, 0.0005158568, -0.0000010706)
 DOTS_BW_LIMITS = {"m": (40.0, 210.0), "f": (40.0, 150.0)}
+
+# IPF GL: (A, B, C) по (соревнование, экипировка, пол). sbd — троеборье, b — жим.
+GL_PARAMS = {
+    ("sbd", "classic", "m"): (1199.72839, 1025.18162, 0.009210),
+    ("sbd", "equipped", "m"): (1236.25115, 1449.21864, 0.01644),
+    ("sbd", "classic", "f"): (610.32796, 1045.59282, 0.03048),
+    ("sbd", "equipped", "f"): (758.63878, 949.31382, 0.02435),
+    ("b", "classic", "m"): (320.98041, 281.40258, 0.01008),
+    ("b", "equipped", "m"): (381.22073, 733.79378, 0.02398),
+    ("b", "classic", "f"): (142.40398, 442.52671, 0.04724),
+    ("b", "equipped", "f"): (221.82209, 357.00377, 0.02937),
+}
+GL_MIN_BW = 35.0
+
+# Разминка: (доля рабочего веса, повторы). Последняя ступень — только перед
+# тяжёлым подходом (до WARMUP_HEAVY_REPS повторов): перед десяткой она лишняя.
+WARMUP_STEPS = ((0.4, 5), (0.6, 3), (0.8, 2), (0.9, 1))
+WARMUP_HEAVY_REPS = 5
+WARMUP_BAR_REPS = 10
+WARMUP_STEP = {"kg": 2.5, "lb": 5.0}
+
+# Таблица RPE: строки — RPE, столбцы — повторы.
+RPE_ROWS = (10.0, 9.5, 9.0, 8.5, 8.0, 7.5, 7.0, 6.5, 6.0)
+RPE_REPS = tuple(range(1, 13))
+
+# Нормативы: пороги DOTS-эквивалента суммы, общие для мужчин и женщин (DOTS
+# уже выравнивает пол и вес). 450 — около 95-го перцентиля мужчин в
+# классике на соревнованиях USAPL, 300 — около 15-го: уровень первого старта.
+LEVELS = (("beginner", 150.0), ("novice", 225.0), ("intermediate", 300.0), ("advanced", 375.0), ("elite", 450.0))
+# Доля упражнения в сумме — медианы по 11 672 мужским и 5 824 женским
+# выступлениям в классическом троеборье (400 последних по номеру папки
+# соревнований USAPL в opl-data, октябрь 2026), округлённые так, чтобы сумма
+# дала 100%.
+LIFT_SHARE = {
+    "m": {"squat": 0.355, "bench": 0.235, "deadlift": 0.41},
+    "f": {"squat": 0.36, "bench": 0.20, "deadlift": 0.44},
+}
+STRENGTH_LIFTS = ("bench", "squat", "deadlift")
+STRENGTH_BW = {"m": tuple(range(50, 145, 5)), "f": tuple(range(40, 115, 5))}
+STRENGTH_BW_LB = {"m": tuple(range(110, 320, 10)), "f": tuple(range(90, 250, 10))}
 
 PERCENTS = (100, 95, 90, 85, 80, 75, 70, 65, 60, 55, 50)
 
@@ -79,6 +130,90 @@ def wilks(total_kg: float, bodyweight_kg: float, sex: str) -> float:
 def dots(total_kg: float, bodyweight_kg: float, sex: str) -> float:
     x = _clamp(bodyweight_kg, DOTS_BW_LIMITS[sex])
     return total_kg * 500 / _poly(DOTS_MEN if sex == "m" else DOTS_WOMEN, x)
+
+
+def ipf_gl(total_kg: float, bodyweight_kg: float, sex: str, event: str = "sbd", equipment: str = "classic") -> float:
+    """Очки IPF GL. 0 — вес тела меньше GL_MIN_BW: там формула не определена."""
+    if bodyweight_kg < GL_MIN_BW or total_kg <= 0:
+        return 0.0
+    a, b, c = GL_PARAMS[(event, equipment, sex)]
+    denominator = a - b * math.exp(-c * bodyweight_kg)
+    return total_kg * max(0.0, 100 / denominator) if denominator else 0.0
+
+
+def _floor_step(value: float, step: float) -> float:
+    return math.floor(value / step + 1e-9) * step
+
+
+def warmup_sets(work: float, bar: float, step: float, work_reps: int = 5) -> list[tuple[float, int]]:
+    """Разминочные подходы до рабочего веса: (вес, повторы), от грифа вверх.
+
+    Ступень, которая после округления не тяжелее предыдущей или уже не легче
+    рабочего веса, выпадает — у лёгкого рабочего веса лесенка короче."""
+    if work <= bar or step <= 0:
+        return []
+    sets = [(bar, WARMUP_BAR_REPS)]
+    last = bar
+    steps = WARMUP_STEPS if work_reps <= WARMUP_HEAVY_REPS else WARMUP_STEPS[:-1]
+    for share, reps in steps:
+        weight = _floor_step(work * share, step)
+        if weight <= last + 1e-9 or weight >= work - 1e-9:
+            continue
+        sets.append((weight, reps))
+        last = weight
+    return sets
+
+
+def rpe_percent(reps: int, rpe: float, formula: str = "epley") -> float:
+    """Сколько процентов от максимума — подход на `reps` при этом RPE."""
+    one = analytics.e1rm(1.0, reps, formula, rpe)
+    return 100 / one if one else 0.0
+
+
+def rpe_chart(formula: str = "epley") -> list[tuple[float, list[float]]]:
+    return [(rpe, [rpe_percent(r, rpe, formula) for r in RPE_REPS]) for rpe in RPE_ROWS]
+
+
+def dots_coefficient(bodyweight_kg: float, sex: str) -> float:
+    x = _clamp(bodyweight_kg, DOTS_BW_LIMITS[sex])
+    return 500 / _poly(DOTS_MEN if sex == "m" else DOTS_WOMEN, x)
+
+
+def level_weight(threshold: float, lift: str, bodyweight_kg: float, sex: str) -> float:
+    """Вес в упражнении, с которого начинается уровень с этим порогом DOTS."""
+    return threshold / dots_coefficient(bodyweight_kg, sex) * LIFT_SHARE[sex][lift]
+
+
+def lift_score(lift_kg: float, lift: str, bodyweight_kg: float, sex: str) -> float:
+    """DOTS-эквивалент одного упражнения: как если бы сумма была в той же пропорции."""
+    return lift_kg / LIFT_SHARE[sex][lift] * dots_coefficient(bodyweight_kg, sex)
+
+
+def level_index(score: float) -> int:
+    """Номер уровня в LEVELS (−1 — ниже первого порога)."""
+    index = -1
+    for i, (_name, threshold) in enumerate(LEVELS):
+        if score >= threshold - 1e-9:
+            index = i
+    return index
+
+
+def round_to(value: float, step: float) -> float:
+    return math.floor(value / step + 0.5) * step
+
+
+def strength_table(lift: str, sex: str, unit: str = "kg") -> list[tuple[float, list[float]]]:
+    """(вес тела, [вес упражнения на каждый уровень]) в выбранных единицах:
+    кг округляются до 2.5, фунты — до 5."""
+    rows = []
+    if unit == "kg":
+        for bw in STRENGTH_BW[sex]:
+            rows.append((float(bw), [round_to(level_weight(t, lift, bw, sex), 2.5) for _n, t in LEVELS]))
+    else:
+        for bw_lb in STRENGTH_BW_LB[sex]:
+            bw = bw_lb / config.LB_PER_KG
+            rows.append((float(bw_lb), [round_to(level_weight(t, lift, bw, sex) * config.LB_PER_KG, 5.0) for _n, t in LEVELS]))
+    return rows
 
 
 def plates_per_side(target: float, bar: float, plates: Iterable[float]) -> tuple[list[float], float]:
@@ -124,6 +259,15 @@ def js_constants() -> str:
         "scale": _SCALE,
         "maxPerSide": MAX_PER_SIDE,
         "lbPerKg": config.LB_PER_KG,
+        "gl": {"|".join(k): list(v) for k, v in GL_PARAMS.items()},
+        "glMinBw": GL_MIN_BW,
+        "warmupSteps": [list(x) for x in WARMUP_STEPS],
+        "warmupHeavyReps": WARMUP_HEAVY_REPS,
+        "warmupBarReps": WARMUP_BAR_REPS,
+        "rpeRows": list(RPE_ROWS),
+        "rpeReps": list(RPE_REPS),
+        "levels": [t for _n, t in LEVELS],
+        "share": LIFT_SHARE,
     })
 
 
@@ -160,6 +304,28 @@ function platesPerSide(target, bar, plates) {
   picked.sort(function (a, b) { return b - a; });
   return { plates: picked, total: bar + 2 * reach / C.scale };
 }
+function ipfGl(total, bw, sex, ev, eq) {
+  if (bw < C.glMinBw || !(total > 0)) return 0;
+  var p = C.gl[ev + '|' + eq + '|' + sex], d = p[0] - p[1] * Math.exp(-p[2] * bw);
+  return d ? total * Math.max(0, 100 / d) : 0;
+}
+function floorStep(v, s) { return Math.floor(v / s + 1e-9) * s; }
+function warmupSets(work, bar, step, reps) {
+  if (!(work > bar) || !(step > 0)) return [];
+  var out = [[bar, C.warmupBarReps]], last = bar;
+  var steps = reps <= C.warmupHeavyReps ? C.warmupSteps : C.warmupSteps.slice(0, -1);
+  for (var i = 0; i < steps.length; i++) {
+    var w = floorStep(work * steps[i][0], step);
+    if (w <= last + 1e-9 || w >= work - 1e-9) continue;
+    out.push([w, steps[i][1]]); last = w;
+  }
+  return out;
+}
+function rpePercent(reps, rpe, formula) { var one = e1rm(1, reps, formula, rpe); return one ? 100 / one : 0; }
+function dotsCoef(bw, sex) { return 500 / poly(C.dots[sex], clamp(bw, C.dotsBw[sex])); }
+function levelWeight(t, lift, bw, sex) { return t / dotsCoef(bw, sex) * C.share[sex][lift]; }
+function liftScore(w, lift, bw, sex) { return w / C.share[sex][lift] * dotsCoef(bw, sex); }
+function levelIndex(score) { var k = -1; for (var i = 0; i < C.levels.length; i++) if (score >= C.levels[i] - 1e-9) k = i; return k; }
 function fmt(x) { var r = Math.round(x * 10) / 10; return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)); }
 """
 
