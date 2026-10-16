@@ -34,6 +34,8 @@ import inbox
 import keyboards
 import product_metrics
 import push_texts
+import seo_pages
+import site_stats
 import timeutil
 import ui
 import view_builder
@@ -738,6 +740,34 @@ async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target
     await ui.safe_edit(callback, text, reply_markup=kb)
 
 
+SITE_FEED_PAGE_SIZE = 30
+
+
+async def _show_site_feed(callback: CallbackQuery, page: int):
+    """Посещения сайта людьми, сложенные по 10 минутам (site_stats.format_feed_line):
+    роботы и повторные обновления одной страницы ленту не забивают."""
+    total = await db.count_site_visit_buckets()
+    rows = await db.site_visits_feed(limit=SITE_FEED_PAGE_SIZE, offset=page * SITE_FEED_PAGE_SIZE)
+    has_next = (page + 1) * SITE_FEED_PAGE_SIZE < total
+    if rows:
+        text = "🌐 Сайт — просмотры людьми, по 10 минут, время UTC, свежие сверху:\n\n" + "\n".join(
+            escape(site_stats.format_feed_line(row)) for row in rows
+        )
+    else:
+        text = f"🌐 Посещений сайта пока нет (хранятся {config.ANALYTICS_RETENTION_DAYS} дн.)."
+    kb = keyboards.admin_site_feed_keyboard(page, has_next)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("admin:acs:"))
+async def admin_activity_site(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await _show_site_feed(callback, int(callback.data.split(":")[2]))
+    await callback.answer()
+
+
 async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, page: int):
     await state.set_state(AdminFlow.browsing_activity_all)
     await state.update_data(admin_activity_all_page=page)
@@ -823,11 +853,17 @@ async def cmd_growth(message: Message, state: FSMContext):
     donation_stars, donation_people = await db.donation_totals(days, day=day)
     period = acquisition.period_label(days, day)
     bot_username = await sharing.get_bot_username(message.bot)
+    site = await db.site_stats(days, day=day)
+    seo_signups = [r for r in funnel if str(r["source"]).startswith(seo_pages.BOT_TAG_PREFIX)]
     text = (
         f"{acquisition.format_funnel(funnel, days, day)}\n\n"
         f"{acquisition.format_onboarding_funnel(onboarding, days, day)}\n\n"
         f"{acquisition.format_app_funnel(app_funnel, days, day)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
+        # Сайт (seo_pages.py, site_stats.py): просмотры без cookies и клики по
+        # кнопкам; последняя строка закрывает воронку — сколько из этого
+        # дошло до /start с меткой src_seo_*.
+        f"{site_stats.format_growth_block(site, period, seo_signups)}\n\n"
         # Донат («Поддержать проект», handlers/donate.py) — не часть воронки
         # источников: это разовый жест, не шаг в онбординге, и число просто
         # рядом, а не в теле format_funnel/format_onboarding_funnel.

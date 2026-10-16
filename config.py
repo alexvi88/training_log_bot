@@ -1194,6 +1194,12 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "lightweight_log_bot").strip().lstrip("
 GOOGLE_SITE_VERIFICATION = os.getenv("GOOGLE_SITE_VERIFICATION", "").strip()
 GOOGLE_SITE_VERIFICATION_FILE = os.getenv("GOOGLE_SITE_VERIFICATION_FILE", "").strip()
 
+# Ключ IndexNow (seo_static.indexnow_key): Bing и Яндекс узнают о новых
+# страницах сразу, а не при следующем обходе, — по нему же ищет ChatGPT.
+# Сервер отдаёт `/<ключ>.txt` с самим ключом, scripts/indexnow_ping.py шлёт
+# адреса из sitemap. Пусто — файла нет.
+INDEXNOW_KEY = os.getenv("INDEXNOW_KEY", "").strip()
+
 
 # Team ID аккаунта разработчика Apple для apple-app-site-association
 # (Universal Links: `<адрес>/coach/<код>` открывает приложение, а не Safari).

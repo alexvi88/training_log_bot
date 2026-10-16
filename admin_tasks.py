@@ -734,6 +734,8 @@ async def _run_retention_cleanup() -> bool:
         # config.ANALYTICS_RETENTION_DAYS): текста человека в них нет.
         ("funnel_events", lambda: db.prune_old_funnel_events(config.ANALYTICS_RETENTION_DAYS)),
         ("analytics_events", lambda: db.prune_old_analytics_events(config.ANALYTICS_RETENTION_DAYS)),
+        # Посещения сайта (seo_pages.py) — те же 13 месяцев, адреса в них нет.
+        ("site_events", lambda: db.prune_old_site_events(config.ANALYTICS_RETENTION_DAYS)),
         ("diagnostics", lambda: db.prune_old_diagnostics(config.DIAGNOSTICS_RETENTION_DAYS)),
         ("behaviour_digests", lambda: db.prune_old_behaviour_digests(config.BEHAVIOUR_DIGEST_RETENTION_DAYS)),
         ("weekly_digests", lambda: db.prune_old_weekly_digests(config.WEEKLY_DIGEST_RETENTION_DAYS)),
