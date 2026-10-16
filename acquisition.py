@@ -225,11 +225,16 @@ def format_onboarding_funnel(rows: Iterable[Any], days: int, day: Optional[str] 
 # Шаги воронки приложения до входа (api_v1_funnel.STEPS) — в том порядке, в
 # каком их проходит человек, и с подписью для админа.
 APP_FUNNEL_STEPS: tuple[tuple[str, str], ...] = (
-    ("onboarding_slide_1", "слайд 1"),
-    ("onboarding_slide_2", "слайд 2 (локскрин, iOS 17+)"),
-    ("onboarding_slide_3", "слайд 3"),
-    ("onboarding_slide_4", "слайд 4"),
-    ("onboarding_slide_5", "слайд 5"),
+    ("onboarding_slide_1", "слайд 1 «ПРИВЕТ АТЛЕТ!»"),
+    ("onboarding_slide_2", "слайд 2 «Рекорды…»"),
+    ("onboarding_slide_3", "слайд 3 «Не знаешь, что делать в зале?»"),
+    ("onboarding_slide_4", "слайд 4 «Давай посмотрю.»"),
+    ("onboarding_slide_5", "слайд 5 «Это ТЫ.»"),
+    ("onboarding_lock_screen", "экран блокировки (только iOS 17+)"),
+    ("onboarding_gender", "«Твой пол»"),
+    ("onboarding_gender_male", "↳ «Начать», пол: мужской"),
+    ("onboarding_gender_female", "↳ «Начать», пол: женский"),
+    ("onboarding_gender_none", "↳ «Начать», пол: не указан"),
     ("push_priming", "экран уведомлений"),
     ("signin_shown", "экран входа"),
     ("signin_tapped", "нажал «Войти с Apple»"),
