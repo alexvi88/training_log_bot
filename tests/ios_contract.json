@@ -1885,6 +1885,11 @@
     "hasMedia": {
      "type": "Bool",
      "optional": false
+    },
+    "muscles": {
+     "type": "ExerciseMuscles",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -1916,6 +1921,19 @@
     "message": {
      "type": "String",
      "optional": true
+    }
+   }
+  },
+  "ExerciseMuscles": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "primary": {
+     "type": "[String]",
+     "optional": false
+    },
+    "secondary": {
+     "type": "[String]",
+     "optional": false
     }
    }
   },
@@ -5488,5 +5506,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "bb3b6c186205dd6c1ed4faa9cb233132ef4b524a"
+ "_ios_commit": "4fc6ca5e713b0ceefd688f2b3e608ce84b59416f"
 }
