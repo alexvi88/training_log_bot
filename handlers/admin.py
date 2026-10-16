@@ -801,13 +801,13 @@ SITE_FEED_PAGE_SIZE = 30
 
 
 async def _show_site_feed(callback: CallbackQuery, page: int):
-    """Посещения сайта людьми, сложенные по 10 минутам (site_stats.format_feed_line):
-    роботы и повторные обновления одной страницы ленту не забивают."""
+    """Посещения сайта, сложенные по 10 минутам (site_stats.format_feed_line):
+    люди — по страницам, роботы — одной строкой на робота в окне."""
     total = await db.count_site_visit_buckets()
     rows = await db.site_visits_feed(limit=SITE_FEED_PAGE_SIZE, offset=page * SITE_FEED_PAGE_SIZE)
     has_next = (page + 1) * SITE_FEED_PAGE_SIZE < total
     if rows:
-        text = "🌐 Сайт — просмотры людьми, по 10 минут, время UTC, свежие сверху:\n\n" + "\n".join(
+        text = "🌐 Сайт — просмотры по 10 минут (🤖 — роботы), время UTC, свежие сверху:\n\n" + "\n".join(
             escape(site_stats.format_feed_line(row)) for row in rows
         )
     else:

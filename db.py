@@ -11699,13 +11699,22 @@ async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10
 
 
 async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
-    """Просмотры людей (не роботов), сложенные по 10 минутам: в одном окне
-    одна строка на (страница, источник, устройство) с числом — чтобы лента
-    /activity не тонула в обновлениях одной страницы."""
+    """Просмотры сайта, сложенные по 10 минутам: у людей в одном окне одна
+    строка на (страница, источник, устройство) с числом — чтобы лента
+    /activity не тонула в обновлениях одной страницы; роботы — одна строка на
+    робота в окне (crawler, сколько страниц), как в логе процесса, а не по
+    странице: обход ClaudeBot — это сотни адресов подряд."""
     cur = await conn().execute(
-        "SELECT substr(created_at, 1, 15) AS bucket, page, referrer, device, COUNT(*) AS n "
+        "SELECT * FROM ("
+        "SELECT substr(created_at, 1, 15) AS bucket, page, referrer, device, NULL AS crawler, COUNT(*) AS n "
         "FROM site_events WHERE kind = 'view' AND device <> 'bot' "
-        "GROUP BY bucket, page, referrer, device ORDER BY bucket DESC, n DESC, page LIMIT ? OFFSET ?",
+        "GROUP BY bucket, page, referrer, device "
+        "UNION ALL "
+        "SELECT substr(created_at, 1, 15) AS bucket, '' AS page, '' AS referrer, 'bot' AS device, "
+        "COALESCE(crawler, '?') AS crawler, COUNT(*) AS n "
+        "FROM site_events WHERE kind = 'view' AND device = 'bot' "
+        "GROUP BY bucket, COALESCE(crawler, '?')"
+        ") ORDER BY bucket DESC, crawler IS NOT NULL, n DESC, page LIMIT ? OFFSET ?",
         (limit, offset),
     )
     return await cur.fetchall()
@@ -11713,8 +11722,10 @@ async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.R
 
 async def count_site_visit_buckets() -> int:
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device <> 'bot' "
-        "GROUP BY substr(created_at, 1, 15), page, referrer, device)"
+        "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        "GROUP BY substr(created_at, 1, 15), page, referrer, device)) + "
+        "(SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device = 'bot' "
+        "GROUP BY substr(created_at, 1, 15), COALESCE(crawler, '?')))"
     )
     (count,) = await cur.fetchone()
     return count

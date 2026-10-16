@@ -838,8 +838,8 @@ async def test_visits_and_clicks_are_counted_without_ip_or_full_referrer(fresh_d
     assert "Роботы: Googlebot 1" in block
     assert "Пришли в бота по ссылкам сайта: 2, из них первую тренировку закрыли 1 (rm1_log 2)" in block
 
-    feed = await fresh_db.site_visits_feed()
-    assert len(feed) == 1 and await fresh_db.count_site_visit_buckets() == 1
+    feed = [r for r in await fresh_db.site_visits_feed() if r["crawler"] is None]
+    assert len(feed) == 1
     line = site_stats.format_feed_line(feed[0])
     assert re.fullmatch(r"🌐 \d\d\.\d\d \d\d:\d0 · /ru/tools/1rm · google · iOS", line)
 
@@ -848,9 +848,15 @@ async def test_feed_folds_repeated_views_into_one_line(fresh_db):
     for _ in range(3):
         await fresh_db.record_site_event("view", "/en", "en", "direct", "desktop")
     await fresh_db.record_site_event("view", "/en", "en", "direct", "bot", "GPTBot")
+    await fresh_db.record_site_event("view", "/en/guides", "en", "direct", "bot", "GPTBot")
+    await fresh_db.record_site_event("view", "/ru", "ru", "direct", "bot", "ClaudeBot")
     feed = await fresh_db.site_visits_feed()
-    assert len(feed) == 1 and feed[0]["n"] == 3
+    assert await fresh_db.count_site_visit_buckets() == len(feed) == 3
+    assert feed[0]["n"] == 3
     assert site_stats.format_feed_line(feed[0]).endswith("· компьютер ×3")
+    bots = [site_stats.format_feed_line(r) for r in feed[1:]]
+    assert any(re.fullmatch(r"🤖 \d\d\.\d\d \d\d:\d0 · GPTBot · 2 стр\.", b) for b in bots)
+    assert any(b.endswith("· ClaudeBot · 1 стр.") for b in bots)
     assert "Пришли в бота по ссылкам сайта: 0" in site_stats.format_growth_block(await fresh_db.site_stats(7), "7 дн.", [])
 
 
