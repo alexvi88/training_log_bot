@@ -66,8 +66,9 @@ MCP_PATH = "/mcp"
 
 # Код для ревьюеров каталогов коннекторов (Claude, ChatGPT): им нужен
 # заполненный аккаунт и способ получить код без Telegram и без iPhone. Вход —
-# тем же демо-аккаунтом, что у App Review (config.REVIEW_DEMO_*, review_demo),
-# с тем же лимитом неудач; без секретов страницы нет (404). Со страницы
+# своим демо-аккаунтом каталогов (config.CATALOG_DEMO_*, catalog_demo), не
+# демо App Review, с тем же лимитом неудач, что у review_demo; без секретов
+# страницы нет (404). Со страницы
 # согласия не ссылаемся: живому атлету она не нужна, адрес — только в
 # инструкции для ревьюера (docs/MCP_LISTING.md).
 DEMO_CODE_PATH = "/mcp/demo-code"
@@ -847,11 +848,12 @@ async def demo_code_route(request: Request) -> Response:
     """
     # Здесь, а не наверху модуля: review_demo тянет achievement_sync и всё
     # дерево базы, а mcp_oauth импортируется рано.
+    import catalog_demo
     import review_demo
 
-    # Демо-аккаунт App Review владелец бережёт: без явного включения
-    # (MCP_DEMO_CODE_ENABLED=true) страницы нет вовсе.
-    if not config.MCP_DEMO_CODE_ENABLED or not config.review_demo_available():
+    # Только свой аккаунт каталогов: пара App Review (REVIEW_DEMO_*) здесь не
+    # подходит никогда. Без пары CATALOG_DEMO_* страницы нет вовсе.
+    if not config.catalog_demo_available():
         return Response("not found\n", status_code=404, media_type="text/plain")
     lang = page_lang(request)
     if request.method == "GET":
@@ -860,13 +862,12 @@ async def demo_code_route(request: Request) -> Response:
     if review_demo.is_rate_limited(ip):
         return _demo_code_page(lang, error=i18n.t_in(lang, "oauth.demo.rate_limited"), status_code=429)
     form = await request.form()
-    username = review_demo.check_credentials(str(form.get("username", "")), str(form.get("password", "")))
-    if username is None:
+    if not catalog_demo.check_credentials(str(form.get("username", "")), str(form.get("password", ""))):
         review_demo.record_failure(ip)
         return _demo_code_page(lang, error=i18n.t_in(lang, "oauth.demo.error"), status_code=401)
-    user_id = await review_demo.ensure_demo_user(lang, username)
+    user_id = await catalog_demo.ensure_user()
     code = await link_code(user_id, force_new=True)
-    logger.info("MCP OAuth: demo code issued for a demo account")
+    logger.info("MCP OAuth: demo code issued for the catalog demo account")
     return _demo_code_page(lang, code=code)
 
 

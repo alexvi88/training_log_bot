@@ -110,6 +110,19 @@ fly secrets set -a training-log-bot WALK_DEMO_USERNAME=screenshots WALK_DEMO_PAS
 Эти же значения — в секреты iOS-репо `WALK_DEMO_USERNAME` и
 `WALK_DEMO_PASSWORD` (Settings → Secrets and variables → Actions).
 
+Ревьюеры каталогов AI-коннекторов (Claude, ChatGPT) ходят под **третьим**,
+своим аккаунтом — не под App Review: у коннектора есть пишущие инструменты, а
+витрину для Apple никто, кроме Apple, трогать не должен. Пара `CATALOG_DEMO_*`
+открывает только страницу `/mcp/demo-code` (в приложение по паролю с ней не
+войти), без неё страницы нет:
+
+```sh
+PW="$(openssl rand -base64 18)"; echo "$PW"
+fly secrets set -a training-log-bot CATALOG_DEMO_USERNAME=connector-review CATALOG_DEMO_PASSWORD="$PW"
+```
+
+Эти же значения — в формы заявок Claude и OpenAI (подробно — `docs/MCP_LISTING.md`).
+
 ## 3. База
 
 1. **Остановить бота на Amvera** (кнопка паузы вверху справа) — иначе после

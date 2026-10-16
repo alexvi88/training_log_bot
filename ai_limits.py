@@ -324,11 +324,17 @@ async def resets_at(user_id: int, kind: str) -> dt.datetime:
 
 
 async def quota_exempt(user_id: int) -> bool:
-    """Личные суточные квоты не держит: свои аккаунты (ADMIN_ID, TEST_USER_ID) и
-    аккаунт прогонов. Своим раньше показывалось предупреждение с «Понятно» — но
-    только в боте: в приложении экрана для него нет, и админ упирался в настоящий
-    отказ. Потолки по деньгам (SOFT/HARD) держат все."""
-    return user_id in config.limit_preview_ids() or await db.is_walk_demo(user_id)
+    """Личные суточные квоты не держит: свои аккаунты (ADMIN_ID, TEST_USER_ID),
+    аккаунт прогонов и демо ревьюеров каталогов коннекторов (catalog_demo.py:
+    ревьюер гоняет инструменты подряд, и упереться в квоту посреди проверки —
+    значит завернуть заявку). Своим раньше показывалось предупреждение с
+    «Понятно» — но только в боте: в приложении экрана для него нет, и админ
+    упирался в настоящий отказ. Потолки по деньгам (SOFT/HARD) держат все."""
+    return (
+        user_id in config.limit_preview_ids()
+        or await db.is_walk_demo(user_id)
+        or await db.is_catalog_demo(user_id)
+    )
 
 
 async def check(user_id: int, kind: str) -> Optional[Block]:
