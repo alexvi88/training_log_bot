@@ -799,8 +799,14 @@ async def _start_ai_scenario(
     keep_message: bool = False,
     scenario: Optional[str] = None,
     on_claimed: Optional[Callable[[], Any]] = None,
+    new_conversation: bool = False,
 ) -> None:
     """Кнопка, которая сама начинает разговор с тренером за пользователя.
+
+    `new_conversation` — начать с чистого листа, как «🆕 Новый разговор»
+    (ai_new_chat): «Тренировка на сегодня» — отдельная просьба, и прошлый
+    разговор ей только мешает (и стоит токенов). В режиме «программа атлету»
+    не сбрасываем: там история — разговор про атлета.
 
     `on_claimed` — шаг, который делается только когда все проверки прошли и
     бронь взята (вход в режим «программа атлету», см. start_client_program).
@@ -867,6 +873,8 @@ async def _start_ai_scenario(
         # захода и его счётчик кругов (см. SETUP_MAX_ROUNDS) к ней отношения не
         # имеют, а доживший счётчик упёр бы её в потолок с первого вопроса.
         await state.update_data(ai_setup=None)
+        if new_conversation and not (await state.get_data()).get("ai_client"):
+            await state.update_data(**{key: None for key in _OWN_CONVERSATION_KEYS})
         # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
         # экран на месте меню — а ответа может и не быть вовсе (сбой провайдера),
         # и без кнопок выход остался бы только через нижнее меню.
@@ -922,7 +930,9 @@ async def ai_build_workout(callback: CallbackQuery, state: FSMContext):
     однодневного черновика можно уйти сразу в тренировку, не сохраняя его
     себе программой — см. keyboards.ai_program_preview_keyboard.
     """
-    await _start_ai_scenario(callback, state, _build_workout_intro(), _build_workout_seed())
+    await _start_ai_scenario(
+        callback, state, _build_workout_intro(), _build_workout_seed(), new_conversation=True,
+    )
 
 
 @router.callback_query(F.data.startswith("ai:preset:"))

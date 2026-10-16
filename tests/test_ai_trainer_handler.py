@@ -2440,3 +2440,32 @@ async def test_question_right_after_new_chat_does_not_crash(fresh_db, user_id, m
     ask.assert_awaited_once()
     assert ask.await_args.args[2] == []
     assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+
+async def test_build_workout_starts_a_new_conversation(fresh_db, user_id, monkeypatch):
+    """«Собрать тренировку на сегодня» — отдельная просьба: прошлый разговор
+    модели не уходит (как после «🆕 Новый разговор»), а дневник переписки цел."""
+    import ui
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ui.chat_bottom, "is_at_bottom", lambda *a, **k: False)
+    seen = {}
+
+    async def fake_ask(uid, question, history, **kwargs):
+        seen["history"] = list(history)
+        return "Сегодня ноги."
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", fake_ask)
+    state = await _make_state(user_id)
+    await state.update_data(
+        ai_history=[{"role": "user", "content": "как жим?"}, {"role": "assistant", "content": "растёт"}],
+        ai_program_draft={"name": "старый"},
+    )
+    callback = _make_buildprog_callback(user_id)
+    callback.data = "ai:buildworkout"
+
+    await ai_trainer.ai_build_workout(callback, state)
+
+    assert seen["history"] == []
+    data = await state.get_data()
+    assert not data.get("ai_program_draft") or data["ai_program_draft"].get("name") != "старый"
