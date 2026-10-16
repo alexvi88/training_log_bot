@@ -1,0 +1,72 @@
+<h1>Connect Athlete Diary to Claude and ChatGPT</h1>
+<p class="muted">Athlete Diary is an iPhone app and a Telegram bot for logging workouts. The connector lets an AI app you use read your own diary and answer questions about your training.</p>
+
+<p>Connect once — and ask about your training right there: “Did my bench progress in the last 3 months?”, “What muscles am I undertraining?”, “Build me a 4-day program around what I already do”.</p>
+
+<h2>What you need</h2>
+<ul>
+  <li>An Athlete Diary account — the iPhone app (Sign in with Apple) or the Telegram bot <a href="https://t.me/lightweight_log_bot">@lightweight_log_bot</a>. Both are free.</li>
+  <li>Claude (claude.ai, the desktop or mobile app, Claude Code) or ChatGPT.</li>
+</ul>
+
+<h2>Connector address</h2>
+<p><code>https://athletediary.app/mcp</code></p>
+<p>Sign-in is OAuth: there is no password. On the confirmation page you enter a one-time 6-digit code that only you can get:</p>
+<ul>
+  <li>in the app: Profile → “Connect to Claude and ChatGPT” → “Get code”;</li>
+  <li>in the bot: send <code>/mcp</code> and pick your app — the code is in the same message.</li>
+</ul>
+<p>The code lasts 10 minutes and works once. A new code cancels the previous one.</p>
+
+<h2>Claude</h2>
+<ol>
+  <li>Settings → Connectors → Add custom connector (or find Athlete Diary in the connector directory).</li>
+  <li>Paste <code>https://athletediary.app/mcp</code> and tap Connect.</li>
+  <li>On the Athlete Diary confirmation page enter the code and tap “Allow”.</li>
+  <li>Check: in a new chat ask “show my recent workouts”.</li>
+</ol>
+<p>Claude Code: <code>claude mcp add --transport http athlete-diary https://athletediary.app/mcp</code>, then <code>/mcp</code> → Authenticate.</p>
+
+<h2>ChatGPT</h2>
+<ol>
+  <li>Find Athlete Diary in the ChatGPT apps directory and tap Connect. Until the listing is live: Settings → Apps &amp; Connectors → Advanced → turn on Developer mode, then Create, paste <code>https://athletediary.app/mcp</code>, Authentication — OAuth.</li>
+  <li>On the Athlete Diary confirmation page enter the code and tap “Allow”.</li>
+  <li>Check: turn the connector on in a chat and ask “show my recent workouts”.</li>
+</ol>
+
+<h2>What the connector can do</h2>
+<p>Reading — it never changes anything:</p>
+<ul>
+  <li><code>get_training_overview</code> — units, stats, training profile and the list of your exercises.</li>
+  <li><code>get_active_workout</code> — the workout in progress, if there is one.</li>
+  <li><code>list_recent_workouts</code> — the last 1–10 workouts with every set.</li>
+  <li><code>get_full_workout_history</code> — up to the last 200 workouts, for long-term questions.</li>
+  <li><code>get_exercise_progress</code> — one exercise: sets by date, working weights, e1RM, records.</li>
+  <li><code>compare_periods</code> — the last N days against the previous N, across all exercises.</li>
+  <li><code>get_weekly_volume_by_group</code> — working sets per muscle group, this week and last.</li>
+  <li><code>get_muscle_recovery</code> — how recovered each muscle group is.</li>
+  <li><code>get_bodyweight_history</code> — weigh-ins.</li>
+  <li><code>get_saved_programs</code> — your programs, the list or one in full.</li>
+  <li><code>get_program_adherence</code> — how your workouts match the saved program.</li>
+  <li><code>list_exercise_catalog</code> — the built-in exercise catalog by muscle group.</li>
+</ul>
+<p>Writing — only when you ask the AI app to:</p>
+<ul>
+  <li><code>log_bodyweight</code> — log today’s body weight.</li>
+  <li><code>delete_bodyweight_log</code> — delete one weigh-in (the AI app asks you to confirm).</li>
+  <li><code>create_exercise</code> — add a custom exercise.</li>
+  <li><code>copy_program</code> — duplicate a saved program.</li>
+</ul>
+<p>The connector cannot read your AI coach chat, rename or delete workouts, exercises or programs, or see your e-mail, Apple ID or Telegram account. Up to 60 requests a minute.</p>
+
+<h2>Privacy and disconnecting</h2>
+<p>Your data goes to the AI app only when it calls the connector on your request, and only to the account you confirmed with the code. From there that company’s own privacy policy applies. To disconnect: in the app, Profile → “Connect to Claude and ChatGPT” → “Connected apps”; in the bot, <code>/mcp</code> → “Connected apps” — or remove the connector in the AI app. Details — in the <a href="/privacy?lang=en">Privacy Policy</a>.</p>
+
+<h2>Help</h2>
+<ul>
+  <li>In the app: Profile → “Support &amp; feedback”.</li>
+  <li>In the bot: the /feedback command.</li>
+  <!-- contact-email -->
+</ul>
+
+<p class="muted"><a href="/privacy?lang=en">Privacy Policy</a> · <a href="/terms?lang=en">Terms of Use</a> · <a href="/support?lang=en">Support</a> · <a href="/connect?lang=ru">Русский</a></p>

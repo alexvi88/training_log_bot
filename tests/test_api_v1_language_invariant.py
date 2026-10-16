@@ -36,6 +36,7 @@ import base64
 import datetime as dt
 import json
 import re
+import time as _time
 from typing import Any
 
 import httpx
@@ -110,6 +111,9 @@ MACHINE_KEYS = {
     # Пол атлета в /v1/settings и /v1/profile — перечисление male/female/null,
     # подпись «Мужской»/«Male» рисует приложение.
     "gender",
+    # Подключение к Claude/ChatGPT (/v1/mcp/*): id клиента OAuth (uuid из
+    # регистрации) и адрес коннектора — машинные значения.
+    "client_id", "server_url",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -538,8 +542,20 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("DELETE", "/push/register", expect=200)
     await w.call("POST", "/account/telegram-link-code", expect=(200, 409))
     await w.call("POST", "/mcp/link-code", expect=503)  # адреса MCP в тесте нет
+    await w.call("GET", "/mcp/apps", expect=503)
     monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
     await w.call("POST", "/mcp/link-code", expect=200)
+    # Подключённое приложение без имени в регистрации — запасное имя из
+    # каталога обязано прийти на языке атлета.
+    await fresh_db.save_oauth_client("00000000-0000-4000-8000-000000000001", None, json.dumps({"redirect_uris": []}))
+    await fresh_db.create_oauth_token(
+        access_token=f"walk-at-{lang}", refresh_token=f"walk-rt-{lang}", client_id="00000000-0000-4000-8000-000000000001",
+        user_id=111, scopes="[]", resource=None,
+        expires_at=_time.time() + 3600, refresh_expires_at=_time.time() + 86400,
+    )
+    await w.call("GET", "/mcp/apps", expect=200)
+    await w.call("DELETE", "/mcp/apps/00000000-0000-4000-8000-000000000001", expect=200)
+    await w.call("DELETE", "/mcp/apps/00000000-0000-4000-8000-000000000001", expect=200)
     monkeypatch.setattr(config, "MCP_PUBLIC_URL", "")
 
     # --- группы, каталог, упражнения ---

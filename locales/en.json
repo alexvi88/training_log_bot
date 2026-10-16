@@ -1103,7 +1103,7 @@
   "oauth.error_empty_code": "Enter the six digits from the bot.",
   "oauth.heading": "Training Log",
   "oauth.no_code_hint": "No code handy? In the app: Profile → “Connect to Claude and ChatGPT” → “Get code”. In the bot: <b>/mcp</b> → pick your app, the code will be in the same message.",
-  "oauth.read_write_note": "It can read all of this. Write — weight, remove a wrong weigh-in, a new exercise, a copy of a program. Renaming something from outside isn't possible — like the chat with the AI coach, that's bot-only.",
+  "oauth.read_write_note": "It can read all of this. Write — weight, remove a wrong weigh-in, a new exercise, a copy of a program. Renaming something from outside isn't possible — like the chat with the AI coach, that's only in the app or the bot.",
   "oauth.shared_bodyweight": "body weight",
   "oauth.shared_programs": "saved programs",
   "oauth.shared_progress": "exercise progress and records",
@@ -3293,5 +3293,6 @@
   "seo.ex.side_bridge.setup": "Lie on your side, elbow under your shoulder, forearm on the floor. Legs straight, feet stacked or one in front of the other. Lift your hips until your body is a straight line.",
   "seo.ex.side_bridge.mistakes": "Hips sagging toward the floor — lift them, heels to head in one line.\nHips drifting back — keep your hips in line with your torso.\nShoulder creeping up to your ear — elbow right under the shoulder, push the floor away.\nOnly training one side — hold both sides for the same time.",
   "btn.site_visits": "🌐 Site visits",
-  "mcp.error.rate_limited": "Too many requests in a row — I answer up to {n} a minute. Wait a minute and ask again."
+  "mcp.error.rate_limited": "Too many requests in a row — I answer up to {n} a minute. Wait a minute and ask again.",
+  "oauth.shared_profile": "training profile: experience, goal, equipment, limitations and gender — if you filled them in"
 }

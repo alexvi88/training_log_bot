@@ -61,6 +61,9 @@ logger = logging.getLogger(__name__)
 # ветку пути: так проще и проксировать, и объяснять.
 CONSENT_PATH = "/mcp/consent"
 
+# Путь самого MCP на домене (mcp_server.MCP_PATH — он же).
+MCP_PATH = "/mcp"
+
 # Сроки жизни. Access короткий — утёкший токен перестаёт работать сам; refresh
 # длинный, иначе человеку пришлось бы переподключать коннектор каждый час.
 ACCESS_TOKEN_TTL = 3600
@@ -119,6 +122,11 @@ _LOCAL_ISSUER = "http://localhost"
 
 def public_base_url() -> str:
     return config.MCP_PUBLIC_URL or _LOCAL_ISSUER
+
+
+def connector_url() -> str:
+    """Адрес коннектора, который человек вставляет в Claude или ChatGPT."""
+    return f"{public_base_url()}{MCP_PATH}"
 
 
 def auth_settings(resource_path: str) -> AuthSettings:
@@ -505,6 +513,10 @@ def _shared_data(lang: str) -> str:
         "oauth.shared_volume",
         "oauth.shared_bodyweight",
         "oauth.shared_programs",
+        # Сводка (get_training_overview) отдаёт и профиль — а в ограничениях
+        # человек сам пишет про травмы. Не назвать его тут значило бы
+        # отдать больше, чем написано на странице, где человек соглашается.
+        "oauth.shared_profile",
     )
     return "".join(f"<li>{i18n.t_in(lang, key)}</li>" for key in keys)
 
