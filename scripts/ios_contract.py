@@ -11,7 +11,8 @@
   равно требует). Необязательное — `T?`, `decodeIfPresent`, `try?`, `?? значение`
   в ручном `init(from:)`.
 * `endpoints` — какой метод клиента какой путь зовёт и каким корневым типом
-  разбирает ответ (`request`/`requestOptional` в `APIClient*.swift`).
+  разбирает ответ (`request`/`requestOptional`/`requestTextStream` — стрим
+  тренера, итог `done` той же формы — в `APIClient*.swift`).
 
 Манифест — снимок: CI бота iOS-репозитория не видит, поэтому его обновляют
 руками этой командой и коммитят вместе с причиной:
@@ -526,7 +527,7 @@ def collect_models(ios: Path) -> tuple[dict, dict[str, Node], dict[str, tuple[st
 # Эндпоинты клиента.
 # --------------------------------------------------------------------------
 
-CALL_RE = re.compile(r"\b(request|requestOptional|rawResponse|rawData)\s*(?:<[^>]*>)?\s*\(")
+CALL_RE = re.compile(r"\b(request|requestOptional|requestTextStream|rawResponse|rawData)\s*(?:<[^>]*>)?\s*\(")
 LET_TYPE_RE = re.compile(r"(?:let|var)\s+(?:\([^)]*\)|\w+)\s*:\s*([^=\n]+?)\s*=\s*(?:try\s+)?(?:await\s+)?(?:try\s+)?$")
 STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
