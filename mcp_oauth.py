@@ -61,6 +61,17 @@ logger = logging.getLogger(__name__)
 # ветку пути: так проще и проксировать, и объяснять.
 CONSENT_PATH = "/mcp/consent"
 
+# Путь самого MCP на домене (mcp_server.MCP_PATH — он же).
+MCP_PATH = "/mcp"
+
+# Код для ревьюеров каталогов коннекторов (Claude, ChatGPT): им нужен
+# заполненный аккаунт и способ получить код без Telegram и без iPhone. Вход —
+# тем же демо-аккаунтом, что у App Review (config.REVIEW_DEMO_*, review_demo),
+# с тем же лимитом неудач; без секретов страницы нет (404). Со страницы
+# согласия не ссылаемся: живому атлету она не нужна, адрес — только в
+# инструкции для ревьюера (docs/MCP_LISTING.md).
+DEMO_CODE_PATH = "/mcp/demo-code"
+
 # Сроки жизни. Access короткий — утёкший токен перестаёт работать сам; refresh
 # длинный, иначе человеку пришлось бы переподключать коннектор каждый час.
 ACCESS_TOKEN_TTL = 3600
@@ -95,8 +106,15 @@ CONSENT_FAILURE_LIMIT_TOTAL = 60
 # анонимный флуд может нарастить oauth_clients за часы — прополка неиспользуемых
 # регистраций идёт раз в сутки (db.purge_expired_oauth). Окно и предел — те же
 # порядки, что и у CONSENT_FAILURE_*, тот же класс защиты.
+#
+# Предел на адрес — шестьдесят, а не десять. Claude и ChatGPT регистрируются
+# заново на КАЖДОЕ новое подключение (DCR), и все их регистрации приходят с
+# немногих адресов их облака (у Anthropic — 160.79.104.0/21): с листингом в
+# каталоге десять за десять минут на адрес означали бы «коннектор не
+# подключается» у одиннадцатого атлета подряд. Шестьдесят — всё ещё грубый
+# предохранитель от флуда с одного адреса, а не потолок для живых людей.
 REGISTER_RATE_LIMIT_WINDOW = 600
-REGISTER_RATE_LIMIT_PER_IP = 10
+REGISTER_RATE_LIMIT_PER_IP = 60
 
 # `client_id` статического токена. Токен выпускает бот, а не приложение, так что
 # клиента у него нет — но `AccessToken.client_id` обязателен, и осмысленное
@@ -114,6 +132,11 @@ def public_base_url() -> str:
     return config.MCP_PUBLIC_URL or _LOCAL_ISSUER
 
 
+def connector_url() -> str:
+    """Адрес коннектора, который человек вставляет в Claude или ChatGPT."""
+    return f"{public_base_url()}{MCP_PATH}"
+
+
 def auth_settings(resource_path: str) -> AuthSettings:
     """Настройки OAuth для MCPServer.
 
@@ -123,9 +146,13 @@ def auth_settings(resource_path: str) -> AuthSettings:
     по которому клиент и находит, куда идти авторизовываться.
     """
     base = public_base_url()
+    site = config.site_base_url()
     return AuthSettings(
         issuer_url=base,
         resource_server_url=f"{base}{resource_path}",
+        # Публичная инструкция по подключению (legal_pages, /connect) — её
+        # просят каталоги коннекторов, и она же попадает в метаданные OAuth.
+        service_documentation_url=f"{site}/connect" if site else None,
         # Динамическая регистрация обязательна: ни Claude, ни ChatGPT не дают
         # человеку вписать client_id руками — они регистрируются сами.
         client_registration_options=ClientRegistrationOptions(enabled=True),
@@ -460,10 +487,14 @@ li { margin: 4px 0; }
   background: #fdecea; color: #b3261e; border-radius: 10px;
   padding: 10px 12px; margin: 12px 0; font-size: 14px;
 }
-input[name="code"] {
+input[name="code"], input#code {
   width: 100%; font-size: 28px; letter-spacing: 6px; text-align: center;
   padding: 12px; border: 1px solid #d2d2d7; border-radius: 12px;
   background: #fff; color: inherit;
+}
+input.field {
+  width: 100%; font-size: 17px; padding: 12px; border: 1px solid #d2d2d7;
+  border-radius: 12px; background: #fff; color: inherit;
 }
 /* row-reverse: «Разрешить» стоит в разметке ПЕРВОЙ, чтобы Enter в поле кода
    отправлял согласие, а не отказ (первая submit-кнопка формы — кнопка по
@@ -482,7 +513,7 @@ button {
   .card { background: #1f1f24; box-shadow: none; }
   .muted { color: #a1a1a6; }
   .deny { color: #c7c7cc; border-color: #6a6a70; }
-  input[name="code"] { background: #2a2a30; border-color: #3a3a41; }
+  input[name="code"], input#code, input.field { background: #2a2a30; border-color: #3a3a41; }
   .error { background: #3a1d1a; color: #ff9f95; }
 }
 """
@@ -494,6 +525,10 @@ def _shared_data(lang: str) -> str:
         "oauth.shared_volume",
         "oauth.shared_bodyweight",
         "oauth.shared_programs",
+        # Сводка (get_training_overview) отдаёт и профиль — а в ограничениях
+        # человек сам пишет про травмы. Не назвать его тут значило бы
+        # отдать больше, чем написано на странице, где человек соглашается.
+        "oauth.shared_profile",
     )
     return "".join(f"<li>{i18n.t_in(lang, key)}</li>" for key in keys)
 
@@ -765,6 +800,76 @@ async def consent_route(request: Request) -> Response:
     )
 
 
+def _demo_code_page(lang: str, *, error: str = "", code: str = "", status_code: int = 200) -> HTMLResponse:
+    title = i18n.t_in(lang, "oauth.demo.title")
+    if code:
+        ttl = i18n.t_in(lang, "mcp.code_ttl", n=LINK_CODE_TTL_MINUTES)
+        body = (
+            f"<h1>{title}</h1>"
+            f"<p>{i18n.t_in(lang, 'oauth.demo.code', ttl=ttl)}</p>"
+            f'<p><input id="code" value="{escape(code)}" readonly></p>'
+            f"<p>{i18n.t_in(lang, 'oauth.demo.next')}</p>"
+        )
+        return _page(lang, title, body)
+    error_block = f'<div class="error" role="alert">{escape(error)}</div>' if error else ""
+    body = (
+        f"<h1>{title}</h1>"
+        f"<p>{i18n.t_in(lang, 'oauth.demo.intro')}</p>"
+        f"{error_block}"
+        '<form method="post" action="">'
+        f'<p><label for="u">{i18n.t_in(lang, "oauth.demo.username")}</label></p>'
+        '<p><input id="u" name="username" autocomplete="username" required class="field"></p>'
+        f'<p><label for="p">{i18n.t_in(lang, "oauth.demo.password")}</label></p>'
+        '<p><input id="p" name="password" type="password" autocomplete="current-password" required class="field"></p>'
+        '<div class="row">'
+        f'<button class="allow" type="submit">{i18n.t_in(lang, "oauth.demo.submit")}</button>'
+        "</div></form>"
+    )
+    return _page(lang, title, body, status_code=status_code)
+
+
+def page_lang(request: Request) -> str:
+    """`?lang=ru|en`, иначе Accept-Language, иначе английский — ревьюеры
+    каталогов открывают страницу без заголовка языка."""
+    explicit = (request.query_params.get("lang") or "").strip().lower()
+    if explicit in i18n.SUPPORTED:
+        return explicit
+    header = request.headers.get("accept-language", "")
+    return _lang_from_accept_language(header) if header.strip() else "en"
+
+
+async def demo_code_route(request: Request) -> Response:
+    """GET — форма входа демо-аккаунтом, POST — код связывания для него.
+
+    Код тот же, что у атлета из бота или приложения (`link_code`), и гасится
+    той же страницей согласия: ревьюер проходит ровно путь живого человека,
+    только код берёт здесь.
+    """
+    # Здесь, а не наверху модуля: review_demo тянет achievement_sync и всё
+    # дерево базы, а mcp_oauth импортируется рано.
+    import review_demo
+
+    # Демо-аккаунт App Review владелец бережёт: без явного включения
+    # (MCP_DEMO_CODE_ENABLED=true) страницы нет вовсе.
+    if not config.MCP_DEMO_CODE_ENABLED or not config.review_demo_available():
+        return Response("not found\n", status_code=404, media_type="text/plain")
+    lang = page_lang(request)
+    if request.method == "GET":
+        return _demo_code_page(lang)
+    ip = review_demo.client_ip(request)
+    if review_demo.is_rate_limited(ip):
+        return _demo_code_page(lang, error=i18n.t_in(lang, "oauth.demo.rate_limited"), status_code=429)
+    form = await request.form()
+    username = review_demo.check_credentials(str(form.get("username", "")), str(form.get("password", "")))
+    if username is None:
+        review_demo.record_failure(ip)
+        return _demo_code_page(lang, error=i18n.t_in(lang, "oauth.demo.error"), status_code=401)
+    user_id = await review_demo.ensure_demo_user(lang, username)
+    code = await link_code(user_id, force_new=True)
+    logger.info("MCP OAuth: demo code issued for a demo account")
+    return _demo_code_page(lang, code=code)
+
+
 def register_routes(server: Any) -> None:
     """Повесить страницу согласия на приложение MCP-сервера.
 
@@ -772,3 +877,4 @@ def register_routes(server: Any) -> None:
     которой токен как раз и добывается, была бы недостижима.
     """
     server.custom_route(CONSENT_PATH, methods=["GET", "POST"])(consent_route)
+    server.custom_route(DEMO_CODE_PATH, methods=["GET", "POST"])(demo_code_route)

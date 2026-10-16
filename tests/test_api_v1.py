@@ -229,6 +229,9 @@ async def test_mcp_link_code_for_app_only_account_goes_through_consent(
     body = resp.json()
     assert body["ttl_minutes"] == mcp_oauth.LINK_CODE_TTL_MINUTES
     assert body["code"].isdigit()
+    # Адрес коннектора — канонический, от сервера: приложение не собирает его
+    # из своего адреса (коннектор и приложение живут на разных доменах).
+    assert body["server_url"] == "https://training-log.example.com/mcp"
 
     # действует один код на пользователя: последний выданный
     again = (await client.post("/mcp/link-code")).json()["code"]
@@ -236,6 +239,42 @@ async def test_mcp_link_code_for_app_only_account_goes_through_consent(
         "SELECT user_id FROM oauth_link_codes WHERE code = ?", (again,)
     )
     assert (await live.fetchone())["user_id"] == user_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_apps_list_and_disconnect_only_own(fresh_db, client_factory, monkeypatch):
+    """Подключённые приложения из приложения: аккаунту без бота иначе нечем
+    отозвать доступ, который он дал Claude или ChatGPT."""
+    import json as _json
+    import time as _time
+
+    import config
+
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://training-log.example.com")
+    client = await _linked_client(fresh_db, client_factory)
+    me = (await client.get("/me")).json()["user_id"]
+    await fresh_db.get_or_create_user(telegram_id=999, username="other")
+    await fresh_db.save_oauth_client("cid-claude", None, _json.dumps({"client_name": "Claude"}))
+    for owner, token in ((me, "a1"), (999, "b1")):
+        await fresh_db.create_oauth_token(
+            access_token=f"at-{token}", refresh_token=f"rt-{token}", client_id="cid-claude",
+            user_id=owner, scopes="[]", resource=None,
+            expires_at=_time.time() + 3600, refresh_expires_at=_time.time() + 86400,
+        )
+
+    listed = (await client.get("/mcp/apps")).json()
+    assert listed["server_url"] == "https://training-log.example.com/mcp"
+    assert [(a["client_id"], a["name"]) for a in listed["apps"]] == [("cid-claude", "Claude")]
+
+    gone = await client.delete("/mcp/apps/cid-claude")
+    assert gone.status_code == 200
+    assert gone.json()["disconnected"] is True and gone.json()["apps"] == []
+    assert await fresh_db.get_oauth_access_token("at-a1") is None
+    # Чужой атлет у того же приложения — не тронут.
+    assert await fresh_db.get_oauth_access_token("at-b1") is not None
+    # Повтор — не ошибка, но и отключать уже нечего.
+    again = await client.delete("/mcp/apps/cid-claude")
+    assert again.status_code == 200 and again.json()["disconnected"] is False
 
 
 @pytest.mark.asyncio

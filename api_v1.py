@@ -57,6 +57,7 @@ import api_v1_hall_of_fame
 import api_v1_history
 import api_v1_import
 import api_v1_inbox
+import api_v1_mcp
 import api_v1_media
 import api_v1_programs
 import api_v1_progress
@@ -375,27 +376,6 @@ async def request_telegram_link_code(request: Request) -> JSONResponse:
         raise ApiError(404, "not_found", "user not found")
     if user["telegram_linked"]:
         raise ApiError(409, "already_linked", "account is already linked to Telegram")
-    code = await mcp_oauth.link_code(user_id, force_new=True)
-    return JSONResponse({"code": code, "ttl_minutes": mcp_oauth.LINK_CODE_TTL_MINUTES})
-
-
-async def request_mcp_link_code(request: Request) -> JSONResponse:
-    """Код для страницы согласия MCP (подключение дневника к Claude/ChatGPT).
-
-    Так у app-only аккаунта (Apple ID без Telegram) появляется то, что у
-    телеграмного даёт бот на экране /mcp: чата, куда бот прислал бы код, у него
-    нет. Страница согласия (`mcp_oauth.consent_route`) и погашение кода
-    (`db.verify_oauth_link_code`) от Telegram не зависят — им нужна только
-    строка в `users`, а `AccessToken.subject` у MCP — просто `users.id`.
-
-    Код всегда новый (`force_new`): человек нажал кнопку в приложении прямо
-    сейчас и сразу понесёт код в браузер. Хранилище общее с остальными кодами
-    связывания — у пользователя живёт один код, новый гасит прежний.
-    Без публичного адреса MCP-сервер не поднят, и код вёл бы в никуда — 503.
-    """
-    user_id = await _authed_user_id(request)
-    if not config.mcp_available():
-        raise ApiError(503, "not_configured", "mcp is not enabled on this server")
     code = await mcp_oauth.link_code(user_id, force_new=True)
     return JSONResponse({"code": code, "ttl_minutes": mcp_oauth.LINK_CODE_TTL_MINUTES})
 
@@ -2296,7 +2276,6 @@ routes = [
     Route("/auth/password", auth_password, methods=["POST"]),
     Route("/auth/logout", auth_logout, methods=["POST"]),
     Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
-    Route("/mcp/link-code", request_mcp_link_code, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/push/register", register_push_token, methods=["POST"]),
     Route("/push/register", unregister_push_token, methods=["DELETE"]),
@@ -2356,6 +2335,7 @@ routes += (
     + api_v1_import.routes
     + api_v1_sharing.routes
     + api_v1_media.routes
+    + api_v1_mcp.routes
     + api_v1_feedback.routes
     + api_v1_support.routes
     + api_v1_inbox.routes

@@ -6,11 +6,19 @@
 Способов два, и они независимы:
 
 * **коннектор по OAuth** — для claude.ai, Claude Desktop и ChatGPT: вставить адрес
-  `https://<адрес-бота>/mcp` и подтвердить шестизначным кодом из бота (`/mcp` →
-  «🔗 Код для подключения»). Ни файлов, ни токенов; подробности — в `mcp_oauth.py`,
-  пошаговые инструкции под каждый клиент показывает сам бот;
+  `https://athletediary.app/mcp` и подтвердить шестизначным кодом — из бота (`/mcp` →
+  «🔗 Код для подключения») или из приложения («Профиль» → «Подключить к Claude и
+  ChatGPT» → «Получить код», `POST /v1/mcp/link-code`). Ни файлов, ни токенов;
+  подробности — в `mcp_oauth.py`, пошаговые инструкции под каждый клиент показывает
+  сам бот, публичная — `https://athletediary.app/connect` (`legal/connect.*.html`);
 * **статический токен** — для клиентов, куда заголовок вписывают руками: Claude Code,
   Cursor, VS Code. Про него всё остальное в этом файле.
+
+Адрес коннектора — `config.MCP_PUBLIC_URL` (в `fly.toml` — `https://athletediary.app`,
+свой домен, на него же смотрят каталоги коннекторов, см. `docs/MCP_LISTING.md`). Тот же
+процесс отвечает и на `training-log-bot.fly.dev/mcp`: старые статические и OAuth-токены
+там продолжают работать, но метаданные OAuth везде называют athletediary.app, так что
+новое подключение по OAuth — только на свой домен.
 
 Токен выдаётся в боте: команда `/mcp` → «Выдать токен для терминала». Один живой токен
 на человека, перевыпуск гасит прежний. На подключённые по OAuth приложения перевыпуск
@@ -23,7 +31,7 @@
 
 ```bash
 claude mcp add --transport http -s user training-log \
-  https://<адрес-бота>/mcp \
+  https://athletediary.app/mcp \
   --header "Authorization: Bearer <токен>"
 ```
 
@@ -42,7 +50,7 @@ claude mcp add --transport http -s user training-log \
 с 403. На claude.ai/code → иконка облака над полем ввода → шестерёнка у окружения:
 
 * **Network access** → `Custom`
-* **Allowed domains** → адрес бота, одной строкой
+* **Allowed domains** → `athletediary.app`, одной строкой
 * отметить **«Also include default list of common package managers»** — без этого
   отвалятся pypi и github, и сборки в сессиях сломаются
 * **Environment variables** → `TRAINING_LOG_MCP_TOKEN=<токен>`

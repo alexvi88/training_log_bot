@@ -35,7 +35,7 @@ async def test_page_is_public_and_english_without_accept_language(page):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
     assert '<html lang=en>' in resp.text
-    assert "Effective October 15, 2026" in resp.text
+    assert "Effective October 16, 2026" in resp.text
 
 
 @pytest.mark.parametrize("page", legal_pages.PAGES)
@@ -44,7 +44,7 @@ async def test_russian_browser_gets_russian(page):
 
     assert '<html lang=ru>' in resp.text
     assert "Вступа" in resp.text  # «Вступает/Вступают в силу»
-    assert "15 октября 2026" in resp.text
+    assert "16 октября 2026" in resp.text
 
 
 @pytest.mark.parametrize("page", legal_pages.PAGES)
@@ -53,7 +53,7 @@ async def test_lang_query_switches_to_english(page):
 
     assert resp.status_code == 200
     assert '<html lang=en>' in resp.text
-    assert "Effective October 15, 2026" in resp.text
+    assert "Effective October 16, 2026" in resp.text
     # Англоязычный не видит русского текста — кроме ссылки-переключателя,
     # которая нарочно подписана автонимом «Русский».
     body = resp.text.replace("Русский", "")

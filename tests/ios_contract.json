@@ -2989,6 +2989,61 @@
     }
    }
   },
+  "McpConnectedApp": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "clientId": {
+     "type": "String",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "connectedAt": {
+     "type": "String",
+     "optional": true
+    },
+    "lastUsedAt": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "McpConnectedApps": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "serverUrl": {
+     "type": "String",
+     "optional": false
+    },
+    "apps": {
+     "type": "[McpConnectedApp]",
+     "optional": false
+    },
+    "disconnected": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "McpLinkCode": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "code": {
+     "type": "String",
+     "optional": false
+    },
+    "ttlMinutes": {
+     "type": "Int",
+     "optional": false
+    },
+    "serverUrl": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
   "Me": {
    "file": "TrainingLog/Models/Models.swift",
    "fields": {
@@ -4943,10 +4998,24 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.mcpApps",
+   "method": "GET",
+   "path": "/mcp/apps",
+   "root": "McpConnectedApps",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.disconnectMcpApp",
+   "method": "DELETE",
+   "path": "/mcp/apps/{}",
+   "root": "McpConnectedApps",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.requestMcpLinkCode",
    "method": "POST",
    "path": "/mcp/link-code",
-   "root": "TelegramLinkCode",
+   "root": "McpLinkCode",
    "nullable": false
   },
   {
@@ -5405,5 +5474,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "b3987833da8bc7d350e106fa0694c0d018ae811f"
+ "_ios_commit": "5c2f621c5408a8a3ce567b97b1a13dc405a7e2fb"
 }

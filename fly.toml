@@ -24,7 +24,16 @@ kill_timeout = 60
 [env]
   APNS_ENV = "production"
   APNS_TEAM_ID = "H93ZYM2S8U"
-  MCP_PUBLIC_URL = "https://training-log-bot.fly.dev"
+  # Публичный адрес MCP-коннектора (Claude, ChatGPT, каталоги) — свой домен:
+  # на нём issuer OAuth, resource в .well-known и адрес на экране /mcp.
+  # Старые подключения на fly.dev владелец разрешил не беречь (16.10.2026):
+  # их токены живут до отзыва, а новое подключение идёт сюда. Хост тот же
+  # процесс — DNS athletediary.app смотрит на это приложение.
+  MCP_PUBLIC_URL = "https://athletediary.app"
+  # Адрес сервера для приложения и Universal Links приглашения тренера
+  # (`applinks:training-log-bot.fly.dev` в entitlements iOS) — прибит явно,
+  # иначе config.public_base_url() уехал бы вслед за MCP_PUBLIC_URL.
+  PUBLIC_BASE_URL = "https://training-log-bot.fly.dev"
   COMMUNITY_CHAT_URL = "https://t.me/training_log_athletes"
   TEST_USER_ID = "8789172252"
   # Ссылка на приложение в App Store — строкой рядом с t.me в приглашении и

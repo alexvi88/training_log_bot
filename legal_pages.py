@@ -1,5 +1,6 @@
 """Публичные страницы `/privacy` и `/terms` — политика конфиденциальности и
-условия использования, — и `/support`: как связаться с поддержкой.
+условия использования, — `/support`: как связаться с поддержкой, и
+`/connect`: как подключить дневник к Claude и ChatGPT (MCP-коннектор).
 
 Зачем: App Store (Guideline 5.1.1(i)) требует публичный URL политики — он
 вписывается в App Store Connect — и ссылку на неё внутри приложения. Страницы
@@ -45,7 +46,11 @@ PAGES = ("privacy", "terms")
 # тот же выбор языка, но без даты вступления в силу: это не документ, а
 # справка (ссылка на неё — Support URL в App Store Connect).
 SUPPORT_PAGE = "support"
-ALL_PAGES = PAGES + (SUPPORT_PAGE,)
+# Как подключить дневник к Claude и ChatGPT — публичная инструкция, которую
+# просят каталоги коннекторов (docs/MCP_LISTING.md); она же
+# service_documentation в метаданных OAuth (mcp_oauth.auth_settings).
+CONNECT_PAGE = "connect"
+ALL_PAGES = PAGES + (SUPPORT_PAGE, CONNECT_PAGE)
 LANGS = ("ru", "en")
 
 # Контактный e-mail для страниц — отдельный ящик проекта (владелец). Стоит
@@ -107,7 +112,7 @@ def render(page: str, lang: str) -> str:
         link = f'E-mail: <a href="mailto:{address}">{address}</a>'
         # В политике «Связь» и на странице поддержки — список, в условиях —
         # одна строка текстом.
-        snippet = f"<li>{link}</li>" if page in ("privacy", SUPPORT_PAGE) else f" {link}."
+        snippet = f"<li>{link}</li>" if page in ("privacy", SUPPORT_PAGE, CONNECT_PAGE) else f" {link}."
         body = body.replace(_EMAIL_MARKER, snippet)
     match = _H1.search(body)
     title = re.sub(r"<[^>]+>", "", match.group(1)) if match else page
@@ -145,9 +150,14 @@ async def support_route(request: Request) -> HTMLResponse:
     return _response(SUPPORT_PAGE, request)
 
 
+async def connect_route(request: Request) -> HTMLResponse:
+    return _response(CONNECT_PAGE, request)
+
+
 def register_routes(server: Any) -> None:
     """Повесить страницы на приложение MCP-сервера. `custom_route` кладёт роут
     без требования токена — страницы публичные по смыслу."""
     server.custom_route("/privacy", methods=["GET"])(privacy_route)
     server.custom_route("/terms", methods=["GET"])(terms_route)
     server.custom_route("/support", methods=["GET"])(support_route)
+    server.custom_route("/connect", methods=["GET"])(connect_route)
