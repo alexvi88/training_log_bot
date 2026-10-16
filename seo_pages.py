@@ -157,14 +157,17 @@ _EXERCISE_BY_URL = dict(EXERCISES)
 _DEMO_SLUG = "barbell_bench_press_medium_grip"
 
 IMPORT_SOURCES = ("hevy", "strong", "csv")
-TOOLS = ("1rm", "warmup", "rpe", "wilks")
+TOOLS = ("1rm", "warmup", "rpe", "wilks", "tonnage", "rest-timer", "goal", "strength-percentile")
 EMBEDS = ("1rm",)
 # Убранные адреса: 301 туда, где теперь то же самое (калькулятор блинов
 # снят — раскладку на сторону показывает разминка).
 REMOVED_TOOLS = {"plates": "/tools"}
 REMOVED_EMBEDS = {"plates": "1rm"}
-COMPETITORS = ("hevy", "strong")
-FEATURES = ("ai-coach", "video-review", "telegram")
+COMPETITORS = ("hevy", "strong", "fitbod", "jefit")
+# Списки альтернатив: «чем заменить Hevy/Strong» — мы первые, остальные факты.
+ALTERNATIVES = ("hevy", "strong")
+FEATURES = ("ai-coach", "video-review", "telegram", "workout-log-app")
+TEMPLATES = ("workout-log",)
 # Нормативы: адрес → ключ упражнения в seo_tools.LIFT_SHARE и адрес техники.
 STRENGTH_LIFTS = (("bench-press", "bench", "bench-press"), ("squat", "squat", "back-squat"),
                   ("deadlift", "deadlift", "deadlift"))
@@ -201,13 +204,36 @@ _BLOCKS = {
     "exercise": "ex",
     "vs:hevy": "vs_hevy",
     "vs:strong": "vs_strng",
+    "vs:fitbod": "vs_fitbod",
+    "vs:jefit": "vs_jefit",
+    "alternatives:hevy": "alt_hevy",
+    "alternatives:strong": "alt_strng",
+    "workout-log-app": "app",
+    "template": "tpl",
+    "about": "about",
+    "muscles": "mus",
+    "muscle": "mus",
+    "compare": "cmp",
+    "pair": "cmp",
+    "glossary": "gls",
+    "term": "gls",
+    "guides": "guide",
+    "guide": "guide",
+    "tool:tonnage": "tonnage",
+    "tool:rest-timer": "timer",
+    "tool:goal": "goal",
+    "tool:strength-percentile": "pct",
+    "log:tonnage": "ton_log",
+    "log:rest-timer": "tmr_log",
+    "log:goal": "goal_log",
+    "log:strength-percentile": "pct_log",
 }
 # Метка для ссылки из llms.txt: страницы у неё нет.
 LLMS_BLOCK = "llms"
 _KNOWN_BLOCKS = frozenset(_BLOCKS.values()) | {LLMS_BLOCK}
 
 # Сколько смысловых блоков у статьи-страницы (ключи seo.<id>.s<n>.h / .p_html).
-_ARTICLE_SECTIONS = {"ai-coach": 4, "video-review": 4, "telegram": 6}
+_ARTICLE_SECTIONS = {"ai-coach": 4, "video-review": 4, "telegram": 9, "workout-log-app": 7}
 
 # Вопросы FAQ по страницам (ключи seo.faq.<id>.q / .a_html). Ответы — только
 # то, что делает код: числа потолков — из config через _article_params.
@@ -217,6 +243,11 @@ FAQ = {
     "import": ("move", "dupes", "undo", "free"),
     "vs:hevy": ("alt_hevy", "move", "free", "video"),
     "vs:strong": ("move", "free", "video", "platforms"),
+    "vs:fitbod": ("what", "free", "history", "platforms"),
+    "vs:jefit": ("what", "free", "move", "video"),
+    "telegram": ("tg_install", "tg_voice", "free", "platforms"),
+    "workout-log-app": ("what", "free", "platforms", "move", "tg_install"),
+    "template": ("tpl_why_csv", "tpl_lb", "tpl_names", "dupes", "undo"),
 }
 
 # Источники для сравнений — живые страницы, по которым сверены факты таблицы.
@@ -230,6 +261,19 @@ _VS_SOURCES = {
     "strong": (
         "https://apps.apple.com/app/id464254577",
         "https://www.strong.app/",
+    ),
+    "fitbod": (
+        "https://apps.apple.com/us/app/fitbod-gym-fitness-planner/id1041517543",
+        "https://help.fitbod.me/hc/en-us/articles/360004904714-How-to-Subscribe-to-Fitbod",
+        "https://help.fitbod.me/hc/en-us/articles/30542136101527-How-the-Trial-Works",
+        "https://fitbod.me/blog/fitbod-algorithm/",
+        "https://help.fitbod.me/hc/en-us/sections/35305345636375-Integrations",
+    ),
+    "jefit": (
+        "https://apps.apple.com/us/app/jefit-workout-plan-gym-tracker/id449810000",
+        "https://www.jefit.com/elite",
+        "https://www.jefit.com/ai-workout-tracker",
+        "https://play.google.com/store/apps/details?id=je.fit",
     ),
 }
 _VS_ROWS = ("price", "free", "ai", "import", "video")
@@ -246,6 +290,20 @@ _OG_IMAGE_FILE = os.path.join(os.path.dirname(__file__), "media", "push", "coach
 _APP_ID_RE = re.compile(r"/id(\d+)")
 
 
+# Адрес страницы без языка: разделы без аргумента и с одним (`/tools/1rm`).
+_PATH_FIXED = {
+    "tools": "/tools", "strength": "/strength", "programs": "/programs", "exercises": "/exercises",
+    "muscles": "/muscles", "compare": "/compare", "glossary": "/glossary", "guides": "/guides", "about": "/about",
+}
+_PATH_PREFIX = {
+    "import": "/import/", "tool": "/tools/", "program": "/programs/", "exercise": "/exercises/", "vs": "/vs/",
+    "alternatives": "/alternatives/", "muscle": "/muscles/", "pair": "/compare/", "term": "/glossary/",
+    "guide": "/guides/", "template": "/templates/",
+}
+# Метка блока зависит от аргумента (`vs:hevy`), а не только от раздела.
+_BLOCK_BY_ARG = ("import", "tool", "vs", "alternatives")
+
+
 @dataclass(frozen=True)
 class Page:
     kind: str
@@ -259,26 +317,12 @@ class Page:
             return ""
         if self.kind in FEATURES:
             return f"/{self.kind}"
-        if self.kind == "import":
-            return f"/import/{self.arg}"
-        if self.kind == "tools":
-            return "/tools"
-        if self.kind == "tool":
-            return f"/tools/{self.arg}"
-        if self.kind == "strength":
-            return "/strength"
         if self.kind == "strength_lift":
             return f"/strength/{self.arg}/{self.arg2}"
-        if self.kind == "programs":
-            return "/programs"
-        if self.kind == "program":
-            return f"/programs/{self.arg}"
-        if self.kind == "exercises":
-            return "/exercises"
-        if self.kind == "exercise":
-            return f"/exercises/{self.arg}"
-        if self.kind == "vs":
-            return f"/vs/{self.arg}"
+        if self.kind in _PATH_FIXED:
+            return _PATH_FIXED[self.kind]
+        if self.kind in _PATH_PREFIX:
+            return _PATH_PREFIX[self.kind] + self.arg
         raise ValueError(self.kind)
 
     @property
@@ -288,7 +332,7 @@ class Page:
 
     @property
     def block(self) -> str:
-        if self.kind in ("import", "tool", "vs"):
+        if self.kind in _BLOCK_BY_ARG:
             return _BLOCKS[f"{self.kind}:{self.arg}"]
         if self.kind == "strength_lift":
             return _BLOCKS["strength"]
@@ -308,6 +352,12 @@ def pages() -> list[Page]:
     result.append(Page("exercises"))
     result += [Page("exercise", url) for url, _slug in EXERCISES]
     result += [Page("vs", c) for c in COMPETITORS]
+    result += [Page("alternatives", c) for c in ALTERNATIVES]
+    result += [Page("template", t) for t in TEMPLATES]
+    result.append(Page("about"))
+    import seo_library
+
+    result += seo_library.pages()
     return result
 
 
@@ -474,24 +524,58 @@ def _head_cta(lang: str, block: str, device: str) -> str:
 
 
 def _nav_pages() -> tuple[tuple[Page, str], ...]:
+    """Шапка — шесть разделов-хабов; всё остальное — внутри них и в подвале."""
     return (
-        (Page("import", "hevy"), "seo.nav.import"),
-        (Page("tools"), "seo.nav.tools"),
-        (Page("strength"), "seo.nav.strength"),
-        (Page("programs"), "seo.nav.programs"),
+        (Page("guides"), "seo.nav.guides"),
         (Page("exercises"), "seo.nav.exercises"),
-        (Page("ai-coach"), "seo.nav.ai"),
+        (Page("muscles"), "seo.nav.muscles"),
+        (Page("programs"), "seo.nav.programs"),
+        (Page("compare"), "seo.nav.compare"),
+        (Page("tools"), "seo.nav.tools"),
     )
+
+
+# Раздел шапки, к которому относится страница (подсветка и хлебные крошки).
+_SECTION = {
+    "tools": "tools", "tool": "tools", "strength": "tools", "strength_lift": "tools", "template": "tools",
+    "guides": "guides", "guide": "guides", "glossary": "guides", "term": "guides",
+    "muscles": "muscles", "muscle": "muscles",
+    "exercises": "exercises", "exercise": "exercises",
+    "programs": "programs", "program": "programs",
+    "compare": "compare", "pair": "compare", "vs": "compare", "alternatives": "compare",
+}
+
+
+def section_of(page: Page) -> str:
+    return _SECTION.get(page.kind, "")
 
 
 def _nav_links(lang: str, current: Page) -> str:
     t = _t(lang)
-    section = current.path.split("/")[1:2]
+    section = section_of(current)
     links = []
     for page, key in _nav_pages():
-        here = " aria-current=page" if page.path.split("/")[1:2] == section else ""
+        here = " aria-current=page" if page.kind == section else ""
         links.append(f'<a href="{url_for(page, lang)}"{here}>{_e(t(key))}</a>')
     return "".join(links)
+
+
+def _parents(page: Page) -> list[Page]:
+    k = page.kind
+    if k in ("tool", "strength", "template"):
+        return [Page("tools")]
+    if k == "strength_lift":
+        return [Page("tools"), Page("strength")]
+    single = {"program": "programs", "exercise": "exercises", "muscle": "muscles", "pair": "compare",
+              "vs": "compare", "alternatives": "compare", "term": "glossary", "guide": "guides"}
+    return [Page(single[k])] if k in single else []
+
+
+def _crumb_label(lang: str, page: Page) -> str:
+    for p, key in _nav_pages():
+        if p == page:
+            return _t(lang)(key)
+    return _strip_emoji(page_h1(page, lang))
 
 
 def _crumbs(lang: str, page: Page) -> list[tuple[str, Page]]:
@@ -500,17 +584,7 @@ def _crumbs(lang: str, page: Page) -> list[tuple[str, Page]]:
     home = (t("seo.crumb.home"), Page("home"))
     if page.kind == "home":
         return [home]
-    trail = [home]
-    if page.kind == "tool":
-        trail.append((t("seo.tools.h1"), Page("tools")))
-    elif page.kind == "strength_lift":
-        trail.append((t("seo.strength.h1"), Page("strength")))
-    elif page.kind == "program":
-        trail.append((t("seo.programs.h1"), Page("programs")))
-    elif page.kind == "exercise":
-        trail.append((t("seo.exercises.h1"), Page("exercises")))
-    trail.append((_strip_emoji(page_h1(page, lang)), page))
-    return trail
+    return [home] + [(_crumb_label(lang, p), p) for p in _parents(page)] + [(_strip_emoji(page_h1(page, lang)), page)]
 
 
 def _crumbs_html(lang: str, page: Page) -> str:
@@ -540,6 +614,23 @@ def _breadcrumb_ld(lang: str, page: Page, base: str) -> Optional[dict]:
     }
 
 
+# Дата последней заметной правки страницы — константой, а не временем файла:
+# одна и та же страница отдаёт одну и ту же дату (тесты, ETag, sitemap).
+SITE_UPDATED = "2026-10-16"
+
+
+def page_updated(page: Page) -> str:
+    import seo_library
+
+    return seo_library.updated_for(page) or SITE_UPDATED
+
+
+def human_date(iso: str, lang: str) -> str:
+    """«16 октября 2026» / «October 16, 2026» — месяцы из каталога."""
+    y, m, d = (int(x) for x in iso.split("-"))
+    return i18n.t_in(lang, "seo.date", day=d, month=i18n.t_in(lang, f"seo.month.{m}"), year=y)
+
+
 def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
     t = _t(lang)
     other = "en" if lang == "ru" else "ru"
@@ -548,11 +639,15 @@ def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
         return "<ul>" + "".join(f'<li><a href="{url_for(p, lang)}">{_e(label)}</a></li>' for p, label in items) + "</ul>"
 
     product = [(Page(f), _strip_emoji(t(f"seo.{f}.card.title"))) for f in FEATURES]
-    product += [(Page("vs", c), t(f"seo.vs.{c}.short")) for c in COMPETITORS]
+    product.append((Page("about"), t("seo.about.short")))
     tools = [(Page("tool", s), t(f"seo.tool.{s}.short")) for s in TOOLS] + [(Page("strength"), t("seo.strength.short"))]
-    library = [(Page("programs"), t("seo.programs.h1")), (Page("exercises"), t("seo.exercises.h1")),
-               (Page("strength"), t("seo.strength.h1"))]
+    library = [(Page("guides"), t("seo.nav.guides")), (Page("glossary"), t("seo.glossary.short")),
+               (Page("exercises"), t("seo.exercises.h1")), (Page("muscles"), t("seo.nav.muscles")),
+               (Page("programs"), t("seo.programs.h1"))]
+    compare = [(Page("compare"), t("seo.compare.short"))] + [(Page("vs", c), t(f"seo.vs.{c}.short")) for c in COMPETITORS]
+    compare += [(Page("alternatives", c), t(f"seo.alt.{c}.short")) for c in ALTERNATIVES]
     moving = [(Page("import", s), t(f"seo.import.{s}.short")) for s in IMPORT_SOURCES]
+    moving += [(Page("template", s), t(f"seo.template.{s}.short")) for s in TEMPLATES]
     return (
         '<footer class=site-foot><div class=wrap><div class=foot-grid>'
         f'<div class=foot-about><a class=brand href="{url_for(Page("home"), lang)}">'
@@ -561,9 +656,11 @@ def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
         f"<div><h4>{_e(t('seo.footer.product'))}</h4>{links(product)}</div>"
         f"<div><h4>{_e(t('seo.footer.tools'))}</h4>{links(tools)}</div>"
         f"<div><h4>{_e(t('seo.footer.library'))}</h4>{links(library)}</div>"
+        f"<div><h4>{_e(t('seo.footer.compare'))}</h4>{links(compare)}</div>"
         f"<div><h4>{_e(t('seo.footer.moving'))}</h4>{links(moving)}</div>"
         "</div><div class=foot-bottom>"
-        f'<span>{_e(t("seo.brand"))} · <a href="{url_for(page, other)}" hreflang={other} lang={other}>{_e(t("seo.footer.other_lang"))}</a></span>'
+        f'<span>{_e(t("seo.brand"))} · <a href="{url_for(page, other)}" hreflang={other} lang={other}>{_e(t("seo.footer.other_lang"))}</a>'
+        f' · <time datetime="{page_updated(page)}">{_e(t("seo.updated", date=human_date(page_updated(page), lang)))}</time></span>'
         f'<span><a href="/privacy?lang={lang}">{_e(t("seo.footer.privacy"))}</a> · '
         f'<a href="/terms?lang={lang}">{_e(t("seo.footer.terms"))}</a> · '
         f'<a href="/support?lang={lang}">{_e(t("seo.footer.support"))}</a></span>'
@@ -619,6 +716,12 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         head.append(f'<meta name="google-site-verification" content="{_e(verification)}">')
     head.append(f"<style>{_css()}</style>")
     crumbs = _breadcrumb_ld(lang, page, base)
+    updated = page_updated(page)
+    for block in list(ld or []):
+        # Дата правки — у всех «творческих» блоков (WebPage, Article, план…),
+        # кроме списка вопросов и крошек: там её не бывает.
+        if block.get("@type") not in ("BreadcrumbList", "FAQPage", "Organization", "WebSite", "DefinedTermSet"):
+            block.setdefault("dateModified", updated)
     for block in ([crumbs] if crumbs else []) + list(ld or []):
         head.append(_json_ld(block))
     head.append("</head>")
@@ -756,7 +859,9 @@ def page_h1(page: Page, lang: str) -> str:
         return seed_data.localized_exercise_name(_identity_for_media_slug(_EXERCISE_BY_URL[page.arg]), lang)
     if page.kind == "vs":
         return t(f"seo.vs.{page.arg}.h1")
-    raise ValueError(page.kind)
+    import seo_library
+
+    return seo_library.page_h1(page, lang)
 
 
 # ---------- главная ----------
@@ -877,6 +982,10 @@ def _render_home(lang: str, page: Page, request) -> str:
     library = [
         (url_for(Page("programs"), lang), "program", t("seo.programs.h1"), t("seo.programs.card")),
         (url_for(Page("exercises"), lang), "dumbbell", t("seo.exercises.h1"), t("seo.exercises.card", count=len(EXERCISES))),
+        (url_for(Page("muscles"), lang), "body", t("seo.nav.muscles"), t("seo.muscles.card")),
+        (url_for(Page("guides"), lang), "book", t("seo.nav.guides"), t("seo.guides.card")),
+        (url_for(Page("compare"), lang), "list", t("seo.compare.short"), t("seo.compare.card")),
+        (url_for(Page("template", "workout-log"), lang), "import", t("seo.template.workout-log.short"), t("seo.template.card")),
     ]
     faq = _faq_items(lang, FAQ["home"])
 
@@ -908,12 +1017,34 @@ def _render_home(lang: str, page: Page, request) -> str:
         "image": base + seo_static.asset_url("icons/icon-512.png"),
         "screenshot": [base + seo_static.asset_url(f"screens/{lang}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[lang]],
         "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
-        "sameAs": [u for u in (config.app_store_url(), f"https://t.me/{bot_username()}") if u],
+        "sameAs": same_as(),
+        "author": {"@type": "Person", "name": DEVELOPER},
+        "publisher": {"@id": base + ORG_ID},
     }
     site = {"@context": "https://schema.org", "@type": "WebSite", "name": t("seo.brand"),
             "url": base + url_for(page, lang), "inLanguage": lang}
     return _layout(lang, page, request, title=t("seo.home.title"), description=t("seo.home.description"),
-                   body=body, ld=[app, site, _faq_ld(faq)])
+                   body=body, ld=[app, site, organization_ld(lang, request), _faq_ld(faq)])
+
+
+# Разработчик — так, как он назван в App Store; других контактов, кроме
+# страницы поддержки, сайт не публикует.
+DEVELOPER = "Aleksandr Vilman"
+ORG_ID = "/#org"
+
+
+def same_as() -> list[str]:
+    return [u for u in (config.app_store_url(), f"https://t.me/{bot_username()}") if u]
+
+
+def organization_ld(lang: str, request) -> dict:
+    base = base_url(request)
+    return {
+        "@context": "https://schema.org", "@type": "Organization", "@id": base + ORG_ID,
+        "name": i18n.t_in(lang, "seo.brand"), "alternateName": i18n.t_in(lang, "bot.name"),
+        "url": base + url_for(Page("home"), lang), "logo": base + seo_static.asset_url("icons/icon-512.png"),
+        "sameAs": same_as(), "founder": {"@type": "Person", "name": DEVELOPER},
+    }
 
 
 # ---------- статьи и переезд ----------
@@ -935,12 +1066,41 @@ def _render_feature(lang: str, page: Page, request) -> str:
         f"<h1>{_e(t(f'seo.{key}.h1'))}</h1><p class=lead>{_e(t(f'seo.{key}.lead'))}</p>"
         + (_chat(lang) if key == "ai-coach" else "")
         + sections
+        + (_coach_examples(lang) if key == "ai-coach" else "")
         + (_faq_html(lang, faq) if faq else "")
         + _cta(lang, page.block, _e(t(f"seo.{key}.cta")), request)
         + _cards(related)
     )
     ld = [_webpage_ld(lang, page, request, title, description)] + ([_faq_ld(faq)] if faq else [])
     return _layout(lang, page, request, title=title, description=description, body=body, ld=ld)
+
+
+# Примеры разговоров с тренером на странице AI-тренера: что он умеет на
+# самом деле — ответ по истории, программа по дням, разбор видео, нагрузка.
+# Подписаны как пример: числа в них придуманы, а не взяты у живого атлета.
+COACH_EXAMPLES = ("history", "program", "video", "load")
+
+
+def _coach_examples(lang: str) -> str:
+    t = _t(lang)
+    face = seo_static.asset_url("coach-face.jpg")
+    items = "".join(
+        f"<div class='example reveal'><h3>{_e(t(f'seo.ai-coach.ex.{k}.h'))}</h3><div class=chat>"
+        f"<div class='bubble me'>{_e(t(f'seo.ai-coach.ex.{k}.q'))}</div>"
+        f"<div class='bubble coach'><img src=\"{face}\" alt=\"\" width=34 height=34 loading=lazy decoding=async>"
+        f"<div>{t(f'seo.ai-coach.ex.{k}.a_html')}</div></div></div></div>"
+        for k in COACH_EXAMPLES
+    )
+    return (f"<section><h2>{_e(t('seo.ai-coach.ex.h'))}</h2><p class=muted>{_e(t('seo.ai-coach.ex.note'))}</p>"
+            f"<div class=examples>{items}</div></section>")
+
+
+def faq_key(page: Page) -> Optional[str]:
+    """Ключ FAQ страницы: по разделу (`import`) или по разделу и аргументу (`vs:hevy`)."""
+    if page.kind in FAQ:
+        return page.kind
+    key = f"{page.kind}:{page.arg}"
+    return key if key in FAQ else None
 
 
 def _render_import(lang: str, page: Page, request) -> str:
@@ -970,7 +1130,8 @@ def _render_import(lang: str, page: Page, request) -> str:
 
 # ---------- калькуляторы ----------
 
-_TOOL_ICONS = {"1rm": "calc", "warmup": "warmup", "rpe": "gauge", "wilks": "trophy"}
+_TOOL_ICONS = {"1rm": "calc", "warmup": "warmup", "rpe": "gauge", "wilks": "trophy",
+               "tonnage": "dumbbell", "rest-timer": "timer", "goal": "target", "strength-percentile": "percent"}
 
 
 def _seg(name: str, legend: str, options: list[tuple[str, str]], checked: str) -> str:
@@ -1168,6 +1329,15 @@ _TOOLS: dict[str, Callable[..., tuple[str, str, str]]] = {
 }
 
 
+def tool_parts(tool: str, lang: str, embed: bool = False) -> tuple[str, str, str]:
+    builder = _TOOLS.get(tool)
+    if builder is None:
+        import seo_calcs
+
+        builder = seo_calcs.TOOLS[tool]
+    return builder(lang, embed=embed)
+
+
 def _units_js(lang: str) -> str:
     t = _t(lang)
     return "{kg:" + _js_str(t("seo.tool.unit_kg")) + ",lb:" + _js_str(t("seo.tool.unit_lb")) + "}"
@@ -1204,7 +1374,7 @@ def _tool_ld(lang: str, page: Page, request, title: str, description: str) -> di
 def _render_tool(lang: str, page: Page, request) -> str:
     t = _t(lang)
     tool = page.arg
-    form, result, script = _TOOLS[tool](lang)
+    form, result, script = tool_parts(tool, lang)
     others = [(url_for(Page("tool", s), lang), t(f"seo.tool.{s}.short"), t(f"seo.tool.{s}.card")) for s in TOOLS if s != tool]
     chart = (f"<section class=reveal><h2>{_e(t('seo.tool.rpe.chart_h'))}</h2>{_rpe_table_html(lang)}</section>"
              if tool == "rpe" else "")
@@ -1622,6 +1792,7 @@ _RENDERERS: dict[str, Callable[[str, Page, Optional[Request]], str]] = {
     "ai-coach": _render_feature,
     "video-review": _render_feature,
     "telegram": _render_feature,
+    "workout-log-app": _render_feature,
     "import": _render_import,
     "tools": _render_tools,
     "tool": _render_tool,
@@ -1636,7 +1807,12 @@ _RENDERERS: dict[str, Callable[[str, Page, Optional[Request]], str]] = {
 
 
 def render(page: Page, lang: str, request: Optional[Request] = None) -> str:
-    return _RENDERERS[page.kind](lang, page, request)
+    renderer = _RENDERERS.get(page.kind)
+    if renderer is None:
+        import seo_library
+
+        renderer = seo_library.RENDERERS[page.kind]
+    return renderer(lang, page, request)
 
 
 # ---------- 404 ----------
@@ -1673,7 +1849,7 @@ def _not_found_route(lang: str):
 
 def render_embed(tool: str, lang: str, request: Optional[Request] = None) -> str:
     t = _t(lang)
-    form, result, script = _TOOLS[tool](lang, embed=True)
+    form, result, script = tool_parts(tool, lang, embed=True)
     site = base_url(request) + url_for(Page("tool", tool), lang)
     return (
         f"<!doctype html><html lang={lang}><head><meta charset=utf-8>"
@@ -1689,17 +1865,35 @@ def render_embed(tool: str, lang: str, request: Optional[Request] = None) -> str
 # ---------- служебные адреса ----------
 
 
+def page_images(page: Page, lang: str) -> list[str]:
+    """Картинки страницы для image-sitemap: кадры упражнений и снимки приложения."""
+    if page.kind == "home":
+        return [seo_static.asset_url(f"screens/{lang}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[lang]]
+    if page.kind == "exercise":
+        slug = _EXERCISE_BY_URL[page.arg]
+        return [_media_url(f"{slug}_1.jpg"), _media_url(f"{slug}_2.jpg")]
+    if page.kind == "pair":
+        import seo_library
+
+        return [_media_url(f"{_EXERCISE_BY_URL[u]}_1.jpg") for u in seo_library.pair_exercises(page.arg)]
+    return []
+
+
 def sitemap_xml(request: Optional[Request] = None) -> str:
     base = base_url(request)
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
-           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">']
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml" '
+           'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">']
     for page in pages():
         alternates = "".join(
             f'<xhtml:link rel="alternate" hreflang="{code}" href="{escape(base + url_for(page, code))}"/>'
             for code in LANGS
         ) + f'<xhtml:link rel="alternate" hreflang="x-default" href="{escape(base + url_for(page, X_DEFAULT_LANG))}"/>'
         for lang in LANGS:
-            out.append(f"<url><loc>{escape(base + url_for(page, lang))}</loc>{alternates}</url>")
+            images = "".join(f"<image:image><image:loc>{escape(base + src)}</image:loc></image:image>"
+                             for src in page_images(page, lang))
+            out.append(f"<url><loc>{escape(base + url_for(page, lang))}</loc><lastmod>{page_updated(page)}</lastmod>"
+                       f"{alternates}{images}</url>")
     out.append("</urlset>")
     return "\n".join(out)
 
@@ -1735,8 +1929,38 @@ def llms_txt(request: Optional[Request] = None) -> str:
         out.append(f"- [{t('seo.cta.bot')}](https://t.me/{bot_username()}?start={bot_payload(LLMS_BLOCK)})")
         main = [Page("home"), *[Page(f) for f in FEATURES], *[Page("import", s) for s in IMPORT_SOURCES], Page("tools"),
                 *[Page("tool", s) for s in TOOLS], Page("strength"), Page("programs"), Page("exercises"),
-                *[Page("vs", c) for c in COMPETITORS]]
+                Page("muscles"), Page("guides"), Page("glossary"), Page("compare"),
+                *[Page("template", s) for s in TEMPLATES],
+                *[Page("vs", c) for c in COMPETITORS], *[Page("alternatives", c) for c in ALTERNATIVES], Page("about")]
         for pg in main:
+            out.append(f"- [{_strip_emoji(page_h1(pg, lang))}]({base}{url_for(pg, lang)})")
+        out.append("")
+    out.append(f"Full version: {base}/llms-full.txt")
+    out.append(f"Sitemap: {base}/sitemap.xml")
+    return "\n".join(out) + "\n"
+
+
+def llms_full_txt(request: Optional[Request] = None) -> str:
+    """/llms-full.txt — подробная справка: факты о продукте (только из
+    каталога и config), потолки, платформы, переезд, и ВСЕ страницы сайта
+    с заголовками — на обоих языках."""
+    base = base_url(request)
+    out: list[str] = []
+    for lang in ("en", "ru"):
+        t = _t(lang)
+        p = _article_params(lang)
+        out.append(f"# {t('seo.brand')} — {t('seo.llms.full')}" if lang == "en" else f"## {t('seo.brand')} — {t('seo.llms.full')}")
+        out += ["", f"> {_plain(t('seo.llms.summary'))}", "", f"### {t('seo.llms.features')}"]
+        out += [f"- {_plain(t(f'seo.llms.f.{k}', **p))}" for k in ("log", "coach", "video", "progress", "programs", "import", "platforms")]
+        out += [f"- {_plain(t(f'seo.llms.ff.{k}', **p))}" for k in ("history", "limits", "privacy", "units", "export", "developer")]
+        out += ["", f"### {t('seo.llms.pricing')}", f"- {_plain(t('seo.llms.price', **p))}", ""]
+        out.append(f"### {t('seo.llms.links')}")
+        store = app_store_link(LLMS_BLOCK)
+        if store:
+            out.append(f"- [{t('seo.cta.app_store')}]({store})")
+        out.append(f"- [{t('seo.cta.bot')}](https://t.me/{bot_username()}?start={bot_payload(LLMS_BLOCK)})")
+        out += ["", f"### {t('seo.llms.pages')}"]
+        for pg in pages():
             out.append(f"- [{_strip_emoji(page_h1(pg, lang))}]({base}{url_for(pg, lang)})")
         out.append("")
     out.append(f"Sitemap: {base}/sitemap.xml")
@@ -1834,6 +2058,28 @@ async def llms_route(request: Request) -> Response:
                              headers={"Cache-Control": "public, max-age=3600"})
 
 
+async def llms_full_route(request: Request) -> Response:
+    return PlainTextResponse(llms_full_txt(request), media_type="text/markdown; charset=utf-8",
+                             headers={"Cache-Control": "public, max-age=3600"})
+
+
+def _template_file_route(lang: str, name: str):
+    import seo_template
+
+    media_type, build = seo_template.FILES[name]
+
+    async def route(request: Request) -> Response:
+        data = build(lang)
+        # Скачивание — клик с целью «template»: /growth видит его рядом с кликами в бота.
+        await _count("click", _click_page(request, _BLOCKS["template"]), None, request, target="template")
+        return Response(data, media_type=media_type, headers={
+            "Cache-Control": "public, max-age=86400", "Content-Disposition": f'attachment; filename="{name}"',
+            "X-Content-Type-Options": "nosniff",
+        })
+
+    return route
+
+
 async def og_image_route(request: Request) -> Response:
     return FileResponse(_OG_IMAGE_FILE, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
@@ -1904,6 +2150,15 @@ def register_routes(server: Any) -> None:
     server.custom_route("/sitemap.xml", methods=["GET"])(sitemap_route)
     server.custom_route("/robots.txt", methods=["GET"])(robots_route)
     server.custom_route("/llms.txt", methods=["GET"])(llms_route)
+    server.custom_route("/llms-full.txt", methods=["GET"])(llms_full_route)
+    import seo_template
+
+    for lang in LANGS:
+        for name in seo_template.FILES:
+            server.custom_route(f"/{lang}/templates/{name}", methods=["GET"])(_template_file_route(lang, name))
+    import seo_library
+
+    seo_library.register_routes(server)
     server.custom_route(OG_IMAGE_PATH, methods=["GET"])(og_image_route)
     server.custom_route("/og/{lang}/{key}.png", methods=["GET"])(og_page_route)
     server.custom_route("/site/{path:path}", methods=["GET"])(seo_static.site_route)

@@ -143,7 +143,8 @@ SYNONYMS = {
     # Дальше — необязательные колонки Hevy/Strong, тоже без ручного маппинга.
     # Название тренировки: по нему (вместе со временем начала) строки
     # делятся на сессии — две тренировки за день остаются двумя.
-    "title": {"title", "workout name", "workout_name"},
+    # «Тренировка» — русский заголовок шаблона дневника с сайта (seo_template.py).
+    "title": {"title", "workout name", "workout_name", "тренировка"},
     "end": {"end_time", "finished_at"},
     # Длительность сессии у Strong («1h 5m»): конец тренировки = начало + она.
     "workout_duration": {"duration"},
@@ -155,7 +156,7 @@ SYNONYMS = {
     # тренировке (Hevy description, Strong Workout Notes).
     # exercise_note/workout_note — колонки нашего же полного архива
     # (full_export.py, workouts.csv): свой файл читается обратно без маппинга.
-    "exercise_note": {"exercise_notes", "notes", "exercise_note"},
+    "exercise_note": {"exercise_notes", "notes", "exercise_note", "заметка", "заметки"},
     "workout_note": {"description", "workout notes", "workout_note"},
     "superset": {"superset_id"},
 }

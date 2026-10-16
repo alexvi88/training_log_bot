@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from typing import Iterable, Optional
 
 import analytics
@@ -247,6 +248,100 @@ def plates_per_side(target: float, bar: float, plates: Iterable[float]) -> tuple
     return picked, bar + 2 * reach / _SCALE
 
 
+# ---------- «когда я пожму 100?» ----------
+#
+# Прогноз, а не обещание. Темп роста расчётного максимума за неделю — доля
+# от текущего e1RM по уровню (новичок до полугода, средний — до двух лет,
+# дальше — опытный), двумя концами: быстрый и медленный. Темп тает как
+# 1 / (1 + t/GOAL_DECAY_WEEKS): через год — вдвое ниже исходного, через два — втрое,
+# потому что каждый следующий килограмм даётся дороже предыдущего. Частота —
+# множитель: одна тренировка с этим движением в неделю растит медленнее, три
+# — чуть быстрее двух (у силы частота заметна, Pelland et al.). Сверху
+# любой темп ограничен тем, что бот вообще предлагает: двойная прогрессия
+# (analytics.suggest_progression) прибавляет не больше повтора за
+# тренировку, а повтор — это около 1/30 веса (Эпли); до этого потолка
+# прогноз не доходит, но ограничение в коде есть.
+GOAL_RATES = {"beginner": (0.015, 0.008), "intermediate": (0.006, 0.003), "advanced": (0.0025, 0.001)}
+GOAL_FREQ = {1: 0.8, 2: 1.0, 3: 1.1, 4: 1.15}
+GOAL_DECAY_WEEKS = 52
+GOAL_MAX_WEEKS = 156
+GOAL_STEP_WEEKS = 4
+
+
+def goal_rate(level: str, freq: int, fast: bool, week: int) -> float:
+    r0 = GOAL_RATES[level][0 if fast else 1] * GOAL_FREQ[min(max(freq, 1), 4)]
+    return r0 / (1 + week / GOAL_DECAY_WEEKS)
+
+
+def goal_curve(current: float, level: str, freq: int, fast: bool, weeks: int = GOAL_MAX_WEEKS) -> list[float]:
+    """e1RM по неделям: [неделя 0, 1, …, weeks]."""
+    out = [current]
+    value = current
+    cap_per_week = max(freq, 1) / 30
+    for week in range(weeks):
+        value *= 1 + min(goal_rate(level, freq, fast, week), cap_per_week)
+        out.append(value)
+    return out
+
+
+def goal_weeks(current: float, target: float, level: str, freq: int, fast: bool) -> Optional[int]:
+    """Через сколько недель кривая дойдёт до цели; None — дольше GOAL_MAX_WEEKS."""
+    if current <= 0 or target <= 0:
+        return None
+    if current >= target:
+        return 0
+    for week, value in enumerate(goal_curve(current, level, freq, fast)):
+        if value >= target - 1e-9:
+            return week
+    return None
+
+
+# ---------- перцентиль на помосте ----------
+
+_PCT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seo_data", "strength_percentiles.json")
+_pct_data: Optional[dict] = None
+
+
+def percentile_data() -> dict:
+    """Таблица из seo_data/strength_percentiles.json (scripts/build_strength_percentiles.py)."""
+    global _pct_data
+    if _pct_data is None:
+        with open(_PCT_FILE, encoding="utf-8") as fh:
+            _pct_data = json.load(fh)
+    return _pct_data
+
+
+def weight_class(sex: str, bodyweight_kg: float) -> str:
+    classes = percentile_data()["classes"][sex]
+    for cls in classes[:-1]:
+        if bodyweight_kg <= float(cls):
+            return cls
+    return classes[-1]
+
+
+def percentile(value_kg: float, sex: str, bodyweight_kg: float, lift: str) -> Optional[tuple[float, str, int]]:
+    """(перцентиль 0–100, весовая категория, атлетов в клетке).
+
+    0 — ниже 1-го перцентиля, 100 — выше 99-го; между точками таблицы —
+    линейно. None — клетки нет."""
+    data = percentile_data()
+    cls = weight_class(sex, bodyweight_kg)
+    cell = data["table"].get(sex, {}).get(cls, {}).get(lift)
+    if not cell or value_kg <= 0:
+        return None
+    qs, ps = cell["q"], data["quantiles"]
+    if value_kg < qs[0]:
+        return 0.0, cls, cell["n"]
+    if value_kg >= qs[-1]:
+        return 100.0, cls, cell["n"]
+    for i in range(len(qs) - 1):
+        lo, hi = qs[i], qs[i + 1]
+        if lo <= value_kg < hi:
+            share = (value_kg - lo) / (hi - lo) if hi > lo else 0.0
+            return ps[i] + (ps[i + 1] - ps[i]) * share, cls, cell["n"]
+    return 100.0, cls, cell["n"]
+
+
 def js_constants() -> str:
     return json.dumps({
         "rirCap": analytics.RIR_CAP,
@@ -269,6 +364,10 @@ def js_constants() -> str:
         "rpeReps": list(RPE_REPS),
         "levels": [t for _n, t in LEVELS],
         "share": LIFT_SHARE,
+        "goalRates": GOAL_RATES,
+        "goalFreq": {str(k): v for k, v in GOAL_FREQ.items()},
+        "goalDecay": GOAL_DECAY_WEEKS,
+        "goalMax": GOAL_MAX_WEEKS,
     })
 
 
@@ -327,6 +426,29 @@ function dotsCoef(bw, sex) { return 500 / poly(C.dots[sex], clamp(bw, C.dotsBw[s
 function levelWeight(t, lift, bw, sex) { return t / dotsCoef(bw, sex) * C.share[sex][lift]; }
 function liftScore(w, lift, bw, sex) { return w / C.share[sex][lift] * dotsCoef(bw, sex); }
 function levelIndex(score) { var k = -1; for (var i = 0; i < C.levels.length; i++) if (score >= C.levels[i] - 1e-9) k = i; return k; }
+function goalRate(level, freq, fast, week) { var r0 = C.goalRates[level][fast ? 0 : 1] * C.goalFreq[String(Math.min(Math.max(freq, 1), 4))]; return r0 / (1 + week / C.goalDecay); }
+function goalCurve(cur, level, freq, fast, weeks) {
+  var out = [cur], v = cur, cap = Math.max(freq, 1) / 30;
+  for (var w = 0; w < weeks; w++) { v *= 1 + Math.min(goalRate(level, freq, fast, w), cap); out.push(v); }
+  return out;
+}
+function goalWeeks(cur, target, level, freq, fast) {
+  if (!(cur > 0) || !(target > 0)) return null;
+  if (cur >= target) return 0;
+  var c = goalCurve(cur, level, freq, fast, C.goalMax);
+  for (var w = 0; w < c.length; w++) if (c[w] >= target - 1e-9) return w;
+  return null;
+}
+function weightClass(P, sex, bw) { var cl = P.classes[sex]; for (var i = 0; i < cl.length - 1; i++) if (bw <= parseFloat(cl[i])) return cl[i]; return cl[cl.length - 1]; }
+function percentile(P, v, sex, bw, lift) {
+  var cls = weightClass(P, sex, bw), cell = ((P.table[sex] || {})[cls] || {})[lift];
+  if (!cell || !(v > 0)) return null;
+  var q = cell.q, p = P.quantiles;
+  if (v < q[0]) return [0, cls, cell.n];
+  if (v >= q[q.length - 1]) return [100, cls, cell.n];
+  for (var i = 0; i < q.length - 1; i++) if (q[i] <= v && v < q[i + 1]) { var s = q[i + 1] > q[i] ? (v - q[i]) / (q[i + 1] - q[i]) : 0; return [p[i] + (p[i + 1] - p[i]) * s, cls, cell.n]; }
+  return [100, cls, cell.n];
+}
 function fmt(x) { var r = Math.round(x * 10) / 10; return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)); }
 """
 

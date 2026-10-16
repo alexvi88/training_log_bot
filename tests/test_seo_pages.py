@@ -337,8 +337,7 @@ async def test_json_ld_is_valid_and_matches_the_page():
                 assert "ExercisePlan" in types
             if page.kind == "exercise":
                 assert "Article" in types
-            faq_key = page.kind if page.kind in ("home", "ai-coach", "import") else f"{page.kind}:{page.arg}"
-            if faq_key in seo_pages.FAQ:
+            if seo_pages.faq_key(page):
                 faq = next(b for b in blocks if b["@type"] == "FAQPage")
                 for question in faq["mainEntity"]:
                     # Вопрос FAQPage обязан быть виден на странице.
