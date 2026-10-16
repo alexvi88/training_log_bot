@@ -31,7 +31,11 @@ kill_timeout = 60
   # визитке (config.APP_STORE_URL). Пока не задана, строки нет вовсе.
   # С provider token (pt=) — иначе метки кампаний (ct=you_story у сторис «ТЫ»)
   # не видны в App Store Connect → Analytics → Campaigns, см. GROWTH.md.
-  # APP_STORE_URL = "https://apps.apple.com/app/apple-store/id<номер>?pt=<provider token>&mt=8"
+  # Без pt= пока: provider token добавить, когда владелец возьмёт его в Analytics.
+  APP_STORE_URL = "https://apps.apple.com/app/id6815211995"
+  # Свой домен публичных страниц (seo_pages.py): canonical, hreflang, sitemap.
+  # DNS athletediary.app смотрит на Fly, сертификат выпущен 16.10.2026.
+  SITE_BASE_URL = "https://athletediary.app"
 
 [deploy]
   # С volume второй машины рядом не поднять: старая гасится, новая
