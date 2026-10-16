@@ -186,7 +186,7 @@ async def test_unknown_page_is_a_real_404_with_the_coach():
 
 
 def _go_links(html):
-    return re.findall(r'href="(/go/(bot|appstore)\?f=([a-z0-9_]+))"', html)
+    return re.findall(r'href="(/go/(bot|appstore|diary)\?f=([a-z0-9_]+))"', html)
 
 
 async def test_every_page_links_to_the_bot_through_go_with_a_known_block():
@@ -272,7 +272,8 @@ async def test_device_decides_the_primary_button(monkeypatch):
         # Робот видит обе ссылки в любом варианте.
         for resp in (iphone, android, desktop, crawler):
             assert "/go/bot?f=" in resp.text and "/go/appstore?f=" in resp.text
-            assert resp.headers["vary"] == "User-Agent"
+            # Accept-Encoding дописывает gzip (seo_http) — страница всё равно зависит от устройства.
+            assert "User-Agent" in [v.strip() for v in resp.headers["vary"].split(",")]
 
 
 async def test_desktop_qr_encodes_the_counted_app_store_link(monkeypatch):
@@ -287,7 +288,7 @@ async def test_calculator_result_offers_to_log_the_set():
     for tool in seo_pages.TOOLS:
         en = responses[f"/en/tools/{tool}"].text
         block = seo_pages._BLOCKS[f"log:{tool}"]
-        assert f'class="log-cta btn-row"><a class="btn primary" href="/go/bot?f={block}"' in en
+        assert f'class="log-cta btn-row"><a class="btn primary" href="/go/diary?f={block}"' in en
     assert "Запиши этот подход — дальше посчитаю сам" in responses["/ru/tools/1rm"].text
     assert "Log this set — I&#x27;ll do the math from here" in responses["/en/tools/1rm"].text
 
@@ -337,8 +338,7 @@ async def test_json_ld_is_valid_and_matches_the_page():
                 assert "ExercisePlan" in types
             if page.kind == "exercise":
                 assert "Article" in types
-            faq_key = page.kind if page.kind in ("home", "ai-coach", "import") else f"{page.kind}:{page.arg}"
-            if faq_key in seo_pages.FAQ:
+            if seo_pages.faq_key(page):
                 faq = next(b for b in blocks if b["@type"] == "FAQPage")
                 for question in faq["mainEntity"]:
                     # Вопрос FAQPage обязан быть виден на странице.
@@ -495,7 +495,10 @@ async def test_site_base_url_wins_for_absolute_urls_and_falls_back_to_server(mon
     assert f'<link rel=canonical href="{HOST}/en/programs">' in fallback["/en/programs"].text
 
     monkeypatch.setattr(config, "SITE_BASE_URL", "https://athletediary.app")
-    responses = await _get_many(["/en/programs", "/robots.txt", "/sitemap.xml"])
+    # С адреса сервера страницы теперь уезжают на свой домен (seo_http) — смотрим их там.
+    moved = await _get("/en/programs")
+    assert moved.status_code == 301 and moved.headers["location"] == "https://athletediary.app/en/programs"
+    responses = await _get_many(["/en/programs", "/robots.txt", "/sitemap.xml"], headers={"Host": "athletediary.app"})
     page = responses["/en/programs"].text
     assert '<link rel=canonical href="https://athletediary.app/en/programs">' in page
     assert 'hreflang=ru href="https://athletediary.app/ru/programs"' in page
@@ -556,8 +559,8 @@ async def test_strength_pages_show_tables_and_lb_on_english_only():
     ru = responses["/ru/strength/deadlift/women"].text
     assert "In pounds" in en and "В фунтах" not in ru
     row = seo_tools.strength_table("bench", "m")[6]
-    assert f"<tr><th scope=row>{row[0]:g}<span class=u>kg</span></th>" in en
-    assert f"<td class=num>{row[1][2]:g}<span class=u>kg</span></td>" in en
+    assert f"<tr><th scope=row>{row[0]:g}<span class=u>\u00a0kg</span></th>" in en
+    assert f"<td class=num>{row[1][2]:g}<span class=u>\u00a0kg</span></td>" in en
     # Методика названа честно: своя шкала, DOTS, допущение о долях, источники.
     for html in (en, ru, responses["/en/strength"].text):
         assert seo_pages.STRENGTH_SOURCES[0] in html and seo_pages.STRENGTH_SOURCES[1] in html

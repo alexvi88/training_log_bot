@@ -52,7 +52,7 @@ OG_SIZE = (1200, 630)
 _OG_MEMORY_LIMIT = 48
 
 _TYPES = {
-    ".jpg": "image/jpeg", ".png": "image/png", ".ico": "image/x-icon", ".woff": "font/woff",
+    ".jpg": "image/jpeg", ".png": "image/png", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2",
     ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".webp": "image/webp", ".avif": "image/avif",
 }
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]{0,120}$")
@@ -105,7 +105,7 @@ def asset_url(rel: str) -> str:
 def _file_response(path: str) -> Response:
     ext = os.path.splitext(path)[1]
     return FileResponse(path, media_type=_TYPES[ext], headers={
-        "Cache-Control": "public, max-age=31536000, immutable" if ext in (".woff", ".jpg", ".png", ".svg", ".webp", ".avif") else "public, max-age=86400",
+        "Cache-Control": "public, max-age=31536000, immutable" if ext in (".woff", ".woff2", ".jpg", ".png", ".svg", ".webp", ".avif") else "public, max-age=86400",
         "X-Content-Type-Options": "nosniff",
         "Access-Control-Allow-Origin": "*",
     })

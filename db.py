@@ -10827,6 +10827,32 @@ async def count_finished_workouts_between(since: str, until: str) -> tuple[int, 
     return workouts, users
 
 
+async def site_week_numbers(since: str, exclude: set[int]) -> dict[str, float]:
+    """Живые цифры для «недели в подвале» на главной сайта (site_numbers.py):
+    закрытые тренировки, записанные подходы и поднятые килограммы с `since`
+    (UTC ISO). Импорт не считается (его подходы созданы в момент загрузки, а
+    сделаны когда угодно), свои аккаунты и демо прогонов — тоже. Фунты
+    переводятся в кг."""
+    marks = ", ".join("?" for _ in exclude) or "-1"  # NOT IN (NULL) не пропускает никого
+    demo = "SELECT user_id FROM auth_identities WHERE provider = 'review_demo'"
+    cur = await conn().execute(
+        f"SELECT COUNT(*), COUNT(DISTINCT user_id) FROM workouts WHERE status = 'finished' AND finished_at >= ? "
+        f"AND import_batch_id IS NULL AND user_id NOT IN ({marks}) AND user_id NOT IN ({demo})",
+        (since, *exclude),
+    )
+    workouts, athletes = await cur.fetchone()
+    cur = await conn().execute(
+        "SELECT COUNT(*), COALESCE(SUM(COALESCE(s.load_weight, s.weight) * s.reps "
+        f"* CASE WHEN u.unit = 'lb' THEN {1 / config.LB_PER_KG!r} ELSE 1 END), 0) "
+        "FROM sets s JOIN workout_blocks b ON b.id = s.block_id JOIN workouts w ON w.id = b.workout_id "
+        "JOIN users u ON u.telegram_id = w.user_id "
+        f"WHERE s.created_at >= ? AND w.import_batch_id IS NULL AND w.user_id NOT IN ({marks}) AND w.user_id NOT IN ({demo})",
+        (since, *exclude),
+    )
+    sets, kg = await cur.fetchone()
+    return {"workouts": workouts or 0, "athletes": athletes or 0, "sets": sets or 0, "kg": float(kg or 0)}
+
+
 async def count_new_users_between(since: str, until: str) -> int:
     """Сколько человек зарегистрировалось за отрезок — для суточного разбора
     поведения: путь новичка и путь вернувшегося читаются по-разному."""

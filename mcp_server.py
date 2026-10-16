@@ -59,6 +59,7 @@ import i18n
 import legal_pages
 import mcp_oauth
 import mcp_wellknown
+import seo_http
 import seo_pages
 
 logger = logging.getLogger(__name__)
@@ -536,6 +537,9 @@ def build_app():
     # A plain path-prefix dispatcher sidesteps that: lifespan always goes to
     # mcp_app, the only one of the two with startup/shutdown state.
     app = _PrefixDispatch(prefix="/v1", prefix_app=api_v1.build_app(), default_app=mcp_app)
+    # Публичный сайт: 301 на свой домен, gzip и ETag/304 — только для адресов
+    # сайта (seo_http.py); /v1, OAuth, /mcp и остальное проходит мимо как было.
+    app = seo_http.SiteMiddleware(app)
     # Общий потолок на тело запроса — снаружи ОБОИХ приложений (см.
     # body_limit.py про то, почему ни Starlette/uvicorn, ни amvera.yaml его
     # не ставят сами): один процесс отвечает и за бота, и за весь этот порт,

@@ -27,6 +27,11 @@ def test_catalogs_keep_weight_units_next_to_the_number():
     for lang in ("ru", "en"):
         catalog = json.loads((ROOT / "locales" / f"{lang}.json").read_text(encoding="utf-8"))
         for key, value in catalog.items():
+            # Исключение — публичный сайт (seo.*): там число и единица через
+            # неразрывный пробел (TONE_OF_VOICE.md, решение владельца 16.10.2026);
+            # его держит tests/test_seo_pages_p3.py.
+            if key.startswith("seo."):
+                continue
             if isinstance(value, str) and _SPACED_UNIT.search(value):
                 offenders.append(f"{lang}:{key}: {_SPACED_UNIT.search(value).group(0)!r}")
     assert offenders == []
