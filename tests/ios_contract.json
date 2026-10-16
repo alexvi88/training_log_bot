@@ -1582,6 +1582,49 @@
      "type": "Dashboard.BodyVolume",
      "optional": true,
      "default": true
+    },
+    "bodySets": {
+     "type": "Dashboard.BodySets",
+     "optional": true,
+     "default": true
+    },
+    "bodyWeeks": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "Dashboard.BodySets": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "chest": {
+     "type": "Int",
+     "optional": true
+    },
+    "back": {
+     "type": "Int",
+     "optional": true
+    },
+    "legs": {
+     "type": "Int",
+     "optional": true
+    },
+    "shoulders": {
+     "type": "Int",
+     "optional": true
+    },
+    "biceps": {
+     "type": "Int",
+     "optional": true
+    },
+    "triceps": {
+     "type": "Int",
+     "optional": true
+    },
+    "abs": {
+     "type": "Int",
+     "optional": true
     }
    }
   },
@@ -5362,5 +5405,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "848874a0bf8e0fec6f41ff978a11fe4c0b33f3eb"
+ "_ios_commit": "b3987833da8bc7d350e106fa0694c0d018ae811f"
 }
