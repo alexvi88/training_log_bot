@@ -31,6 +31,7 @@ import db
 import exercise_alternatives
 import exercise_descriptions
 import exercise_media
+import exercise_muscles
 import i18n
 import seed_data
 from api_v1_common import JSONResponse
@@ -65,6 +66,10 @@ def _media_json(template) -> dict[str, Any]:
         "images": images,
         "animation": api_v1_media.media_file_url(animation) if animation else None,
         "has_media": bool(images or animation),
+        # Схема мышц — тем же объектом, что кадры: оба экрана приложения,
+        # где она нарисована (превью шаблона и карточка упражнения), уже
+        # читают `media`. Не из каталога — `null` (exercise_muscles).
+        "muscles": exercise_muscles.for_exercise(template),
     }
 
 

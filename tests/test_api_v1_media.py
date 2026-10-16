@@ -95,7 +95,7 @@ async def test_media_for_exercise_without_catalog_entry(fresh_db, client_factory
     resp = await client.get(f"/exercises/{exercise_id}/media")
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {"images": [], "animation": None, "has_media": False}
+    assert body == {"images": [], "animation": None, "has_media": False, "muscles": None}
 
 
 @pytest.mark.asyncio
