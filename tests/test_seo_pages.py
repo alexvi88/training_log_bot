@@ -257,23 +257,75 @@ async def _get_as(path, ua):
     return await _get(path, headers={"User-Agent": ua})
 
 
+def _head_target(html):
+    head = re.search(r"<header class=site-head>(.*?)</header>", html, re.S).group(1)
+    return re.search(r'head-cta[^"]*" href="/go/(bot|appstore)\?', head).group(1)
+
+
+def _primary_targets(html):
+    """Все главные кнопки в теле страницы (без «запиши в дневник» калькулятора)."""
+    main = html.split("<main", 1)[1].split("<footer", 1)[0]
+    return set(re.findall(r'<a class="btn primary" href="/go/(bot|appstore)\?', main))
+
+
+def _alt_targets(html):
+    main = html.split("<main", 1)[1].split("<footer", 1)[0]
+    return set(re.findall(r'class=alt-link>[^<]*<a href="/go/(bot|appstore)\?', main))
+
+
+# Политика кнопок: приложение для iPhone — главный продукт, App Store первым
+# везде, кроме Android (там приложения нет — главный бот). Язык не влияет.
+# Запасной путь — строка помельче под кнопкой, а не вторая такая же кнопка.
+_POLICY = {"ios": "appstore", "android": "bot", "desktop": "appstore", "crawler": "appstore"}
+_POLICY_PAGES = ("", "/ai-coach", "/import/hevy", "/tools/1rm", "/tools/goal", "/programs", "/exercises",
+                 "/vs/hevy", "/alternatives/strong", "/guides", "/compare", "/about")
+
+
 async def test_device_decides_the_primary_button(monkeypatch):
     monkeypatch.setattr(config, "APP_STORE_URL", STORE)
+    uas = {"ios": UA_IPHONE, "android": UA_ANDROID, "desktop": UA_DESKTOP, "crawler": UA_GOOGLEBOT}
     for lang in ("ru", "en"):
-        iphone = await _get_as(f"/{lang}", UA_IPHONE)
-        android = await _get_as(f"/{lang}", UA_ANDROID)
+        for device, ua in uas.items():
+            pages = await _get_many([f"/{lang}{p}" for p in _POLICY_PAGES], {"user-agent": ua})
+            want = _POLICY[device]
+            other = "bot" if want == "appstore" else "appstore"
+            for url, resp in pages.items():
+                html = resp.text
+                assert _primary_target(html) == want, (url, device)
+                assert _primary_targets(html) == {want}, (url, device)
+                assert _head_target(html) == want, (url, device)
+                # Второй путь виден, но мельче: строкой, а не кнопкой того же размера.
+                assert other in _alt_targets(html), (url, device)
+                assert not re.search(rf'<a class="btn" href="/go/{other}\?', html), (url, device)
+                # Робот видит обе ссылки в любом варианте.
+                assert "/go/bot?f=" in html and "/go/appstore?f=" in html, url
+                # Accept-Encoding дописывает gzip (seo_http) — страница всё равно зависит от устройства.
+                assert "User-Agent" in [v.strip() for v in resp.headers["vary"].split(",")]
+                # QR-код в App Store — только на компьютере.
+                assert ("<div class=qr" in html) == (device == "desktop"), (url, device)
         desktop = await _get_as(f"/{lang}", UA_DESKTOP)
-        crawler = await _get_as(f"/{lang}", UA_GOOGLEBOT)
-        assert _primary_target(iphone.text) == "appstore"
-        assert _primary_target(android.text) == "bot"
-        # Компьютер: на английском главный App Store, на русском — бот; и QR.
-        assert _primary_target(desktop.text) == ("appstore" if lang == "en" else "bot")
+        iphone = await _get_as(f"/{lang}", UA_IPHONE)
         assert "<div class=qr" in desktop.text and "<div class=qr" not in iphone.text
-        # Робот видит обе ссылки в любом варианте.
-        for resp in (iphone, android, desktop, crawler):
-            assert "/go/bot?f=" in resp.text and "/go/appstore?f=" in resp.text
-            # Accept-Encoding дописывает gzip (seo_http) — страница всё равно зависит от устройства.
-            assert "User-Agent" in [v.strip() for v in resp.headers["vary"].split(",")]
+        assert i18n.t_in(lang, "seo.cta.head_store") in desktop.text.split("</header>", 1)[0]
+
+
+async def test_bot_page_keeps_the_bot_first_on_every_device(monkeypatch):
+    """Страница про сам бот — единственное исключение: бот первой кнопкой,
+    App Store строкой под ней; шапка — по общей политике."""
+    monkeypatch.setattr(config, "APP_STORE_URL", STORE)
+    for ua in (UA_IPHONE, UA_DESKTOP, UA_ANDROID):
+        html = (await _get_as("/ru/telegram", ua)).text
+        assert _primary_targets(html) == {"bot"}
+        assert "appstore" in _alt_targets(html)
+
+
+async def test_diary_button_follows_the_device_not_the_language(monkeypatch):
+    monkeypatch.setattr(config, "APP_STORE_URL", STORE)
+    for lang in ("ru", "en"):
+        for ua, host in ((UA_DESKTOP, "apps.apple.com"), (UA_IPHONE, "apps.apple.com"), (UA_ANDROID, "t.me")):
+            resp = await _get("/go/diary?f=" + seo_pages._BLOCKS["log:goal"],
+                              headers={"user-agent": ua, "referer": f"{HOST}/{lang}/tools/goal"})
+            assert urlsplit(resp.headers["location"]).hostname == host, (lang, ua)
 
 
 async def test_desktop_qr_encodes_the_counted_app_store_link(monkeypatch):
