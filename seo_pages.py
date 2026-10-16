@@ -527,7 +527,7 @@ def _head_cta(lang: str, block: str, device: str) -> str:
     if config.app_store_url() and _primary_store(lang, device):
         return (f'<a class="btn small primary head-cta" href="{_e(go_url("appstore", block))}">'
                 f'{_e(t("seo.cta.head_store"))}</a>')
-    return f'<a class="btn small primary head-cta" href="{_e(go_url("bot", block))}">{_e(t("seo.cta.head_bot"))}</a>'
+    return f'<a class="btn small primary head-cta bot" href="{_e(go_url("bot", block))}">{_e(t("seo.cta.head_bot"))}</a>'
 
 
 def _nav_pages() -> tuple[tuple[Page, str], ...]:
@@ -740,8 +740,14 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         f"<span>{_e(t('bot.name'))}</span></a>"
         f"<nav class=head-nav aria-label=\"{_e(t('seo.nav.label'))}\">{_nav_links(lang, page)}</nav>"
         f'<div class=head-end><a class=lang href="{url_for(page, other)}" hreflang={other} lang={other}>{other.upper()}</a>'
-        f"{_head_cta(lang, page.block, device)}</div></div>"
-        f'<nav class=sub-nav aria-label="{_e(t("seo.nav.label_mobile"))}">{_nav_links(lang, page)}</nav></div></header>'
+        f"{_head_cta(lang, page.block, device)}"
+        # На телефоне разделы — за кнопкой меню, а не второй строкой шапки:
+        # панель ложится поверх страницы (без сдвига вёрстки), тап мимо неё
+        # или Esc её закрывают.
+        f'<details class=menu><summary class=menu-btn><span class=vh>{_e(t("seo.nav.menu"))}</span>'
+        f'{seo_design.icon("menu")}{seo_design.icon("close")}</summary>'
+        f"<nav class=menu-panel aria-label=\"{_e(t('seo.nav.label'))}\"><div class=wrap>{_nav_links(lang, page)}</div></nav>"
+        "</details></div></div></div></header>"
     )
     if page.kind == "home":
         inner = body
@@ -754,11 +760,13 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
             f"{_footer(lang, page, request)}<script>{_PAGE_JS}</script></body></html>")
 
 
-# Мелочи всей страницы: активный раздел в мобильной ленте разделов — в поле
-# зрения; запятая в числовых полях — точка (на русской клавиатуре запятая).
+# Мелочи всей страницы: меню разделов на телефоне закрывается по Esc и по
+# тапу на ссылку; запятая в числовых полях — точка (на русской клавиатуре
+# запятая).
 _PAGE_JS = (
-    "(function(){var a=document.querySelector('.sub-nav [aria-current]');if(a&&a.scrollIntoView)"
-    "{var n=a.parentNode;n.scrollLeft=a.offsetLeft-(n.clientWidth-a.offsetWidth)/2;}"
+    "(function(){var m=document.querySelector('details.menu');if(m){"
+    "document.addEventListener('keydown',function(e){if(e.key==='Escape'&&m.open){m.open=false;m.querySelector('summary').focus();}});"
+    "m.querySelectorAll('.menu-panel a').forEach(function(a){a.addEventListener('click',function(){m.open=false;});});}"
     "document.querySelectorAll('input[inputmode=decimal],input[inputmode=numeric]').forEach(function(el){"
     "el.addEventListener('input',function(){if(el.value.indexOf(',')>=0)el.value=el.value.replace(/,/g,'.');},true);});})();"
 )
