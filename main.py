@@ -37,6 +37,7 @@ import engagement
 import exercise_photos
 import i18n
 import keyboards
+import lifecycle_events
 import ops_alerts
 import product_metrics
 import review_watch
@@ -115,6 +116,9 @@ class SetUserLanguageMiddleware(BaseMiddleware):
             lang = row["lang"] if row is not None else i18n.normalize(user.language_code)
             await _remember_first_name(user, row)
         i18n.set_lang(lang)
+        # Заодно — клиент для событий, которые пишет сама база
+        # (lifecycle_events): всё, что сделал этот апдейт, — из Telegram.
+        lifecycle_events.enter(lifecycle_events.PLATFORM_TG)
         return await handler(event, data)
 
 
@@ -445,6 +449,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="crashes", description="Сбои iOS-приложения по версиям (админ)"),
                 BotCommand(command="crash", description="Один отчёт о сбое iOS: /crash N (админ)"),
                 BotCommand(command="metrics", description="Метрики по дням + CSV (админ)"),
+                BotCommand(command="events_csv", description="Сырые события за N дней, CSV (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
                 BotCommand(command="announce", description="Релизный анонс: проверить и разослать (админ)"),
                 BotCommand(command="admin_wipe", description="Снести TEST_USER_ID для проверки онбординга (админ)"),

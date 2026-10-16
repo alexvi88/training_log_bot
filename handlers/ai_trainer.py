@@ -2121,6 +2121,7 @@ async def _handle_question(
     video_context: Optional[str] = None,
     scenario: Optional[str] = None,
     progress_stages: Optional[Sequence[str]] = None,
+    question_kind: Optional[str] = None,
 ) -> None:
     """Общая логика для текстовых и фото-вопросов: запрос к модели, история, отправка ответа.
 
@@ -2142,6 +2143,10 @@ async def _handle_question(
     фейковый процент и галочки по этапам. Задаёт его только _finish_setup —
     тот самый ход, что реально уходит за составом программы; на всех остальных
     (включая опросник и обычный чат) placeholder остаётся прежним.
+
+    question_kind — вид вопроса для события `ai_question` (lifecycle_events):
+    голос передаёт «voice» сам (сюда приходит уже расшифровка), фото и видео
+    узнаются по вложению, остальное — «text».
 
     Caller owns the `_busy` reservation end-to-end (claimed atomically before
     any await, released in the caller's `finally`) — this function assumes the
@@ -2353,7 +2358,10 @@ async def _handle_question(
     # свой потолок (см. db.try_increment_ai_question_count). Списание
     # по-прежнему ПОСЛЕ ответа: сорвавшийся у провайдера запрос не должен
     # стоить человеку вопроса.
-    await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
+    await db.try_increment_ai_question_count(
+        user_id, config.AI_QUESTION_DAILY_LIMIT,
+        kind=question_kind or ("video" if video_context else "photo" if image_data_url else "text"),
+    )
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
@@ -3355,6 +3363,6 @@ async def ai_voice_question(message: Message, state: FSMContext):
         # like the trainer hallucinating, with nothing pointing at the
         # transcription. Set logging already does this ("🎙 Записал: …").
         await message.reply(f"🎙 <i>{escape(question)}</i>", parse_mode="HTML")
-        await _handle_question(message, state, question, history_question=question)
+        await _handle_question(message, state, question, history_question=question, question_kind="voice")
     finally:
         _busy.discard(user_id)

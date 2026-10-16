@@ -72,6 +72,7 @@ import db
 import formatting
 import history_search_data
 import i18n
+import lifecycle_events
 import mcp_oauth
 import no_store
 import parser
@@ -261,6 +262,11 @@ async def auth_apple(request: Request) -> JSONResponse:
                 raise ApiError(400, "invalid_code", "code is invalid or expired")
             user_id = code_user_id
         else:
+            # Ручка до входа: клиента и версию для события `signup` здесь
+            # выставляет она сама (authed_user_id ещё не звали).
+            lifecycle_events.enter(
+                lifecycle_events.PLATFORM_IOS, request.headers.get("x-app-version")
+            )
             new_user = await db.create_app_only_user(
                 language_code=_signup_language_code(body, request),
                 # Пояс телефона вместо config.DEFAULT_TZ_OFFSET (+3): без него
@@ -1198,6 +1204,10 @@ async def log_set(request: Request) -> JSONResponse:
     set_id = await db.append_set(
         block_id, exercise_id, 0, weight, reps, rpe,
         user_id=user_id, idempotency_key=idempotency_key, created_at=created_at,
+        # Откуда подход — для события `set_logged`: кнопка повторов на экране
+        # блокировки шлёт `lock_screen` (и её досылка из очереди тоже).
+        # Необязательное: старые сборки не шлют, тогда `app`.
+        analytics_source=lifecycle_events.client_set_source(body.get("source")),
     )
     cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     row = await cur.fetchone()

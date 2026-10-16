@@ -28,6 +28,7 @@ import exercise_media
 import exercise_photos
 import formatting
 import i18n
+import lifecycle_events
 import parser
 import timeutil
 
@@ -237,6 +238,9 @@ async def authed_user_id(request: Request) -> int:
     # обработчика — перечитай сам: это снимок на момент входа.
     request.state.user = user
     request.state.lang = _set_request_lang(user)
+    # Клиент для событий, которые пишет сама база (lifecycle_events): тот же
+    # «один раз на весь обработчик», что и язык.
+    lifecycle_events.enter(lifecycle_events.PLATFORM_IOS, request.headers.get("x-app-version"))
     return user_id
 
 

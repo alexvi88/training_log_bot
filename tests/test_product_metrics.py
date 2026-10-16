@@ -54,8 +54,11 @@ def test_event_time_accepts_recent_phone_clock_only():
 
 
 async def _events(user):
+    # `signup` пишет само заведение аккаунта (lifecycle_events) — у этих
+    # тестов он фон, а не предмет проверки.
     cur = await db.conn().execute(
-        "SELECT event, props, platform, app_version FROM analytics_events WHERE user_id = ? ORDER BY id",
+        "SELECT event, props, platform, app_version FROM analytics_events "
+        "WHERE user_id = ? AND event != 'signup' ORDER BY id",
         (user,),
     )
     return [tuple(r) for r in await cur.fetchall()]

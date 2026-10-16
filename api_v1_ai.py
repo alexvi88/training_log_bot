@@ -560,7 +560,12 @@ async def _run_turn(
     # Квота тратится за состоявшийся ответ, как и в боте (db.try_increment_ai_question_count
     # уже сам не даёт перескочить лимит атомарным UPDATE ... WHERE count < limit)
     # — сбой провайдера выше уже вернул бы 502/504 и до сюда не дошёл.
-    await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
+    await db.try_increment_ai_question_count(
+        user_id, config.AI_QUESTION_DAILY_LIMIT,
+        # Вид для события `ai_question`. Голос приложение расшифровывает
+        # отдельной ручкой (/v1/voice) и шлёт сюда уже текст — он «text».
+        kind="video" if video_context is not None else "photo" if image_data_url is not None else "text",
+    )
 
     visible_question = shown_question or question
     wire_messages = wire_cell.get("messages")

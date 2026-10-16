@@ -116,8 +116,13 @@ async def _attach_ai_comment(
         )
 
 
-async def _ensure_user(telegram_id: int, username: str | None, language_code: str | None = None):
-    return await db.get_or_create_user(telegram_id, username, language_code)
+async def _ensure_user(
+    telegram_id: int, username: str | None, language_code: str | None = None,
+    *, signup_source: str | None = None,
+):
+    return await db.get_or_create_user(
+        telegram_id, username, language_code, signup_source=signup_source
+    )
 
 
 def _move_open_exercises_last(
@@ -1023,16 +1028,20 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
     # Спрашиваем до _ensure_user: «первый ли это /start» видно только по тому,
     # была ли запись до него.
     is_new = await db.get_user(message.from_user.id) is None
+    # Метка разбирается до заведения записи: тогда событие `signup` несёт
+    # источник сразу (db.get_or_create_user, lifecycle_events). Старожилу
+    # она не пишется никуда — см. ниже.
+    attribution = acquisition.attribution_for(
+        command.args if command else None, message.from_user.id
+    )
     await _ensure_user(
-        message.from_user.id, message.from_user.username, message.from_user.language_code
+        message.from_user.id, message.from_user.username, message.from_user.language_code,
+        signup_source=attribution.source,
     )
     if is_new:
         # Только новичку: у старожила переход по чужой ссылке — не привлечение,
         # и записывать ему источник значило бы приписать каналу человека,
         # который был в боте задолго до него.
-        attribution = acquisition.attribution_for(
-            command.args if command else None, message.from_user.id
-        )
         await db.set_user_source(
             message.from_user.id, attribution.source, attribution.referrer_id
         )

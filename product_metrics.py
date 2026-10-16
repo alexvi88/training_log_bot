@@ -22,9 +22,32 @@
   кнопки под пушем в Telegram (`record_tg_push_tap`: сообщение пуша узнаётся
   по `pushes.tg_message_id`, повторные нажатия под тем же пушем не в счёт;
   прочтение без нажатия сервер не видит и не считает);
+- события жизненного цикла пишет сама база, той же транзакцией, что и
+  действие (`lifecycle_events.py`; клиент tg|ios — из входа: middleware бота
+  и `api_v1_common.authed_user_id`), — поэтому одинаково для бота и приложения:
+  `signup` (`source` — метка deep link'а, если пришёл по ней; ios — app-only
+  аккаунт), `program_created` (`origin` ai|catalog|manual|coach|import|workout),
+  `workout_started` (`kind` live|backfill, `plan` yes|no), `set_logged`
+  (`source` bot|app|lock_screen|watch, `workout` live|backfill|edit — по одному
+  на подход), `workout_finished` (`kind`, `plan`, `sets` и `duration` —
+  корзины), вехи по разу на человека `first_set`, `first_workout_finished`,
+  `second_workout_finished` (импорт не в счёт), `coach_linked` (под атлетом),
+  `ai_question` (`kind` text|photo|video|voice — на списании квоты, то есть на
+  отвеченный вопрос), `video_review` (состоявшийся разбор видео), `import_done`
+  (`source` hevy|strong|csv|notes, корзины `workouts`/`sets`; подходы импорта
+  по одному не пишутся). Без контекста входа (фоновая задача, скрипт) не
+  пишется ничего. Объём: `set_logged` — самое частое, строка на подход (20–30
+  на тренировку), то есть не больше, чем уже пишут `action`/`tg_message` на тот
+  же подход; 13 месяцев хранения это выдерживают. Своего «онбординг
+  пройден» у сервера нет — шаги онбординга шлёт приложение (воронка до входа,
+  `api_v1_funnel`);
 - приложение присылает `POST /v1/events` (`api_v1_events`): открытие и уход в
   фон с длиной сессии, просмотр экрана, тап по пушу — то, чего сервер не видит:
-  GET'ы в ленту не пишутся, а тап по баннеру до сервера не доходит вовсе.
+  GET'ы в ленту не пишутся, а тап по баннеру до сервера не доходит вовсе; там
+  же показанная ошибка (`error_shown` с машинным кодом), подход в очередь без
+  связи (`offline_queued`), «Поделиться» картинкой тренировки
+  (`workout_card_share`/`workout_card_shared`) — список с белыми списками
+  свойств в `CLIENT_EVENTS`.
 
 **Сводка** (`db.daily_metrics`, хранится всегда): `rollup_day` складывает
 сутки в строки (сутки, метрика) — активные (всего, в боте, в приложении), за
@@ -57,7 +80,11 @@ Telegram в знаменателе и пуши без кнопки-колбэк�
 нижняя граница, а не ноль.
 
 Смотреть — админская `/metrics` (handlers/admin.py): таблица за две недели и CSV
-всей сводки.
+всей сводки. Любая воронка, которой в сводке нет, — по сырым событиям:
+`/events_csv [дней]` (по умолчанию 30) отдаёт CSV событий (ts, user_id,
+platform, event, props, app_version, own) и CSV атлетов из них для когорт
+(дата заведения, источник, язык, где завёлся, есть ли вход в приложение);
+до 200 тысяч строк, обрезку подпись называет.
 """
 
 from __future__ import annotations
@@ -93,6 +120,20 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "app_background": frozenset({"seconds"}),
     "screen_view": frozenset({"screen"}),
     PUSH_OPEN_EVENT: frozenset({"category"}),
+    # Приложение показало плашку ошибки (`error.displayMessage` в приложении —
+    # одна точка на все экраны): `code` — машинный код ApiError сервера
+    # (`question_limit_exceeded`, `http_502`) или вид сбоя клиента
+    # (`offline`, `timeout`, `decoding`…), `screen` — последний screen_view.
+    # Текста ошибки нет: только код.
+    "error_shown": frozenset({"code", "screen"}),
+    # Подход не ушёл сразу и ждёт связи в очереди телефона: source
+    # app|lock_screen. Сам подход, когда дойдёт, — серверное set_logged.
+    "offline_queued": frozenset({"source"}),
+    # Картинка тренировки (WorkoutCardSheet): нажал «Поделиться» — source
+    # finish|history; системный лист закрылся — activity (тип действия iOS
+    # или cancelled, тот же формат, что у сторис «ТЫ»).
+    "workout_card_share": frozenset({"source"}),
+    "workout_card_shared": frozenset({"source", "activity"}),
     # Экран «Итог недели» (GET /v1/weekly-summary): откуда открыли — source
     # push|card — и какой был вердикт (kind из weekly_summary.KINDS). По паре
     # видно, сколько открывают из воскресного пуша и в какой вердикт
