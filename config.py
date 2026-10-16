@@ -1068,6 +1068,10 @@ APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "com.trainingdiary.ios")
 # вписывают в App Store Connect → App Review Information.
 REVIEW_DEMO_USERNAME = os.getenv("REVIEW_DEMO_USERNAME", "")
 REVIEW_DEMO_PASSWORD = os.getenv("REVIEW_DEMO_PASSWORD", "")
+# Страница /mcp/demo-code (код коннектора для ревьюеров каталогов) входит
+# демо-аккаунтом App Review. Выключена, пока владелец не решит пустить туда
+# ревьюеров каталогов: аккаунт — витрина для Apple.
+MCP_DEMO_CODE_ENABLED = os.getenv("MCP_DEMO_CODE_ENABLED", "false").lower() == "true"
 
 # Второй демо-аккаунт — для прогона скриншотов (screenshots.yml в iOS-репо).
 # Тот же вход и та же демо-история, но отдельный аккаунт: прогон начинает и

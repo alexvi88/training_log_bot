@@ -849,7 +849,9 @@ async def demo_code_route(request: Request) -> Response:
     # дерево базы, а mcp_oauth импортируется рано.
     import review_demo
 
-    if not config.review_demo_available():
+    # Демо-аккаунт App Review владелец бережёт: без явного включения
+    # (MCP_DEMO_CODE_ENABLED=true) страницы нет вовсе.
+    if not config.MCP_DEMO_CODE_ENABLED or not config.review_demo_available():
         return Response("not found\n", status_code=404, media_type="text/plain")
     lang = page_lang(request)
     if request.method == "GET":

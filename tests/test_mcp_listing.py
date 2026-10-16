@@ -316,6 +316,7 @@ def demo_secrets(monkeypatch):
 
     monkeypatch.setattr(config, "REVIEW_DEMO_USERNAME", "reviewer")
     monkeypatch.setattr(config, "REVIEW_DEMO_PASSWORD", "s3cret-pass")
+    monkeypatch.setattr(config, "MCP_DEMO_CODE_ENABLED", True)
     monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
     monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
     review_demo.reset_failures()
@@ -371,3 +372,11 @@ async def test_reviewer_gets_a_code_that_the_consent_page_accepts(fresh_db, demo
         "SELECT COUNT(*) FROM workouts WHERE user_id = ?", (user_id,)
     )
     assert (await workouts.fetchone())[0] > 0
+
+
+async def test_demo_code_page_is_off_by_default(monkeypatch, demo_secrets):
+    import mcp_oauth
+
+    monkeypatch.setattr(config, "MCP_DEMO_CODE_ENABLED", False)
+    status, _, _ = await _asgi(mcp_server.build_app(), "GET", mcp_oauth.DEMO_CODE_PATH)
+    assert status == 404
