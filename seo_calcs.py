@@ -54,6 +54,25 @@ def _tonnage_objects(lang: str) -> list[dict]:
     return out
 
 
+# Сравнение «это как N предметов» — тем же правилом, что
+# formatting.format_tonnage_equivalent (seed 0: самый лёгкий подходящий
+# предмет); тест гоняет эту функцию в node против бота.
+TONNAGE_JS = (
+        "function equiv(total,u){var kg=u==='lb'?total/LBK:total;if(kg<150)return '';var c=[];"
+        "OBJ.forEach(function(o){var n=Math.round(kg/o.kg);if(n>=2&&n<=40)c.push([o,n]);});"
+        "if(!c.length){var f=OBJ.filter(function(o){return o.kg<=kg;});if(!f.length)return '';var o=f[f.length-1];c=[[o,Math.max(1,Math.round(kg/o.kg))]];}"
+        "var o=c[0][0],n=c[0][1],cat=PR.select(n),noun=o.f[cat]||o.f.other;"
+        "return EQ.replace('{count}',n).replace('{noun}',noun).replace('{emoji}','').trim();}"
+)
+
+
+def tonnage_prelude(lang: str) -> str:
+    """Данные для TONNAGE_JS: предметы с формами слова, строка «это как…», единицы."""
+    return (f"var OBJ={json.dumps(_tonnage_objects(lang), ensure_ascii=False)},PR=new Intl.PluralRules({json.dumps(lang)}),"
+            f"EQ={sp._js_str(i18n.t_in(lang, 'tonnage.equivalent', count='{count}', noun='{noun}', emoji='{emoji}'))},"
+            f"TON={sp._js_str(i18n.t_in(lang, 'seo.tool.unit_t'))},LBK=C.lbPerKg;")
+
+
 def tool_tonnage(lang: str, embed: bool = False) -> tuple[str, str, str]:
     t = sp._t(lang)
     row = (
@@ -79,14 +98,7 @@ def tool_tonnage(lang: str, embed: bool = False) -> tuple[str, str, str]:
         + ("" if embed else sp._log_cta(lang, "tonnage")) + "</div>"
     )
     script = (
-        f"var OBJ={json.dumps(_tonnage_objects(lang), ensure_ascii=False)},PR=new Intl.PluralRules({json.dumps(lang)}),"
-        f"EQ={sp._js_str(i18n.t_in(lang, 'tonnage.equivalent', count='{count}', noun='{noun}', emoji='{emoji}'))},"
-        f"TON={sp._js_str(t('seo.tool.unit_t'))},LBK=C.lbPerKg;"
-        "function equiv(total,u){var kg=u==='lb'?total/LBK:total;if(kg<150)return '';var c=[];"
-        "OBJ.forEach(function(o){var n=Math.round(kg/o.kg);if(n>=2&&n<=40)c.push([o,n]);});"
-        "if(!c.length){var f=OBJ.filter(function(o){return o.kg<=kg;});if(!f.length)return '';var o=f[f.length-1];c=[[o,Math.max(1,Math.round(kg/o.kg))]];}"
-        "var o=c[0][0],n=c[0][1],cat=PR.select(n),noun=o.f[cat]||o.f.other;"
-        "return EQ.replace('{count}',n).replace('{noun}',noun).replace('{emoji}','').trim();}"
+        tonnage_prelude(lang) + TONNAGE_JS +
         "function tonText(total,u){if(u==='kg'&&total>=1000)return fmt(total/1000)+'\u00a0<span class=u>'+TON+'</span>';return fu(total,u);}"
         "var n=1;function rowHtml(i){return document.querySelector('#rows .set-row').outerHTML.replace(/(w|r|s)1/g,'$1'+i);}"
         "$('add').addEventListener('click',function(){if(n>=30)return;n++;var d=document.createElement('div');d.innerHTML=rowHtml(n);"

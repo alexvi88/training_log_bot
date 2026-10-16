@@ -10833,7 +10833,7 @@ async def site_week_numbers(since: str, exclude: set[int]) -> dict[str, float]:
     (UTC ISO). Импорт не считается (его подходы созданы в момент загрузки, а
     сделаны когда угодно), свои аккаунты и демо прогонов — тоже. Фунты
     переводятся в кг."""
-    marks = ", ".join("?" for _ in exclude) or "NULL"
+    marks = ", ".join("?" for _ in exclude) or "-1"  # NOT IN (NULL) не пропускает никого
     demo = "SELECT user_id FROM auth_identities WHERE provider = 'review_demo'"
     cur = await conn().execute(
         f"SELECT COUNT(*), COUNT(DISTINCT user_id) FROM workouts WHERE status = 'finished' AND finished_at >= ? "

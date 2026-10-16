@@ -523,8 +523,10 @@ def _pair_frames(lang: str, a: str, b: str) -> str:
         slug = sp._EXERCISE_BY_URL[url]
         name = _ex_name(url, lang)
         figs.append(
-            f'<figure><a href="{sp.url_for(Page("exercise", url), lang)}"><img src="{sp._media_url(f"{slug}_1.jpg")}" '
-            f'alt="{sp._e(t("seo.exercise.frame_start", name=name))}" width=400 height=300 loading=lazy decoding=async></a>'
+            f'<figure><a href="{sp.url_for(Page("exercise", url), lang)}">'
+            + sp.exercise_picture(slug, 1, t("seo.exercise.frame_start", name=name),
+                                  sizes="(max-width: 600px) 50vw, 400px", widths=(360, 720), width=400, height=300)
+            + "</a>"
             f"<figcaption>{sp._e(name)}</figcaption></figure>")
     return f"<div class=frames>{''.join(figs)}</div>"
 

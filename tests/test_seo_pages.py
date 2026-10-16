@@ -272,7 +272,8 @@ async def test_device_decides_the_primary_button(monkeypatch):
         # Робот видит обе ссылки в любом варианте.
         for resp in (iphone, android, desktop, crawler):
             assert "/go/bot?f=" in resp.text and "/go/appstore?f=" in resp.text
-            assert resp.headers["vary"] == "User-Agent"
+            # Accept-Encoding дописывает gzip (seo_http) — страница всё равно зависит от устройства.
+            assert "User-Agent" in [v.strip() for v in resp.headers["vary"].split(",")]
 
 
 async def test_desktop_qr_encodes_the_counted_app_store_link(monkeypatch):
@@ -494,7 +495,10 @@ async def test_site_base_url_wins_for_absolute_urls_and_falls_back_to_server(mon
     assert f'<link rel=canonical href="{HOST}/en/programs">' in fallback["/en/programs"].text
 
     monkeypatch.setattr(config, "SITE_BASE_URL", "https://athletediary.app")
-    responses = await _get_many(["/en/programs", "/robots.txt", "/sitemap.xml"])
+    # С адреса сервера страницы теперь уезжают на свой домен (seo_http) — смотрим их там.
+    moved = await _get("/en/programs")
+    assert moved.status_code == 301 and moved.headers["location"] == "https://athletediary.app/en/programs"
+    responses = await _get_many(["/en/programs", "/robots.txt", "/sitemap.xml"], headers={"Host": "athletediary.app"})
     page = responses["/en/programs"].text
     assert '<link rel=canonical href="https://athletediary.app/en/programs">' in page
     assert 'hreflang=ru href="https://athletediary.app/ru/programs"' in page
