@@ -70,6 +70,7 @@ class AdminFlow(StatesGroup):
     browsing_history = State()
     browsing_pushes = State()
     browsing_ai_users = State()
+    ai_dialogs_search = State()  # /ai_dialogs → «🔎 Найти атлета»: ждём id, @ник или имя
     browsing_activity_users = State()
     browsing_activity = State()
     browsing_activity_all = State()
