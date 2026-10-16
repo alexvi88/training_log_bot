@@ -326,6 +326,13 @@ async def admin_pushes_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+AI_DIALOGS_SEARCH_LIMIT = 10
+AI_DIALOGS_SEARCH_PROMPT = (
+    "🔎 Пришли id атлета, @ник или часть ника/имени/почты. "
+    "У аккаунтов только из приложения ника нет — ищи по id (он отрицательный) или почте."
+)
+
+
 async def _show_ai_users_list(target: Message | CallbackQuery, state: FSMContext, page: int):
     await state.set_state(AdminFlow.browsing_ai_users)
     await state.update_data(admin_ai_users_page=page)
@@ -333,6 +340,10 @@ async def _show_ai_users_list(target: Message | CallbackQuery, state: FSMContext
     users = await db.list_users_with_ai_message_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
     has_next = (page + 1) * USERS_PAGE_SIZE < total
     kb = keyboards.admin_ai_users_keyboard(users, page, has_next)
+    if users:
+        kb.inline_keyboard.insert(
+            0, [InlineKeyboardButton(text="🔎 Найти атлета", callback_data="admin:ais")]
+        )
     text = "🤖 Диалоги с AI-тренером — выбери пользователя:" if users else "Пользователей пока нет."
     if isinstance(target, CallbackQuery):
         await ui.safe_edit(target, text, reply_markup=kb)
@@ -340,12 +351,92 @@ async def _show_ai_users_list(target: Message | CallbackQuery, state: FSMContext
         await target.answer(text, reply_markup=kb)
 
 
+def _ai_dialogs_pick_label(row) -> str:
+    label = keyboards.admin_user_label(row["username"], row["email"], row["telegram_id"])
+    if row["first_name"]:
+        label += f" · {row['first_name']}"
+    if row["username"] or row["email"]:
+        label += f" · {row['telegram_id']}"
+    return f"{label} ({row['ai_message_count']})"
+
+
+async def _ai_dialogs_search(message: Message, state: FSMContext, query: str) -> None:
+    """Найти атлета по id / @нику / части ника, имени или почты и открыть его
+    диалоги; несколько совпадений — список кнопок на тот же экран диалогов."""
+    query = query.strip()
+    data = await state.get_data()
+    page = data.get("admin_ai_users_page", 0)
+    await state.set_state(AdminFlow.browsing_ai_users)
+    await state.update_data(admin_ai_users_page=page)
+
+    user_id = await _resolve_athlete(query)
+    if user_id is not None:
+        await _send_ai_dialogs(message, user_id, page)
+        return
+    matches, total = await db.search_users_for_admin(query, limit=AI_DIALOGS_SEARCH_LIMIT)
+    if not matches:
+        await message.answer(
+            f"Не нашёл атлета «{query}». Пришли id, @ник или часть имени — "
+            "или открой общий список: /ai_dialogs"
+        )
+        return
+    if total == 1:
+        await _send_ai_dialogs(message, matches[0]["telegram_id"], page)
+        return
+    b = InlineKeyboardBuilder()
+    for row in matches:
+        b.button(text=_ai_dialogs_pick_label(row), callback_data=f"admin:aiu:{row['telegram_id']}")
+    b.button(text=i18n.t("btn.to_list"), callback_data=f"admin:aib:{page}")
+    b.adjust(1)
+    more = f" Показал первые {len(matches)} — уточни запрос." if total > len(matches) else ""
+    await message.answer(
+        f"Под «{query}» подходят {total} атлетов — выбери (в скобках — сообщений тренеру).{more}",
+        reply_markup=b.as_markup(),
+    )
+
+
 @router.message(Command("ai_dialogs"))
-async def cmd_ai_dialogs(message: Message, state: FSMContext):
+async def cmd_ai_dialogs(message: Message, state: FSMContext, command: CommandObject | None = None):
     if not _is_admin(message.from_user.id):
         return
     await state.clear()
+    arg = (command.args if command else None) or ""
+    if arg.strip():
+        await _ai_dialogs_search(message, state, arg)
+        return
     await _show_ai_users_list(message, state, page=0)
+
+
+@router.callback_query(F.data == "admin:ais")
+async def admin_ai_dialogs_search_start(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    page = data.get("admin_ai_users_page", 0)
+    await state.set_state(AdminFlow.ai_dialogs_search)
+    await state.update_data(admin_ai_users_page=page)
+    b = InlineKeyboardBuilder()
+    b.button(text="Отмена", callback_data=f"admin:ais:no:{page}")
+    await ui.safe_edit(callback, AI_DIALOGS_SEARCH_PROMPT, reply_markup=b.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:ais:no:"))
+async def admin_ai_dialogs_search_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    page = int(callback.data.split(":")[3])
+    await _show_ai_users_list(callback, state, page)
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminFlow.ai_dialogs_search), F.text, ~F.text.startswith("/"))
+async def admin_ai_dialogs_search_receive(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await _ai_dialogs_search(message, state, message.text)
 
 
 @router.callback_query(F.data.startswith("admin:aip:"))
@@ -368,21 +459,18 @@ async def admin_ai_users_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin:aiu:"))
-async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
-    if not _is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    target_user_id = int(callback.data.split(":")[2])
-
+async def _send_ai_dialogs(target: Message, target_user_id: int, page: int) -> bool:
+    """Весь вечный лог переписки атлета с тренером — кусками под лимит Telegram,
+    «К списку» под последним. Диалогов нет — так и пишет, возвращает False
+    (кнопка списка проверяет это заранее и отвечает алертом)."""
     user = await db.get_user(target_user_id)
     rows = await db.get_ai_chat_history(target_user_id) if user else []
     if not rows:
-        await callback.answer("У этого пользователя пока нет диалогов с AI-тренером.", show_alert=True)
-        return
-
-    data = await state.get_data()
-    page = data.get("admin_ai_users_page", 0)
+        await target.answer(
+            f"У {await _athlete_label(target_user_id)} пока нет диалогов с AI-тренером.",
+            reply_markup=keyboards.admin_ai_dialogs_back_keyboard(page),
+        )
+        return False
 
     who = f"@{user['username']}" if user["username"] else str(target_user_id)
     lines = [f"🤖 Диалоги с AI-тренером — {who} ({len(rows)} сообщ.):", ""]
@@ -396,7 +484,23 @@ async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
         markup = keyboards.admin_ai_dialogs_back_keyboard(page) if is_last else None
-        await callback.message.answer(chunk, reply_markup=markup)
+        await target.answer(chunk, reply_markup=markup)
+    return True
+
+
+@router.callback_query(F.data.startswith("admin:aiu:"))
+async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    target_user_id = int(callback.data.split(":")[2])
+    user = await db.get_user(target_user_id)
+    if user is None or not await db.get_ai_chat_history(target_user_id, limit=1):
+        await callback.answer("У этого пользователя пока нет диалогов с AI-тренером.", show_alert=True)
+        return
+    data = await state.get_data()
+    page = data.get("admin_ai_users_page", 0)
+    await _send_ai_dialogs(callback.message, target_user_id, page)
     await callback.answer()
 
 

@@ -11284,6 +11284,34 @@ async def find_user_id_by_username(username: str) -> Optional[int]:
     return row["telegram_id"] if row else None
 
 
+async def search_users_for_admin(query: str, limit: int = 10) -> tuple[list[dict], int]:
+    """Атлеты, у которых ник, имя из Telegram или почта входа содержат `query`
+    (без «@» и без учёта регистра, кириллица тоже) — для поиска в админке.
+
+    Возвращает первые `limit` совпадений (больше сообщений тренеру — выше) и
+    сколько совпало всего. Сравнение — в Python: LOWER у SQLite знает только
+    ASCII, а имена бывают русские; админская выборка редкая, таблица целиком —
+    дешевле, чем своя функция сравнения в соединении.
+    """
+    needle = query.strip().lstrip("@").casefold()
+    if not needle:
+        return [], 0
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.username, u.first_name, "
+        "(SELECT i.email FROM auth_identities i WHERE i.user_id = u.telegram_id "
+        "AND i.email IS NOT NULL ORDER BY i.created_at LIMIT 1) AS email, "
+        "(SELECT COUNT(*) FROM ai_chat_messages m WHERE m.telegram_id = u.telegram_id) AS ai_message_count "
+        "FROM users u"
+    )
+    found = [
+        dict(row)
+        for row in await cur.fetchall()
+        if any(needle in (row[col] or "").casefold() for col in ("username", "first_name", "email"))
+    ]
+    found.sort(key=lambda r: (-r["ai_message_count"], r["telegram_id"]))
+    return found[:limit], len(found)
+
+
 async def list_user_events(telegram_id: int, limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
     """Действия одного пользователя, свежие сверху."""
     cur = await conn().execute(

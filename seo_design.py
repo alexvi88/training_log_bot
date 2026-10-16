@@ -463,8 +463,6 @@ li.alt.us { border-color: rgba(255,138,61,.55); background: linear-gradient(160d
 @media (prefers-reduced-motion: no-preference) {
   .sprite.anim { animation-name: sprite-run; animation-iteration-count: infinite; animation-timing-function: steps(var(--frames)); }
   @keyframes sprite-run { to { background-position: var(--sx) 0; } }
-  .scene-dog { animation: dog-cross 9s linear infinite; }
-  @keyframes dog-cross { 0% { transform: translateX(-90px); } 55%, 100% { transform: translateX(calc(100cqw + 20px)); } }
 }
 .sec-head .sprite { display: block; margin-bottom: 10px; }
 .gym { display: grid; gap: var(--s5); align-items: center; }
@@ -473,9 +471,11 @@ li.alt.us { border-color: rgba(255,138,61,.55); background: linear-gradient(160d
 .scene { position: relative; margin: 0; padding: 8px; background: #2a1810; container-type: inline-size;
   clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px), 0 14px);
   box-shadow: 0 40px 80px -40px rgba(255,106,43,.6); }
-.scene img { display: block; width: 100%; height: auto; image-rendering: pixelated;
+.scene video, .scene img { display: block; width: 100%; height: auto; aspect-ratio: 1110 / 617; object-fit: cover; image-rendering: pixelated;
   clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px); }
-.scene-dog { position: absolute; left: 8px; bottom: 14px; display: block; pointer-events: none; }
+/* live loop; with reduced motion only the screenshot */
+.scene .scene-still { display: none; }
+@media (prefers-reduced-motion: reduce) { .scene .scene-video { display: none; } .scene .scene-still { display: block; } }
 .you { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: end; margin: var(--s5) 0; padding: var(--s4); border-radius: 18px; background: var(--glass); border: 1px solid var(--line); }
 .you .sprite { grid-row: span 2; }
 .you-tag { justify-self: start; font: 10px/1 var(--pixel); color: #1b0d06; background: #ffd23f; padding: 6px 8px; border-radius: 4px; box-shadow: 0 0 0 2px #1b0d06; }
@@ -550,13 +550,23 @@ body.embed .tool { margin-top: 0; }
 .basement { position: relative; margin: var(--s8) 0; padding: var(--s5); border-radius: 28px; overflow: hidden; min-height: 150px;
   background: linear-gradient(180deg, #2a1810 0%, #1d110c 70%, #3a2116 70%, #2a1810 100%); border: 1px solid var(--line2); display: grid; gap: var(--s4); align-items: center; container-type: inline-size; }
 @media (min-width: 760px) { .basement { grid-template-columns: 1fr auto; } }
-.basement-floor { position: relative; height: 210px; }
-.walker, .walker-dog { position: absolute; bottom: 0; left: 0; }
-.walker-dog { bottom: 0; }
+/* the floor is its own container: walkers stay on it (up to the board on wide
+   screens, full width when the board stacks below) and turn around at its edge */
+.basement-floor { position: relative; height: 210px; container-type: inline-size; min-width: 0; }
+.walker, .walker-dog, .lifter { position: absolute; bottom: 0; left: 0; display: block; }
+.lifter { left: auto; right: 0; bottom: 6px; }
+.walker { --path: calc(100cqw - 110px - 96px); }
+.walker-dog { bottom: 2px; --path: calc(100cqw - 66px); }
+.walker .sprite, .walker-dog .sprite { display: block; }
 @media (prefers-reduced-motion: no-preference) {
-  .walker { animation: walk 22s linear infinite alternate; }
-  .walker-dog { animation: walk 9s linear infinite alternate-reverse; }
-  @keyframes walk { from { transform: translateX(0); } to { transform: translateX(calc(100cqw - 180px)); } }
+  .walker { animation: pace 22s linear infinite; }
+  .walker-dog { animation: pace 9s linear infinite; animation-delay: -4s; }
+  @keyframes pace {
+    0% { transform: translateX(0) scaleX(1); }
+    49.99% { transform: translateX(var(--path)) scaleX(1); }
+    50% { transform: translateX(var(--path)) scaleX(-1); }
+    100% { transform: translateX(0) scaleX(-1); }
+  }
 }
 .board { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, minmax(0, auto)); gap: var(--s3) var(--s5); padding: var(--s4) var(--s5); border-radius: 6px; background: #12201a; border: 6px solid #5a3a22; box-shadow: 0 12px 30px -10px rgba(0,0,0,.7); color: #e8f1e6; }
 .board-h { grid-column: 1 / -1; font: 10px/1.4 var(--pixel); letter-spacing: .05em; color: #ffd23f; }

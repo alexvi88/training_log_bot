@@ -1099,25 +1099,41 @@ def _basement(lang: str) -> str:
         board = (f'<div class=board role=group aria-label="{_e(t("seo.home.week.h"))}"><b class=board-h>{_e(t("seo.home.week.h"))}</b>'
                  + "".join(f"<div><span class=board-n>{_e(v)}</span><small>{_e(k)}</small></div>" for k, v in cells)
                  + f"<small class=board-note>{_e(t('seo.home.week.note'))}</small></div>")
+    # пол — свой контейнер: тренер и собака ходят только по нему и
+    # разворачиваются у края, а не уходят под доску; атлет с гантелями
+    # стоит у дальнего края и делает подходы
     return (f'<section class="basement reveal" aria-label="{_e(t("seo.home.week.label"))}"><div class=basement-floor>'
-            f"<span class=walker>{sprite('coach', 2)}</span><span class=walker-dog>{sprite('dog', 2)}</span></div>{board}</section>")
+            f"<span class=lifter>{sprite('curl', 2)}</span>"
+            f"<span class=walker>{sprite('coach_walk', 2)}</span><span class=walker-dog>{sprite('dog', 2)}</span></div>"
+            f"{board}</section>")
 
 
 def sprite(name: str, scale: int = 3, label: str = "") -> str:
     """Пиксельный спрайт из ленты кадров: шаги CSS, без сглаживания; при
     «уменьшении движения» стоит первый кадр."""
-    rel, w, h, frames = seo_static.SPRITES[name]
+    rel, w, h, frames, step_ms = seo_static.SPRITES[name]
     role = f' role=img aria-label="{_e(label)}"' if label else " aria-hidden=true"
-    anim = f"animation-duration:{0.6 * frames:.1f}s;--sx:-{w * scale * frames}px;" if frames > 1 else ""
+    anim = f"animation-duration:{step_ms * frames}ms;--sx:-{w * scale * frames}px;" if frames > 1 else ""
     return (f'<span class="sprite{" anim" if frames > 1 else ""}"{role} style="width:{w * scale}px;height:{h * scale}px;'
             f"background-image:url({seo_static.asset_url(rel)});background-size:{w * scale * frames}px {h * scale}px;"
             f'{anim}--frames:{frames}"></span>')
 
 
 def _gym(lang: str) -> str:
-    """Подвал с вкладки «Меню» — только как есть в приложении для iPhone."""
+    """Подвал с вкладки «Меню» — как есть в приложении для iPhone: петля,
+    отрисованная тем же кодом сцены (scripts/render_basement_loop.py), постер
+    — скриншот симулятора. При «уменьшении движения» — только скриншот:
+    видео прячет CSS, а скрипт ставит на паузу и не даёт ему качаться."""
     t = _t(lang)
     w, h = seo_static.SCENE_SIZE
+    alt = _e(t("seo.home.gym.alt"))
+    poster = seo_static.asset_url(f"gym/scene-{lang}.png")
+    script = (
+        "(function(){var m=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)');"
+        "var v=document.querySelectorAll('.scene-video');function apply(){v.forEach(function(e){"
+        "if(m&&m.matches){e.removeAttribute('autoplay');e.pause();}else if(e.paused){e.play().catch(function(){});}});}"
+        "if(m){apply();m.addEventListener&&m.addEventListener('change',apply);}})();"
+    )
     return (
         "<section class='gym-sec reveal'><div class=gym>"
         "<div class=gym-text><span class=eyebrow>" + _e(t("seo.home.gym.eyebrow")) + "</span>"
@@ -1125,9 +1141,12 @@ def _gym(lang: str) -> str:
         f"<div class=you>{sprite('stand', 2)}<span class=you-tag>{_e(t('seo.home.gym.you_tag'))}</span>"
         f"<p>{_e(t('seo.home.gym.you'))}</p></div>"
         f"<p class=muted>{_e(t('seo.home.gym.note'))}</p></div>"
-        f'<figure class=scene><img src="{seo_static.asset_url(f"gym/scene-{lang}.png")}" alt="{_e(t("seo.home.gym.alt"))}" '
-        f"width={w} height={h} loading=lazy decoding=async>"
-        f"<span class=scene-dog>{sprite('dog', 2)}</span></figure>"
+        f'<figure class=scene><video class=scene-video autoplay muted loop playsinline preload=metadata '
+        f'disablepictureinpicture poster="{poster}" width={w} height={h} role=img aria-label="{alt}">'
+        f'<source src="{seo_static.asset_url(f"gym/scene-{lang}.webm")}" type=video/webm>'
+        f'<source src="{seo_static.asset_url(f"gym/scene-{lang}.mp4")}" type=video/mp4></video>'
+        f'<img class=scene-still src="{poster}" alt="{alt}" width={w} height={h} loading=lazy decoding=async>'
+        f"</figure><script>{script}</script>"
         "</div></section>"
     )
 
