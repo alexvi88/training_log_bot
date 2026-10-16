@@ -3048,7 +3048,7 @@
   "seo.tool.wilks.equipment": "Экипировка (для GL)",
   "seo.tool.wilks.classic": "Классика",
   "seo.tool.wilks.equipped": "Экипировка",
-  "seo.tool.wilks.low_bw": "IPF GL считают с веса тела от {min}кг.",
+  "seo.tool.wilks.low_bw": "IPF GL считают с веса тела от {min} кг.",
   "seo.tool.warmup.short": "Разминка до рабочего веса",
   "seo.tool.warmup.card": "Лесенка подходов от пустого грифа до рабочего.",
   "seo.tool.warmup.title": "Калькулятор разминки: подходы до рабочего веса — Дневник атлета",
