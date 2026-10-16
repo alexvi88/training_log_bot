@@ -803,7 +803,7 @@ def _render_template(lang: str, page: Page, request) -> str:
         + upload
         + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.columns.h'))}</h2><div class=table-card><table><tbody>{col_rows}</tbody></table></div>"
         f"<p class=muted>{t(f'{key}.columns_note_html', **params)}</p></section>"
-        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.example.h'))}</h2><div class=table-card><table><thead><tr>{ex_head}</tr></thead>"
+        + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.example.h'))}</h2><div class='table-card scroll-x nowrap'><table><thead><tr>{ex_head}</tr></thead>"
         f"<tbody>{ex_rows}</tbody></table></div></section>"
         + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.excel.h'))}</h2>{t(f'{key}.excel_html', **params)}</section>"
         + f"<section class='reveal sub'><h2>{sp._e(t(f'{key}.sheets.h'))}</h2>{t(f'{key}.sheets_html', **params)}</section>"
