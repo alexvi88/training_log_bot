@@ -1199,6 +1199,7 @@
   "program.upperlower.meta": "intermediate · 2–4 workouts a week",
   "program.upperlower.name": "↕️ Upper / Lower",
   "program.weekly_sets": "Sets per week: {groups}",
+  "program.session_sets": "Sets per workout: {groups}",
   "progress.e1rm_delta": "e1RM: {delta} {since}",
   "progress.e1rm_hint": "ℹ️ <i>e1RM — your estimated one-rep max: the weight you could probably lift once (I count it from your weights, reps and RPE — @9 means you left one rep in the tank).</i>",
   "progress.need_second_session": "I'll draw the chart after your second workout with this exercise",

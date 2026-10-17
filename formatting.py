@@ -1553,14 +1553,18 @@ def _editable_later() -> str:
     return i18n.t("program.editable_later")
 
 
-def format_weekly_sets(rows: Optional[list[dict]]) -> Optional[str]:
+def format_weekly_sets(rows: Optional[list[dict]], single_session: bool = False) -> Optional[str]:
     """«Подходов в неделю: грудь 9 · спина 9 · ноги 13» — из готовых строк
     ai_trainer.program_weekly_sets (порядок и нули решены там). None — если
-    считать нечего: пустую строку объёма не показываем."""
+    считать нечего: пустую строку объёма не показываем.
+
+    `single_session` — программа из одного дня (тренировка на сегодня):
+    «в неделю» там неправда, это подходы за одну тренировку."""
     if not rows:
         return None
     groups = " · ".join(f"{escape(r['group'].lower())} {r['sets']}" for r in rows)
-    return i18n.t("program.weekly_sets", groups=groups)
+    key = "program.session_sets" if single_session else "program.weekly_sets"
+    return i18n.t(key, groups=groups)
 
 
 def build_ai_program_preview(
@@ -1607,8 +1611,10 @@ def build_ai_program_preview(
         i18n.t("program.header_edit") if replaces else i18n.t("program.header_new"),
         "",
         f"<b>{escape(name)}</b>",
-        i18n.t("program.days_exercises", days=len(days), d=len(days), total=total, e=total),
     ]
+    # Один день — «1 день · 7 упражнений» лишнее: состав пронумерован ниже.
+    if len(days) > 1:
+        lines.append(i18n.t("program.days_exercises", days=len(days), d=len(days), total=total, e=total))
 
     # Прогрессия — общий принцип программы, а не свойство каждой строки: одна
     # фраза сверху вместо восьми почти одинаковых под упражнениями.
@@ -1639,7 +1645,7 @@ def build_ai_program_preview(
                 composition.append(f"   ⤴️ {escape(i18n.t(_PROGRESSION_KIND_KEYS[kind]))}")
 
     tail = ["", DIVIDER]
-    volume_line = format_weekly_sets(weekly_sets)
+    volume_line = format_weekly_sets(weekly_sets, single_session=len(days) == 1)
     if volume_line:
         tail = ["", volume_line] + tail
     if replaces:
