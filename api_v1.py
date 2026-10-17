@@ -1811,10 +1811,20 @@ async def finish_workout(request: Request) -> JSONResponse:
     #
     # У закрытой задним числом — тоже `None`, как у бота: реальный конец
     # неизвестен, и нулевая длительность соврала бы не меньше суточной.
+    #
+    # Живая длительность — тем же правилом, что у бота, у пересчёта значков
+    # (achievement_sync.resync) и у «Самой долгой тренировки»:
+    # view_builder.workout_duration_seconds, от первого подхода до последнего.
+    # Раньше здесь стояло `finished_at - started_at`: started_at — момент
+    # «Начать тренировку» (или открытия программы, или подхваченной брошенной
+    # тренировки), и всё время до первого подхода шло в зачёт. Итоги
+    # приложения считают от первого подхода и показывали «1h 12m», а значок
+    # «Марафонец · длиннее 2 часов» приезжал тем же ответом.
     duration_seconds = None
     if workout["status"] == "active" and workout["started_at"] and not backdated:
-        finished = dt.datetime.fromisoformat((await db.get_workout(workout_id))["finished_at"])
-        duration_seconds = (finished - started_at).total_seconds()
+        duration_seconds = await view_builder.workout_duration_seconds(
+            await db.get_workout(workout_id)
+        )
     new_codes = await achievement_sync.evaluate_after_finish(
         user_id, workout_id, started_at, duration_seconds
     )
