@@ -1199,6 +1199,7 @@
   "program.upperlower.meta": "средний уровень · 2–4 тренировки в неделю",
   "program.upperlower.name": "↕️ Верх / Низ",
   "program.weekly_sets": "Подходов в неделю: {groups}",
+  "program.session_sets": "Подходов за тренировку: {groups}",
   "progress.e1rm_delta": "e1RM: {delta} {since}",
   "progress.e1rm_hint": "ℹ️ <i>e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять на один раз (считаю по весам, повторам и RPE — @9 значит, что один повтор ты оставил в запасе).</i>",
   "progress.need_second_session": "Нарисую график после второй тренировки с этим упражнением",

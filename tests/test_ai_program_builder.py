@@ -1349,3 +1349,21 @@ def test_preview_without_countable_sets_has_no_volume_line():
     days = [{"name": "День 1", "items": [{"name": "Жим", "source": "own"}]}]
     assert "Подходов в неделю" not in formatting.build_ai_program_preview("П", days, weekly_sets=[])
     assert "Подходов в неделю" not in formatting.build_ai_program_preview("П", days)
+
+
+def test_single_day_preview_counts_sets_per_workout_without_day_count():
+    """Тренировка на сегодня — программа из одного дня: «1 день · 7
+    упражнений» лишнее (состав пронумерован ниже), а объём — за тренировку,
+    не «в неделю» (владелец)."""
+    days = [{"name": "Сегодня — грудь", "items": [
+        {"name": "Жим", "source": "own"}, {"name": "Разводка", "source": "own"},
+    ]}]
+    rows = [{"group": "Грудь", "sets": 6}]
+    text = formatting.build_ai_program_preview("Сегодня — грудь", days, weekly_sets=rows)
+    assert "Подходов за тренировку: грудь 6" in text
+    assert "Подходов в неделю" not in text
+    assert "1 день" not in text
+    with i18n.use_lang("en"):
+        text_en = formatting.build_ai_program_preview("Today — Chest", days, weekly_sets=rows)
+    assert "Sets per workout: грудь 6" in text_en
+    assert "1 day" not in text_en
