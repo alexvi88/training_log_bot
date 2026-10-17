@@ -95,7 +95,65 @@ async def test_finish_without_backdated_still_ends_now(fresh_db, client_factory)
     assert resp.status_code == 200, resp.text
     finished = dt.datetime.fromisoformat((await fresh_db.get_workout(workout_id))["finished_at"])
     assert finished > dt.datetime.fromisoformat(started) + dt.timedelta(hours=2)
-    # Честная живая длительность — значок за неё остаётся как был.
+    # Единственный подход записан только что: от первого подхода до
+    # последнего — ноль, и «Марафонца» за три часа открытого экрана нет
+    # (правило view_builder.workout_duration_seconds, как у бота).
+    assert "marathon" not in await fresh_db.list_achievement_codes(111)
+
+
+# ---------- «Марафонец» — та же длительность, что в итогах ----------
+
+
+def _utc_ago(minutes: float) -> str:
+    """Наивный UTC, как сервер хранит started_at и created_at подходов."""
+    moment = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(minutes=minutes)
+    return moment.isoformat(timespec="seconds")
+
+
+async def _live_workout(db, client, *, opened_min: float, set_minutes_ago: list[float]) -> int:
+    """Живая тренировка: «Начать» нажали `opened_min` минут назад, подходы
+    легли в моменты `set_minutes_ago` (их created_at — как у офлайн-досылки)."""
+    bench = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await _set_started_at(db, workout_id, _utc_ago(opened_min))
+    for ago in set_minutes_ago:
+        resp = await client.post(
+            f"/workouts/{workout_id}/sets",
+            json={"exercise_id": bench, "weight": 80, "reps": 5, "created_at": _utc_ago(ago) + "Z"},
+        )
+        assert resp.status_code in (200, 201), resp.text
+    return workout_id
+
+
+async def test_marathon_ignores_time_before_the_first_set(fresh_db, client_factory):
+    """Живой баг: итоги в приложении показали «1h 12m», а тем же ответом finish
+    приехал «Марафонец · длиннее 2 часов». Экран тренировки открыли за 2.5 часа
+    до конца, первый подход — за 72 минуты: итоги считают от первого подхода,
+    значок считал от started_at."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id = await _live_workout(
+        fresh_db, client, opened_min=150, set_minutes_ago=[72, 40, 1]
+    )
+
+    resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+
+    assert resp.status_code == 200, resp.text
+    codes = {b["code"] for b in resp.json()["rewards"]["new_achievements"]}
+    assert "marathon" not in codes
+    assert "marathon" not in await fresh_db.list_achievement_codes(111)
+
+
+async def test_marathon_still_earned_by_a_real_two_hour_session(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id = await _live_workout(
+        fresh_db, client, opened_min=150, set_minutes_ago=[130, 60, 1]
+    )
+
+    resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+
+    assert resp.status_code == 200, resp.text
+    codes = {b["code"] for b in resp.json()["rewards"]["new_achievements"]}
+    assert "marathon" in codes
     assert "marathon" in await fresh_db.list_achievement_codes(111)
 
 
