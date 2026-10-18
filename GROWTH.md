@@ -333,6 +333,126 @@ ClaudeBot…), клики и их долю от просмотров и скол
 4. Задеплоить, отправить адреса через IndexNow, отметить дату правки — и
    через две недели сравнить позиции.
 
+## 3¾. Каталоги приложений — ссылки на сайт
+
+Позицию в Google у нового домена двигают ссылки с чужих сайтов, а не правка
+заголовков. В первые сутки после запуска (17–18 октября 2026) Search
+Console показал 250 показов по 160 запросам при средней позиции 54: Google
+страницы уже понимает, но ставит далеко. Каталоги — самый дешёвый способ
+получить первые ссылки и при этом людей, которые ищут именно замену
+Hevy/Strong.
+
+Правила те же, что у каталогов ботов (раздел 2): денег за размещение не
+платим; у каждой ссылки на сайт своя метка `?utm_source=<каталог>`, иначе
+заходы смешаются в `/growth`; голос — тренер от первого лица, без брендовой
+формулы.
+
+### Где мы есть и что дальше
+
+| Площадка | Статус | Метка |
+|---|---|---|
+| App Store Connect → Marketing URL | ✅ стоит | `utm_source=appstore` |
+| AlternativeTo | ✅ заявка 18.10.2026, ждёт модерации (1–7 дней) | `utm_source=alternativeto` |
+| There's An AI For That | — | `utm_source=taaft` |
+| Futurepedia | — | `utm_source=futurepedia` |
+| Toolify.ai | — | `utm_source=toolify` |
+| SaaSHub, Uneed, BetaList | — | `utm_source=saashub` / `uneed` / `betalist` |
+| Product Hunt | — тексты ниже, нужна галерея 1270×760 | `utm_source=producthunt` |
+| Каталоги MCP (Glama, Smithery, mcp.so) | — мы в официальном реестре MCP | `utm_source=<каталог>` |
+
+На AlternativeTo связь «альтернатива» двусторонняя: отмечаешь Hevy
+альтернативой нам — и мы появляемся на странице «Hevy alternatives». Там
+отмечены Hevy Workout Tracker, Strong, Fitbod, JEFIT, FitNotes, Boostcamp,
+Alpha Progression. Порядок на тех страницах — по лайкам: пара лайков от
+знакомых поднимает нас в списке. Теги там вводятся по одному (не строкой
+через запятую), лучше выбирать из подсказок: `workout-tracker`, `fitness`,
+`gym`, `strength-training`, `personal-trainer`, `weightlifting`,
+`ai-powered`, `exercise-log`. Платформы — iPhone и Telegram (Android и
+Windows не ставим: по правилам площадки — только если есть своё приложение
+под эту ОС). Пакетные менеджеры — пусто.
+
+### Тексты (английский, копировать как есть)
+
+Ссылка на App Store — без хвоста `?uo=4`:
+`https://apps.apple.com/us/app/athlete-diary-gym-workout-log/id6815211995`.
+Бот — `https://t.me/lightweight_log_bot`.
+
+**Короткое описание**
+
+> Workout diary with an AI coach. Type "100 8" — I count the rest myself.
+
+**Развёрнутое описание** (AlternativeTo, AI-каталоги, SaaSHub)
+
+> Athlete Diary is a strength training log with an AI coach built in. Type
+> "100 8" and the set is down — no forms, no dropdowns.
+>
+> I count your tonnage, records and estimated 1RM, and chart your progress
+> across your whole history — no 3-month limit, no paywall on graphs.
+> Bodyweight moves get their own Max reps view.
+>
+> The AI coach reads your actual sets: it tells you where you've stalled,
+> builds a program around your gym and goal, puts together today's workout
+> from the muscle groups that are ready, and reviews your form from a video
+> clip.
+>
+> Coming from Hevy or Strong? Import your CSV export in a minute — and the
+> import can be undone.
+>
+> Works as an iPhone app and as a Telegram bot (so Android and desktop too),
+> in English and Russian. You can also connect it to Claude or ChatGPT and
+> ask about your training there.
+>
+> Free.
+
+**«Альтернатива для»**: Hevy, Strong, Fitbod, JEFIT, FitNotes, Boostcamp,
+Alpha Progression. Беговые и шагомеры (Strava, Google Fit) — не наши.
+
+**Скриншоты** — те же, что в App Store, 3–5 штук: ввод «100 8», ответ
+AI-тренера, график прогресса, итог тренировки, импорт.
+
+### Product Hunt
+
+Запуск — вторник–четверг в 00:01 по тихоокеанскому времени; весь день
+отвечать на комментарии.
+
+- **Tagline** (до 60): A workout log where an AI coach reads your real sets
+- **Description** (до 260): Log a set by typing "100 8". Full history and
+  charts are free — no 3-month limit. The AI coach reads your actual sets,
+  tells you where you've stalled, builds programs and reviews form from
+  video. Imports Hevy/Strong CSV. iPhone + Telegram.
+- **Topics**: Health & Fitness, Artificial Intelligence, iOS, Telegram,
+  Productivity. **Pricing**: Free.
+- **Links**: сайт с `utm_source=producthunt`, App Store, бот
+  `?start=src_ph`.
+
+**Первый комментарий автора**
+
+> Hey Product Hunt 👋
+>
+> I built Athlete Diary because every gym log I tried either hid my own
+> history behind a paywall or gave "AI" advice that had nothing to do with
+> what I actually lifted.
+>
+> So here's what it does:
+> • Logging is one line — "100 8" is 100 kg × 8 reps. Voice works too.
+> • Full history and charts are free. No 3-month window.
+> • The AI coach reads your real sets: where you've stalled, what's
+>   recovered, what to train today. It can build a full program or a one-off
+>   session, and review your form from a short video.
+> • Moving from Hevy or Strong? Drop in the CSV export — and you can undo
+>   the import if something looks off.
+> • It also connects to Claude and ChatGPT, so you can ask "did my bench
+>   move this month?" right in your chat.
+>
+> It's an iPhone app and a Telegram bot (so it works on Android and desktop
+> through Telegram), in English and Russian.
+>
+> I'd love honest feedback — what would make you switch from your current
+> log?
+
+Каждое утверждение здесь держит код (бесплатная полная история, импорт с
+отменой, разбор видео, коннектор). Убираешь фичу — правь и эти тексты.
+
 ## 4. Дальше — закупка
 
 Порядок и суммы обсуждались отдельно; коротко:
