@@ -425,6 +425,15 @@ CREATE TABLE IF NOT EXISTS announcement_state (
     text_hash TEXT
 );
 
+-- Разовые правки данных, которым нужен код поверх db (см. data_fixes.py):
+-- строка появляется, только когда правка прошла целиком, — следующий старт
+-- её не повторяет. PRAGMA user_version сюда не годится: те миграции идут
+-- внутри init_db до старта бота, а эти — фоновой задачей после него.
+CREATE TABLE IF NOT EXISTS data_fixes (
+    name TEXT PRIMARY KEY,
+    done_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS push_rotation (
     telegram_id INTEGER NOT NULL,
     category TEXT NOT NULL,
@@ -6473,6 +6482,37 @@ async def revoke_achievements(user_id: int, codes: set[str]) -> list[str]:
         )
         await conn().commit()
     return gone
+
+
+async def list_users_with_achievement(code: str) -> list[int]:
+    """Все, у кого сейчас есть значок `code` (для разовых правок, data_fixes.py)."""
+    cur = await conn().execute(
+        "SELECT DISTINCT user_id FROM achievements WHERE code = ? ORDER BY user_id", (code,)
+    )
+    return [r["user_id"] for r in await cur.fetchall()]
+
+
+async def is_password_demo_account(telegram_id: int) -> bool:
+    """Любой демо-вход по паролю (App Review, прогон скриншотов, новичок,
+    каталоги коннекторов): у всех провайдер `review_demo`."""
+    cur = await conn().execute(
+        "SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'review_demo'",
+        (telegram_id,),
+    )
+    return await cur.fetchone() is not None
+
+
+async def is_data_fix_done(name: str) -> bool:
+    cur = await conn().execute("SELECT 1 FROM data_fixes WHERE name = ?", (name,))
+    return await cur.fetchone() is not None
+
+
+async def mark_data_fix_done(name: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT OR IGNORE INTO data_fixes (name, done_at) VALUES (?, ?)", (name, now_iso())
+        )
+        await conn().commit()
 
 
 async def list_finished_workouts_meta(user_id: int) -> list[aiosqlite.Row]:
