@@ -144,6 +144,18 @@ async def resync(user_id: int) -> tuple[list[str], list[str]]:
         return [], []
 
 
+async def revoke_unearned(user_id: int, codes: set[str]) -> list[str]:
+    """Забрать из `codes` те значки, которых история пользователя сейчас не
+    подтверждает; ничего не выдаёт и остальные значки не трогает. Узкая
+    половина `resync` для разовой правки (data_fixes.py): исключения не
+    глотает — правка, упавшая на ком-то, не должна считаться сделанной."""
+    held = await db.list_achievement_codes(user_id) & codes
+    if not held:
+        return []
+    earned = await _earned_now(user_id)
+    return await db.revoke_achievements(user_id, held - earned)
+
+
 async def earned_dates(user_id: int, codes) -> dict[str, str]:
     """code → когда значок был заработан на самом деле: начало первой
     тренировки, после которой история стала ему соответствовать.

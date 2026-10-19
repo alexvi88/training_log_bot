@@ -32,6 +32,7 @@ import announcements
 import bot_profile
 import chat_bottom
 import config
+import data_fixes
 import db
 import engagement
 import exercise_photos
@@ -563,6 +564,9 @@ async def main() -> None:
     # фоновая задача старта, а не скрипт руками). Идемпотентно: на втором
     # старте брать нечего.
     background.append(asyncio.create_task(exercise_photos.backfill_from_telegram(bot)))
+    # Разовые правки данных после разворота (data_fixes.py): фоном, чтобы не
+    # задерживать старт; сделанная отмечается в базе и больше не повторяется.
+    background.append(asyncio.create_task(data_fixes.run_pending()))
     # Прополка OAuth не зависит ни от ADMIN_ID, ни от того, дошёл ли отчёт: она
     # чистит коды и заявки, которые копятся от каждой брошенной попытки
     # подключения (см. admin_tasks.run_oauth_purge_job).
