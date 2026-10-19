@@ -1397,7 +1397,7 @@
   "push.ios.streak_milestone.title": "Streak milestone hit",
   "push.ios.weekly_digest.1": "HEY ATHLETE! {tonnage} this month, {week_count} this week. Check the breakdown.",
   "push.ios.weekly_digest.2": "HEY ATHLETE! Week closed: {week_count}. Numbers are laid out in the app.",
-  "push.ios.weekly_digest.3": "HEY ATHLETE! {tonnage} lifted this month. Come see the full picture.",
+  "push.ios.weekly_digest.3": "HEY ATHLETE! {week_count} this week, {tonnage} lifted this month. Come see the full picture.",
   "push.ios.weekly_digest.title": "Your week is ready",
   "push.ios.win_back.1": "HEY ATHLETE! A long break isn't a verdict. Come by for even 20 minutes.",
   "push.ios.win_back.2": "HEY ATHLETE! Your old record is still here, waiting to get beaten.",
