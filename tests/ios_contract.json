@@ -4337,6 +4337,11 @@
      "type": "Int",
      "optional": true,
      "default": true
+    },
+    "imported": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5518,5 +5523,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "6ea528d5487aeffe86b53404ee372d0ba33ae9bf"
+ "_ios_commit": "4e278c7f057daee0635cb56a1cb307edb1465f26"
 }
