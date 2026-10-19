@@ -130,6 +130,10 @@ def _workout_json(row) -> dict[str, Any]:
         "note": row["note"],
         "routine_id": row["routine_id"],
         "client_id": row["client_id"],
+        # Перенесена импортом: приложение не считает такие тренировки опытом
+        # с нашим вводом (подсказки новичку, паутина в подвале, просьба
+        # оценить) — данные в истории и прогрессе те же.
+        "imported": db.is_imported_workout(row),
     }
 
 

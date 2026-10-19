@@ -261,6 +261,25 @@ def skip_milestone(
     return days_since_last
 
 
+def days_since_activity(
+    days_since_last: Optional[int], last_import_at: Optional[str], today: dt.date
+) -> Optional[int]:
+    """Дней тишины для пушей о паузе: от последней тренировки или от переноса
+    истории, что свежее. Импорт кладёт в дневник старые даты, и без этого на
+    следующий день после переезда из Hevy приходило «давно не тренировался»
+    или «возвращайся» (владелец)."""
+    if not last_import_at:
+        return days_since_last
+    try:
+        imported_on = dt.date.fromisoformat(last_import_at[:10])
+    except ValueError:
+        return days_since_last
+    since_import = max((today - imported_on).days, 0)
+    if days_since_last is None:
+        return since_import
+    return min(days_since_last, since_import)
+
+
 def is_win_back_day(days_since_last: Optional[int]) -> bool:
     """21-й день без тренировки, затем каждые WIN_BACK_REPEAT_DAYS, до
     WIN_BACK_STOP_DAY включительно. Тексты (push.win_back.*) не называют срок
@@ -402,13 +421,14 @@ async def build_daily_push(
             push_texts.STREAK_AT_RISK, text, ios_params={"weeks": weeks_phrase, "days_left": days_left}
         )
 
-    milestone_day = skip_milestone(dashboard.days_since_last, dates)
+    days_quiet = days_since_activity(dashboard.days_since_last, await db.last_import_at(telegram_id), today)
+    milestone_day = skip_milestone(days_quiet, dates)
     if milestone_day is not None:
         category = push_texts.SKIP_CATEGORY_BY_DAY[milestone_day]
         text = await push_texts.pick_text(telegram_id, category)
         return PushDecision(category, text)
 
-    if is_win_back_day(dashboard.days_since_last):
+    if is_win_back_day(days_quiet):
         text = await push_texts.pick_text(telegram_id, push_texts.WIN_BACK)
         return PushDecision(push_texts.WIN_BACK, text)
 
