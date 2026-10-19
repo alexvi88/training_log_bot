@@ -3786,7 +3786,9 @@ async def _should_explain_e1rm(user, summary_fn) -> bool:
     """
     if not user["show_extra_stats"]:
         return False
-    if await db.count_workouts(user["telegram_id"], "finished") > _E1RM_HINT_WORKOUTS:
+    # Перенесённые импортом не считаются: карточку с e1RM атлет из Hevy видит
+    # у нас впервые.
+    if await db.count_workouts(user["telegram_id"], "finished", in_app_only=True) > _E1RM_HINT_WORKOUTS:
         return False
     return "e1RM" in summary_fn(None)
 

@@ -6055,9 +6055,27 @@ async def count_workouts_by_exercise(user_id: int, query: str) -> int:
     return count
 
 
-async def count_workouts(user_id: int, status: str = "finished") -> int:
+# Тренировка перенесена импортом (Hevy, Strong, CSV, заметки), а не записана
+# в боте или приложении. Одно условие на все места, где «опыт с нашим
+# продуктом» считается без чужой истории: подсказки новичку, пуши о паузе.
+IMPORTED_WORKOUT_SQL = "(import_batch_id IS NOT NULL OR source = 'import')"
+
+
+def is_imported_workout(row) -> bool:
+    """То же, что IMPORTED_WORKOUT_SQL, для уже прочитанной строки."""
+    keys = row.keys()
+    batch = row["import_batch_id"] if "import_batch_id" in keys else None
+    source = row["source"] if "source" in keys else None
+    return batch is not None or source == "import"
+
+
+async def count_workouts(user_id: int, status: str = "finished", *, in_app_only: bool = False) -> int:
+    """`in_app_only` — без перенесённых импортом: атлет, который принёс сорок
+    тренировок из Hevy, нашим вводом ещё не пользовался, и подсказки новичку
+    ему нужны так же (владелец)."""
+    imported = f" AND NOT {IMPORTED_WORKOUT_SQL}" if in_app_only else ""
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM workouts WHERE user_id = ? AND status = ?", (user_id, status)
+        f"SELECT COUNT(*) FROM workouts WHERE user_id = ? AND status = ?{imported}", (user_id, status)
     )
     (count,) = await cur.fetchone()
     return count
@@ -14331,6 +14349,20 @@ async def set_exercise_alias(user_id: int, name: str, exercise_id: int, source: 
             (user_id, folded, exercise_id, source, now_iso()),
         )
         await conn().commit()
+
+
+async def last_import_at(user_id: int) -> Optional[str]:
+    """Когда атлет последний раз перенёс историю (партия с тренировками, не
+    отменённая), `None` — не переносил. Пуши о паузе считают перенос
+    активностью: свежий переезд с полугодом старой истории — не повод
+    писать «давно не тренировался» на следующий день."""
+    cur = await conn().execute(
+        "SELECT MAX(created_at) FROM import_batches "
+        "WHERE user_id = ? AND undone_at IS NULL AND workouts > 0",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
 
 
 async def create_import_batch(user_id: int, source: str) -> str:
