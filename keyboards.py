@@ -1925,14 +1925,8 @@ def settings_keyboard(
         i18n.t("btn.ai_comments_on") if ai_comments_enabled else i18n.t("btn.ai_comments_off")
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
-    # users.show_extra_stats has always gated the e1RM line on the finish card;
-    # it just had no switch, so nobody could ever turn it off. «Подробно /
-    # компактно» не говорило, что именно меняется — переименовано в то, что
-    # реально переключается.
-    card_label = (
-        i18n.t("btn.card_detail_on") if show_extra_stats else i18n.t("btn.card_detail_off")
-    )
-    b.button(text=card_label, callback_data="settings:card_detail")
+    # «e1RM на карточке» тумблером больше нет: у всех и всегда
+    # (db._show_extra_stats_for_everyone).
 
     # --- Данные: что тренер знает · экспорт · импорт · MCP · отзыв ---
     # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),

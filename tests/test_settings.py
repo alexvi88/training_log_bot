@@ -206,20 +206,19 @@ async def test_settings_keyboard_groups_into_three_blocks():
     assert rows[3] == ["settings:rep_range"]
     assert rows[4] == ["settings:pushes"]
     assert rows[5] == ["settings:ai_comments"]
-    assert rows[6] == ["settings:card_detail"]
     # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
-    assert rows[7] == ["settings:profile"]
-    assert rows[8] == ["settings:export"]
-    assert rows[9] == ["settings:import"]
-    assert rows[10] == ["settings:mcp"]
-    assert rows[11] == ["feedback:open"]
+    assert rows[6] == ["settings:profile"]
+    assert rows[7] == ["settings:export"]
+    assert rows[8] == ["settings:import"]
+    assert rows[9] == ["settings:mcp"]
+    assert rows[10] == ["feedback:open"]
     # Сервис для тренеров — кто видит твой дневник (handlers/coach.py).
-    assert rows[12] == ["coach:hub"]
-    assert rows[13] == ["invite:show"]
+    assert rows[11] == ["coach:hub"]
+    assert rows[12] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[14] == ["settings:delete"]
-    assert rows[15] == ["settings:back"]
+    assert rows[13] == ["settings:delete"]
+    assert rows[14] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
@@ -294,10 +293,8 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     assert "🤖 Комментарий тренера: пишу по кнопке" in off_texts
     # «КБЖУ: считаю» ушёл вместе с AI-разбором еды — считать больше нечем.
     assert not any("КБЖУ" in t for t in on_texts + off_texts)
-    # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
-    # переключается — это строка e1RM на итоговой карточке.
-    assert "📊 e1RM на карточке: показываю" in on_texts
-    assert "📊 e1RM на карточке: прячу" in off_texts
+    # «e1RM на карточке» тумблером больше нет: у всех и всегда.
+    assert not any("e1RM на карточке" in t for t in on_texts + off_texts)
     for text in on_texts + off_texts:
         assert len(text) <= 40, f"кнопка слишком длинная для Telegram: {text!r}"
 
@@ -444,3 +441,18 @@ async def test_ai_comments_toggle_starts_off_and_says_what_changed(fresh_db, use
     await settings.settings_ai_comments(callback, state)
     assert (await db.get_user(user_id))["ai_comments_enabled"] == 0
     callback.answer.assert_awaited_with(i18n.t_in("ru", "settings.ai_comments.toast_off"), show_alert=False)
+
+
+async def test_card_detail_button_from_old_messages_just_redraws(fresh_db, user_id):
+    """Тумблер «e1RM на карточке» снят: кнопка в старом сообщении ничего не
+    выключает, а перерисовывает настройки."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "settings:card_detail")
+    await settings.settings_card_detail_gone(callback, state)
+    assert (await fresh_db.get_user(user_id))["show_extra_stats"] == 1
+
+
+async def test_migration_turns_extra_stats_on_for_everyone(fresh_db, user_id):
+    await fresh_db.update_user(user_id, show_extra_stats=0)
+    await fresh_db._show_extra_stats_for_everyone()
+    assert (await fresh_db.get_user(user_id))["show_extra_stats"] == 1

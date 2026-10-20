@@ -77,7 +77,7 @@ async def test_e1rm_text_absent_with_show_extra_stats_off(fresh_db, client_facto
     расширенной статистике поле молчит, как и record_text (docstring
     formatting.format_block_e1rm)."""
     client = await _linked_client(fresh_db, client_factory)
-    await client.patch("/settings", json={"show_extra_stats": False})
+    await fresh_db.update_user(111, show_extra_stats=0)  # тумблера нет — колонка напрямую
     exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
     workout_id = (await client.post("/workouts/active")).json()["id"]
     await _log_set(client, workout_id, exercise_id, 100, 5)
@@ -107,7 +107,7 @@ async def test_e1rm_text_is_isolated_between_users(fresh_db, client_factory):
     в друга через это поле."""
     a = await _linked_client(fresh_db, client_factory, telegram_id=201)
     b = await _linked_client(fresh_db, client_factory, telegram_id=202)
-    await b.patch("/settings", json={"show_extra_stats": False})
+    await fresh_db.update_user(202, show_extra_stats=0)  # тумблера нет — колонка напрямую
 
     ex_a = (await a.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
     ex_b = (await b.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]

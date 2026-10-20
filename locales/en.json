@@ -280,8 +280,6 @@
   "btn.cal.wed": "We",
   "btn.cancel": "❌ Cancel",
   "btn.cancel_all_input": "❌ Cancel the whole import",
-  "btn.card_detail_off": "📊 e1RM on the card: hidden",
-  "btn.card_detail_on": "📊 e1RM on the card: shown",
   "btn.change_date": "📅 Change date",
   "btn.claim_program": "Grab: {program_name}",
   "btn.clear": "🗑 Clear",

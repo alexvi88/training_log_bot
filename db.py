@@ -2308,7 +2308,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 15
+_SCHEMA_VERSION = 16
 
 
 async def _run_one_shot_migrations() -> None:
@@ -2354,9 +2354,20 @@ async def _run_one_shot_migrations() -> None:
         await _turn_off_ai_comments_for_everyone()
     if version < 15:
         await _reset_e1rm_formula_to_epley()
+    if version < 16:
+        await _show_extra_stats_for_everyone()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
+async def _show_extra_stats_for_everyone() -> None:
+    """e1RM на карточке тренировки — у всех и всегда (владелец): тумблер
+    «e1RM на карточке» снят из настроек бота и приложения. Колонка
+    `users.show_extra_stats` остаётся — её читают карточка и подсказка e1RM,
+    просто нуля в ней больше никто не пишет."""
+    await _conn.execute("UPDATE users SET show_extra_stats = 1 WHERE show_extra_stats != 1")
     await _conn.commit()
 
 

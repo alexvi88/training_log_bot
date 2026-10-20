@@ -109,7 +109,7 @@ async def test_show_extra_stats_off_hides_e1rm_record_but_not_reps_record(
     e1RM молчит при выключенных доп. цифрах (нельзя получить e1RM через
     заднюю дверь), а рекорд повторов своим весом виден всегда."""
     client = await _linked_client(fresh_db, client_factory)
-    await client.patch("/settings", json={"show_extra_stats": False})
+    await fresh_db.update_user(111, show_extra_stats=0)  # тумблера нет — колонка напрямую
 
     weighted = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
     bodyweight = (await client.post("/exercises", json={"name": "Подтягивания"})).json()["id"]

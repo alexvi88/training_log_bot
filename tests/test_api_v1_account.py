@@ -664,3 +664,13 @@ async def test_athlete_profile_requires_auth(fresh_db, client_factory):
     assert resp.status_code == 401
     resp = await client.delete("/profile")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_patch_show_extra_stats_is_accepted_and_ignored(fresh_db, client_factory):
+    """Тумблер «e1RM на карточке» снят — у всех всегда. Старые сборки ещё
+    шлют поле: 200, ничего не пишем, в ответе — true."""
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.patch("/settings", json={"show_extra_stats": False})
+    assert resp.status_code == 200
+    assert resp.json()["show_extra_stats"] is True
