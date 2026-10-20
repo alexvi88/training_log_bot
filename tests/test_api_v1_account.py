@@ -194,10 +194,14 @@ async def test_patch_settings_invalid_lang_is_400(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
-async def test_patch_settings_invalid_formula_is_400(fresh_db, client_factory):
+async def test_patch_settings_formula_is_accepted_and_ignored(fresh_db, client_factory):
+    """Выбор формулы снят — у всех Эпли. Старые сборки ещё шлют поле: не
+    падаем и ничего не пишем."""
     client = await _linked_client(fresh_db, client_factory)
-    resp = await client.patch("/settings", json={"e1rm_formula": "bogus"})
-    assert resp.status_code == 400
+    for value in ("brzycki", "bogus"):
+        resp = await client.patch("/settings", json={"e1rm_formula": value})
+        assert resp.status_code == 200
+        assert resp.json()["e1rm_formula"] == "epley"
 
 
 @pytest.mark.asyncio

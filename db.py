@@ -2308,7 +2308,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 14
+_SCHEMA_VERSION = 15
 
 
 async def _run_one_shot_migrations() -> None:
@@ -2352,9 +2352,21 @@ async def _run_one_shot_migrations() -> None:
         await _relocalize_old_coach_copies()
     if version < 14:
         await _turn_off_ai_comments_for_everyone()
+    if version < 15:
+        await _reset_e1rm_formula_to_epley()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
+async def _reset_e1rm_formula_to_epley() -> None:
+    """Формула e1RM — Эпли у всех (владелец): выбор Эпли/Бжицки снят из
+    настроек бота и приложения. Разница — 3–4% на малых повторах, а термин в
+    настройках только путал. Переключившимся на Бжицки тоже показываем Эпли.
+    Колонка `users.e1rm_formula` остаётся — по ней по-прежнему читают
+    расчёты, просто других значений больше не пишет никто."""
+    await _conn.execute("UPDATE users SET e1rm_formula = 'epley' WHERE e1rm_formula != 'epley'")
     await _conn.commit()
 
 

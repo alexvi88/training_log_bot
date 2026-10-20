@@ -1802,7 +1802,6 @@ def format_utc_offset(tz_offset: int) -> str:
 # сокращение рядом с цифрой. Внутренние значения ("kg"/"lb", "epley"/"brzycki")
 # остаются как есть везде, где их сравнивают и парсят (db, formatting, handlers.settings).
 UNIT_NAMES = {"kg": _lazy("btn.unit_kg"), "lb": _lazy("btn.unit_lb")}
-FORMULA_NAMES = {"epley": _lazy("btn.formula_epley"), "brzycki": _lazy("btn.formula_brzycki")}
 
 
 def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
@@ -1895,15 +1894,9 @@ def settings_keyboard(
         text=f"🌐 {i18n.t_in(lang, 'screen.language.button')}: {LANG_NAMES.get(lang, lang)}",
         callback_data="settings:lang",
     )
-    # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
-    # e1RM, and a setting that names the metric differently reads as a setting
-    # for something else entirely.
-    b.button(
-        text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
-        callback_data="settings:formula",
-    )
-    # Пол — пятой кнопкой блока, отдельной строкой: необязательный ответ о
-    # себе (users.gender), по нему тренер выбирает род в обращении и нормы.
+    # Формулы e1RM здесь нет: у всех Эпли (db._reset_e1rm_formula_to_epley).
+    # Пол — в паре с языком: необязательный ответ о себе (users.gender), по
+    # нему тренер выбирает род в обращении и нормы.
     b.button(text=gender_button_text(gender), callback_data="settings:gender:menu")
 
     # --- Как разговариваю: тумблеры ---

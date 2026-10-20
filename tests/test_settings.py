@@ -75,57 +75,20 @@ async def test_settings_progression_toggles_off_then_on(fresh_db, user_id):
     assert (await db.get_user(user_id))["progression_hint_enabled"] == 1
 
 
-async def test_formula_switch_asks_before_rewriting_every_e1rm(fresh_db, user_id):
-    """Switching the formula recomputes every e1RM, record and chart in the
-    history — bigger than the unit switch, which already asked."""
-    state = await _make_state(user_id)
-    callback = _make_callback(user_id, "settings:formula")
-
-    await settings.settings_formula_confirm(callback, state)
-
-    user = await fresh_db.get_user(user_id)
-    assert user["e1rm_formula"] == "epley"  # unchanged — it only asked
-    sent = callback.message.answer.await_args
-    text = sent.args[0] if sent.args else sent.kwargs["text"]
-    # Русское название формулы, а не сырой код "brzycki" — та же логика, что и
-    # у тоста после подтверждения (test_confirming_the_formula_switch_is_a_toast_not_a_modal).
-    assert "Бжицки" in text
-    assert "Пересчитаю" in text
+async def test_formula_buttons_from_old_messages_just_redraw_settings(fresh_db, user_id):
+    """Выбор формулы снят — у всех Эпли. Кнопка в старом сообщении настроек
+    ничего не переключает, а перерисовывает экран уже без неё."""
+    for data in ("settings:formula", "settings:formulayes", "settings:formulano"):
+        state = await _make_state(user_id)
+        callback = _make_callback(user_id, data)
+        await settings.settings_formula_gone(callback, state)
+        assert (await fresh_db.get_user(user_id))["e1rm_formula"] == "epley"
 
 
-async def test_confirming_the_formula_switch_applies_it(fresh_db, user_id):
-    state = await _make_state(user_id)
-    callback = _make_callback(user_id, "settings:formulayes")
-
-    await settings.settings_formula(callback, state)
-
-    user = await fresh_db.get_user(user_id)
-    assert user["e1rm_formula"] == "brzycki"
-
-
-async def test_confirming_the_formula_switch_is_a_toast_not_a_modal(fresh_db, user_id):
-    """«Формула e1RM: brzycki» за модалкой с ОК — лишний тап на итог, который и
-    так виден на экране настроек; после подтверждающего yes/no это уже не
-    предупреждение, а короткая реплика тренера («Перевёл на Бжицки»)."""
-    state = await _make_state(user_id)
-    callback = _make_callback(user_id, "settings:formulayes")
-
-    await settings.settings_formula(callback, state)
-
-    callback.answer.assert_awaited_once()
-    args, kwargs = callback.answer.call_args
-    assert "Бжицки" in args[0]
-    assert kwargs.get("show_alert") is False
-
-
-async def test_cancelling_the_formula_switch_changes_nothing(fresh_db, user_id):
-    state = await _make_state(user_id)
-    callback = _make_callback(user_id, "settings:formulano")
-
-    await settings.settings_formula_cancel(callback, state)
-
-    user = await fresh_db.get_user(user_id)
-    assert user["e1rm_formula"] == "epley"
+async def test_migration_puts_everyone_on_epley(fresh_db, user_id):
+    await fresh_db.update_user(user_id, e1rm_formula="brzycki")
+    await fresh_db._reset_e1rm_formula_to_epley()
+    assert (await fresh_db.get_user(user_id))["e1rm_formula"] == "epley"
 
 
 # ---------- «🧬 Обо мне»: что AI-тренер записал с твоих слов ----------
@@ -233,31 +196,30 @@ async def test_settings_keyboard_groups_into_three_blocks():
     )
     rows = [[b.callback_data for b in row] for row in kb.inline_keyboard]
 
-    # Профиль: единицы+пояс, язык+формула — парами по 2, короткие подписи.
+    # Профиль: единицы+пояс, язык+пол — парами по 2, короткие подписи.
+    # Формулы e1RM нет: у всех Эпли.
     assert rows[0] == ["settings:unit", "settings:tz"]
-    assert rows[1] == ["settings:lang", "settings:formula"]
-    # Пол — пятой кнопкой блока, отдельной строкой.
-    assert rows[2] == ["settings:gender:menu"]
+    assert rows[1] == ["settings:lang", "settings:gender:menu"]
     # Как разговариваю: тумблеры, по одному в ряд (КБЖУ ушёл вместе с AI-разбором еды) — длинные подписи;
     # диапазон повторов — сразу под подсказками прогрессии.
-    assert rows[3] == ["settings:progression"]
-    assert rows[4] == ["settings:rep_range"]
-    assert rows[5] == ["settings:pushes"]
-    assert rows[6] == ["settings:ai_comments"]
-    assert rows[7] == ["settings:card_detail"]
+    assert rows[2] == ["settings:progression"]
+    assert rows[3] == ["settings:rep_range"]
+    assert rows[4] == ["settings:pushes"]
+    assert rows[5] == ["settings:ai_comments"]
+    assert rows[6] == ["settings:card_detail"]
     # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
-    assert rows[8] == ["settings:profile"]
-    assert rows[9] == ["settings:export"]
-    assert rows[10] == ["settings:import"]
-    assert rows[11] == ["settings:mcp"]
-    assert rows[12] == ["feedback:open"]
+    assert rows[7] == ["settings:profile"]
+    assert rows[8] == ["settings:export"]
+    assert rows[9] == ["settings:import"]
+    assert rows[10] == ["settings:mcp"]
+    assert rows[11] == ["feedback:open"]
     # Сервис для тренеров — кто видит твой дневник (handlers/coach.py).
-    assert rows[13] == ["coach:hub"]
-    assert rows[14] == ["invite:show"]
+    assert rows[12] == ["coach:hub"]
+    assert rows[13] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[15] == ["settings:delete"]
-    assert rows[16] == ["settings:back"]
+    assert rows[14] == ["settings:delete"]
+    assert rows[15] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
@@ -343,25 +305,21 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
 # ---------- экран настроек говорит по-русски, а не телеметрией ----------
 
 
-async def test_settings_keyboard_shows_russian_unit_and_formula_names():
-    """«Единицы: kg» и «Формула e1RM: brzycki» — телеметрия, а не реплики
-    тренера (TONE_OF_VOICE.md). Внутренние значения ("kg"/"lb",
-    "epley"/"brzycki") не меняются — русифицируется только то, что видит
-    человек."""
+async def test_settings_keyboard_shows_russian_unit_names_and_no_formula():
+    """«Единицы: kg» — телеметрия, а не реплика тренера (TONE_OF_VOICE.md).
+    Внутренние значения ("kg"/"lb") не меняются — русифицируется только то,
+    что видит человек. Формулы e1RM на экране нет вовсе: у всех Эпли."""
     import keyboards
 
     kb = keyboards.settings_keyboard("lb", "brzycki", True, True, True)
     labels = [b.text for row in kb.inline_keyboard for b in row]
-
     assert any("фунты" in label for label in labels)
-    assert any("Бжицки" in label for label in labels)
     assert not any("lb" in label for label in labels)
-    assert not any("brzycki" in label for label in labels)
+    assert not any("Бжицки" in label or "Эпли" in label or "Формула" in label for label in labels)
 
     kb_kg = keyboards.settings_keyboard("kg", "epley", True, True, True)
     labels_kg = [b.text for row in kb_kg.inline_keyboard for b in row]
     assert any("кг" in label for label in labels_kg)
-    assert any("Эпли" in label for label in labels_kg)
 
 
 async def test_settings_header_is_a_coach_line_not_a_label(fresh_db, user_id):
