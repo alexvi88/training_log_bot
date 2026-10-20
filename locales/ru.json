@@ -280,8 +280,6 @@
   "btn.cal.wed": "Ср",
   "btn.cancel": "❌ Отмена",
   "btn.cancel_all_input": "❌ Отменить весь ввод",
-  "btn.card_detail_off": "📊 e1RM на карточке: прячу",
-  "btn.card_detail_on": "📊 e1RM на карточке: показываю",
   "btn.change_date": "📅 Изменить дату",
   "btn.claim_program": "Забрать: {program_name}",
   "btn.clear": "🗑 Очистить",

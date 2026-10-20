@@ -50,8 +50,11 @@ _BOOL_FIELDS = (
     "pushes_enabled",
     "ai_comments_enabled",
     "progression_hint_enabled",
-    "show_extra_stats",
 )
+
+# `show_extra_stats` и `e1rm_formula` из этого списка ушли: тумблеров больше
+# нет (e1RM на карточке — всегда, формула — Эпли). Старые сборки их ещё шлют —
+# PATCH принимает и молча пропускает, чтобы их экран настроек не падал.
 
 # Двойной тап по «Переключить на lb» в приложении — тот же риск, что и
 # settings._converting у бота: рескейл всей истории подходов занимает время
@@ -83,6 +86,9 @@ def _settings_json(user) -> dict[str, Any]:
         "tz_follows_device": not user["tz_set_by_user"],
         "e1rm_formula": user["e1rm_formula"],
         **{field: bool(user[field]) for field in _BOOL_FIELDS},
+        # Тумблера больше нет (db._show_extra_stats_for_everyone), но старые
+        # сборки читают поле: отдаём всегда true.
+        "show_extra_stats": True,
         # Согласие на передачу данных стороннему AI (App Store 5.1.2(i)) —
         # не тумблер из _BOOL_FIELDS: в базе это метка времени, а не 0/1,
         # чтобы было видно, КОГДА человек разрешил. PATCH принимает bool

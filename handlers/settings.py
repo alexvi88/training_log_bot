@@ -457,13 +457,9 @@ async def settings_rep_range_set(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "settings:card_detail")
-async def settings_card_detail(callback: CallbackQuery, state: FSMContext):
-    """Detailed cards carry the e1RM line under each exercise; compact ones drop
-    it. The column existed from the start but had no switch."""
-    user = await db.get_user(callback.from_user.id)
-    await db.update_user(
-        callback.from_user.id, show_extra_stats=0 if user["show_extra_stats"] else 1
-    )
+async def settings_card_detail_gone(callback: CallbackQuery, state: FSMContext):
+    """Тумблер «e1RM на карточке» снят — e1RM у всех и всегда. Кнопка в старом
+    сообщении настроек перерисовывает экран уже без неё."""
     await show_settings(callback, state)
 
 
