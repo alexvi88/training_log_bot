@@ -36,11 +36,10 @@ _authed_user_id = common.authed_user_id
 _json_body = common.json_body
 
 # Допустимые значения — те же множества, что проверяет бот на своих экранах
-# (keyboards.UNIT_NAMES/FORMULA_NAMES, i18n.SUPPORTED). Захардкожены здесь же,
+# (keyboards.UNIT_NAMES, i18n.SUPPORTED). Захардкожены здесь же,
 # а не переиспользованы из keyboards, чтобы не тащить в REST-слой aiogram-only
 # модуль ради двух ключей словаря.
 _UNITS = ("kg", "lb")
-_FORMULAS = ("epley", "brzycki")
 # Тот же диапазон, что у keyboards.timezone_picker_keyboard: UTC-11 … UTC+14 —
 # весь обитаемый диапазон офсетов, не более широкий и не более узкий.
 _TZ_MIN, _TZ_MAX = common.TZ_OFFSET_MIN, common.TZ_OFFSET_MAX
@@ -308,11 +307,10 @@ async def update_settings(request: Request) -> JSONResponse:
         if new_tz is not None or tz_set_by_user:
             device_tz = None
 
+    # Формула e1RM — Эпли у всех (db._reset_e1rm_formula_to_epley): выбор
+    # снят. Старые сборки приложения ещё шлют поле — принимаем и молча не
+    # пишем, чтобы их экран настроек не падал на ошибке.
     new_formula: Optional[str] = None
-    if "e1rm_formula" in body:
-        new_formula = body["e1rm_formula"]
-        if new_formula not in _FORMULAS:
-            raise ApiError(400, "bad_request", f"e1rm_formula must be one of {_FORMULAS}")
 
     bool_updates: dict[str, int] = {}
     for field in _BOOL_FIELDS:

@@ -406,40 +406,11 @@ async def settings_language_set(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "settings:formula")
-async def settings_formula_confirm(callback: CallbackQuery, state: FSMContext):
-    """Switching the formula recomputes every e1RM, record and chart in the app's
-    history. That's a bigger change than switching units (which at least keeps the
-    numbers meaning the same thing), so it asks the same way."""
-    user = await db.get_user(callback.from_user.id)
-    new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
-    formula_name = keyboards.FORMULA_NAMES[new_formula]
-    kb = keyboards.yes_no_keyboard(
-        yes_cb="settings:formulayes", no_cb="settings:formulano",
-        yes_text=i18n.t("settings.formula.switch_to", formula=formula_name), no_text=i18n.t("btn.cancel"),
-    )
-    await ui.safe_edit(
-        callback,
-        i18n.t("settings.formula.confirm", formula=formula_name),
-        reply_markup=kb,
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "settings:formulayes")
-async def settings_formula(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
-    await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
-    await show_settings(
-        callback, state,
-        alert=i18n.t("settings.formula.done", formula=keyboards.FORMULA_NAMES[new_formula]),
-        show_alert=False,
-    )
-
-
-@router.callback_query(F.data == "settings:formulano")
-async def settings_formula_cancel(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.in_({"settings:formula", "settings:formulayes", "settings:formulano"}))
+async def settings_formula_gone(callback: CallbackQuery, state: FSMContext):
+    """Кнопка формулы e1RM снята — у всех Эпли (db._reset_e1rm_formula_to_epley).
+    Старое сообщение настроек с ней ещё может висеть в чате: тап просто
+    перерисовывает настройки уже без неё."""
     await show_settings(callback, state)
 
 
