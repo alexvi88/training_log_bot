@@ -2801,7 +2801,7 @@
   "seo.exercises.description": "{count, plural, one{# exercise} other{# exercises}} with position photos: squat, bench press, deadlift, pull-ups and more — setup, step-by-step execution and common mistakes.",
   "seo.exercises.h1": "Exercise technique",
   "seo.exercises.lead": "How to set up, how to move and where people go wrong most often — short and step by step.",
-  "seo.exercise.title": "{name}: technique and common mistakes — Athlete Diary",
+  "seo.exercise.title": "{name}: how to do it, muscles worked, mistakes — Athlete Diary",
   "seo.exercise.setup.h": "Setup",
   "seo.exercise.steps.h": "Execution",
   "seo.exercise.mistakes.h": "Common mistakes",
@@ -5309,5 +5309,8 @@
   "seo.sbw.pct_link_html": "I'll work out your own percentile among them in the <a href=\"{href}\">percentile calculator</a>.",
   "seo.sbw.other_bw.h": "Other bodyweights",
   "seo.sbw.link_bw": "At {w}",
-  "seo.sbw.by_bw.h": "Short answer for your bodyweight"
+  "seo.sbw.by_bw.h": "Short answer for your bodyweight",
+  "seo.exercise.muscles.h": "Muscles worked",
+  "seo.exercise.muscles.list": "Muscles worked: {muscles}.",
+  "seo.exercise.muscles.primary": "Main muscle group: {muscle}."
 }

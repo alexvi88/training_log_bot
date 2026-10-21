@@ -2802,7 +2802,7 @@
   "seo.exercises.description": "{count, plural, one{# упражнение} few{# упражнения} many{# упражнений} other{# упражнения}} с фото положений: присед, жим лёжа, становая тяга, подтягивания и другие — постановка, выполнение по шагам и частые ошибки.",
   "seo.exercises.h1": "Техника упражнений",
   "seo.exercises.lead": "Как поставиться, как выполнять и где чаще всего ошибаются — коротко и по шагам.",
-  "seo.exercise.title": "{name}: техника выполнения и частые ошибки — Дневник атлета",
+  "seo.exercise.title": "{name}: техника, какие мышцы работают, ошибки — Дневник атлета",
   "seo.exercise.setup.h": "Постановка",
   "seo.exercise.steps.h": "Выполнение",
   "seo.exercise.mistakes.h": "Частые ошибки",
@@ -5310,5 +5310,8 @@
   "seo.sbw.pct_link_html": "Твой перцентиль среди них посчитаю в <a href=\"{href}\">калькуляторе перцентиля</a>.",
   "seo.sbw.other_bw.h": "Другой вес тела",
   "seo.sbw.link_bw": "При весе {w}",
-  "seo.sbw.by_bw.h": "Короткий ответ для твоего веса"
+  "seo.sbw.by_bw.h": "Короткий ответ для твоего веса",
+  "seo.exercise.muscles.h": "Какие мышцы работают",
+  "seo.exercise.muscles.list": "Работают: {muscles}.",
+  "seo.exercise.muscles.primary": "Основная группа мышц: {muscle}."
 }

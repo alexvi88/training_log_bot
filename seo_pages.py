@@ -2102,6 +2102,28 @@ def _steps(identity: str, lang: str) -> list[str]:
     return [re.sub(r"^\d+\.\s*", "", line).strip() for line in text.splitlines() if line.strip()]
 
 
+def _muscles_worked(lang: str, page: Page, identity: str) -> str:
+    """«Какие мышцы работают» — так ищут почти про любое упражнение. Только из
+    данных: сверенный руками список мышц (`seo.exf.*`, у упражнений из
+    `EX_FACTS`) или основная группа каталога; ссылка — на страницу мышцы."""
+    import seo_library
+
+    t = _t(lang)
+    group = _group_of(identity)
+    target = seed_data.EXERCISE_MUSCLE_TARGET.get(identity)
+    if page.arg in seo_library.EX_FACTS:
+        text = t("seo.exercise.muscles.list", muscles=t(f"seo.exf.{page.arg}.muscles"))
+    else:
+        primary = (seed_data.localized_muscle_target_name(target, lang) if target
+                   else seed_data.localized_muscle_group_name(group, lang))
+        text = t("seo.exercise.muscles.primary", muscle=primary)
+    muscle_pages = [m for m, g, tg in seo_library.MUSCLES if g == group and (tg is None or tg == target)]
+    links = "".join(f'<li><a href="{url_for(Page("muscle", m), lang)}">'
+                    f"{_e(t('seo.muscle.h1', name=seo_library.muscle_name(m, lang)))}</a></li>" for m in muscle_pages)
+    return (f"<section class=reveal><h2>{_e(t('seo.exercise.muscles.h'))}</h2><p>{_e(text)}</p>"
+            + (f"<ul class=links>{links}</ul>" if links else "") + "</section>")
+
+
 def _render_exercise(lang: str, page: Page, request) -> str:
     import seo_swaps
 
@@ -2142,6 +2164,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         f"<section class=reveal><h2>{_e(t('seo.exercise.setup.h'))}</h2><p>{_e(t(f'seo.ex.{slug}.setup'))}</p></section>"
         f"<section class=reveal><h2>{_e(t('seo.exercise.steps.h'))}</h2><ol class=steps>{steps}</ol></section>"
         f"<section class='mistakes reveal'><h2>{_e(t('seo.exercise.mistakes.h'))}</h2><ul>{mistakes}</ul></section>"
+        + _muscles_worked(lang, page, identity)
         + seo_swaps.teaser(page.arg, lang)
         + in_programs
     )
