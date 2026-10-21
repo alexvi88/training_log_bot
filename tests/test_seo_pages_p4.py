@@ -84,7 +84,7 @@ def test_wave_four_page_counts():
     assert kinds["split"] == len(seo_plans.SPLIT_PAGES) == 7 and kinds["splits"] == 1
     assert kinds["workout"] == 3 and kinds["apps"] == 1
     assert 20 <= kinds["muscle_equip"] <= 30
-    assert kinds["guide"] == 24 and kinds["term"] == 21 and kinds["pair"] == 24
+    assert kinds["guide"] == 24 and kinds["term"] == 21 and kinds["pair"] == 54
     assert {"531", "weekly-volume"} <= {p.arg for p in _pages("tool")}
     assert {("total", "men"), ("total", "women")} <= {(p.arg, p.arg2) for p in _pages("strength_lift")}
     assert {"fitbod", "jefit"} <= {p.arg for p in _pages("alternatives")}

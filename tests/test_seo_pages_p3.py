@@ -207,7 +207,7 @@ async def test_library_pages_link_what_they_promise():
 
 
 def test_guides_are_long_enough_and_glossary_complete():
-    assert len(seo_library.GUIDES) == 24 and len(seo_library.GLOSSARY) == 21 and len(seo_library.PAIRS) == 24
+    assert len(seo_library.GUIDES) == 24 and len(seo_library.GLOSSARY) == 21 and len(seo_library.PAIRS) == 54
     assert len(seo_library.MUSCLES) == 12
     for slug in seo_library.GUIDES[:10]:
         for lang in ("ru", "en"):
