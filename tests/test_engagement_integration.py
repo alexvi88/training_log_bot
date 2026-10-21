@@ -16,7 +16,7 @@ async def test_build_daily_push_fires_the_matching_skip_milestone(fresh_db, user
         user_id, started_at="2026-07-05T10:00:00", finished_at="2026-07-05T11:00:00"
     )
 
-    today = dt.date(2026, 7, 12)  # exactly 7 days after the workout above
+    today = dt.date(2026, 7, 13)  # 7 full empty days after the workout (today not counted)
     decision = await engagement.build_daily_push(user_id, today)
 
     assert decision is not None
@@ -32,7 +32,7 @@ async def test_build_daily_push_respects_one_per_day_dedup(fresh_db, user_id):
     await db.create_finished_workout(
         user_id, started_at="2026-07-05T10:00:00", finished_at="2026-07-05T11:00:00"
     )
-    today = dt.date(2026, 7, 12)
+    today = dt.date(2026, 7, 13)
     await db.record_push(user_id, push_texts.SKIP_7, "already sent today", today.isoformat())
 
     decision = await engagement.build_daily_push(user_id, today)
@@ -162,3 +162,36 @@ async def test_sunday_digest_falls_back_to_static_when_ai_returns_none(fresh_db,
     decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 19))
     assert decision is not None
     assert decision.category == push_texts.WEEKLY_DIGEST
+
+
+async def _every_other_day_until_sunday(db, user_id):
+    """Шесть тренировок через день, последняя — в воскресенье 5 июля."""
+    for day in (25, 27, 29):
+        await db.create_finished_workout(
+            user_id, started_at=f"2026-06-{day}T10:00:00", finished_at=f"2026-06-{day}T11:00:00"
+        )
+    for day in (1, 3, 5):
+        await db.create_finished_workout(
+            user_id, started_at=f"2026-07-0{day}T10:00:00", finished_at=f"2026-07-0{day}T11:00:00"
+        )
+
+
+async def test_skip_3_waits_for_the_third_full_empty_day(fresh_db, user_id):
+    """Тренировка в воскресенье, пн–вт отдых: в среду вечером «третий день без
+    зала» — неправда (он может быть в зале), подколка — в четверг."""
+    await _every_other_day_until_sunday(fresh_db, user_id)
+    assert await engagement.build_daily_push(user_id, dt.date(2026, 7, 8)) is None
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 9))
+    assert decision is not None and decision.category == push_texts.SKIP_3
+
+
+async def test_no_skip_push_while_a_workout_is_running(fresh_db, user_id, monkeypatch):
+    await _every_other_day_until_sunday(fresh_db, user_id)
+    await fresh_db.create_workout(user_id, started_at="2026-07-09T17:30:00")
+    now = dt.datetime(2026, 7, 9, 18, 0)
+    monkeypatch.setattr(engagement, "_utc_now", lambda: now)
+    assert await engagement.build_daily_push(user_id, dt.date(2026, 7, 9)) is None
+    # брошенная неделю назад тренировка подколку не глушит
+    monkeypatch.setattr(engagement, "_utc_now", lambda: now + dt.timedelta(days=7))
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 9))
+    assert decision is not None and decision.category == push_texts.SKIP_3
