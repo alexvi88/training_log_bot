@@ -163,6 +163,12 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "you_story_open": frozenset({"source"}),
     "you_story_share": frozenset({"source"}),
     "you_story_shared": frozenset({"source", "activity"}),
+    # Партия игры началась (RestGameSheet в приложении): game — catch|weigh|
+    # sort|runner, source — rest (между подходами), menu_arcade (автомат в
+    # подвале «Меню»), achievements («Играть» у рекорда). По паре видно,
+    # играют ли вне тренировки и какой вход работает. Результат партии — свой
+    # запрос POST /v1/games/results, не событие.
+    "game_open": frozenset({"game", "source"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
@@ -172,6 +178,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("you_story_open", "source"): frozenset({"menu", "finish"}),
     ("you_story_share", "source"): frozenset({"menu", "finish"}),
     ("you_story_shared", "source"): frozenset({"menu", "finish"}),
+    ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
+    ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
 }
 
 # Тип действия системного листа iOS — reverse-DNS id (точки, регистр), а не
