@@ -348,3 +348,20 @@ def test_split_pages_show_week_volume_and_templates_are_labelled():
                 assert seo_library._sets_of(scheme), (key, identity)
     for page in _pages("program"):
         assert i18n.t_in("ru", "seo.split.week.h") in _html(page, "ru")
+
+
+def test_every_link_on_the_site_is_an_address():
+    """Подпись кнопки не затирает адрес: `href="AI coach"` уже стояло в
+    статьях, пока `_article_params` перетирал `{ai}` в `link_params`."""
+    bad = {}
+    for page in seo_pages.pages():
+        for lang in ("ru", "en"):
+            html = seo_pages.render(page, lang)
+            for href in re.findall(r'href="([^"]*)"', html):
+                if not re.match(r"(/|https?:|#|mailto:)", href):
+                    bad.setdefault(seo_pages.url_for(page, lang), href)
+            text = re.sub(r"<script.*?</script>|<style.*?</style>|<head>.*?</head>", "", html, flags=re.S)
+            leaked = re.search(r">[^<]*\s/(?:ru|en)/[a-z]", text)
+            if leaked:
+                bad.setdefault(seo_pages.url_for(page, lang), leaked.group(0)[:80])
+    assert not bad, bad

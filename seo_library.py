@@ -463,7 +463,14 @@ def link_params(lang: str) -> dict[str, str]:
         out[f"swap_{_ph(url)}"] = u(Page("exercise_alt", url))
     out["protein"] = u(Page("tool", "protein"))
     out["calories"] = u(Page("tool", "calories"))
-    out.update(sp._article_params(lang))
+    # Подписи кнопок из `_article_params` не перетирают адреса: `{ai}`,
+    # `{video}`, `{programs}` здесь — ссылки (`href="{ai}"`), а подпись той же
+    # кнопки в тексте — `{ai_btn}`, `{video_btn}`, `{programs_btn}`. Раньше
+    # подпись затирала адрес, и в статьях стояли ссылки `href="AI coach"`.
+    article = sp._article_params(lang)
+    for name in ("ai", "video", "programs"):
+        out[f"{name}_btn"] = article.pop(name)
+    out.update(article)
     return out  # type: ignore[return-value]
 
 
