@@ -224,7 +224,10 @@ _EXERCISE_BY_URL = dict(EXERCISES)
 _DEMO_SLUG = "barbell_bench_press_medium_grip"
 
 IMPORT_SOURCES = ("hevy", "strong", "csv")
-TOOLS = ("1rm", "warmup", "rpe", "wilks", "tonnage", "rest-timer", "goal", "strength-percentile", "531", "weekly-volume")
+TOOLS = ("1rm", "warmup", "rpe", "wilks", "tonnage", "rest-timer", "goal", "strength-percentile", "531", "weekly-volume",
+         "protein", "calories")
+# Калькуляторы питания — своей группой на странице калькуляторов.
+NUTRITION_TOOLS = ("protein", "calories")
 EMBEDS = ("1rm",)
 # Убранные адреса: 301 туда, где теперь то же самое (калькулятор блинов
 # снят — раскладку на сторону показывает разминка).
@@ -306,6 +309,10 @@ _BLOCKS = {
     "log:rest-timer": "tmr_log",
     "log:goal": "goal_log",
     "log:strength-percentile": "pct_log",
+    "tool:protein": "protein",
+    "tool:calories": "kcal",
+    "log:protein": "prot_log",
+    "log:calories": "kcal_log",
 }
 # Метка для ссылки из llms.txt: страницы у неё нет.
 LLMS_BLOCK = "llms"
@@ -1471,7 +1478,7 @@ def _render_import(lang: str, page: Page, request) -> str:
 
 _TOOL_ICONS = {"1rm": "calc", "warmup": "warmup", "rpe": "gauge", "wilks": "trophy",
                "tonnage": "dumbbell", "rest-timer": "timer", "goal": "target", "strength-percentile": "percent",
-               "531": "plates", "weekly-volume": "chart"}
+               "531": "plates", "weekly-volume": "chart", "protein": "bolt", "calories": "flame"}
 
 
 def _seg(name: str, legend: str, options: list[tuple[str, str]], checked: str) -> str:
@@ -1754,13 +1761,17 @@ def _render_tool(lang: str, page: Page, request) -> str:
 
 def _render_tools(lang: str, page: Page, request) -> str:
     t = _t(lang)
-    items = [(url_for(Page("tool", s), lang), _TOOL_ICONS[s], t(f"seo.tool.{s}.short"), t(f"seo.tool.{s}.card")) for s in TOOLS]
+    def item(s: str) -> tuple[str, str, str, str]:
+        return url_for(Page("tool", s), lang), _TOOL_ICONS[s], t(f"seo.tool.{s}.short"), t(f"seo.tool.{s}.card")
+
+    items = [item(s) for s in TOOLS if s not in NUTRITION_TOOLS]
     items.append((url_for(Page("strength"), lang), "scale", t("seo.strength.short"), t("seo.strength.card")))
     title, description = t("seo.tools.title"), t("seo.tools.description")
     body = (
         f"<span class=eyebrow>{_e(t('seo.eyebrow.tool'))}</span>"
         f"<h1>{_e(t('seo.tools.h1'))}</h1><p class=lead>{_e(t('seo.tools.lead'))}</p>"
-        + _icon_cards(items)
+        + f"<h2 class=group-title>{_e(t('seo.tools.training.h'))}</h2>" + _icon_cards(items)
+        + f"<h2 class=group-title>{_e(t('seo.tools.nutrition.h'))}</h2>" + _icon_cards([item(s) for s in NUTRITION_TOOLS])
         + _cta(lang, page.block, _e(t("seo.tools.cta")), request)
     )
     return _layout(lang, page, request, title=title, description=description, body=body, wide=True,

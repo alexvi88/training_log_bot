@@ -25,7 +25,11 @@
   обратно: % от максимума = 1 ÷ e1RM(1кг, повторы, RPE);
 - нормативы силы — своя шкала по DOTS (пороги `LEVELS`), разложенная на
   одно упражнение долей в сумме (`LIFT_SHARE`): медианы по выступлениям в
-  классическом троеборье (данные OpenPowerlifting, общественное достояние).
+  классическом троеборье (данные OpenPowerlifting, общественное достояние);
+- белок — коридор граммов на кг веса тела по цели (Morton 2018, позиция ISSN,
+  Helms 2014), калории — основной обмен по Миффлину — Сан Жеору × коэффициент
+  активности ± доля под набор или сушку. Еду бот не ведёт: это оценка на
+  старт, проверка — весы.
 
 `tests/test_seo_pages.py` сверяет Python с ботом и гоняет `CALC_JS` в node
 на тех же входах.
@@ -330,6 +334,53 @@ def five31(one_rm: float, step: float, tm_share: float = FIVE31_TM) -> dict:
     }
 
 
+# ---------- белок и калории ----------
+#
+# Белок в граммах на кг веса тела в сутки, по цели: «держать» — 1.4–2.0
+# (позиция ISSN по белку, Jäger et al. 2017), «набор» — 1.6–2.2 (Morton et
+# al. 2018: прибавка от белка выходит на плато около 1.6, верх доверительного
+# интервала — 2.2), «сушка» — 1.8–2.7: Helms et al. (2014) советуют 2.3–3.1 г
+# на кг сухой массы, а на весь вес тела у типичного атлета это примерно столько.
+PROTEIN_G_PER_KG = {"maintain": (1.4, 2.0), "gain": (1.6, 2.2), "cut": (1.8, 2.7)}
+PROTEIN_GOALS = ("maintain", "gain", "cut")
+PROTEIN_MEALS = (3, 4, 5)
+
+# Калории: основной обмен по Миффлину — Сан Жеору (1990): 10·вес(кг) +
+# 6.25·рост(см) − 5·возраст + 5 у мужчин и − 161 у женщин; умножается на
+# коэффициент активности (общепринятая лесенка 1.2…1.9). Цель — доля от
+# поддержки: набор +5…15%, сушка −10…20%. Это оценка: весы за две-три недели
+# точнее любой формулы — так и пишет страница.
+MIFFLIN_SEX = {"m": 5.0, "f": -161.0}
+ACTIVITY = {"sedentary": 1.2, "light": 1.375, "moderate": 1.55, "high": 1.725, "very": 1.9}
+CALORIE_GOALS = {"maintain": (0.0, 0.0), "gain": (0.05, 0.15), "cut": (-0.20, -0.10)}
+CALORIE_AGE = (18, 80)
+CM_PER_IN = 2.54
+
+
+def protein_range(bodyweight_kg: float, goal: str) -> tuple[float, float]:
+    """Белок в граммах в сутки: (нижний край, верхний)."""
+    lo, hi = PROTEIN_G_PER_KG[goal]
+    return bodyweight_kg * lo, bodyweight_kg * hi
+
+
+def protein_per_meal(bodyweight_kg: float, goal: str, meals: int) -> tuple[float, float]:
+    lo, hi = protein_range(bodyweight_kg, goal)
+    return lo / meals, hi / meals
+
+
+def bmr_mifflin(weight_kg: float, height_cm: float, age: float, sex: str) -> float:
+    """Основной обмен, ккал в сутки (Mifflin et al., 1990)."""
+    return 10 * weight_kg + 6.25 * height_cm - 5 * age + MIFFLIN_SEX[sex]
+
+
+def calorie_targets(weight_kg: float, height_cm: float, age: float, sex: str, activity: str, goal: str) -> dict:
+    """{'bmr', 'maintenance', 'lo', 'hi'} — ккал в сутки, без округления."""
+    bmr = bmr_mifflin(weight_kg, height_cm, age, sex)
+    maintenance = bmr * ACTIVITY[activity]
+    lo, hi = CALORIE_GOALS[goal]
+    return {"bmr": bmr, "maintenance": maintenance, "lo": maintenance * (1 + lo), "hi": maintenance * (1 + hi)}
+
+
 # ---------- перцентиль на помосте ----------
 
 _PCT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seo_data", "strength_percentiles.json")
@@ -404,6 +455,12 @@ def js_constants() -> str:
         "goalMax": GOAL_MAX_WEEKS,
         "five31Weeks": [[list(x) for x in w] for w in FIVE31_WEEKS],
         "five31Warmup": [list(x) for x in FIVE31_WARMUP],
+        "proteinPerKg": {k: list(v) for k, v in PROTEIN_G_PER_KG.items()},
+        "mifflin": MIFFLIN_SEX,
+        "activity": ACTIVITY,
+        "calorieGoals": {k: list(v) for k, v in CALORIE_GOALS.items()},
+        "calorieAge": list(CALORIE_AGE),
+        "cmPerIn": CM_PER_IN,
     })
 
 
@@ -489,6 +546,12 @@ function five31(orm, step, share) {
   var tm = orm * share, f = function (p) { return floorStep(tm * p, step); };
   return { tm: tm, warmup: C.five31Warmup.map(function (x) { return [f(x[0]), x[1]]; }),
     weeks: C.five31Weeks.map(function (w) { return w.map(function (x) { return [x[0], f(x[0]), x[1]]; }); }) };
+}
+function proteinRange(bw, goal) { var r = C.proteinPerKg[goal]; return [bw * r[0], bw * r[1]]; }
+function mifflin(w, h, age, sex) { return 10 * w + 6.25 * h - 5 * age + C.mifflin[sex]; }
+function calorieTargets(w, h, age, sex, act, goal) {
+  var b = mifflin(w, h, age, sex), m = b * C.activity[act], g = C.calorieGoals[goal];
+  return { bmr: b, maintenance: m, lo: m * (1 + g[0]), hi: m * (1 + g[1]) };
 }
 function fmt(x) { var r = Math.round(x * 10) / 10; return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)); }
 """

@@ -177,6 +177,10 @@ GLOSSARY: tuple[str, ...] = (
     "compound-exercise",
 )
 
+NUTRITION_GUIDES: tuple[str, ...] = (
+    "protein-per-day", "creatine", "whey-protein", "calories-for-muscle-gain", "cutting-without-losing-muscle",
+    "caffeine-before-workout", "pre-and-post-workout-meal", "supplements-that-work",
+)
 GUIDES: tuple[str, ...] = (
     "how-to-keep-a-workout-log", "progressive-overload", "rest-between-sets", "break-a-plateau",
     "sets-per-muscle-per-week", "estimate-1rm-safely", "warm-up-before-lifting",
@@ -186,6 +190,8 @@ GUIDES: tuple[str, ...] = (
     "common-gym-mistakes", "strength-training-after-40", "beginner-gains", "junk-volume",
     "beginner-gym-program", "muscle-gain-program", "gym-program-for-women", "increase-bench-press",
     "reps-for-muscle-growth", "training-frequency",
+    # Пятая волна: питание и спортпит (своей группой на /guides).
+    *NUTRITION_GUIDES,
 )
 GUIDE_SECTIONS = {
     "how-to-keep-a-workout-log": 6, "progressive-overload": 6, "rest-between-sets": 6, "break-a-plateau": 7,
@@ -195,6 +201,7 @@ GUIDE_SECTIONS = {
                       "first-week-in-the-gym", "common-gym-mistakes", "strength-training-after-40", "beginner-gains",
                       "junk-volume", "beginner-gym-program", "muscle-gain-program", "gym-program-for-women",
                       "increase-bench-press", "reps-for-muscle-growth", "training-frequency")},
+    **{g: 8 for g in NUTRITION_GUIDES},
 }
 
 # Исследования, на которые опирается статья там, где названо число. Подпись —
@@ -248,6 +255,21 @@ _BORDE = ("Borde, Hortobágyi, Granacher (2015). Dose-response relationships of 
 _ROBERTS = ("Roberts, Nuckols, Krieger (2020). Sex differences in resistance training: a systematic review and meta-analysis. "
             "J Strength Cond Res", "https://pubmed.ncbi.nlm.nih.gov/32218059/")
 
+# Питание и спортпит. Позиции ISSN — открытые обзоры в J Int Soc Sports Nutr.
+_ISSN_PROTEIN = ("Jäger et al. (2017). International Society of Sports Nutrition position stand: protein and exercise. "
+                 "J Int Soc Sports Nutr", "https://pubmed.ncbi.nlm.nih.gov/28642676/")
+_ISSN_CREATINE = ("Kreider et al. (2017). International Society of Sports Nutrition position stand: safety and efficacy of "
+                  "creatine supplementation in exercise, sport, and medicine. J Int Soc Sports Nutr",
+                  "https://pubmed.ncbi.nlm.nih.gov/28615996/")
+_ISSN_CAFFEINE = ("Guest et al. (2021). International Society of Sports Nutrition position stand: caffeine and exercise "
+                  "performance. J Int Soc Sports Nutr", "https://pubmed.ncbi.nlm.nih.gov/33388079/")
+_TIMING = ("Aragon, Schoenfeld (2013). Nutrient timing revisited: is there a post-exercise anabolic window? "
+           "J Int Soc Sports Nutr", "https://pubmed.ncbi.nlm.nih.gov/23360586/")
+_HELMS = ("Helms, Aragon, Fitschen (2014). Evidence-based recommendations for natural bodybuilding contest preparation: "
+          "nutrition and supplementation. J Int Soc Sports Nutr", "https://pubmed.ncbi.nlm.nih.gov/24864135/")
+_IRAKI = ("Iraki et al. (2019). Nutrition recommendations for bodybuilders in the off-season: a narrative review. "
+          "Sports (Basel)", "https://pubmed.ncbi.nlm.nih.gov/31247944/")
+
 GUIDE_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
     "how-to-keep-a-workout-log": (_PLOTKIN, _RIR),
     "progressive-overload": (_PLOTKIN, _FAILURE, _RIR),
@@ -273,6 +295,14 @@ GUIDE_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
     "increase-bench-press": (_FREQ_STRENGTH, _LOAD_2017, _PLOTKIN,),
     "reps-for-muscle-growth": (_LOAD_2017, _FAILURE, _FAILURE_GRGIC, _PLOTKIN,),
     "training-frequency": (_FREQ_2016, _FREQ_2019, _SARIC, _FREQ_STRENGTH, _PELLAND,),
+    "protein-per-day": (_PROTEIN, _ISSN_PROTEIN, _HELMS),
+    "creatine": (_ISSN_CREATINE,),
+    "whey-protein": (_PROTEIN, _ISSN_PROTEIN, _TIMING),
+    "calories-for-muscle-gain": (_IRAKI, _PROTEIN, _SCHOENFELD_2017),
+    "cutting-without-losing-muscle": (_HELMS, _ISSN_PROTEIN, _PROTEIN),
+    "caffeine-before-workout": (_ISSN_CAFFEINE,),
+    "pre-and-post-workout-meal": (_TIMING, _ISSN_PROTEIN, _ISSN_CAFFEINE),
+    "supplements-that-work": (_ISSN_CREATINE, _ISSN_CAFFEINE, _PROTEIN, _ISSN_PROTEIN),
 }
 
 # Ссылки «читать дальше» у термина: имена плейсхолдеров link_params.
@@ -325,6 +355,14 @@ GUIDE_LINKS: dict[str, tuple[str, ...]] = {
     "increase-bench-press": ("ex_bench_press", "rm1", "t531", "video"),
     "reps-for-muscle-growth": ("guide_strength_vs_hypertrophy", "term_rir", "guide_junk_volume", "rm1"),
     "training-frequency": ("split_full_body_vs_split", "splits", "term_frequency", "guide_sets_per_muscle_per_week"),
+    "protein-per-day": ("protein", "calories", "guide_whey_protein", "guide_muscle_gain_program"),
+    "creatine": ("guide_supplements_that_work", "guide_protein_per_day", "rm1", "protein"),
+    "whey-protein": ("protein", "guide_protein_per_day", "guide_pre_and_post_workout_meal", "guide_supplements_that_work"),
+    "calories-for-muscle-gain": ("calories", "protein", "guide_muscle_gain_program", "guide_cutting_without_losing_muscle"),
+    "cutting-without-losing-muscle": ("calories", "protein", "guide_calories_for_muscle_gain", "guide_progressive_overload"),
+    "caffeine-before-workout": ("guide_supplements_that_work", "guide_warm_up_before_lifting", "guide_creatine", "protein"),
+    "pre-and-post-workout-meal": ("protein", "guide_whey_protein", "guide_caffeine_before_workout", "guide_protein_per_day"),
+    "supplements-that-work": ("guide_creatine", "guide_caffeine_before_workout", "guide_whey_protein", "protein"),
 }
 
 # Альтернативы: id приложений в списке; «us» — всегда первыми.
@@ -423,6 +461,8 @@ def link_params(lang: str) -> dict[str, str]:
         out[f"apps_{_ph(a)}__{_ph(b)}"] = u(Page("apps", pair_slug(a, b)))
     for url, _slug in sp.EXERCISES:
         out[f"swap_{_ph(url)}"] = u(Page("exercise_alt", url))
+    out["protein"] = u(Page("tool", "protein"))
+    out["calories"] = u(Page("tool", "calories"))
     out.update(sp._article_params(lang))
     return out  # type: ignore[return-value]
 
@@ -463,6 +503,7 @@ def _link_label(lang: str, name: str) -> tuple[str, str]:
         "guides": "seo.nav.guides", "splits": "seo.splits.h1", "t531": "seo.tool.531.short",
         "vol": "seo.tool.weekly-volume.short", "strength": "seo.strength.short", "wilks": "seo.tool.wilks.short",
         "glossary": "seo.glossary.short", "compare": "seo.compare.short", "import_csv": "seo.import.csv.short",
+        "protein": "seo.tool.protein.short", "calories": "seo.tool.calories.short",
     }
     return href, sp._strip_emoji(t(labels[name]))
 
@@ -855,12 +896,16 @@ def guide_text(slug: str, lang: str) -> str:
 
 def _render_guides(lang: str, page: Page, request) -> str:
     t = sp._t(lang)
-    cards = [(sp.url_for(Page("guide", g), lang), t(f"seo.guide.{g}.h1"), t(f"seo.guide.{g}.card")) for g in GUIDES]
+    def cards(slugs) -> str:
+        return sp._cards([(sp.url_for(Page("guide", g), lang), t(f"seo.guide.{g}.h1"), t(f"seo.guide.{g}.card")) for g in slugs])
+
     title, description = t("seo.guides.title"), t("seo.guides.description")
     body = (
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.library'))}</span>"
         f"<h1>{sp._e(t('seo.guides.h1'))}</h1><p class=lead>{sp._e(t('seo.guides.lead'))}</p>"
-        + sp._cards(cards)
+        + f"<h2 class=group-title>{sp._e(t('seo.guides.training.h'))}</h2>"
+        + cards(g for g in GUIDES if g not in NUTRITION_GUIDES)
+        + f"<h2 class=group-title>{sp._e(t('seo.guides.nutrition.h'))}</h2>" + cards(NUTRITION_GUIDES)
         + f'<p><a href="{sp.url_for(Page("glossary"), lang)}">{sp._e(t("seo.guides.glossary_link"))} →</a></p>'
         + sp._cta(lang, page.block, sp._e(t("seo.guides.cta")), request)
     )
