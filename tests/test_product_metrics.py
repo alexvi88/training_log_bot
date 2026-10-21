@@ -579,3 +579,12 @@ def test_event_time_is_utc_whatever_the_process_zone():
         else:
             os.environ["TZ"] = old
         time.tzset()
+
+
+def test_game_open_keeps_source_and_game_enums():
+    assert product_metrics.clean_props("game_open", {"game": "runner", "source": "menu_arcade"}) == {
+        "game": "runner", "source": "menu_arcade"
+    }
+    for source in ("rest", "achievements"):
+        assert product_metrics.clean_props("game_open", {"game": "catch", "source": source})["source"] == source
+    assert product_metrics.clean_props("game_open", {"game": "chess", "source": "push", "x": 1}) == {}
