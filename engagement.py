@@ -241,7 +241,8 @@ def usual_gap_days(dates: list[dt.date]) -> Optional[float]:
 def skip_milestone(
     days_since_last: Optional[int], dates: Optional[list[dt.date]] = None
 ) -> Optional[int]:
-    """Веха пропуска (день из SKIP_MILESTONE_DAYS) или None.
+    """Веха пропуска (день из SKIP_MILESTONE_DAYS) или None. `days_since_last`
+    — целые дни без тренировки (`full_days_missed`), сегодняшний не в счёте.
 
     `dates` — дни законченных тренировок (по одному на тренировку). Без них —
     только точное совпадение дня. С ними короткие вехи молчат, пока перерыв
@@ -259,6 +260,32 @@ def skip_milestone(
     if usual is not None and days_since_last <= usual:
         return None
     return days_since_last
+
+
+def full_days_missed(days_since_last: Optional[int]) -> Optional[int]:
+    """Сколько целых дней прошло без тренировки — сегодняшний не в счёте: пуш
+    уходит вечером, а атлет может быть в зале прямо сейчас. Тренировка в
+    воскресенье, отдых пн–вт, зал в среду — «третий день без зала» в среду
+    вечером был неправдой (владелец); веха 3 — в четверг, если и в среду пусто."""
+    if days_since_last is None:
+        return None
+    return max(days_since_last - 1, 0)
+
+
+# Начатая и не законченная тренировка свежее этого — атлет в зале: подколку о
+# пропуске он не получает (законченной ещё нет, и счётчик дней её не видит).
+TRAINING_NOW_HOURS = 12
+
+
+async def _training_now(telegram_id: int) -> bool:
+    active = await db.get_active_workout(telegram_id)
+    if active is None or not active["started_at"]:
+        return False
+    try:
+        started = dt.datetime.fromisoformat(active["started_at"]).replace(tzinfo=None)
+    except ValueError:
+        return False
+    return _utc_now() - started < dt.timedelta(hours=TRAINING_NOW_HOURS)
 
 
 def days_since_activity(
@@ -422,8 +449,8 @@ async def build_daily_push(
         )
 
     days_quiet = days_since_activity(dashboard.days_since_last, await db.last_import_at(telegram_id), today)
-    milestone_day = skip_milestone(days_quiet, dates)
-    if milestone_day is not None:
+    milestone_day = skip_milestone(full_days_missed(days_quiet), dates)
+    if milestone_day is not None and not await _training_now(telegram_id):
         category = push_texts.SKIP_CATEGORY_BY_DAY[milestone_day]
         text = await push_texts.pick_text(telegram_id, category)
         return PushDecision(category, text)

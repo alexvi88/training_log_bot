@@ -182,18 +182,22 @@ async def test_mon_wed_fri_monday_gets_no_skip_3_but_a_real_skip_does(fresh_db, 
     decision = await engagement.build_daily_push(user_id, monday)
     assert decision is None or decision.category not in push_texts.SKIP_CATEGORY_BY_DAY.values()
 
-    # Понедельник и среда есть, пятница пропущена — в субботу подколка уходит.
+    # Понедельник и среда есть, пятница пропущена. В субботу вечером молчим —
+    # он может быть в зале прямо сейчас; в воскресенье три целых пустых дня
+    # (чт, пт, сб) — подколка уходит.
     await _finished(fresh_db, user_id, monday)
     await _finished(fresh_db, user_id, _day(3, 2))
     decision = await engagement.build_daily_push(user_id, _day(3, 5))
+    assert decision is None or decision.category not in push_texts.SKIP_CATEGORY_BY_DAY.values()
+    decision = await engagement.build_daily_push(user_id, _day(3, 6))
     assert decision is not None and decision.category == push_texts.SKIP_3
 
 
 async def test_newbie_with_few_workouts_gets_first_jab_on_day_five(fresh_db, user_id):
     for day in (MON, _day(0, 2)):
         await _finished(fresh_db, user_id, day)
-    assert await engagement.build_daily_push(user_id, _day(0, 5)) is None  # 3 дня
-    decision = await engagement.build_daily_push(user_id, _day(1, 0))  # 5 дней
+    assert await engagement.build_daily_push(user_id, _day(0, 6)) is None  # 3 целых пустых дня
+    decision = await engagement.build_daily_push(user_id, _day(1, 1))  # 5 целых пустых дней
     assert decision is not None and decision.category == push_texts.SKIP_5
 
 

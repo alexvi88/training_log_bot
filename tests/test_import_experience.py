@@ -58,7 +58,7 @@ async def test_no_pause_push_the_week_after_importing_old_history(fresh_db, user
 async def test_pause_counts_from_the_import_once_a_week_passes(fresh_db, user_id):
     db = fresh_db
     await _import(db, user_id, "2026-03-01T10:00:00", batch_created_at="2026-07-05T20:00:00")
-    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 12))
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 13))
     assert decision is not None
     assert decision.category == push_texts.SKIP_7
 
@@ -75,7 +75,7 @@ async def test_undone_import_is_not_activity(fresh_db, user_id):
     )
     await db.conn().commit()
     assert await db.last_import_at(user_id) is None
-    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 12))
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 13))
     assert decision is not None and decision.category == push_texts.SKIP_7
 
 
