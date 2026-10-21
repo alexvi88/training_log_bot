@@ -397,7 +397,7 @@ class Page:
             return ""
         if self.kind in FEATURES:
             return f"/{self.kind}"
-        if self.kind == "strength_lift":
+        if self.kind in ("strength_lift", "strength_bw"):
             return f"/strength/{self.arg}/{self.arg2}"
         if self.kind == "exercise_alt":
             return f"/exercises/{self.arg}/alternatives"
@@ -418,7 +418,7 @@ class Page:
     def block(self) -> str:
         if self.kind in _BLOCK_BY_ARG:
             return _BLOCKS[f"{self.kind}:{self.arg}"]
-        if self.kind == "strength_lift":
+        if self.kind in ("strength_lift", "strength_bw"):
             return _BLOCKS["strength"]
         return _BLOCKS[self.kind]
 
@@ -431,6 +431,9 @@ def pages() -> list[Page]:
     result += [Page("tool", t) for t in TOOLS]
     result.append(Page("strength"))
     result += [Page("strength_lift", url, sex) for url, _k, _e in STRENGTH_LIFTS for sex, _s in STRENGTH_SEXES]
+    import seo_strength_bw
+
+    result += seo_strength_bw.pages()
     result.append(Page("programs"))
     result += [Page("program", p["key"]) for p in seed_data.WORKOUT_PROGRAMS]
     result.append(Page("exercises"))
@@ -629,7 +632,7 @@ def _nav_pages() -> tuple[tuple[Page, str], ...]:
 
 # Раздел шапки, к которому относится страница (подсветка и хлебные крошки).
 _SECTION = {
-    "tools": "tools", "tool": "tools", "strength": "tools", "strength_lift": "tools", "template": "tools",
+    "tools": "tools", "tool": "tools", "strength": "tools", "strength_lift": "tools", "strength_bw": "tools", "template": "tools",
     "guides": "guides", "guide": "guides", "glossary": "guides", "term": "guides",
     "muscles": "muscles", "muscle": "muscles", "muscle_equip": "muscles",
     "exercises": "exercises", "exercise": "exercises", "exercise_alt": "exercises",
@@ -658,6 +661,11 @@ def _parents(page: Page) -> list[Page]:
         return [Page("tools")]
     if k == "strength_lift":
         return [Page("tools"), Page("strength")]
+    if k == "strength_bw":
+        import seo_strength_bw
+
+        _key, sex, _bw = seo_strength_bw.parts(page)
+        return [Page("tools"), Page("strength"), Page("strength_lift", page.arg, "men" if sex == "m" else "women")]
     if k == "exercise_alt":
         return [Page("exercises"), Page("exercise", page.arg)]
     if k == "muscle_equip":
@@ -1001,6 +1009,10 @@ def page_h1(page: Page, lang: str) -> str:
         return seed_data.localized_exercise_name(_identity_for_media_slug(_EXERCISE_BY_URL[page.arg]), lang)
     if page.kind == "vs":
         return t(f"seo.vs.{page.arg}.h1")
+    if page.kind == "strength_bw":
+        import seo_strength_bw
+
+        return seo_strength_bw.page_h1(page, lang)
     import seo_library
 
     return seo_library.page_h1(page, lang)
@@ -1775,15 +1787,17 @@ def _strength_table(lang: str, lift: str, sex: str, unit: str) -> str:
             f"<tbody>{rows}</tbody></table></div>")
 
 
-def _strength_tool(lang: str, lift: str = "bench", sex: str = "m") -> tuple[str, str, str]:
+def _strength_tool(lang: str, lift: str = "bench", sex: str = "m", *, bw: Optional[float] = None,
+                   lift_kg: Optional[float] = None) -> tuple[str, str, str]:
     t = _t(lang)
     form = (
         "<form class=calc onsubmit='return false'>"
         + _seg("lift", t("seo.strength.tool.lift"), [(k, t(f"seo.strength.lift.{k}")) for k in seo_tools.STRENGTH_LIFTS + ("total",)], lift)
         + "<div class=row>" + _seg("sex", t("seo.tool.wilks.sex"), [("m", t("seo.tool.wilks.male")), ("f", t("seo.tool.wilks.female"))], sex)
         + _unit_seg(lang) + "</div>"
-        "<div class=row>" + _num_input("bw", t("seo.tool.wilks.bw"), "80" if sex == "m" else "60", "0.1")
-        + _num_input("lw", t("seo.tool.1rm.weight"), "100" if sex == "m" else "50", "0.25") + "</div>"
+        "<div class=row>" + _num_input("bw", t("seo.tool.wilks.bw"), _num(bw) if bw else ("80" if sex == "m" else "60"), "0.1")
+        + _num_input("lw", t("seo.tool.1rm.weight"), _num(lift_kg) if lift_kg else ("100" if sex == "m" else "50"), "0.25")
+        + "</div>"
         + _num_input("lr", t("seo.tool.1rm.reps"), "1", "1", "numeric", "12")
         + "</form>"
     )
@@ -1854,6 +1868,8 @@ def _render_strength(lang: str, page: Page, request) -> str:
 
 
 def _render_strength_lift(lang: str, page: Page, request) -> str:
+    import seo_strength_bw
+
     t = _t(lang)
     key, ex_url = _LIFT_BY_URL[page.arg]
     sex = _SEX_BY_URL[page.arg2]
@@ -1872,6 +1888,7 @@ def _render_strength_lift(lang: str, page: Page, request) -> str:
         + f"<section class=reveal><h2>{_e(t('seo.strength.table.h'))}</h2>{tables}"
         f"<p class=muted>{_e(t('seo.strength.table_note'))}</p></section>"
         + _strength_method(lang)
+        + seo_strength_bw.lift_page_links(lang, page.arg, sex)
         + (f'<p><a href="{url_for(Page("exercise", ex_url), lang)}">{_e(t("seo.strength.technique", lift=lift_name))} →</a></p>'
            if ex_url else "")
         + _cta(lang, page.block, _e(t("seo.strength.cta")), request)
@@ -2216,6 +2233,15 @@ _RENDERERS: dict[str, Callable[[str, Page, Optional[Request]], str]] = {
     "exercise": _render_exercise,
     "vs": _render_vs,
 }
+
+
+def _strength_bw_renderer(lang: str, page: Page, request) -> str:
+    import seo_strength_bw
+
+    return seo_strength_bw.RENDERERS["strength_bw"](lang, page, request)
+
+
+_RENDERERS["strength_bw"] = _strength_bw_renderer
 
 
 def render(page: Page, lang: str, request: Optional[Request] = None) -> str:

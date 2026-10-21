@@ -217,6 +217,7 @@ LOCALIZED: list[str] = [
     # seo_catalog (NEVER_LOCALIZED ниже).
     "seo_plans.py",
     "seo_swaps.py",
+    "seo_strength_bw.py",
     # Экран прогресса упражнения: подпись метрики и строка дельты («e1RM: ↑12.5кг
     # с первой тренировки») собираются через i18n.t внутри use_lang(users.lang).
     "api_v1_progress.py",
