@@ -84,7 +84,7 @@ def test_wave_four_page_counts():
     assert kinds["split"] == len(seo_plans.SPLIT_PAGES) == 7 and kinds["splits"] == 1
     assert kinds["workout"] == 3 and kinds["apps"] == 1
     assert 20 <= kinds["muscle_equip"] <= 30
-    assert kinds["guide"] == 24 and kinds["term"] == 21 and kinds["pair"] == 54
+    assert kinds["guide"] == 32 and kinds["term"] == 21 and kinds["pair"] == 54
     assert {"531", "weekly-volume"} <= {p.arg for p in _pages("tool")}
     assert {("total", "men"), ("total", "women")} <= {(p.arg, p.arg2) for p in _pages("strength_lift")}
     assert {"fitbod", "jefit"} <= {p.arg for p in _pages("alternatives")}
@@ -294,13 +294,15 @@ _LATIN_OK = {
     "Granacher", "Fragala", "Singer", "Šarić", "Fradkin", "Zazryn", "Smoliga", "Ribeiro", "Coleman", "Rogerson", "Latella",
     "Primer", "free-exercise-db", "repetitions", "in", "reserve", "as", "many", "reps", "possible", "personal", "record",
     "routines", "JavaScript", "push-pull-legs", "Push-pull-legs", "deload", "Power", "Hypertrophy", "Upper", "Lower", "A", "B", "e", "Wilks", "IPF", "GL", "lb", "kg", "USAPL", "OpenPowerlifting", "Epley", "Brzycki", "A-B-A", "B-A-B",
+    # Пятая волна (питание): авторы позиций ISSN и обзоров, BCAA, витамин D.
+    "ISSN", "BCAA", "D", "Jäger", "Kreider", "Guest", "Aragon", "Helms", "Fitschen", "Iraki", "Mifflin", "et", "al",
 }
 
 
 def test_russian_pages_of_wave_four_carry_no_stray_english():
     pages = _pages(*NEW_KINDS) + [p for p in _pages("guide") if p.arg in seo_library.GUIDES[10:]]
     pages += [p for p in _pages("term") if p.arg in seo_library.GLOSSARY[12:]]
-    pages += [p for p in _pages("tool") if p.arg in ("531", "weekly-volume")]
+    pages += [p for p in _pages("tool") if p.arg in ("531", "weekly-volume", "protein", "calories")]
     stray = Counter()
     for page in pages:
         main = _main(_html(page, "ru")).split(">", 1)[1]
@@ -346,3 +348,20 @@ def test_split_pages_show_week_volume_and_templates_are_labelled():
                 assert seo_library._sets_of(scheme), (key, identity)
     for page in _pages("program"):
         assert i18n.t_in("ru", "seo.split.week.h") in _html(page, "ru")
+
+
+def test_every_link_on_the_site_is_an_address():
+    """Подпись кнопки не затирает адрес: `href="AI coach"` уже стояло в
+    статьях, пока `_article_params` перетирал `{ai}` в `link_params`."""
+    bad = {}
+    for page in seo_pages.pages():
+        for lang in ("ru", "en"):
+            html = seo_pages.render(page, lang)
+            for href in re.findall(r'href="([^"]*)"', html):
+                if not re.match(r"(/|https?:|#|mailto:)", href):
+                    bad.setdefault(seo_pages.url_for(page, lang), href)
+            text = re.sub(r"<script.*?</script>|<style.*?</style>|<head>.*?</head>", "", html, flags=re.S)
+            leaked = re.search(r">[^<]*\s/(?:ru|en)/[a-z]", text)
+            if leaked:
+                bad.setdefault(seo_pages.url_for(page, lang), leaked.group(0)[:80])
+    assert not bad, bad

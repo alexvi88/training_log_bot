@@ -16,6 +16,9 @@ CALC_JS), тексты — `seo.tool.<имя>.*` в каталоге.
   темп) — диапазон дат, а не день; карточка для сторис — `/og/card/…`.
 - Перцентиль: таблица `seo_data/strength_percentiles.json` (OpenPowerlifting,
   классика, USAPL) — сравнение с теми, кто выступает, а не со всем залом.
+- Белок и калории (`seo_tools.protein_range`, `calorie_targets`): граммы на
+  день и на приём, поддержка и коридор под цель. Кнопка под результатом зовёт
+  взвешиваться и писать тренировки — дневника еды в продукте нет.
 
 Карточки `/og/card/<язык>/goal.png` и `/pct.png` рисует тот же
 seo_static.render_og, что и превью страниц; параметры строго проверяются
@@ -472,8 +475,113 @@ def tool_weekly_volume(lang: str, embed: bool = False) -> tuple[str, str, str]:
     return form, result, script
 
 
+# ---------- белок и калории ----------
+#
+# Еду дневник не ведёт — кнопка под результатом зовёт взвешиваться и писать
+# тренировки, а не «записать рацион». Граммы и ккал — целыми (ккал — до
+# десятка): точнее формула всё равно не знает.
+
+# Общие для двух калькуляторов функции страницы: диапазон с единицей и
+# пересчёт веса тела при смене кг ↔ lb.
+NUTRITION_JS = (
+    "function rg(lo,hi,u,step){step=step||1;var a=Math.round(lo/step)*step,b=Math.round(hi/step)*step;"
+    "return (a===b?String(a):a+'–'+b)+'<span class=u> '+u+'</span>';}"
+    "function swapUnit(id){document.querySelectorAll('[name=unit]').forEach(function(el){el.addEventListener('change',function(){"
+    "var x=parseFloat($(id).value);if(x>0)$(id).value=String(Math.round(this.value==='lb'?x*C.lbPerKg:x/C.lbPerKg));});});}"
+)
+
+
+def _range(lo: float, hi: float, unit: str, step: int = 1) -> str:
+    """То же, что `rg` в NUTRITION_JS: «128–176 г» с неразрывным пробелом."""
+    a, b = (int(seo_tools.round_to(x, step)) for x in (lo, hi))
+    return f"{a if a == b else f'{a}–{b}'}<span class=u> {sp._e(unit)}</span>"
+
+
+def tool_protein(lang: str, embed: bool = False) -> tuple[str, str, str]:
+    t = sp._t(lang)
+    goals = [(g, t(f"seo.tool.protein.goal.{g}")) for g in seo_tools.PROTEIN_GOALS]
+    form = (
+        "<form class=calc onsubmit='return false'>"
+        + sp._seg("goal", t("seo.tool.protein.goal"), goals, "gain")
+        + "<div class=row>" + sp._num_input("bw", t("seo.tool.wilks.bw"), "80", "0.1") + sp._unit_seg(lang) + "</div>"
+        + sp._seg("meals", t("seo.tool.protein.meals"), [(str(n), str(n)) for n in seo_tools.PROTEIN_MEALS], "4")
+        + "</form>"
+    )
+    g = t("seo.tool.unit_g")
+    lo, hi = seo_tools.protein_range(80, "gain")
+    rate = seo_tools.PROTEIN_G_PER_KG["gain"]
+    result = (
+        '<div class=result aria-live=polite><div class=pair>'
+        f'<div><div class=k>{sp._e(t("seo.tool.protein.result"))}</div><div class=big id=day>{_range(lo, hi, g)}</div></div>'
+        f'<div><div class=k>{sp._e(t("seo.tool.protein.per_meal"))}</div><div class=big id=meal>{_range(lo / 4, hi / 4, g)}</div></div></div>'
+        f'<div class=note id=note>{sp._e(t("seo.tool.protein.rate_kg", lo=sp._num(rate[0]), hi=sp._num(rate[1])))}</div>'
+        f'<p class=muted>{sp._e(t("seo.tool.protein.honest"))}</p>'
+        + ("" if embed else sp._log_cta(lang, "protein", "seo.tool.protein.log_cta")) + "</div>"
+    )
+    script = (
+        f"var G={sp._js_str(g)},RKG={sp._js_str(t('seo.tool.protein.rate_kg', lo='{lo}', hi='{hi}'))},"
+        f"RLB={sp._js_str(t('seo.tool.protein.rate_lb', lo='{lo}', hi='{hi}'))};"
+        + NUTRITION_JS +
+        "function run(){var u=val('unit'),k=u==='lb'?1/C.lbPerKg:1,bw=parseFloat($('bw').value)*k,goal=val('goal'),n=parseInt(val('meals'),10)||4;"
+        "if(!(bw>0)){$('day').textContent=$('meal').textContent='—';$('note').textContent='';done(0);return;}"
+        "var r=proteinRange(bw,goal),pk=C.proteinPerKg[goal];$('day').innerHTML=rg(r[0],r[1],G);$('meal').innerHTML=rg(r[0]/n,r[1]/n,G);"
+        "$('note').textContent=u==='lb'?RLB.replace('{lo}',(pk[0]/C.lbPerKg).toFixed(2)).replace('{hi}',(pk[1]/C.lbPerKg).toFixed(2))"
+        ":RKG.replace('{lo}',fmt(pk[0])).replace('{hi}',fmt(pk[1]));done(1);}"
+        "swapUnit('bw');bind(run);"
+    )
+    return form, result, script
+
+
+def tool_calories(lang: str, embed: bool = False) -> tuple[str, str, str]:
+    t = sp._t(lang)
+    acts = "".join(f'<option value="{a}"{" selected" if a == "moderate" else ""}>{sp._e(t(f"seo.tool.calories.act.{a}"))}</option>'
+                   for a in seo_tools.ACTIVITY)
+    goals = [(g, t(f"seo.tool.calories.goal.{g}")) for g in seo_tools.CALORIE_GOALS]
+    form = (
+        "<form class=calc onsubmit='return false'>"
+        "<div class=row>" + sp._seg("sex", t("seo.tool.wilks.sex"), [("m", t("seo.tool.wilks.male")), ("f", t("seo.tool.wilks.female"))], "m")
+        + sp._unit_seg(lang) + "</div>"
+        "<div class=row>" + sp._num_input("age", t("seo.tool.calories.age"), "30", "1", "numeric")
+        + sp._num_input("bw", t("seo.tool.wilks.bw"), "80", "0.1") + "</div>"
+        "<div class=row id=cmrow>" + sp._num_input("hcm", t("seo.tool.calories.height_cm"), "180", "1") + "</div>"
+        "<div class=row id=inrow hidden>" + sp._num_input("hft", t("seo.tool.calories.height_ft"), "5", "1", "numeric")
+        + sp._num_input("hin", t("seo.tool.calories.height_in"), "11", "0.5") + "</div>"
+        f"<label>{sp._e(t('seo.tool.calories.activity'))}<select id=act>{acts}</select></label>"
+        + sp._seg("goal", t("seo.tool.calories.goal"), goals, "maintain")
+        + "</form>"
+    )
+    kcal = t("seo.tool.unit_kcal")
+    c = seo_tools.calorie_targets(80, 180, 30, "m", "moderate", "maintain")
+    result = (
+        '<div class=result aria-live=polite><div class=pair>'
+        f'<div><div class=k>{sp._e(t("seo.tool.calories.keep"))}</div><div class=big id=keep>{_range(c["maintenance"], c["maintenance"], kcal, 10)}</div></div>'
+        f'<div><div class=k>{sp._e(t("seo.tool.calories.target"))}</div><div class=big id=tgt>{_range(c["lo"], c["hi"], kcal, 10)}</div></div></div>'
+        f'<div class=note id=note>{t("seo.tool.calories.bmr", bmr=_range(c["bmr"], c["bmr"], kcal, 10))}</div>'
+        f'<p class=muted>{sp._e(t("seo.tool.calories.honest"))}</p>'
+        + ("" if embed else sp._log_cta(lang, "calories", "seo.tool.calories.log_cta")) + "</div>"
+    )
+    script = (
+        f"var KC={sp._js_str(kcal)},BMR={sp._js_str(t('seo.tool.calories.bmr', bmr='{bmr}'))},"
+        f"AGE={sp._js_str(t('seo.tool.calories.age_range', lo=seo_tools.CALORIE_AGE[0], hi=seo_tools.CALORIE_AGE[1]))};"
+        + NUTRITION_JS +
+        "document.querySelectorAll('[name=unit]').forEach(function(el){el.addEventListener('change',function(){"
+        "$('cmrow').hidden=this.value!=='kg';$('inrow').hidden=this.value!=='lb';});});"
+        "function height(u){if(u==='kg')return parseFloat($('hcm').value);"
+        "var ft=parseFloat($('hft').value)||0,inch=parseFloat($('hin').value)||0;return (ft*12+inch)*C.cmPerIn;}"
+        "function run(){var u=val('unit'),k=u==='lb'?1/C.lbPerKg:1,w=parseFloat($('bw').value)*k,h=height(u),a=parseFloat($('age').value);"
+        "var keep=$('keep'),tgt=$('tgt'),note=$('note');"
+        "if(!(w>0)||!(h>0)||!(a>0)){keep.textContent=tgt.textContent='—';note.textContent='';done(0);return;}"
+        "if(a<C.calorieAge[0]||a>C.calorieAge[1]){keep.textContent=tgt.textContent='—';note.textContent=AGE;done(0);return;}"
+        "var c=calorieTargets(w,h,a,val('sex'),$('act').value,val('goal'));"
+        "keep.innerHTML=rg(c.maintenance,c.maintenance,KC,10);tgt.innerHTML=rg(c.lo,c.hi,KC,10);"
+        "note.innerHTML=BMR.replace('{bmr}',rg(c.bmr,c.bmr,KC,10));done(1);}"
+        "swapUnit('bw');bind(run);"
+    )
+    return form, result, script
+
+
 TOOLS = {"tonnage": tool_tonnage, "rest-timer": tool_rest_timer, "goal": tool_goal, "strength-percentile": tool_percentile,
-         "531": tool_531, "weekly-volume": tool_weekly_volume}
+         "531": tool_531, "weekly-volume": tool_weekly_volume, "protein": tool_protein, "calories": tool_calories}
 
 
 # ---------- карточки для сторис ----------
