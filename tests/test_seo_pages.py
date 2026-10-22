@@ -140,6 +140,7 @@ async def test_robots_allows_search_and_ai_crawlers_and_points_to_sitemap():
     for agent in ("Googlebot", "bingbot", "GPTBot", "OAI-SearchBot", "PerplexityBot", "ClaudeBot", "SomeNewBot"):
         assert parser.can_fetch(agent, f"{HOST}/en/tools/1rm"), agent
         assert parser.can_fetch(agent, f"{HOST}/llms.txt"), agent
+        assert not parser.can_fetch(agent, f"{HOST}/go/bot?f=home"), agent
     assert responses["/privacy"].status_code == 200
     assert responses["/v1/health"].status_code == 200
     assert responses["/.well-known/oauth-authorization-server"].status_code == 200
