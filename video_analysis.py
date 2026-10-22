@@ -391,6 +391,89 @@ def _clean_checklist(raw: Any) -> list[dict[str, Any]]:
     return [by_point[p] for p in CHECKPOINTS if p in by_point]
 
 
+# Противоречие между точками: одно и то же место тела на одном и том же кадре
+# одна точка описывает как отклонение, другая — как норму. Живой случай (тяга в
+# тренажёре): «спина — отклонение: в пиковой точке (0:02) … уводя лопатки от
+# позвоночника» и «амплитуда — норма: полное сведение лопаток в верхней точке
+# (0:02)». Тренер взял первое и сказал атлету как факт. Какая из двух правда —
+# по тексту не узнать, а обвинять атлета в том, чего модель сама не уверена,
+# хуже, чем промолчать: спорное отклонение понижается до «не видно».
+_BODY_PARTS: dict[str, tuple[str, ...]] = {
+    "лопатки": ("лопат",),
+    "спина": ("спин", "грудн", "поясниц"),
+}
+# Пары противоположных описаний: (как у отклонения, как у нормы) — в обе стороны.
+_OPPOSITES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("свед", "свод"), ("развед", "разъезж", "от позвоночника")),
+    (("округл", "сутул", "горб"), ("прям", "нейтрал", "ровн")),
+)
+_TIMESTAMP_RE = re.compile(r"\b(\d{1,2}:\d{2})\b")
+
+
+def _claims(text: str) -> list[tuple[frozenset[str], str, int, int]]:
+    """Утверждения текста: (кадры, часть тела, номер пары, сторона пары).
+
+    Текст режется на предложения: в одном описании точки бывает и «в начале
+    спина прямая», и «в пиковой точке округляет» — сравнивать надо предложение
+    с предложением, а не всё со всем."""
+    out = []
+    for sentence in re.split(r"(?<=[.!?;])\s+", text.lower()):
+        stamps = frozenset(_TIMESTAMP_RE.findall(sentence))
+        if not stamps:
+            continue
+        for part, markers in _BODY_PARTS.items():
+            if not any(m in sentence for m in markers):
+                continue
+            for pair_no, sides in enumerate(_OPPOSITES):
+                for side_no, words in enumerate(sides):
+                    if any(w in sentence for w in words):
+                        out.append((stamps, part, pair_no, side_no))
+    return out
+
+
+def _drop_contradictions(
+    checklist: list[dict[str, Any]], observations: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Отклонение, которое на том же кадре про ту же часть тела спорит с нормой
+    другой точки, → «не видно»; наблюдения с тем же утверждением — вон."""
+    norms = [(item, _claims(item.get("what_i_see") or "")) for item in checklist if item["verdict"] == "норма"]
+    disputed: list[tuple[str, int, int]] = []
+    for item in checklist:
+        if item["verdict"] != "отклонение":
+            continue
+        clash = None
+        for stamps, part, pair_no, side_no in _claims(item.get("what_i_see") or ""):
+            for norm_item, norm_claims in norms:
+                for n_stamps, n_part, n_pair, n_side in norm_claims:
+                    if n_part == part and n_pair == pair_no and n_side != side_no and stamps & n_stamps:
+                        clash = norm_item["point"]
+                        disputed.append((part, pair_no, side_no))
+        if clash:
+            logger.warning(
+                "video sanitize: «%s» (отклонение) спорит с «%s» (норма) на том же кадре → «не видно»",
+                item["point"], clash,
+            )
+            item["verdict"] = "не видно"
+            item["what_i_see"] = (
+                f"описание этой точки противоречит точке «{clash}» на том же кадре — "
+                "по видео не судим"
+            )
+    if not disputed:
+        return checklist, observations
+    kept = []
+    for obs in observations:
+        text = f"{obs.get('what') or ''} {obs.get('evidence') or ''}".lower()
+        hit = any(
+            any(m in text for m in _BODY_PARTS[part]) and any(w in text for w in _OPPOSITES[pair_no][side_no])
+            for part, pair_no, side_no in disputed
+        )
+        if hit:
+            logger.warning("video sanitize: наблюдение «%s» снято как спорное", obs.get("what"))
+        else:
+            kept.append(obs)
+    return checklist, kept
+
+
 def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
     """Убрать из ответа модели то, что она обещала не писать.
 
@@ -441,6 +524,7 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
         not_visible = not_visible[:2]
 
     checklist = _clean_checklist(data.get("checklist"))
+    checklist, observations = _drop_contradictions(checklist, observations)
     # Точка помечена отклонением, а в observations его нет — модель потеряла своё
     # же наблюдение по дороге со шага 1 на шаг 2. Ничего не достраиваем: весь
     # checklist едет тренеру целиком (см. to_context_block), так что отклонение

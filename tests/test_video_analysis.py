@@ -626,3 +626,48 @@ async def test_watcher_writes_findings_as_statements_not_guesses():
     prompt = video_analysis.SYSTEM_PROMPT
     assert "Неуверенность выражает поле confidence" in prompt
     assert "«высокая», даже если ракурс низкий" in prompt
+
+
+def _live_row_checklist():
+    """Живой разбор горизонтальной тяги в тренажёре: «спина» и «амплитуда»
+    описывают лопатки на кадре 0:02 противоположно."""
+    checklist = _checklist(**{"спина": "отклонение", "порядок движения": "отклонение"})
+    texts = {
+        "спина": "В начале движения (0:01) спина прямая. В фазе пикового сокращения (0:02) атлет активно "
+                 "округляет грудной отдел и плечи вперед, уводя лопатки от позвоночника.",
+        "амплитуда": "Полная амплитуда соблюдается: руки полностью выпрямляются в нижней точке (0:03), вес "
+                     "касается стопоров, затем следует полное сведение лопаток в верхней точке (0:02).",
+        "порядок движения": "Движение начинается с инерционного рывка корпусом вперед и назад (0:01).",
+    }
+    for item in checklist:
+        if item["point"] in texts:
+            item["what_i_see"] = texts[item["point"]]
+    return checklist
+
+
+async def test_contradicting_deviation_is_demoted_and_its_observation_dropped():
+    observations = [
+        {"what": "округляет грудь в верхней точке", "evidence": "на 0:02 плечи уходят вперёд, лопатки от позвоночника",
+         "severity": "стоит поправить"},
+        {"what": "рывок корпусом в начале", "evidence": "на 0:01 корпус качается вперёд-назад", "severity": "мешает"},
+    ]
+    out = video_analysis._sanitize(_analysis(checklist=_live_row_checklist(), observations=observations))
+    by_point = {i["point"]: i for i in out["checklist"]}
+    assert by_point["спина"]["verdict"] == "не видно"
+    assert "округляет" not in by_point["спина"]["what_i_see"]
+    # честное отклонение без спора остаётся
+    assert by_point["порядок движения"]["verdict"] == "отклонение"
+    assert by_point["амплитуда"]["verdict"] == "норма"
+    assert [o["what"] for o in out["observations"]] == ["рывок корпусом в начале"]
+    assert "округляет" not in video_analysis.to_context_block(out)
+
+
+async def test_no_contradiction_on_different_frames_keeps_the_deviation():
+    checklist = _live_row_checklist()
+    for item in checklist:
+        if item["point"] == "амплитуда":
+            item["what_i_see"] = item["what_i_see"].replace("(0:02)", "(0:05)")
+    observations = [{"what": "округляет грудь", "evidence": "на 0:02 лопатки от позвоночника", "severity": "мелочь"}]
+    out = video_analysis._sanitize(_analysis(checklist=checklist, observations=observations))
+    assert {i["point"]: i for i in out["checklist"]}["спина"]["verdict"] == "отклонение"
+    assert len(out["observations"]) == 1
