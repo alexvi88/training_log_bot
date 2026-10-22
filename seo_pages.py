@@ -2383,8 +2383,11 @@ AI_CRAWLERS = ("GPTBot", "OAI-SearchBot", "ChatGPT-User", "PerplexityBot", "Perp
 
 
 def robots_txt(request: Optional[Request] = None) -> str:
+    # /go/* — счётчик клика и редирект в бота или App Store, а не страница:
+    # без запрета робот обходил их и записывал в «Страница с переадресацией».
     named = "".join(f"User-agent: {name}\n" for name in AI_CRAWLERS)
-    return (f"User-agent: *\nAllow: /\n\n{named}Allow: /\n\n"
+    rules = "Disallow: /go/\nAllow: /\n"
+    return (f"User-agent: *\n{rules}\n{named}{rules}\n"
             f"Sitemap: {base_url(request)}/sitemap.xml\n")
 
 
