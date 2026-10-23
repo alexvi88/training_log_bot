@@ -1000,9 +1000,7 @@ def exercise_picker_entry_keyboard(
 _PLAN_LABEL_MAX = 44
 
 
-def planned_plan_keyboard(
-    items: list[tuple[int, str]], *, removing: bool = False, allow_removing: bool = True
-) -> InlineKeyboardMarkup:
+def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     """What's left of the program, any of it startable right now.
 
     `items` — (position in planned_blocks, label) in program order. The program's
@@ -1010,33 +1008,19 @@ def planned_plan_keyboard(
     session to wait, so every remaining exercise is one tap away and the rest keep
     their order after it.
 
-    Каждая строка — на всю ширину. «Убрать из плана» (для тренажёра, который
-    реально сломан, а не просто занят) раньше висело крестиком в той же строке,
-    но Telegram делит строку из двух кнопок пополам: половину экрана занимали
-    ✕, а названия упражнений обрезались до «Сгибание но…ре». Посреди
-    тренировки нужен список того, что делать, — убирание из плана ушло под
-    отдельную кнопку внизу (`removing=True` перерисовывает тот же список, где
-    тап убирает строку).
+    Каждая строка — на всю ширину. «Убрать из плана» здесь было (для сломанного
+    тренажёра) и убрано совсем (владелец): на экране выбора оно только мешало,
+    а пропустить упражнение можно и так — просто не открывать его и закончить
+    тренировку.
     """
     b = InlineKeyboardBuilder()
-    action = "skip" if removing else "pick"
     for index, label in items:
         b.row(
             InlineKeyboardButton(
-                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:{action}:{index}",
+                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:pick:{index}",
             ),
         )
-    if removing:
-        b.row(InlineKeyboardButton(text=i18n.t("btn.done_check"), callback_data="live:plan"))
-    else:
-        # allow_removing=False — самый первый экран тренировки («С чего
-        # начнёшь?»). Выкидывание из плана там преждевременно: человек ещё не
-        # дошёл до занятого тренажёра и не знает, чего сегодня не будет, а
-        # уборка никуда не денется — тот же экран между упражнениями её и
-        # предложит, когда это станет решением, а не гаданием.
-        if allow_removing:
-            b.row(InlineKeyboardButton(text=i18n.t("btn.remove_from_plan"), callback_data="live:plan:rm"))
-        b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="live:plan:back"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="live:plan:back"))
     return b.as_markup()
 
 
