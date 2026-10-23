@@ -143,7 +143,7 @@ async def test_rebuild_excludes_exercises_already_touched_this_workout(fresh_db,
 
 
 async def test_rebuild_not_used_when_a_plan_is_already_in_the_fsm(fresh_db, user_id):
-    """A deliberately-trimmed plan (see live_plan_skip) — even an empty one —
+    """A plan trimmed during the workout (picked through or, earlier, skipped) — even an empty one —
     must never be silently replaced by a DB rebuild."""
     db = fresh_db
     (bench, fly), routine_id = await _start_program(

@@ -136,22 +136,22 @@ async def test_the_first_exercise_is_chosen_too_not_forced(fresh_db, user_id):
     assert "С чего начнёшь" in _last_text(cb)
 
 
-async def test_the_start_screen_does_not_offer_removing_anything_yet(fresh_db, user_id):
-    """Чего сегодня не будет, выясняется у занятого тренажёра, а не до начала
-    тренировки. Между упражнениями кнопка на месте — там это уже решение."""
+async def test_plan_screens_offer_no_removing(fresh_db, user_id):
+    """«Убрать из плана» убрано (владелец): ни на первом экране, ни между
+    упражнениями — список только для выбора."""
     db = fresh_db
-    routine, _ = await _routine_for(db, user_id, [("Жим лёжа", "4x8"), ("Разводка", "3x12")])
+    routine, _ = await _routine_for(db, user_id, [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)])
     state = await _state(user_id)
     cb = _make_callback(user_id)
     await routines._begin_routine_workout(cb, state, routine)
 
-    assert "live:plan:rm" not in _callback_datas(_last_keyboard(cb))
+    assert not any(d.startswith(("live:plan:rm", "live:plan:skip")) for d in _callback_datas(_last_keyboard(cb)))
 
     await workout.live_plan_pick(_make_callback(user_id, "live:plan:pick:0"), state)
     await _go_idle(user_id, state)
     mid = _make_callback(user_id, "live:plan")
     await workout.live_plan(mid, state)
-    assert "live:plan:rm" in _callback_datas(_last_keyboard(mid))
+    assert not any(d.startswith(("live:plan:rm", "live:plan:skip")) for d in _callback_datas(_last_keyboard(mid)))
 
 
 async def test_starting_out_of_order_opens_the_second_and_keeps_the_first(fresh_db, user_id):
@@ -208,27 +208,8 @@ async def test_plan_screen_lists_everything_left_by_name_only(fresh_db, user_id)
     cb = _make_callback(user_id, "live:plan")
     await workout.live_plan(cb, state)
     kb = _last_keyboard(cb)
-    assert _button_texts(kb) == ["Разводка", "Брусья", "🗑 Убрать из плана", "⬅️ Назад"]
-    assert _callback_datas(kb) == [
-        "live:plan:pick:0", "live:plan:pick:1", "live:plan:rm", "live:plan:back",
-    ]
-
-
-async def test_removing_is_a_mode_behind_its_own_button(fresh_db, user_id):
-    """Крестика в каждой строке больше нет — «убрать» это тот же список за
-    отдельной кнопкой, где тап убирает вместо того, чтобы начинать."""
-    db = fresh_db
-    await _start_program(db, user_id, state := await _state(user_id), [
-        ("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None),
-    ])
-    await _go_idle(user_id, state)
-
-    cb = _make_callback(user_id, "live:plan:rm")
-    await workout.live_plan_remove_mode(cb, state)
-    kb = _last_keyboard(cb)
-    assert "Убрать из плана" in _last_text(cb)
-    assert _button_texts(kb) == ["Разводка", "Брусья", "✅ Готово"]
-    assert _callback_datas(kb) == ["live:plan:skip:0", "live:plan:skip:1", "live:plan"]
+    assert _button_texts(kb) == ["Разводка", "Брусья", "⬅️ Назад"]
+    assert _callback_datas(kb) == ["live:plan:pick:0", "live:plan:pick:1", "live:plan:back"]
 
 
 async def test_picking_out_of_order_opens_it_and_keeps_the_rest_queued(fresh_db, user_id):
@@ -296,59 +277,6 @@ async def test_plan_button_hidden_when_only_one_exercise_is_left(fresh_db, user_
     )
     assert "live:plan" not in _callback_datas(kb)
     assert "▶️ Жим лёжа" in _button_texts(kb)
-
-
-# ---------- skipping a queued exercise (4.5): the machine is broken, not just busy ----------
-
-
-async def test_skip_drops_the_block_and_redraws_the_plan_screen(fresh_db, user_id):
-    db = fresh_db
-    await _start_program(db, user_id, state := await _state(user_id), [
-        ("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None),
-    ])
-    await _go_idle(user_id, state)
-
-    cb = _make_callback(user_id, "live:plan:skip:0")
-    await workout.live_plan_skip(cb, state)
-
-    data = await state.get_data()
-    # Only the skipped block (Разводка, index 0 of what's left) is gone — the
-    # workout itself is untouched, and we're still on the 📋 screen, not bumped
-    # into logging_set.
-    assert len(data["planned_blocks"]) == 1
-    assert await state.get_state() == WorkoutFlow.idle
-    cb.answer.assert_awaited_once_with("Убрал")
-    kb = _last_keyboard(cb)
-    # Остались в режиме «убрать»: два сломанных тренажёра — два тапа подряд.
-    assert "Разводка" not in _button_texts(kb)
-    assert "Брусья" in _button_texts(kb)
-    assert _callback_datas(kb) == ["live:plan:skip:0", "live:plan"]
-
-
-async def test_skip_out_of_range_answers_stale_instead_of_crashing(fresh_db, user_id):
-    db = fresh_db
-    await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", None), ("Разводка", None)])
-    await _go_idle(user_id, state)
-
-    cb = _make_callback(user_id, "live:plan:skip:5")
-    await workout.live_plan_skip(cb, state)
-    assert cb.answer.await_args.args == ("Это упражнение уже не в плане",)
-
-
-async def test_skipping_the_last_planned_exercise_reaches_the_program_complete_screen(fresh_db, user_id):
-    db = fresh_db
-    ex_ids = await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", None), ("Разводка", None)])
-    data = await state.get_data()
-    await db.append_set(data["open_blocks"][ex_ids[0]], ex_ids[0], 0, 100, 8)
-    await _go_idle(user_id, state)
-
-    cb = _make_callback(user_id, "live:plan:skip:0")
-    await workout.live_plan_skip(cb, state)
-
-    assert (await state.get_data())["planned_blocks"] == []
-    text = _last_text(cb)
-    assert "Программа пройдена" in text
-    assert "🏁 Завершить тренировку" in _button_texts(_last_keyboard(cb))
 
 
 # ---------- находка 20: обычное линейное прохождение тоже должно доходить ----------
