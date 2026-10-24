@@ -344,7 +344,8 @@ EXERCISE_IMAGE_SLUGS = {
 # файла, `<слаг>_r<ревизия>_<n>.jpg`, а старое имя уходит. Ревизия 2 — кадры
 # с нашим тренером вместо стока free-exercise-db (скилл exercise-art в
 # iOS-репо); 3 — второй кадр перерисован правкой первого, чтобы зал, свет
-# и обувь в паре совпадали. Имя кадра собирает только frame_name — не подклеивай
+# и обувь в паре совпадали; 4 — шраги, у которых второй кадр не отличался
+# от первого (подъём плеч дорисован явно). Имя кадра собирает только frame_name — не подклеивай
 # `f"{slug}_1.jpg"` руками.
 FRAME_REVISION: dict[str, int] = {
     "barbell_bench_press_medium_grip": 3,
@@ -354,7 +355,7 @@ FRAME_REVISION: dict[str, int] = {
     "dumbbell_bicep_curl": 3,
     "triceps_pushdown_rope_attachment": 3,
     "crunches": 3,
-    "dumbbell_shrug": 3,
+    "dumbbell_shrug": 4,
     "dumbbell_bench_press": 3,
     "wide_grip_lat_pulldown": 3,
     "leg_press": 3,
@@ -362,7 +363,7 @@ FRAME_REVISION: dict[str, int] = {
     "barbell_curl": 3,
     "triceps_pushdown": 3,
     "plank": 3,
-    "barbell_shrug": 3,
+    "barbell_shrug": 4,
     "barbell_incline_bench_press_medium_grip": 3,
     "barbell_deadlift": 3,
     "romanian_deadlift": 3,

@@ -93,12 +93,12 @@ async def test_fields_on_every_list_mode_and_single_responses(fresh_db):
         row = _by_id((await client.get(url)).json())[ex]
         assert row["thumb"] == CATALOG_THUMB and row["has_photo"] is False, url
     archived = _by_id((await client.get("/exercises?archived=1")).json())[arch]
-    assert archived["thumb"] == "/media/exercises/thumbs/barbell_shrug_r3_1.jpg"
+    assert archived["thumb"] == "/media/exercises/thumbs/barbell_shrug_r4_1.jpg"
 
     patched = (await client.patch(f"/exercises/{ex}", json={"description": "Медленно."})).json()
     assert patched["thumb"] == CATALOG_THUMB
     unarchived = (await client.post(f"/exercises/{arch}/unarchive")).json()
-    assert unarchived["thumb"] == "/media/exercises/thumbs/barbell_shrug_r3_1.jpg"
+    assert unarchived["thumb"] == "/media/exercises/thumbs/barbell_shrug_r4_1.jpg"
     created = (await client.post("/exercises", json={"name": "Совсем новое"})).json()
     assert created["thumb"] is None and created["has_photo"] is False
 
