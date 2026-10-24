@@ -30,3 +30,12 @@ def test_get_images_returns_two_paths_for_known_exercise():
 
 def test_get_images_returns_empty_for_unknown_exercise():
     assert exercise_media.get_images("Совсем не упражнение") == []
+
+
+def test_redrawn_exercises_keep_stock_frames():
+    """«Фото» в приложении берёт стоковый кадр по исходному имени: у каждого
+    перерисованного упражнения он и его миниатюра обязаны остаться."""
+    for slug in exercise_media.FRAME_REVISION:
+        for name in (f"{slug}_1.jpg", f"{slug}_2.jpg", f"thumbs/{slug}_1.jpg"):
+            path = os.path.join(exercise_media.MEDIA_DIR, name)
+            assert os.path.isfile(path), f"missing stock {path}"
