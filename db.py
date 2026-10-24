@@ -6710,7 +6710,7 @@ async def top_exercises_by_frequency(
     user_id: int,
     start_date: str,
     end_date: str,
-    limit: int = 3,
+    limit: Optional[int] = 3,
     min_sessions: int = 2,
     *,
     tz_offset: Optional[int] = None,
@@ -6729,6 +6729,7 @@ async def top_exercises_by_frequency(
     порядок входит в ключ кэша картинки.
 
     Границы окна — местные календарные дни (как их и считает вызывающая сторона).
+    `limit=None` — все, кто прошёл `min_sessions`.
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     without, without_params = _without_workouts(exclude_workout_ids)
@@ -6745,7 +6746,7 @@ async def top_exercises_by_frequency(
         "HAVING sessions >= ? "
         "ORDER BY sessions DESC, sets_count DESC, e.display_name "
         "LIMIT ?",
-        (user_id, *without_params, start_date, end_date, min_sessions, limit),
+        (user_id, *without_params, start_date, end_date, min_sessions, -1 if limit is None else limit),
     )
     return await cur.fetchall()
 

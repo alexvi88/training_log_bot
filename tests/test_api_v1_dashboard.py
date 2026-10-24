@@ -152,7 +152,7 @@ async def test_lift_tiles_carry_the_exercise_id(fresh_db, client_factory):
     # База 10 недель назад, рост — внутри 8-недельного окна; у приседа сильнее.
     await _session(111, bench, 70, 100.0)
     await _session(111, squat, 70, 100.0)
-    for days_ago in (20, 5):
+    for days_ago in (40, 30, 20, 5):
         await _session(111, bench, days_ago, 110.0)
         await _session(111, squat, days_ago, 130.0)
 

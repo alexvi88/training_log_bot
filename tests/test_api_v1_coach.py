@@ -853,6 +853,9 @@ async def test_client_progress_growth_is_the_athletes_dashboard_block(fresh_db):
     ex = await _exercise(athlete, "Жим")
     today = dt.date.today()
     await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=70)).isoformat())
+    # Плитка роста — с 4 тренировок окна (dashboard_data.LIFT_MIN_SESSIONS).
+    for days in (40, 30):
+        await _finished_workout(athlete, ex, 62, date=(today - dt.timedelta(days=days)).isoformat())
     await _finished_workout(athlete, ex, 65, date=(today - dt.timedelta(days=20)).isoformat())
     await _finished_workout(athlete, ex, 70, date=(today - dt.timedelta(days=5)).isoformat())
 
@@ -870,6 +873,9 @@ async def test_client_progress_growth_names_in_the_athletes_language(fresh_db):
     ex = await _exercise(athlete, "Жим штанги лёжа")
     today = dt.date.today()
     await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=70)).isoformat())
+    # Плитка роста — с 4 тренировок окна (dashboard_data.LIFT_MIN_SESSIONS).
+    for days in (40, 30):
+        await _finished_workout(athlete, ex, 62, date=(today - dt.timedelta(days=days)).isoformat())
     await _finished_workout(athlete, ex, 65, date=(today - dt.timedelta(days=20)).isoformat())
     await _finished_workout(athlete, ex, 70, date=(today - dt.timedelta(days=5)).isoformat())
     growth = (await coach.get(f"/coach/clients/{CLIENT}/progress")).json()["growth"]

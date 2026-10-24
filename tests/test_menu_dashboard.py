@@ -574,7 +574,7 @@ async def test_young_history_falls_back_to_a_four_week_lift_window(fresh_db, use
     # полного (8 недель) — ровно тот случай, когда нужен фолбэк.
     await _session(db, user_id, today - dt.timedelta(weeks=5), [(bench, 100, 5, 3)])
     # Рост случился внутри последних 4 недель — а до этого база 100 кг.
-    for offset in (25, 15, 5):
+    for offset in (25, 20, 15, 5):
         await _session(db, user_id, today - dt.timedelta(days=offset), [(bench, 120, 5, 3)])
 
     await workout_handlers._menu_view(user_id)
@@ -584,6 +584,25 @@ async def test_young_history_falls_back_to_a_four_week_lift_window(fresh_db, use
     assert "4 НЕДЕЛИ" in captured["lifts_title"]
 
 
+async def test_lift_needs_four_sessions_in_the_window(fresh_db, user_id, monkeypatch):
+    """Разовое движение — шум, а не рост: три тренировки в окне с «+50%» не
+    вытесняют стабильный подъём с четырьмя (dashboard_data.LIFT_MIN_SESSIONS)."""
+    db = fresh_db
+    captured = _capture_lifts_title(monkeypatch)
+    workout_handlers._heatmap_cache.pop(user_id, None)
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    rare = await _own(db, user_id, SQUAT)
+    await _session(db, user_id, today - dt.timedelta(weeks=10), [(bench, 100, 5, 3), (rare, 60, 5, 3)])
+    for offset in (40, 30, 20):
+        await _session(db, user_id, today - dt.timedelta(days=offset), [(bench, 105, 5, 3), (rare, 90, 5, 3)])
+    await _session(db, user_id, today - dt.timedelta(days=5), [(bench, 110, 5, 3)])
+
+    await workout_handlers._menu_view(user_id)
+
+    assert [tile[0] for tile in captured["lift_tiles"]] == [BENCH.upper()]
+
+
 async def test_history_older_than_8_weeks_keeps_the_full_window(fresh_db, user_id, monkeypatch):
     db = fresh_db
     captured = _capture_lifts_title(monkeypatch)
@@ -591,7 +610,7 @@ async def test_history_older_than_8_weeks_keeps_the_full_window(fresh_db, user_i
     today = dt.date.today()
     bench = await _own(db, user_id, BENCH)
     await _session(db, user_id, today - dt.timedelta(weeks=10), [(bench, 100, 5, 3)])
-    for offset in (25, 15, 5):
+    for offset in (25, 20, 15, 5):
         await _session(db, user_id, today - dt.timedelta(days=offset), [(bench, 120, 5, 3)])
 
     await workout_handlers._menu_view(user_id)
