@@ -41,6 +41,7 @@ import formatting
 import i18n
 import keyboards
 import progression_data
+import seed_data
 import set_sanity
 import timeutil
 import ui
@@ -50,6 +51,10 @@ from fsm import BackfillFlow, WorkoutFlow
 from parser import (
     ParsedSet,
     ParseError,
+    as_reps_only,
+    bodyweight_warning,
+    mentions_bodyweight_unit,
+    parse_bodyweight_entry,
     parse_ru_date,
     parse_set_edit,
     parse_sets_line,
@@ -478,12 +483,18 @@ def _logging_hint(
     show_format_hint: bool = False,
     reps_row_hint: str = "",
     rep_range: tuple[int, int] | None = None,
+    reps_only: bool = False,
 ) -> str:
+    # reps_only — упражнение своим весом без доп. веса (seed_data.is_reps_only):
+    # вес не вводится вовсе, и подсказки про «вес и повторы» здесь врут.
     base = None
     if show_instruction:
-        base = i18n.t("workout.instruction_base")
-        if has_sets:
-            base += i18n.t("workout.instruction_reps_only")
+        if reps_only:
+            base = i18n.t("workout.instruction_base_reps_only")
+        else:
+            base = i18n.t("workout.instruction_base")
+            if has_sets:
+                base += i18n.t("workout.instruction_reps_only")
     # The program's recommended sets×reps, if this exercise was opened from a
     # routine that carries one — shown above the history/warning lines since
     # it's the plan for today, not a look back at a previous session.
@@ -520,13 +531,18 @@ def _logging_hint(
         # не вместо неё: первые несколько раз человеку нужно и «это вообще про
         # повторы», и «на каком весе» — дальше остаётся только вес, его хватает.
         hint_prefix = f"{reps_row_hint}\n" if reps_row_hint else ""
-        reps_row_line = f"{hint_prefix}{i18n.t('workout.reps_row_line', weight=weight_str)}\n"
+        row_line = (
+            i18n.t("workout.reps_row_line_reps_only") if reps_only
+            else i18n.t("workout.reps_row_line", weight=weight_str)
+        )
+        reps_row_line = f"{hint_prefix}{row_line}\n"
     # Показывается только пока в дневнике вообще нет ни одного подхода — гаснет
     # сразу после первого же удачного, не дожидаясь конца тренировки или того,
     # пока человек «наберёт стаж» (это уже show_instruction — тот держится
     # дольше, по недавним закрытым тренировкам).
+    format_hint_key = "workout.format_hint_reps_only" if reps_only else "workout.format_hint"
     format_hint_line = (
-        f"{i18n.t('workout.format_hint')}\n" if show_format_hint else ""
+        f"{i18n.t(format_hint_key)}\n" if show_format_hint else ""
     )
     # План стоит НЕ здесь, а ниже, под «Прошлый раз» (см. сборку info-блока):
     # читается это одним движением сверху вниз — что было, что делаем, куда
@@ -682,11 +698,13 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     names: dict[int, str] = {}
     active_note: str | None = None
     can_swap = False
+    active_reps_only = False
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
         if ex_id == active:
             can_swap = bool(exercise_alternatives.alternatives_for(exercise_media.catalog_key(ex)))
+            active_reps_only = seed_data.exercise_is_reps_only(ex)
     if active is not None:
         active_note = await db.get_workout_exercise_note(data["workout_id"], active)
 
@@ -749,6 +767,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         # Диапазон повторов из настроек: цель без схемы программы тянется к
         # его верху, а не к общему 5–12.
         rep_range=analytics.user_rep_range(user),
+        reps_only=active_reps_only,
     )
     kb = keyboards.logging_keyboard(
         open_items, active, has_sets,
@@ -2667,6 +2686,7 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
     # «дном» чата, а следующий рендер живого экрана потерял бы дешёвое
     # редактирование на месте (см. chat_bottom.is_at_bottom в _refresh_live).
     await _render_logging_screen(bot, state, user)
+    await _maybe_ask_bodyweight(bot, state, user, data["workout_id"], active)
 
 
 async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active: int,
@@ -2700,6 +2720,7 @@ async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active:
     # Уже нашёл голос сам — подсказку про него больше показывать незачем.
     await db.mark_voice_hint_shown(user["telegram_id"])
     await _render_logging_screen(bot, state, user)
+    await _maybe_ask_bodyweight(bot, state, user, data["workout_id"], active)
 
 
 async def _ask_weight_confirmation(
@@ -2819,6 +2840,166 @@ async def _repeat_last_set(
     return last["weight"], last["reps"], last["rpe"]
 
 
+async def _reps_only_exercise(exercise_id: int | None) -> str | None:
+    """Текст отказа на вес, если упражнение «только повторы»
+    (seed_data.is_reps_only), иначе None. Язык — текущий (middleware)."""
+    if exercise_id is None:
+        return None
+    ex = await db.get_exercise(exercise_id)
+    if not seed_data.exercise_is_reps_only(ex):
+        return None
+    return seed_data.reps_only_weight_refusal(ex["original_name"], i18n.get_lang())
+
+
+async def _apply_reps_only(
+    exercise_id: int | None, parsed: list[ParsedSet]
+) -> tuple[str | None, list[ParsedSet]]:
+    """(отказ, подходы): у упражнения «только повторы» «7» — это 0×7, а не
+    вес прошлого подхода, а «60 8» — отказ с подсказкой про вариант «с весом».
+    У остальных — (None, как разобрано)."""
+    refusal = await _reps_only_exercise(exercise_id)
+    if refusal is None:
+        return None, parsed
+    reps_only = as_reps_only(parsed)
+    if reps_only is None:
+        return refusal, parsed
+    return None, reps_only
+
+
+async def _maybe_ask_bodyweight(bot, state: FSMContext, user, workout_id: int, exercise_id) -> None:
+    """Под первым подходом своим весом в тренировке — вопрос о весе тела
+    (db.bodyweight_prompt_for): нет записей — «сколько весишь», старая —
+    «последний раз ты весил 82кг (12 авг). Сейчас так же?». Раз за
+    тренировку: после показа тренировка помечена 'shown', «Позже» — 'later'."""
+    ex = await db.get_exercise(exercise_id) if exercise_id is not None else None
+    if ex is None or (ex["bodyweight_load"] or "none") == "none":
+        return
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["bodyweight_prompt"] is not None:
+        return
+    prompt = await db.bodyweight_prompt_for(user["telegram_id"], workout_id)
+    if prompt is None:
+        return
+    u = formatting.unit_label(user["unit"])
+    example = f"{82 if user['unit'] != 'lb' else 180}{u}"
+    same_label = None
+    if prompt["kind"] == "stale":
+        weight = formatting.format_weight(prompt["weight"])
+        logged = dt.datetime.fromisoformat(prompt["logged_at"])
+        text = i18n.t(
+            "workout.bw_prompt.stale", weight=weight, u=u,
+            date=formatting.format_date_short(logged), example=example,
+        )
+        same_label = i18n.t("workout.bw_prompt.btn_same", weight=weight, u=u)
+    else:
+        text = i18n.t("workout.bw_prompt.missing", example=example)
+    await db.set_bodyweight_prompt_state(workout_id, db.BODYWEIGHT_PROMPT_SHOWN)
+    try:
+        sent = await bot.send_message(
+            user["telegram_id"], text, reply_markup=keyboards.bodyweight_prompt_keyboard(same_label)
+        )
+    except TelegramBadRequest:
+        logger.warning("bodyweight prompt not sent to %s", user["telegram_id"])
+        return
+    await state.update_data(
+        bw_prompt={
+            "chat_id": sent.chat.id,
+            "message_id": sent.message_id,
+            "workout_id": workout_id,
+            "weight": prompt.get("weight"),
+        }
+    )
+
+
+async def _close_bodyweight_prompt(bot, state: FSMContext, pending: dict) -> None:
+    await state.update_data(bw_prompt=None)
+    with suppress(TelegramBadRequest):
+        await bot.delete_message(chat_id=pending["chat_id"], message_id=pending["message_id"])
+
+
+async def _maybe_take_bodyweight_answer(
+    message: Message, state: FSMContext, data: dict, text: str
+) -> bool:
+    """Число в ответ на вопрос о весе тела — True, если сообщение им и было.
+
+    Ответом считается реплай на сам вопрос или число с единицами («82 кг»):
+    голое «8» посреди тренировки — это повторы, и угадывать за человека, что
+    он имел в виду, нельзя."""
+    pending = data.get("bw_prompt")
+    if not pending:
+        return False
+    reply_to = message.reply_to_message
+    is_reply = reply_to is not None and reply_to.message_id == pending.get("message_id")
+    if not is_reply and not mentions_bodyweight_unit(text):
+        return False
+    user = await db.get_user(message.from_user.id)
+    try:
+        if is_reply:
+            weight, _date = parse_bodyweight_entry(text, unit=user["unit"])
+        else:
+            weight, date = parse_bodyweight_entry(text, unit=user["unit"])
+            if date is not None:
+                return False
+    except ParseError as e:
+        if not is_reply:
+            # «80 кг 8» — подход с единицами, а не вес тела: пусть его
+            # разберёт обычный путь.
+            return False
+        await _reply_transient(message, e.message)
+        return True
+    warning = bodyweight_warning(weight, user["unit"])
+    if warning is not None:
+        await _reply_transient(message, warning)
+        return True
+    await db.add_bodyweight_log(user["telegram_id"], weight)
+    await _close_bodyweight_prompt(message.bot, state, pending)
+    # Подтверждение уходит вместе с самим числом через несколько секунд
+    # (ui.reply_transient), как ответы на ввод в трекере.
+    await _reply_transient(
+        message,
+        i18n.t(
+            "workout.bw_prompt.saved",
+            weight=formatting.format_weight(weight), u=formatting.unit_label(user["unit"]),
+        ),
+    )
+    if await state.get_state() == WorkoutFlow.logging_set.state:
+        await _render_logging_screen(message.bot, state, user)
+    return True
+
+
+@router.callback_query(F.data.in_({"bwp:same", "bwp:later"}))
+async def bodyweight_prompt_answer(callback: CallbackQuery, state: FSMContext):
+    """Кнопки под вопросом о весе тела: «82кг — так и есть» пишет тот же вес
+    сегодняшним числом (вопрос гаснет на BODYWEIGHT_STALE_DAYS), «Позже» —
+    в этой тренировке больше не спрашиваю."""
+    data = await state.get_data()
+    pending = data.get("bw_prompt")
+    user = await db.get_user(callback.from_user.id)
+    if not pending or user is None:
+        with suppress(TelegramBadRequest):
+            await callback.message.delete()
+        await callback.answer()
+        return
+    await _close_bodyweight_prompt(callback.bot, state, pending)
+    if callback.data == "bwp:later":
+        await db.set_bodyweight_prompt_state(pending["workout_id"], db.BODYWEIGHT_PROMPT_LATER)
+        await callback.answer(i18n.t("workout.bw_prompt.later"))
+        return
+    weight = pending.get("weight")
+    if not weight:
+        await callback.answer()
+        return
+    await db.add_bodyweight_log(user["telegram_id"], float(weight))
+    await callback.answer(
+        i18n.t(
+            "workout.bw_prompt.saved",
+            weight=formatting.format_weight(float(weight)), u=formatting.unit_label(user["unit"]),
+        )
+    )
+    if await state.get_state() == WorkoutFlow.logging_set.state:
+        await _render_logging_screen(callback.bot, state, user)
+
+
 @router.message(StateFilter(WorkoutFlow.logging_set), F.text)
 async def log_set_text(message: Message, state: FSMContext):
     """Typed input in an active exercise. Beyond plain "weight reps" sets
@@ -2834,6 +3015,8 @@ async def log_set_text(message: Message, state: FSMContext):
     """
     text = message.text.strip()
     data = await state.get_data()
+    if await _maybe_take_bodyweight_answer(message, state, data, text):
+        return
     data = await _discard_superseded_confirmation(message.bot, state, data)
     active = data.get("active_exercise_id")
 
@@ -2883,6 +3066,12 @@ async def log_set_text(message: Message, state: FSMContext):
         return
     if edit is not None:
         index, new_set = edit
+        if (
+            not new_set.weight_omitted and new_set.weight
+            and await _reps_only_exercise(active) is not None
+        ):
+            await _reply_transient(message, await _reps_only_exercise(active))
+            return
         try:
             await _apply_set_edit(state, data, active, index, new_set)
         except ParseError as e:
@@ -2897,6 +3086,10 @@ async def log_set_text(message: Message, state: FSMContext):
         parsed = parse_sets_line(text)
     except ParseError as e:
         await _reply_transient(message, e.message)
+        return
+    refusal, parsed = await _apply_reps_only(active, parsed)
+    if refusal is not None:
+        await _reply_transient(message, refusal)
         return
 
     user = await db.get_user(message.from_user.id)
@@ -2966,6 +3159,10 @@ async def log_set_voice(message: Message, state: FSMContext):
     data = await state.get_data()
     data = await _discard_superseded_confirmation(message.bot, state, data)
     active = data.get("active_exercise_id")
+    refusal, parsed = await _apply_reps_only(active, parsed)
+    if refusal is not None:
+        await message.reply(refusal)
+        return
     user = await db.get_user(message.from_user.id)
     resolved = _resolve_parsed_weights(data, active, parsed)
     # Mishearing a number is at least as likely as mistyping one, so voice gets
@@ -3104,6 +3301,10 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n.t("workout.log_first_set_hint"))
         return
     weight = basis[0]
+    if seed_data.exercise_is_reps_only(await db.get_exercise(active)):
+        # Своим весом — повторы без веса, даже если в истории остались подходы
+        # с добавкой, записанные до правила «только повторы».
+        weight = 0.0
     try:
         reps = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
@@ -3124,6 +3325,7 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
     await state.update_data(last_by_exercise=last_by)
     await _render_logging_screen(callback.bot, state, user)
     await callback.answer(i18n.t("workout.set_added", set=formatting.format_set(weight, reps)))
+    await _maybe_ask_bodyweight(callback.bot, state, user, data["workout_id"], active)
 
 
 
@@ -3367,7 +3569,7 @@ async def _program_complete_stats(workout_id: int) -> tuple[int, int, float]:
     for ex_id in exercise_ids:
         rows = await db.list_sets_for_workout_exercise(workout_id, ex_id)
         set_count += len(rows)
-        tonnage += sum(r["weight"] * r["reps"] for r in rows)
+        tonnage += sum(db.load_of(r) * r["reps"] for r in rows)
     return len(exercise_ids), set_count, tonnage
 
 

@@ -146,6 +146,24 @@ BODYWEIGHT_TEMPLATES: dict[str, tuple[str, float]] = {
     "Обратные отжимания от скамьи": ("full", 0.5),
 }
 
+# Упражнения своим весом С ДОП. ВЕСОМ — пояс с блином, гантель в ногах. У них
+# вес вводится как у штанги: это добавка к весу тела. У остальных из
+# BODYWEIGHT_TEMPLATES (и у своих упражнений с bodyweight_load != 'none') веса
+# нет вовсе — только повторы (`is_reps_only`): «Подтягивания» с поясом — это
+# отдельное упражнение «Подтягивания с весом», а не «Подтягивания» с 10 кг.
+# Ключ — идентичность шаблона (exercises.original_name), не показанное имя.
+WEIGHTED_BODYWEIGHT_TEMPLATES: frozenset[str] = frozenset({
+    "Подтягивания с весом",
+})
+
+# Куда отправить человека, который ввёл вес в упражнении «только повторы»:
+# вариант с поясом из каталога. Нет варианта — подсказка общая.
+WEIGHTED_VARIANT_OF: dict[str, str] = {
+    "Подтягивания": "Подтягивания с весом",
+    "Подтягивания обратным хватом": "Подтягивания с весом",
+    "Подтягивания параллельным хватом": "Подтягивания с весом",
+}
+
 # Чем у упражнения растёт нагрузка — для правила прогрессии в программе
 # (ai_trainer._clean_program_item) и для подсказки «🎯 Цель» на экране подхода
 # (analytics.suggest_progression). Модель ставила шаг в кг на всё подряд:
@@ -202,6 +220,46 @@ _KIND_BY_IDENTITY: dict[str, str] = {
     **{_fold_identity(n): "no_load" for n in NO_LOAD_TEMPLATES},
     **{_fold_identity(n): "timed" for n in TIMED_TEMPLATES},
 }
+
+
+_WEIGHTED_BW_FOLDED = frozenset(_fold_identity(n) for n in WEIGHTED_BODYWEIGHT_TEMPLATES)
+_WEIGHTED_VARIANT_FOLDED = {_fold_identity(k): v for k, v in WEIGHTED_VARIANT_OF.items()}
+
+
+def is_reps_only(original_name: str | None, bodyweight_load: str | None) -> bool:
+    """Упражнение своим весом без доп. веса: вес не вводится, только повторы.
+
+    По `bodyweight_load` (у своих упражнений по умолчанию 'none' — обычное
+    железо, вес вводится) и по идентичности каталога: «… с весом» из
+    WEIGHTED_BODYWEIGHT_TEMPLATES вес принимают как добавку к весу тела.
+    """
+    if (bodyweight_load or "none") == "none":
+        return False
+    return _fold_identity(original_name or "") not in _WEIGHTED_BW_FOLDED
+
+
+def exercise_is_reps_only(row) -> bool:
+    """`is_reps_only` над строкой exercises (sqlite3.Row или dict)."""
+    if row is None:
+        return False
+    return is_reps_only(row["original_name"], row["bodyweight_load"])
+
+
+def weighted_variant_for(original_name: str | None) -> str | None:
+    """Каноничное имя варианта «с весом» для упражнения своим весом, или None."""
+    return _WEIGHTED_VARIANT_FOLDED.get(_fold_identity(original_name or ""))
+
+
+def reps_only_weight_refusal(original_name: str | None, lang: str) -> str:
+    """Отказ на вес в упражнении «только повторы» — голосом тренера, на `lang`:
+    что не так и что сделать (повторы числом; с поясом — вариант «с весом»
+    из каталога, его имя на языке атлета). Один текст у бота и у /v1."""
+    variant = weighted_variant_for(original_name)
+    if variant is None:
+        return i18n.t_in(lang, "workout.reps_only_weight")
+    return i18n.t_in(
+        lang, "workout.reps_only_weight_variant", variant=localized_exercise_name(variant, lang)
+    )
 
 
 def progression_kind(identity: str | None) -> str:

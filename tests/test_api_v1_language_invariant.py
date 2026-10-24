@@ -655,6 +655,23 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
                  json={"exercise_id": squat_id, "audio_data_url": "data:audio/m4a;base64,AAAA"}, expect=201)
     await w.call("POST", f"/workouts/{wid}/sets", json={"exercise_id": own_id, "weight": 20, "reps": 12},
                  expect=201)
+    # Подтягивания — «только повторы»: вес — отказ с подсказкой про вариант
+    # «с весом» на языке атлета, повторы — подход и вопрос о весе тела.
+    pull_tpl = next(
+        t for t in (await w.call("GET", "/exercise-templates?query=pull", expect=200)).json()
+        if t["original_name"] == "Подтягивания"
+    )
+    pull_id = (await w.call("POST", f"/exercise-templates/{pull_tpl['id']}/add",
+                            expect=(200, 201))).json()["id"]
+    refused = (await w.call("POST", f"/workouts/{wid}/sets",
+                            json={"exercise_id": pull_id, "weight": 10, "reps": 8}, expect=400)).json()
+    assert refused["error"] == "weight_on_bodyweight_exercise"
+    await w.call("POST", f"/workouts/{wid}/sets/parse", json={"exercise_id": pull_id, "text": "10 8"},
+                 expect=400)
+    logged = (await w.call("POST", f"/workouts/{wid}/sets",
+                           json={"exercise_id": pull_id, "weight": 0, "reps": 8}, expect=201)).json()
+    assert logged["bodyweight_prompt"] == {"kind": "missing"}
+    await w.call("POST", "/bodyweight/prompt/later", expect=200)
     await w.call("GET", "/workouts/active", expect=200)
     await w.call("GET", f"/workouts/{wid}", expect=200)
     await w.call("GET", f"/workouts/{wid}/exercises/{forked_id}/next-target", expect=200)

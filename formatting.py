@@ -301,6 +301,11 @@ def format_rpe(rpe: float | None) -> str:
 
 
 def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
+    """«100×8», а подход без внешнего веса — «×8»: подтягивания своим весом
+    (seed_data.is_reps_only) записаны с весом 0, и «0×8» читается как подход с
+    пустым грифом, а не как восемь подтягиваний."""
+    if not weight:
+        return f"×{reps}{format_rpe(rpe)}"
     return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
 
 
@@ -2025,7 +2030,7 @@ def build_workout_card(
             body.append(f"  ★ {record}")
         exercise_count += 1
         set_count += len(block.sets)
-        tonnage += block.tonnage
+        tonnage += block.load_tonnage
 
     # TONE_OF_VOICE.md запрещает «сет» в прозе («суперсет» — ок) — словарь
     # хочет «подход» (по-английски же естественное слово для этого — именно
@@ -2033,12 +2038,21 @@ def build_workout_card(
     # voice). Эта строка уходит и в текстовую карточку, и в PNG-картинку
     # шеринга (charts.render_workout_card), так что видит её каждый
     # пользователь на каждой законченной тренировке.
-    footer = i18n.t(
-        "card.image_footer",
-        ex=exercise_count, e=exercise_count,
-        sets=set_count, s=set_count,
-        tonnage=format_weight(tonnage), u=u,
-    )
+    # Тоннаж — по нагрузке (вес тела в подтягиваниях — не ноль). Ноль всё же
+    # бывает — одни подходы своим весом без записанного веса тела, — и «· 0кг»
+    # на картинке читается как «ничего не поднял»: такой хвост не печатаем.
+    if tonnage > 0:
+        footer = i18n.t(
+            "card.image_footer",
+            ex=exercise_count, e=exercise_count,
+            sets=set_count, s=set_count,
+            tonnage=format_weight(round(tonnage)), u=u,
+        )
+    else:
+        footer = i18n.t(
+            "card.image_footer_no_tonnage",
+            ex=exercise_count, e=exercise_count, sets=set_count, s=set_count,
+        )
     return title, body, footer, note
 
 

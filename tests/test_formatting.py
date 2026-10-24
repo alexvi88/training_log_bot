@@ -205,7 +205,7 @@ def test_build_workout_summary_bodyweight_exercise_shows_no_delta_line():
     ]
     text = formatting.build_workout_summary(started, blocks)
     assert "19 июн" not in text
-    assert "[прошлая: 0×15]" in text
+    assert "[прошлая: ×15]" in text
 
 
 def test_build_workout_summary_keeps_every_set_in_its_own_place():

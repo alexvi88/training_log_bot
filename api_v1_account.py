@@ -495,6 +495,12 @@ async def update_workout_set(request: Request) -> JSONResponse:
     weight = set_row["weight"]
     if "weight" in body:
         weight = common.keep_exact(common.set_weight(body["weight"]), set_row["weight"])
+        if weight != set_row["weight"]:
+            # Упражнение «только повторы» нового веса не принимает; старый
+            # (подход, записанный до этого правила) правке повторов не мешает.
+            common.reject_weight_on_reps_only(
+                await db.get_exercise(set_row["exercise_id"]), weight
+            )
 
     reps = set_row["reps"]
     if "reps" in body:
@@ -576,6 +582,7 @@ async def add_workout_set(request: Request) -> JSONResponse:
     if "weight" not in body:
         raise ApiError(400, "bad_request", "missing field: weight")
     weight = common.set_weight(body["weight"])
+    common.reject_weight_on_reps_only(exercise, weight)
     reps = common.set_reps(common.require(body, "reps", int))
     rpe = common.set_rpe(body.get("rpe"))
     idempotency_key = common.optional_str(body, "idempotency_key")

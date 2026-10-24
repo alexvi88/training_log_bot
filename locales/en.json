@@ -5787,5 +5787,19 @@
   "share_page.manual": "Installing from the App Store? Once you're signed in, open this link again — I'll show you what you got.",
   "share_page.og_description": "{summary}. One tap and it's in your diary — in the app or in Telegram.",
   "share_page.not_found.title": "Can't find this link",
-  "share_page.not_found.body": "The owner revoked it or there's a typo in the address. Ask them for a fresh link."
+  "share_page.not_found.body": "The owner revoked it or there's a typo in the address. Ask them for a fresh link.",
+  "api.error.weight_on_bodyweight_exercise": "No weight here — the load is your bodyweight. Just send reps, like 8. Training with a belt? Add a separate weighted exercise.",
+  "workout.reps_only_weight": "No weight here — the load is your bodyweight. Just send reps, like 8. Training with a belt? Add a separate weighted exercise.",
+  "workout.reps_only_weight_variant": "No weight here — the load is your bodyweight. Just send reps, like 8. With a belt it's \"{variant}\" — open that one.",
+  "workout.instruction_base_reps_only": "Send reps as a number, like \"8\" — I'll count your bodyweight myself",
+  "workout.format_hint_reps_only": "💡 Bodyweight move — just reps: <code>8</code>",
+  "workout.reps_row_line_reps_only": "🔢 Tap reps",
+  "workout.bw_prompt.missing": "⚖️ How much do you weigh right now? In bodyweight moves the load is you, and without your bodyweight I count it as zero. Reply to this message with a number or type it with units: \"{example}\".",
+  "workout.bw_prompt.stale": "⚖️ Last time you weighed {weight}{u} ({date}). Still the same? If not, reply to this message with the new number or type it with units: \"{example}\".",
+  "workout.bw_prompt.btn_same": "{weight}{u} — still true",
+  "workout.bw_prompt.btn_later": "Later",
+  "workout.bw_prompt.saved": "Logged your weight: {weight}{u}. I recounted the load of your bodyweight sets.",
+  "workout.bw_prompt.later": "Got it, I'll ask next workout",
+  "card.image_footer_no_tonnage": "{ex} {e, plural, one{exercise} other{exercises}} · {sets} {s, plural, one{set} other{sets}}",
+  "api.error.bodyweight_not_editable": "A catalog exercise keeps its bodyweight setting — I don't change it. Need it different? Make a copy of the exercise and tick the box there."
 }

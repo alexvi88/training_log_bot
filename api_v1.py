@@ -666,9 +666,23 @@ async def create_exercise(request: Request) -> JSONResponse:
         # сломать им создание; без группы завести нельзя (его не видно в «Моих
         # упражнениях»), поэтому — во встроенную «Другое».
         group_id = await db.other_muscle_group_id()
+    # Галка «Своим весом»: необязательное `bodyweight` (по умолчанию false).
+    # true — нагрузка подхода = вес тела, вес не вводится (`reps_only`).
+    bodyweight = _bodyweight_flag(body)
     exercise_id = await db.create_exercise(user_id, name, group_id)
+    if bodyweight:
+        await db.set_exercise_bodyweight(exercise_id, True)
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row), status_code=201)
+
+
+def _bodyweight_flag(body: dict[str, Any]) -> bool:
+    value = body.get("bodyweight", False)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ApiError(400, "bad_request", "bodyweight must be bool")
+    return value
 
 
 async def update_exercise(request: Request) -> JSONResponse:
@@ -700,6 +714,19 @@ async def update_exercise(request: Request) -> JSONResponse:
     if "description" in body:
         description = common.optional_str(body, "description")
         await db.set_exercise_description(exercise_id, description)
+
+    if "bodyweight" in body:
+        # Галка «Своим весом» у своего упражнения; нагрузка его подходов
+        # пересчитывается (db.set_exercise_bodyweight). У копии каталога режим
+        # задан каталогом: то же значение — no-op, другое — 400.
+        bodyweight = _bodyweight_flag(body)
+        current = await db.get_exercise(exercise_id)
+        if bodyweight != ((current["bodyweight_load"] or "none") != "none"):
+            if await db.is_catalog_exercise(current):
+                raise ApiError(
+                    400, "bodyweight_not_editable", "catalog exercise bodyweight mode is fixed"
+                )
+            await db.set_exercise_bodyweight(exercise_id, bodyweight)
 
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row))
@@ -1061,7 +1088,12 @@ async def active_workout(request: Request) -> JSONResponse:
     workout = await db.get_active_workout(user_id)
     if workout is None:
         return JSONResponse(None)
-    return JSONResponse(await _workout_detail_json(workout))
+    data = await _workout_detail_json(workout)
+    # Вопрос «сколько ты сейчас весишь» (db.bodyweight_prompt_for) — тот же,
+    # что в ответе записи подхода: приложение, открытое посреди тренировки,
+    # видит его и без нового подхода.
+    data["bodyweight_prompt"] = await db.bodyweight_prompt_for(user_id, workout["id"])
+    return JSONResponse(data)
 
 
 async def start_workout(request: Request) -> JSONResponse:
@@ -1231,7 +1263,8 @@ async def log_set(request: Request) -> JSONResponse:
     idempotency_key = common.optional_str(body, "idempotency_key")
     # Момент подхода, если он записан без связи и досылается позже.
     created_at = common.set_created_at(body, workout)
-    await _owned_exercise(exercise_id, user_id)
+    exercise = await _owned_exercise(exercise_id, user_id)
+    common.reject_weight_on_reps_only(exercise, weight)
     block_id = await _block_for_exercise(workout_id, exercise_id)
     set_id = await db.append_set(
         block_id, exercise_id, 0, weight, reps, rpe,
@@ -1250,7 +1283,28 @@ async def log_set(request: Request) -> JSONResponse:
     is_record = await view_builder.sets_beat_record(
         exercise_id, workout_id, [(weight, reps, rpe)], user["e1rm_formula"]
     )
-    return JSONResponse({**_set_json(row), "is_record": is_record}, status_code=201)
+    return JSONResponse(
+        {
+            **_set_json(row),
+            "is_record": is_record,
+            "bodyweight_prompt": await db.bodyweight_prompt_for(user_id, workout_id),
+        },
+        status_code=201,
+    )
+
+
+def _reps_only_parsed(exercise, parsed):
+    """Строка подходов для упражнения «только повторы»: голые повторы — вес 0
+    (а не вес прошлого подхода), явный вес ≠ 0 — 400 с подсказкой тренера.
+    У остальных упражнений — как разобрано."""
+    if not seed_data.exercise_is_reps_only(exercise):
+        return parsed
+    reps_only = parser.as_reps_only(parsed)
+    if reps_only is None:
+        common.reject_weight_on_reps_only(
+            exercise, next(ps.weight for ps in parsed if not ps.weight_omitted and ps.weight)
+        )
+    return reps_only
 
 
 @_translate_write_race
@@ -1294,7 +1348,7 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
     if not text:
         raise ApiError(400, "bad_request", "text must not be empty", key="api.error.text_empty")
     idempotency_key = common.optional_str(body, "idempotency_key")
-    await _owned_exercise(exercise_id, user_id)
+    exercise = await _owned_exercise(exercise_id, user_id)
 
     user = await db.get_user(user_id)
     with i18n.use_lang(user["lang"] if user else "ru"):
@@ -1304,6 +1358,7 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
             # Машинный код всё равно есть — клиенту иногда надо отличить
             # «не разобрал» от «сервер лёг», — но показывать он должен message.
             raise ApiError(400, "unparsed_input", "set line not parsed", human=exc.message) from exc
+        parsed = _reps_only_parsed(exercise, parsed)
 
     if body.get("confirm_suspicious") is True and body.get("confirmed") is not True:
         answer = await _suspicious_line_answer(
@@ -1316,7 +1371,10 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
         workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key,
         created_at=common.set_created_at(body, workout),
     )
-    return JSONResponse({"sets": created}, status_code=201)
+    return JSONResponse(
+        {"sets": created, "bodyweight_prompt": await db.bodyweight_prompt_for(user_id, workout_id)},
+        status_code=201,
+    )
 
 
 def _line_number(value: float) -> str:
@@ -1456,7 +1514,7 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
     _require_open(workout)
     exercise_id = _require(body, "exercise_id", int)
     idempotency_key = common.optional_str(body, "idempotency_key")
-    await _owned_exercise(exercise_id, user_id)
+    exercise = await _owned_exercise(exercise_id, user_id)
 
     user = await db.get_user(user_id)
     with i18n.use_lang(user["lang"] if user else "ru"):
@@ -1479,13 +1537,17 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
                 parsed = None
         if not parsed:
             raise ApiError(400, "unparsed_input", "empty transcript", key="ai.screen.voice_empty")
+        parsed = _reps_only_parsed(exercise, parsed)
 
     created = await _store_parsed_sets(
         workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key,
         created_at=common.set_created_at(body, workout),
     )
     return JSONResponse(
-        {"sets": created, "transcript": transcript, "dropped_sets": dropped_sets},
+        {
+            "sets": created, "transcript": transcript, "dropped_sets": dropped_sets,
+            "bodyweight_prompt": await db.bodyweight_prompt_for(user_id, workout_id),
+        },
         status_code=201,
     )
 
@@ -1743,7 +1805,10 @@ async def _finish_rewards_json(
         return {
             "sets": sum(len(block.sets) for block in blocks),
             "exercises": len(blocks),
-            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"])),
+            # Пустая строка при нулевом тоннаже (одни подходы своим весом, а
+            # веса тела в дневнике нет): «0кг» в итогах читается как «ничего
+            # не поднял». Приложение пустую строку не показывает.
+            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"])) if tonnage > 0 else "",
             # Пустая строка, а не null, когда сравнивать нечего (тоннаж ниже
             # 150 кг): в уже выпущенных сборках приложения поле обязательное
             # (`String`), и null ронял разбор всего ответа finish — тренировка
@@ -2199,6 +2264,11 @@ async def _workout_detail_json(workout, user=None, *, group_lang: Optional[str] 
                 {
                     "exercise_id": be["exercise_id"],
                     "display_name": be["display_name"],
+                    # Своим весом без доп. веса — живой трекер спрашивает
+                    # только повторы (seed_data.is_reps_only).
+                    "reps_only": seed_data.exercise_is_reps_only(
+                        rows.exercises.get(be["exercise_id"])
+                    ),
                     "sets": [
                         {**_set_json(s), "is_gold": i == gold_index}
                         for i, s in enumerate(own_sets)
@@ -2302,6 +2372,18 @@ async def add_bodyweight(request: Request) -> JSONResponse:
     return JSONResponse({"id": log_id, "weight": weight, "logged_at": logged_at}, status_code=201)
 
 
+async def bodyweight_prompt_later(request: Request) -> JSONResponse:
+    """«Позже» на вопрос о весе тела (db.bodyweight_prompt_for): в идущей
+    тренировке больше не спрашивать — спросим на следующей. Ответ — обычный
+    POST /bodyweight (для «так и есть» — тем же весом). Без идущей тренировки
+    отмечать нечего: 200 с тем же `bodyweight_prompt: null`."""
+    user_id = await _authed_user_id(request)
+    workout = await db.get_active_workout(user_id)
+    if workout is not None:
+        await db.set_bodyweight_prompt_state(workout["id"], db.BODYWEIGHT_PROMPT_LATER)
+    return JSONResponse({"bodyweight_prompt": None})
+
+
 async def update_bodyweight(request: Request) -> JSONResponse:
     """Поправить опечатку в весе, не трогая дату/время взвешивания — тот же
     приём, что у «✏️ Записи» в боте."""
@@ -2382,6 +2464,7 @@ routes = [
     Route("/workouts/{workout_id:int}/note", update_note, methods=["PATCH"]),
     Route("/bodyweight", list_bodyweight, methods=["GET"]),
     Route("/bodyweight", add_bodyweight, methods=["POST"]),
+    Route("/bodyweight/prompt/later", bodyweight_prompt_later, methods=["POST"]),
     Route("/bodyweight/{log_id:int}", update_bodyweight, methods=["PATCH"]),
     Route("/bodyweight/{log_id:int}", delete_bodyweight, methods=["DELETE"]),
 ]

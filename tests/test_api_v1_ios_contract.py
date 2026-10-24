@@ -367,8 +367,12 @@ async def _state_bodyweight(fresh_db, lang: str) -> list[_Walker]:
     await _train(w, pull, [(0, 8), (0, 6)], date="2026-01-05")
     await _read_everything(w, exercise_id=pull, workout_id=None, today="2026-10-05")
     await w.call("POST", "/bodyweight", json={"weight": 80}, expect=201)
-    await _train(w, pull, [(0, 9), (5, 5)], date=None)
+    await _train(w, pull, [(0, 9)], date=None)
     await _read_everything(w, exercise_id=pull, workout_id=None, today="2026-10-05")
+    # Подтягивания «только повторы»: пояс с блином — отдельное упражнение.
+    weighted = await _fork(w, "weighted pull")
+    await _train(w, weighted, [(5, 5)], date=None)
+    await _read_everything(w, exercise_id=weighted, workout_id=None, today="2026-10-05")
     return [w]
 
 
