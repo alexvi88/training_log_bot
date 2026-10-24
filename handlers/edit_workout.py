@@ -18,6 +18,7 @@ import keyboards
 import timeutil
 import ui
 from fsm import EditWorkoutFlow
+from handlers.workout import _apply_reps_only
 from parser import ParseError, parse_ru_date, parse_sets_line, parse_single_token
 from workout_edit_data import move_workout_to_date
 from workout_edit_data import on_workout_edited as _on_workout_edited
@@ -221,16 +222,19 @@ async def editw_editset_entered(message: Message, state: FSMContext):
         await ui.reply_transient(message, i18n.t("workout.edit_set_single_only"))
         return
     data = await state.get_data()
+    # «Только повторы» — тот же отказ, что в живом трекере: «40 8» на
+    # подтягиваниях не правится, а «8» — это 0×8, не вес прошлой записи.
+    row = await db.get_set(data["edit_set_id"])
+    refusal, parsed = await _apply_reps_only(row["exercise_id"] if row else None, parsed)
+    if refusal is not None:
+        await ui.reply_transient(message, refusal)
+        return
     new_set = parsed[0]
     # A bare "8" parses as weight_omitted (weight=0.0) — same as everywhere
     # else bare reps are accepted (see workout._apply_set_edit). Without this,
     # editing a set to just its reps silently zeroed the weight instead of
     # keeping what was already there.
-    if new_set.weight_omitted:
-        row = await db.get_set(data["edit_set_id"])
-        weight = row["weight"]
-    else:
-        weight = new_set.weight
+    weight = row["weight"] if new_set.weight_omitted else new_set.weight
     await db.update_set(data["edit_set_id"], weight, new_set.reps, new_set.rpe)
     await _on_workout_edited(data["edit_workout_id"])
     # No "Готово." reply: the redrawn screen below already shows the new value,
@@ -287,6 +291,10 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     ex_id = data["add_exercise_id"]
     block_id = data.get("add_block_id")
+    refusal, parsed = await _apply_reps_only(ex_id, parsed)
+    if refusal is not None:
+        await ui.reply_transient(message, refusal)
+        return
     prev_weight = None
     if block_id is None:
         # A brand-new exercise for this workout (via "➕ Новое упражнение") — the
@@ -331,6 +339,10 @@ async def editw_typed_set(message: Message, state: FSMContext):
         parsed = parse_sets_line(message.text)
     except ParseError as e:
         await ui.reply_transient(message, e.message)
+        return
+    refusal, parsed = await _apply_reps_only(ex_id, parsed)
+    if refusal is not None:
+        await ui.reply_transient(message, refusal)
         return
     block_exs = await db.get_block_exercises(block_id)
     order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)

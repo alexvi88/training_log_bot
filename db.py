@@ -2650,6 +2650,41 @@ async def _sync_bodyweight_load_of_old_copies() -> int:
     return fixed
 
 
+async def weighted_variant_copy(
+    user_id: int, variant_name: str
+) -> tuple[Optional[int], Optional[str]]:
+    """Своя копия варианта «с весом» (seed_data.weighted_variant_for) — куда
+    ложатся подходы с поясом упражнения «только повторы». Одна точка у
+    миграции v18 и у импорта истории.
+
+    По идентичности (`original_name`): есть — она, из архива возвращается
+    (подходы в ней должны быть видны); нет — заводится из шаблона каталога
+    так же, как это делает приложение (fork_exercise_from_template, имя на
+    языке атлета). Возвращает (id, как: "found" | "revived" | "forked" —
+    заведена сейчас), или
+    (None, None), если шаблона в каталоге нет."""
+    target = await find_exercise_by_original_name(user_id, variant_name)
+    if target is not None:
+        if target["is_archived"]:
+            await _revive_existing_exercise(target, target["primary_group_id"])
+            return target["id"], "revived"
+        return target["id"], "found"
+    cur = await conn().execute(
+        "SELECT id FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name = ?",
+        (variant_name,),
+    )
+    template = await cur.fetchone()
+    if template is None:
+        return None, None
+    # fork может и не завести строку: create_exercise отдаёт уже живущее у
+    # атлета упражнение с тем же показанным именем. "forked" — только новая
+    # строка (импорт по нему решает, помечать ли её своей пачкой).
+    cur = await conn().execute("SELECT COALESCE(MAX(id), 0) FROM exercises")
+    (last_id,) = await cur.fetchone()
+    ex_id = await fork_exercise_from_template(user_id, template["id"])
+    return ex_id, "forked" if ex_id > last_id else "found"
+
+
 async def _move_weighted_sets_to_weighted_variant() -> dict[str, int]:
     """Подходы с поясом — из «только повторы» в вариант «с весом» (владелец).
 
@@ -2719,24 +2754,13 @@ async def _move_weighted_sets_to_weighted_variant() -> dict[str, int]:
         if not workouts:
             continue
         variant_name = weighted_variant_for(source["original_name"])
-        target = await find_exercise_by_original_name(user_id, variant_name)
-        if target is None:
-            cur = await _conn.execute(
-                "SELECT id FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name = ?",
-                (variant_name,),
-            )
-            template = await cur.fetchone()
-            if template is None:
-                stats["no_template"] += 1
-                logger.warning("weighted variant %r has no catalog template", variant_name)
-                continue
-            target_id = await fork_exercise_from_template(user_id, template["id"])
-            stats["forked"] += 1
-        else:
-            target_id = target["id"]
-            if target["is_archived"]:
-                await _revive_existing_exercise(target, target["primary_group_id"])
-                stats["revived"] += 1
+        target_id, how = await weighted_variant_copy(user_id, variant_name)
+        if target_id is None:
+            stats["no_template"] += 1
+            logger.warning("weighted variant %r has no catalog template", variant_name)
+            continue
+        if how in ("forked", "revived"):
+            stats[how] += 1
         target = await get_exercise(target_id)
         keep_load = (source["bodyweight_load"], source["bodyweight_factor"]) == (
             target["bodyweight_load"], target["bodyweight_factor"]

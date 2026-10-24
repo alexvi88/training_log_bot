@@ -1646,6 +1646,7 @@ async def apply_import(
     (achievements). Возвращает (сколько тренировок записано, сколько сорвалось).
     """
     tz_offset = await db.user_tz_offset(user_id)
+    variants = await _weighted_variants(user_id, workouts, resolved, batch_id)
     imported = 0
     failed = 0
     sets_written = 0
@@ -1657,7 +1658,9 @@ async def apply_import(
             title=w.get("title"), import_batch_id=batch_id,
         )
         try:
-            written = await _write_session(workout_id, w, resolved, started_at, finished_at)
+            written = await _write_session(
+                workout_id, w, resolved, started_at, finished_at, variants
+            )
         except Exception:
             logger.exception("import: workout on %s failed for user %s", w.get("date"), user_id)
             await db.discard_workout(workout_id)
@@ -1680,15 +1683,80 @@ async def apply_import(
     return imported, failed
 
 
+def _is_weighted(set_row) -> bool:
+    weight = set_row[0]
+    return bool(weight) and weight > 0
+
+
+async def _weighted_variants(
+    user_id: int, workouts: list[dict], resolved: dict[str, int], batch_id: Optional[str],
+) -> dict[int, int]:
+    """Упражнение «только повторы» → своя копия его варианта «с весом», для
+    тех, у кого в файле есть подходы с весом («Pull Up» с поясом из Hevy):
+    вес в «только повторы» не пишется нигде (seed_data.is_reps_only), такой
+    подход — это «Подтягивания с весом». Копия ищется по идентичности или
+    заводится из каталога (db.weighted_variant_copy — та же точка, что у
+    миграции v18); заведённая здесь помечается пачкой — «Отменить импорт»
+    снимет её вместе с остальным. Упражнения своим весом без варианта
+    («Отжимания на брусьях») сюда не попадают: подходы с весом пишутся в них
+    как есть — переложить их некуда."""
+    candidates = {
+        resolved[entry["name"]]
+        for w in workouts for entry in w["entries"]
+        if any(_is_weighted(s) for s in entry["sets"])
+    }
+    variants: dict[int, int] = {}
+    for ex_id in sorted(candidates):
+        exercise = await db.get_exercise(ex_id)
+        if not seed_data.exercise_is_reps_only(exercise):
+            continue
+        variant_name = seed_data.weighted_variant_for(exercise["original_name"])
+        if variant_name is None:
+            continue
+        target, how = await db.weighted_variant_copy(user_id, variant_name)
+        if target is None or target == ex_id:
+            continue
+        if how == "forked" and batch_id:
+            await db.tag_exercise_import_batch(target, batch_id)
+        variants[ex_id] = target
+    return variants
+
+
+def _route_weighted_sets(
+    entries: list[dict], resolved: dict[str, int], variants: dict[int, int],
+) -> list[dict]:
+    """Записи тренировки с id упражнения (`ex_id`); подходы с весом у
+    «только повторы» — в вариант (`variants`). Все подходы с весом —
+    запись целиком меняет упражнение (место в суперсете и заметка с ней);
+    смешанная — без веса остаются, с весом идут отдельной записью следом,
+    одиночным блоком."""
+    out: list[dict] = []
+    for entry in entries:
+        ex_id = resolved[entry["name"]]
+        target = variants.get(ex_id)
+        heavy = [s for s in entry["sets"] if _is_weighted(s)] if target else []
+        if not heavy:
+            out.append({**entry, "ex_id": ex_id})
+            continue
+        plain = [s for s in entry["sets"] if not _is_weighted(s)]
+        if not plain:
+            out.append({**entry, "ex_id": target})
+            continue
+        out.append({**entry, "sets": plain, "ex_id": ex_id})
+        out.append({**entry, "sets": heavy, "ex_id": target, "superset": None, "note": None})
+    return out
+
+
 async def _write_session(
     workout_id: int, w: dict, resolved: dict[str, int], started_at: str, finished_at: str,
+    variants: Optional[dict[int, int]] = None,
 ) -> int:
     """Блоки и подходы одной тренировки. Время подходов раскладывается
     равномерно между началом и концом сессии: длительность перенесённой
     тренировки — настоящая, а не «секунда в момент загрузки»."""
     groups: list[list[dict]] = []
     by_superset: dict[str, list[dict]] = {}
-    for entry in w["entries"]:
+    for entry in _route_weighted_sets(w["entries"], resolved, variants or {}):
         key = entry.get("superset")
         if key is not None and key in by_superset:
             by_superset[key].append(entry)
@@ -1704,7 +1772,7 @@ async def _write_session(
     for group in groups:
         block_id = await db.create_block(workout_id, "superset" if len(group) > 1 else "single")
         for order, entry in enumerate(group):
-            ex_id = resolved[entry["name"]]
+            ex_id = entry["ex_id"]
             await db.add_block_exercise(block_id, ex_id, order)
             await db.touch_exercise_last_used(ex_id)
             if entry.get("note"):
@@ -1718,7 +1786,7 @@ async def _write_session(
                 offset = span * position / (total - 1) if total > 1 else 0
                 created = (start + dt.timedelta(seconds=offset)).isoformat(timespec="seconds")
                 await db.add_set(
-                    block_id, resolved[entry["name"]], idx + 1, order, weight or 0.0, reps, rpe,
+                    block_id, entry["ex_id"], idx + 1, order, weight or 0.0, reps, rpe,
                     created_at=created,
                 )
                 position += 1
