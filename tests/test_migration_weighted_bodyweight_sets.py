@@ -235,11 +235,11 @@ async def test_other_users_and_exercises_are_untouched(fresh_db):
     user = await _user()
     other = await _user(222)
     pull = await _fork(user, PULL)
-    dips = await _fork(user, "Отжимания на брусьях")  # своим весом, варианта нет
+    pushups = await _fork(user, "Отжимания от пола")  # своим весом, варианта нет
     bench = await _fork(user, "Жим штанги лёжа")
     other_pull = await _fork(other, PULL)
     w1 = await _workout(user, 7)
-    await _block(w1, {dips: [(10, 8)]})
+    await _block(w1, {pushups: [(10, 8)]})
     await _block(w1, {bench: [(80, 8)]})
     await _block(w1, {pull: [(0, 10)]})
     w2 = await _workout(other, 7)
@@ -254,7 +254,7 @@ async def test_other_users_and_exercises_are_untouched(fresh_db):
     after_sets = [tuple(r) for r in await (await db.conn().execute("SELECT * FROM sets ORDER BY id")).fetchall()]
     after_blocks = [tuple(r) for r in await (await db.conn().execute("SELECT * FROM block_exercises")).fetchall()]
     assert after_sets == before_sets and after_blocks == before_blocks
-    assert await _weighted_left(dips) == 1
+    assert await _weighted_left(pushups) == 1
 
 
 async def test_only_the_owners_weighted_sets_move(fresh_db):
@@ -370,4 +370,52 @@ async def test_progress_of_both_exercises_is_clean_after_the_move(fresh_db):
     assert [p["max_weight"] for p in loaded["points"]] == [10, 15]
     assert [p["sets"] for p in loaded["points"]] == [2, 2]
     assert loaded["records"] is not None
+    await client.aclose()
+
+
+# ---------- брусья: вариант «Отжимания на брусьях с весом» ----------
+
+
+@pytest.mark.parametrize("lang, shown", [("ru", "Отжимания на брусьях с весом"), ("en", "Weighted Dips")])
+async def test_weighted_dips_move_to_the_new_catalog_variant(fresh_db, lang, shown):
+    user = await _user(lang=lang)
+    dips = await _fork(user, "Отжимания на брусьях")
+    triceps_dips = await _fork(user, "Отжимания на брусьях на трицепс")
+    wid = await _workout(user, 20)
+    dips_block = await _block(wid, {dips: [(0, 12), (20, 6)]})
+    tri_block = await _block(wid, {triceps_dips: [(10, 8)]})
+
+    stats = await db._move_weighted_sets_to_weighted_variant()
+
+    [variant] = await _copies(user, "Отжимания на брусьях с весом")
+    assert variant["display_name"] == shown
+    assert (variant["bodyweight_load"], variant["bodyweight_factor"]) == ("full", 1.0)
+    assert stats["forked"] == 1 and stats["sets"] == 2
+    # Смешанные брусья: 0×12 на месте, 20×6 — новым блоком следом. Брусья на
+    # трицепс целиком с весом, но вариант в тренировке к тому времени уже
+    # есть — подход дописан к нему, опустевший блок ушёл.
+    assert await _sets(dips_block, dips) == [(1, 0, 0, 12)]
+    variant_block = (await db.list_blocks_for_workout(wid))[1]["id"]
+    assert await _sets(variant_block, variant["id"]) == [(1, 0, 20, 6), (2, 0, 10, 8)]
+    assert await db.get_block(tri_block) is None
+
+
+async def test_weighted_dips_template_is_english_for_an_english_athlete(fresh_db):
+    """Новый шаблон каталога — показываемые данные: у англоязычного атлета
+    имя, описание техники и альтернативы приходят по-английски, а вес он
+    принимает (не «только повторы»)."""
+    user = await _user(lang="en")
+    client = await _linked(user)
+    found = (await client.get("/exercise-templates", params={"query": "Weighted Dips"})).json()
+    tpl = next(t for t in found if t["original_name"] == "Отжимания на брусьях с весом")
+    assert "Weighted Dips" in str(tpl) and "Отжимания" not in str({k: v for k, v in tpl.items() if k != "original_name"})
+    resp = await client.post(f"/exercise-templates/{tpl['id']}/add")
+    assert resp.status_code in (200, 201), resp.text
+    ex = resp.json()
+    assert ex["display_name"] == "Weighted Dips" and ex["reps_only"] is False and ex["thumb"]
+    desc = (await client.get(f"/exercises/{ex['id']}/description")).json()
+    assert "dip belt" in str(desc) and not any("а" <= ch <= "я" for ch in str(desc))
+    wid = (await client.post("/workouts/active", json={})).json()["id"]
+    resp = await client.post(f"/workouts/{wid}/sets", json={"exercise_id": ex["id"], "weight": 20, "reps": 6})
+    assert resp.status_code == 201, resp.text
     await client.aclose()

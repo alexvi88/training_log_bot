@@ -225,12 +225,12 @@ async def test_import_reuses_existing_variant_and_keeps_superset(fresh_db, user_
 
 
 async def test_import_without_a_variant_writes_weight_as_before(fresh_db, user_id):
-    dips = await _fork(user_id, "Отжимания на брусьях")
-    workouts = [_session("2025-07-01", [{"name": "Dip", "sets": [[0, 12, None], [10, 8, None]]}])]
+    pushups = await _fork(user_id, "Отжимания от пола")
+    workouts = [_session("2025-07-01", [{"name": "Push Up", "sets": [[0, 12, None], [10, 8, None]]}])]
 
-    await csv_import.run_import(user_id, workouts, {"Dip": {"kind": "existing", "id": dips}}, "csv")
+    await csv_import.run_import(user_id, workouts, {"Push Up": {"kind": "existing", "id": pushups}}, "csv")
 
     cur = await db.conn().execute("SELECT id FROM workouts WHERE user_id = ?", (user_id,))
     wid = (await cur.fetchone())["id"]
-    assert await _blocks(wid) == [[(dips, [(0, 12, 1), (10, 8, 2)])]]
+    assert await _blocks(wid) == [[(pushups, [(0, 12, 1), (10, 8, 2)])]]
     assert await _copies(user_id, WEIGHTED) == []

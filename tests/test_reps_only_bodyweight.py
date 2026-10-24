@@ -39,12 +39,17 @@ def test_reps_only_follows_catalog_identity_not_shown_name():
 
 def test_weighted_variant_named_in_athletes_language():
     assert seed_data.weighted_variant_for("подтягивания обратным хватом") == "Подтягивания с весом"
-    assert seed_data.weighted_variant_for("Отжимания на брусьях") is None
+    assert seed_data.weighted_variant_for("Отжимания на брусьях") == "Отжимания на брусьях с весом"
+    assert seed_data.weighted_variant_for("Отжимания на брусьях на трицепс") == "Отжимания на брусьях с весом"
+    assert seed_data.weighted_variant_for("Отжимания от пола") is None
+    assert not seed_data.is_reps_only("Отжимания на брусьях с весом", "full")
     ru = seed_data.reps_only_weight_refusal("Подтягивания", "ru")
     en = seed_data.reps_only_weight_refusal("Подтягивания", "en")
     assert "«Подтягивания с весом»" in ru
     assert '"Weighted Pull-Ups"' in en
-    assert "с весом" in seed_data.reps_only_weight_refusal("Отжимания на брусьях", "ru")
+    assert "«Отжимания на брусьях с весом»" in seed_data.reps_only_weight_refusal("Отжимания на брусьях", "ru")
+    assert '"Weighted Dips"' in seed_data.reps_only_weight_refusal("Отжимания на брусьях", "en")
+    assert "с весом" in seed_data.reps_only_weight_refusal("Отжимания от пола", "ru")
 
 
 def test_as_reps_only():
@@ -130,6 +135,8 @@ async def test_v1_exercise_carries_reps_only_and_refuses_weight(fresh_db, lang):
     resp = await client.post(f"/workouts/{wid}/sets", json={"exercise_id": dips, "weight": 10, "reps": 8})
     assert resp.status_code == 400
     assert "Подтягивания" not in resp.json()["message"]
+    dips_variant = "«Отжимания на брусьях с весом»" if lang == "ru" else '"Weighted Dips"'
+    assert dips_variant in resp.json()["message"]
     resp = await client.post(f"/workouts/{wid}/sets/parse", json={"exercise_id": pull, "text": "10 8"})
     assert resp.status_code == 400 and resp.json()["error"] == "weight_on_bodyweight_exercise"
 
