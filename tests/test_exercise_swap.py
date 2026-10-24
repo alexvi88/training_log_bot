@@ -98,6 +98,30 @@ async def test_tracker_shows_swap_for_catalog_exercise(fresh_db, user_id, screen
     assert "live:swap" in _callbacks(kb)
 
 
+def test_swap_sits_on_its_own_row_and_leaves_after_a_set():
+    """Третьей в ряду с «Суперсет»/«Заметка» кнопка обрезала все три
+    («…рсет / З…етка / …ивы»), а после подхода снаряд уже нашёлся."""
+    import keyboards
+    kb = keyboards.logging_keyboard([(1, "Жим")], 1, has_sets=False, can_swap=True)
+    rows = [[b.callback_data for b in row] for row in kb.inline_keyboard]
+    assert ["live:swap"] in rows
+    assert all(len(row) == 1 for row in rows if "live:swap" in row)
+    assert "live:swap" not in _callbacks(keyboards.logging_keyboard([(1, "Жим")], 1, can_swap=False))
+
+
+async def test_tracker_hides_swap_after_first_set(fresh_db, user_id, screens):
+    db = fresh_db
+    bench = await db.fork_exercise_from_template(user_id, (await _template(db, BENCH))["id"])
+    state = await _tracker_with(db, user_id, bench)
+    data = await state.get_data()
+    block_id = (data.get("open_blocks") or {}).get(str(bench)) or (data.get("open_blocks") or {}).get(bench)
+    await db.add_set(block_id, bench, 1, 1, 60, 8)
+    user = await db.get_user(user_id)
+    await workout._render_logging_screen(_callback(user_id, "x").bot, state, user)
+    _hint, kb = screens[-1]
+    assert "live:swap" not in _callbacks(kb)
+
+
 async def test_tracker_has_no_swap_for_own_exercise(fresh_db, user_id, screens):
     db = fresh_db
     own = await db.create_exercise(user_id, "Мой хитрый жим на резинке", None)
