@@ -107,6 +107,25 @@ def _deep_link(username: str, token: str) -> str:
     return f"https://t.me/{username}?start={START_PREFIX}{token}"
 
 
+# Публичная страница визитки `<адрес сервера>/p/<токен>` (share_page.py): с
+# приложением на iPhone она открывает его сразу (Universal Link, путь в AASA),
+# без него — показывает состав и три выхода: приложение, App Store, Telegram.
+WEB_LINK_PATH = "/p/"
+# Схема для кнопки «Открыть в приложении» на самой странице: Universal Link на
+# тот же домен, с которого открыта страница, iOS в приложение не уводит.
+APP_LINK_PREFIX = "trainingdiary://share/"
+
+
+def web_link(token: str) -> Optional[str]:
+    """https-ссылка на страницу визитки или None без публичного адреса сервера.
+
+    Хост — тот же, что у приглашения тренера (config.public_base_url), а не
+    домен сайта: Universal Links приложение принимает только с него
+    (associated domains в entitlements iOS-приложения)."""
+    base = config.public_base_url()
+    return f"{base}{WEB_LINK_PATH}{token}" if base else None
+
+
 def app_store_line(*, html: bool = True) -> Optional[str]:
     """Строка «С iPhone — приложение: <url>» под приглашением и визиткой, или
     None, если config.APP_STORE_URL не задан (тогда строки нет вовсе).
@@ -125,6 +144,20 @@ def app_store_line(*, html: bool = True) -> Optional[str]:
 def _with_app_store_line(lines: list[str]) -> list[str]:
     line = app_store_line()
     return lines + [line] if line else lines
+
+
+def _with_web_line(lines: list[str], token: str) -> list[str]:
+    """Хвост визитки для тех, кому Telegram не дом: ссылка на страницу визитки.
+
+    Кнопка визитки остаётся t.me — пересланная в Telegram, она открывает бота
+    сразу. А текст визитки копируют и в другие мессенджеры, и там голая ссылка
+    на App Store теряла саму программу. Страница несёт и состав, и все три
+    выхода (приложение, App Store, Telegram), поэтому заменяет строку App Store,
+    а не встаёт рядом. Нет публичного адреса — прежняя строка App Store."""
+    url = web_link(token)
+    if url is None:
+        return _with_app_store_line(lines)
+    return lines + [i18n.t("share.web_line", url=escape(url))]
 
 
 # ---------- создание визитки ----------
@@ -320,7 +353,7 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
     url = _deep_link(await get_bot_username(callback.bot), token)
 
     text = "\n".join(
-        _with_app_store_line(_routine_preview_lines(payload) + ["", i18n.t("share.forward_hint_program")])
+        _with_web_line(_routine_preview_lines(payload) + ["", i18n.t("share.forward_hint_program")], token)
     )
     await callback.message.answer(
         text, parse_mode="HTML",
@@ -391,10 +424,11 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
 
     note = _omitted_days_note(payload)
     text = "\n".join(
-        _with_app_store_line(
+        _with_web_line(
             _program_preview_lines(payload)
             + ([f"\n{note}"] if note else [])
-            + ["", i18n.t("share.forward_hint_program")]
+            + ["", i18n.t("share.forward_hint_program")],
+            token,
         )
     )
     await callback.message.answer(
@@ -481,7 +515,7 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
         lines.append(escape(description))
     lines += ["", i18n.t("share.forward_hint_exercise")]
     await callback.message.answer(
-        "\n".join(_with_app_store_line(lines)), parse_mode="HTML",
+        "\n".join(_with_web_line(lines, token)), parse_mode="HTML",
         reply_markup=_share_card_keyboard(url, i18n.t("share.add_exercise_button"), token),
     )
     await callback.answer(i18n.t("share.card_ready"))

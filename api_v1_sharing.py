@@ -122,8 +122,16 @@ def _payload_json(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _share_created_json(token: str, kind: str) -> JSONResponse:
+    # web_url — https-страница визитки (share_page.py): с приложением на iPhone
+    # открывает его по Universal Link, без него — состав и три выхода. Её и
+    # стоит класть в текст «Поделиться». null — у сервера нет публичного адреса.
     return JSONResponse(
-        {"token": token, "kind": kind, "start_param": f"{sharing.START_PREFIX}{token}"},
+        {
+            "token": token,
+            "kind": kind,
+            "start_param": f"{sharing.START_PREFIX}{token}",
+            "web_url": sharing.web_link(token),
+        },
         status_code=201,
     )
 
@@ -275,7 +283,7 @@ async def list_my_shares(request: Request) -> JSONResponse:
     Отозванных в списке нет (отзыв удаляет строку). url собираем, только если
     username бота уже известен процессу (sharing.get_bot_username кэширует его
     при старте), иначе null — клиент соберёт сам из start_param, как и после
-    создания. opens всегда null: открытия превью нигде не считаем, считаем
+    создания. web_url — страница визитки, как в ответе создания. opens всегда null: открытия превью нигде не считаем, считаем
     только импорты (taken_count)."""
     user_id = await _authed_user_id(request)
     username = sharing._bot_username
@@ -288,6 +296,7 @@ async def list_my_shares(request: Request) -> JSONResponse:
                 "kind": row["kind"],
                 "title": _share_title(row["kind"], payload),
                 "url": sharing._deep_link(username, row["token"]) if username else None,
+                "web_url": sharing.web_link(row["token"]),
                 "start_param": f"{sharing.START_PREFIX}{row['token']}",
                 "created_at": row["created_at"],
                 "opens": None,
