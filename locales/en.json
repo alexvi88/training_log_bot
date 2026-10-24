@@ -3359,6 +3359,7 @@
   "seo.tool.card.dots": "My DOTS score — {v}",
   "seo.tool.card.tonnage": "Lifted {v} in one workout",
   "seo.tool.card.level": "My {lift} rank — {level}",
+  "seo.tool.card.level_full": "{lift}: {weight} at {bw} bodyweight — {level}",
   "seo.tool.unit_t": "t",
   "seo.program.card_days": "{n, plural, one{# day in the program} other{# days in the program}}",
   "seo.exercise.cap_start_short": "Start",

@@ -664,7 +664,17 @@ def simple_card(lang: str, kind: str, request: Request) -> Optional[tuple[str, s
         if level is None or lift is None or not 0 <= int(level) < len(seo_tools.LEVELS):
             return None
         name = t(f"seo.strength.level.{seo_tools.LEVELS[int(level)][0]}")
-        return t("seo.tool.card.level", level=name, lift=t(f"seo.tool.goal.card_lift.{lift}")), f"card-level-{lang}-{level}-{lift}", footer
+        lift_name = t(f"seo.tool.goal.card_lift.{lift}")
+        lifted, reps, bw = _q(request, "w", _NUM), _q(request, "r", _INT), _q(request, "bw", _NUM)
+        unit = _q(request, "u", _INT, ("kg", "lb"))
+        if lifted and bw and unit and 0 < float(lifted) <= 1500 and 0 < float(bw) <= 700 and 1 <= int(reps or 1) <= 30:
+            # С весом и результатом — то, чем хвастаются; старые ссылки без них рисуют прежнюю карточку.
+            unit_label = t("seo.tool.unit_kg") if unit == "kg" else t("seo.tool.unit_lb")
+            weight = f"{float(lifted):g}\u00a0{unit_label}" + (f"\u00a0×\u00a0{int(reps)}" if reps and int(reps) > 1 else "")
+            text = t("seo.tool.card.level_full", lift=lift_name[:1].upper() + lift_name[1:], weight=weight,
+                     bw=f"{float(bw):g}\u00a0{unit_label}", level=name)
+            return text, f"card-level-{lang}-{level}-{lift}-{float(lifted):g}-{int(reps or 1)}-{float(bw):g}-{unit}", footer
+        return t("seo.tool.card.level", level=name, lift=lift_name), f"card-level-{lang}-{level}-{lift}", footer
     value = _q(request, "v", _NUM)
     if value is None or float(value) <= 0 or float(value) > (200000 if kind == "tonnage" else 2000):
         return None
