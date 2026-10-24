@@ -3113,6 +3113,11 @@
      "type": "Int",
      "optional": true,
      "default": true
+    },
+    "inviteUrl": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3205,6 +3210,11 @@
     "takenCount": {
      "type": "Int",
      "optional": true
+    },
+    "webUrl": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3408,6 +3418,15 @@
     },
     "minPerWeek": {
      "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "ReferralApplied": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "applied": {
+     "type": "Bool",
      "optional": false
     }
    }
@@ -3651,6 +3670,11 @@
     "startParam": {
      "type": "String",
      "optional": false
+    },
+    "webUrl": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4462,6 +4486,69 @@
      "optional": true
     }
    }
+  },
+  "YouTimeline": {
+   "file": "TrainingLog/Features/Home/GymYouTimelapse.swift",
+   "fields": {
+    "firstDate": {
+     "type": "String",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "points": {
+     "type": "[YouTimeline.Point]",
+     "optional": false
+    }
+   }
+  },
+  "YouTimeline.Point": {
+   "file": "TrainingLog/Features/Home/GymYouTimelapse.swift",
+   "fields": {
+    "day": {
+     "type": "Int",
+     "optional": false
+    },
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "workouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "tonnage": {
+     "type": "Double",
+     "optional": false
+    },
+    "records": {
+     "type": "Int",
+     "optional": false
+    },
+    "rank": {
+     "type": "YouTimeline.Rank",
+     "optional": false
+    },
+    "bodyVolume": {
+     "type": "Dashboard.BodyVolume",
+     "optional": true
+    }
+   }
+  },
+  "YouTimeline.Rank": {
+   "file": "TrainingLog/Features/Home/GymYouTimelapse.swift",
+   "fields": {
+    "level": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    }
+   }
   }
  },
  "endpoints": [
@@ -4809,6 +4896,13 @@
    "nullable": true
   },
   {
+   "swift": "APIClient.youTimeline",
+   "method": "GET",
+   "path": "/dashboard/timeline",
+   "root": "YouTimeline",
+   "nullable": true
+  },
+  {
    "swift": "APIClient.exerciseTemplates",
    "method": "GET",
    "path": "/exercise-templates",
@@ -5072,6 +5166,13 @@
    "method": "GET",
    "path": "/me",
    "root": "Me",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.applyReferral",
+   "method": "POST",
+   "path": "/me/referral",
+   "root": "ReferralApplied",
    "nullable": false
   },
   {
@@ -5523,5 +5624,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "4e278c7f057daee0635cb56a1cb307edb1465f26"
+ "_ios_commit": "f9138b99510d8e931552ba119b4049f23ca605db"
 }

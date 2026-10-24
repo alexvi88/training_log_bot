@@ -6991,6 +6991,62 @@ async def e1rm_running_records_in_window(
     return await cur.fetchall()
 
 
+async def daily_sets_by_group(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> dict[str, dict[Optional[int], int]]:
+    """Рабочих подходов по местным дням и группам за всю историю — одним
+    запросом: из них таймлапс «ТЫ» (dashboard_data.you_timeline) собирает
+    окно фигуры на каждый день истории. Тот же счёт, что у
+    weekly_volume_by_group (законченные тренировки, exercises.primary_group_id),
+    иначе тело в видео и тело в подвале росли бы по разным подходам.
+
+    {день: {id группы: подходов}}; группа None — упражнения без группы."""
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT {day} AS d, e.primary_group_id AS gid, COUNT(s.id) AS cnt "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"GROUP BY {day}, e.primary_group_id",
+        (user_id,),
+    )
+    out: dict[str, dict[Optional[int], int]] = {}
+    for row in await cur.fetchall():
+        out.setdefault(row["d"], {})[row["gid"]] = row["cnt"]
+    return out
+
+
+async def e1rm_record_days(
+    user_id: int, formula: str = "epley", *, tz_offset: Optional[int] = None
+) -> list[str]:
+    """Местные дни рекордов за всю историю, по строке на (упражнение, день),
+    по возрастанию: день, чей лучший e1RM в движении выше всего, что атлет
+    делал в нём раньше. Критерий — e1rm_running_records_in_window: первая
+    попытка движения — не рекорд. Таймлапс «ТЫ» считает по ним «рекордов к
+    этому дню»."""
+    e1rm = _e1rm_sql(formula)
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        "WITH daily AS ("
+        f"  SELECT s.exercise_id AS ex, {day} AS d, MAX({e1rm}) AS best"
+        "   FROM sets s"
+        "   JOIN workout_blocks b ON b.id = s.block_id"
+        "   JOIN workouts w ON w.id = b.workout_id"
+        "   WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
+        "   GROUP BY s.exercise_id, d"
+        "), ranked AS ("
+        "  SELECT d, best, MAX(best) OVER ("
+        "    PARTITION BY ex ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING"
+        "  ) AS before FROM daily"
+        ") "
+        "SELECT d FROM ranked WHERE before IS NOT NULL AND before > 0 AND best > before ORDER BY d",
+        (user_id,),
+    )
+    return [row["d"] for row in await cur.fetchall()]
+
+
 async def count_workouts_finished_after(
     user_id: int, start_date: str, end_date: str, after: str, *, tz_offset: Optional[int] = None
 ) -> int:

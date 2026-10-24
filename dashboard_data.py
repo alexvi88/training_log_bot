@@ -13,7 +13,9 @@ handlers/workout.py, — иначе у REST появилась бы вторая
 
 from __future__ import annotations
 
+import bisect
 import datetime as dt
+import itertools
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional
 
@@ -194,6 +196,106 @@ def volume_per_week(sets: tuple[tuple[str, int], ...]) -> tuple[tuple[str, float
     """Подходы за окно → в среднем в неделю, с одним знаком после запятой:
     по ним растёт фигура «ТЫ»."""
     return tuple((slug, round(count / BODY_VOLUME_WEEKS, 1)) for slug, count in sets)
+
+
+@dataclass(frozen=True)
+class TimelinePoint:
+    """«ТЫ» на один день истории — кадр таймлапса «Видео: как ты рос» в
+    приложении. Всё накопленное к концу дня `date` включительно, тем же
+    счётом, что сводка и зал славы сегодня."""
+
+    #: День с первой тренировки, первая — день 1.
+    day: int
+    date: dt.date
+    workouts: int
+    #: В единицах атлета (users.unit), как tonnage.value у /hall-of-fame.
+    tonnage: float
+    #: Дней-рекордов по движениям (db.e1rm_record_days) к этому дню.
+    records: int
+    rank: "analytics.Rank"
+    #: (ключ группы, подходов в неделю) за BODY_VOLUME_WEEKS недель по этот
+    #: день — то же, что body_volume сводки в тот день.
+    body_volume: tuple[tuple[str, float], ...]
+
+
+async def you_timeline(user_id: int, user: Any = None) -> Optional[list[TimelinePoint]]:
+    """«ТЫ» по дням истории: точка на каждый день с законченной тренировкой
+    и последняя — сегодня (если сегодня не тренировался), чтобы конец видео
+    совпадал с «ТЫ» в подвале. `None` — тренировок нет.
+
+    Только настоящие данные: точки — дни, когда атлет реально тренировался;
+    вехи (неделя, месяц…) из них выбирает приложение и только те, до которых
+    история доросла. Звание и тело на каждый день — те же формулы, что
+    сегодня (analytics.rank_for, окно BODY_VOLUME_WEEKS), только «сегодня» —
+    тот день. Перенесённая история — данные, как и везде в прогрессе."""
+    if user is None:
+        user = await db.get_user(user_id)
+    if user is None:
+        return None
+    tz = timeutil.offset_hours(user)
+    today = timeutil.user_today(user)
+    dates = [
+        d for d in (dt.date.fromisoformat(s) for s in await db.list_finished_workout_dates(user_id, tz_offset=tz))
+        if d <= today
+    ]
+    if not dates:
+        return None
+    unit = user["unit"]
+    tonnage_by_day = {
+        dt.date.fromisoformat(d): t
+        for d, t in (await db.daily_tonnage(user_id, "0001-01-01", today.isoformat(), tz_offset=tz)).items()
+    }
+    record_days = [dt.date.fromisoformat(d) for d in await db.e1rm_record_days(
+        user_id, user["e1rm_formula"], tz_offset=tz
+    )]
+    slug_of: dict[Optional[int], str] = {}
+    for group in await db.list_muscle_groups(user_id):
+        slug = seed_data.muscle_group_slug(group["name"])
+        if slug in BODY_VOLUME_GROUPS:
+            slug_of[group["id"]] = slug
+    sets_by_day: dict[dt.date, dict[str, int]] = {}
+    for d, by_group in (await db.daily_sets_by_group(user_id, tz_offset=tz)).items():
+        bucket = sets_by_day.setdefault(dt.date.fromisoformat(d), {})
+        for gid, count in by_group.items():
+            slug = slug_of.get(gid)
+            if slug is not None:
+                bucket[slug] = bucket.get(slug, 0) + count
+
+    days = sorted(set(dates))
+    if days[-1] < today:
+        days.append(today)
+    first = dates[0]
+    window = dt.timedelta(days=BODY_VOLUME_WEEKS * 7 - 1)
+    # Накопленные суммы по дням — точек бывает сотни, пересчитывать всю
+    # историю на каждую незачем.
+    tonnage_days = sorted(tonnage_by_day)
+    tonnage_sum = list(itertools.accumulate(tonnage_by_day[d] for d in tonnage_days))
+    set_days = sorted(sets_by_day)
+    set_sum = {
+        slug: [0, *itertools.accumulate(sets_by_day[d].get(slug, 0) for d in set_days)]
+        for slug in BODY_VOLUME_GROUPS
+    }
+    points: list[TimelinePoint] = []
+    for day in days:
+        workouts = bisect.bisect_right(dates, day)
+        k = bisect.bisect_right(tonnage_days, day)
+        tonnage = tonnage_sum[k - 1] if k else 0.0
+        lo = bisect.bisect_left(set_days, day - window)
+        hi = bisect.bisect_right(set_days, day)
+        sets = tuple((slug, set_sum[slug][hi] - set_sum[slug][lo]) for slug in BODY_VOLUME_GROUPS)
+        rank = analytics.rank_for(
+            workouts, formatting.to_kg(tonnage, unit), analytics.workouts_per_week(dates[:workouts], day)
+        )
+        points.append(TimelinePoint(
+            day=(day - first).days + 1,
+            date=day,
+            workouts=workouts,
+            tonnage=round(tonnage, 1),
+            records=bisect.bisect_right(record_days, day),
+            rank=rank,
+            body_volume=volume_per_week(sets),
+        ))
+    return points
 
 
 async def lift_growth(
