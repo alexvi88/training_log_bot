@@ -30,6 +30,7 @@ import formatting
 import i18n
 import lifecycle_events
 import parser
+import seed_data
 import timeutil
 
 logger = logging.getLogger(__name__)
@@ -414,6 +415,21 @@ def _too_big(error: tuple[int, str, str]) -> ApiError:
     return ApiError(status, code, f"{code}: payload too large", human=text)
 
 
+def reject_weight_on_reps_only(exercise, weight: float) -> None:
+    """400 `weight_on_bodyweight_exercise` на вес ≠ 0 у упражнения «только
+    повторы» (seed_data.is_reps_only). `message` — подсказка тренера на языке
+    атлета (язык запроса уже выставил authed_user_id): повторы числом, с
+    поясом — вариант «… с весом» из каталога. Вес 0 — обычный подход."""
+    if not weight or not seed_data.exercise_is_reps_only(exercise):
+        return
+    raise ApiError(
+        400,
+        "weight_on_bodyweight_exercise",
+        "weight is not accepted for a bodyweight-only exercise",
+        human=seed_data.reps_only_weight_refusal(exercise["original_name"], i18n.get_lang()),
+    )
+
+
 def exercise_json(row) -> dict[str, Any]:
     """Сериализация упражнения — общая для api_v1.py (CRUD своих упражнений)
     и api_v1_templates.py (форк каталожного шаблона возвращает уже свою
@@ -427,6 +443,10 @@ def exercise_json(row) -> dict[str, Any]:
         "unilateral": bool(row["unilateral"]),
         "attachment": row["attachment"],
         "bodyweight_load": row["bodyweight_load"],
+        # Своим весом без доп. веса (seed_data.is_reps_only): живой трекер
+        # спрашивает только повторы, вес 0. Подход с весом ≠ 0 сервер отвергает
+        # 400 `weight_on_bodyweight_exercise` (reject_weight_on_reps_only).
+        "reps_only": seed_data.exercise_is_reps_only(row),
         "description": row["description"],
         # Есть ли что показать на карточке — своё описание или встроенное из
         # каталога. Та же проверка, что ставит «📝 » у кнопки упражнения в

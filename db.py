@@ -1734,6 +1734,11 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN title TEXT")
     if "import_batch_id" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN import_batch_id TEXT")
+    # Вопрос «сколько ты сейчас весишь» на первом подходе своим весом
+    # (bodyweight_prompt_for): NULL — ещё не задан, 'shown' — бот уже спросил
+    # в этой тренировке, 'later' — атлет нажал «Позже». Раз за тренировку.
+    if "bodyweight_prompt" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN bodyweight_prompt TEXT")
     await _conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_workouts_import_batch "
         "ON workouts (import_batch_id) WHERE import_batch_id IS NOT NULL"
@@ -2582,15 +2587,30 @@ async def _backfill_bodyweight_load() -> None:
 
     One-shot: дальше снимок ставится при записи подхода (_load_weight_for).
     """
-    cur = await _conn.execute(
+    await _fill_null_bodyweight_loads()
+    await _conn.commit()
+
+
+async def _fill_null_bodyweight_loads(user_id: Optional[int] = None) -> int:
+    """Тело `_backfill_bodyweight_load`: подходам своим весом без снимка
+    нагрузки (load_weight IS NULL) — нагрузку по взвешиванию на их дату.
+    `user_id` — только этому атлету: так его первый ответ «сколько весишь»
+    (add_bodyweight_log) дозаполняет всю его историю. Без commit — вызывающий
+    держит транзакцию. Возвращает число пересчитанных подходов."""
+    sql = (
         "SELECT s.id, s.weight, s.created_at, e.user_id, "
         "       e.bodyweight_load, e.bodyweight_factor "
         "FROM sets s JOIN exercises e ON e.id = s.exercise_id "
         "WHERE s.load_weight IS NULL AND e.bodyweight_load != 'none' AND e.user_id IS NOT NULL"
     )
+    params: tuple = ()
+    if user_id is not None:
+        sql += " AND e.user_id = ?"
+        params = (user_id,)
+    cur = await _conn.execute(sql, params)
     rows = await cur.fetchall()
     if not rows:
-        return
+        return 0
     # Взвешивания читаются пачкой на пользователя: у активного аккаунта таких
     # подходов тысячи, и запрос на каждый — это минуты на старте бота.
     logs: dict[int, list[tuple[str, float]]] = {}
@@ -2603,6 +2623,7 @@ async def _backfill_bodyweight_load() -> None:
             )
             logs[row["user_id"]] = [(r["logged_at"], r["weight"]) for r in await log_cur.fetchall()]
 
+    filled = 0
     for row in rows:
         entries = logs.get(row["user_id"]) or []
         if not entries:
@@ -2618,7 +2639,8 @@ async def _backfill_bodyweight_load() -> None:
                 row["id"],
             ),
         )
-    await _conn.commit()
+        filled += 1
+    return filled
 
 
 async def _migrate_programs_from_names() -> None:
@@ -7230,13 +7252,20 @@ async def bodyweight_at(telegram_id: int, when_iso: Optional[str] = None) -> Opt
 
 
 async def _workout_date_of_block(block_id: int) -> Optional[str]:
+    """Дата, на которую брать вес тела для подхода этого блока.
+
+    У идущей тренировки — None, то есть последнее взвешивание: вес, который
+    атлет назвал посреди тренировки (вопрос bodyweight_prompt_for), записан
+    позже её начала, и «не позже started_at» его бы не увидело."""
     cur = await conn().execute(
-        "SELECT w.started_at FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
-        "WHERE b.id = ?",
+        "SELECT w.started_at, w.status FROM workout_blocks b "
+        "JOIN workouts w ON w.id = b.workout_id WHERE b.id = ?",
         (block_id,),
     )
     row = await cur.fetchone()
-    return row["started_at"] if row else None
+    if row is None or row["status"] == "active":
+        return None
+    return row["started_at"]
 
 
 async def _load_weight_for(
@@ -13477,13 +13506,147 @@ async def clear_ai_undo_actions(telegram_id: int) -> None:
 # ---------- bodyweight log ----------
 
 async def add_bodyweight_log(telegram_id: int, weight: float, logged_at: Optional[str] = None) -> int:
+    """Записать взвешивание — единственная точка записи «Дневника веса».
+
+    Той же транзакцией пересчитывается нагрузка подходов своим весом, которой
+    без веса тела взяться было неоткуда (load_weight IS NULL — вся история), и
+    всех подходов своим весом идущей тренировки: ответ на вопрос «сколько
+    весишь» (bodyweight_prompt_for) меняет её тоннаж сразу, а не со следующего
+    подхода."""
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO bodyweight_logs (telegram_id, weight, logged_at) VALUES (?, ?, ?)",
             (telegram_id, weight, logged_at or now_iso()),
         )
+        log_id = cur.lastrowid
+        await _fill_null_bodyweight_loads(telegram_id)
+        await _reload_active_bodyweight_sets(telegram_id)
         await conn().commit()
-        return cur.lastrowid
+        return log_id
+
+
+async def _reload_active_bodyweight_sets(user_id: int) -> None:
+    """Нагрузка подходов своим весом в идущей тренировке — по последнему
+    взвешиванию. Без commit: зовётся внутри add_bodyweight_log."""
+    bodyweight = await bodyweight_at(user_id)
+    if not bodyweight:
+        return
+    cur = await conn().execute(
+        "SELECT s.id, s.weight, e.bodyweight_load, e.bodyweight_factor "
+        "FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'active' AND e.bodyweight_load != 'none'",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        await conn().execute(
+            "UPDATE sets SET load_weight = ? WHERE id = ?",
+            (
+                effective_load(
+                    row["weight"], bodyweight, row["bodyweight_load"], row["bodyweight_factor"]
+                ),
+                row["id"],
+            ),
+        )
+
+
+async def is_catalog_exercise(exercise) -> bool:
+    """Упражнение — копия шаблона каталога (идентичность original_name совпадает
+    с именем шаблона): режим «своим весом» у него задан каталогом
+    (BODYWEIGHT_TEMPLATES) и руками не меняется."""
+    cur = await conn().execute(
+        "SELECT 1 FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name = ? LIMIT 1",
+        (exercise["original_name"],),
+    )
+    return await cur.fetchone() is not None
+
+
+async def set_exercise_bodyweight(exercise_id: int, bodyweight: bool) -> None:
+    """Галка «Своим весом» у своего упражнения: 'full' с долей 1.0 или обычное
+    железо ('none'). Нагрузка его подходов пересчитывается той же транзакцией:
+    стало своим весом — по весу тела на дату подхода (как
+    `_backfill_bodyweight_load`; в идущей тренировке — по последнему), стало
+    железом — снимок снимается (NULL = записанный вес, LOAD_WEIGHT_SQL)."""
+    ex = await get_exercise(exercise_id)
+    if ex is None:
+        return
+    load = "full" if bodyweight else "none"
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = 1.0 WHERE id = ?",
+            (load, exercise_id),
+        )
+        await conn().execute("UPDATE sets SET load_weight = NULL WHERE exercise_id = ?", (exercise_id,))
+        if bodyweight and ex["user_id"] is not None:
+            await _fill_null_bodyweight_loads(ex["user_id"])
+            await _reload_active_bodyweight_sets(ex["user_id"])
+        await conn().commit()
+
+
+BODYWEIGHT_PROMPT_SHOWN = "shown"
+BODYWEIGHT_PROMPT_LATER = "later"
+
+
+async def bodyweight_prompt_for(user_id: int, workout_id: int) -> Optional[dict]:
+    """Спросить ли вес тела в этой тренировке — и что именно.
+
+    Вес тела — половина нагрузки подходов своим весом (effective_load): без
+    него подтягивания считаются нулём, по устаревшему — врут на разницу. Вопрос
+    задаётся в идущей тренировке, где уже есть подход своим весом, и не после
+    «Позже» в ней же:
+    - `{"kind": "missing"}` — взвешиваний нет вовсе;
+    - `{"kind": "stale", "weight", "unit", "logged_at"}` — последнее старше
+      config.BODYWEIGHT_STALE_DAYS (дата — день YYYY-MM-DD);
+    - None — спрашивать нечего.
+    Ответ — обычная запись веса (add_bodyweight_log; «так и есть» — тем же
+    весом сегодня), после неё вопрос гаснет сам: свежая запись есть.
+    """
+    cur = await conn().execute(
+        "SELECT status, bodyweight_prompt FROM workouts WHERE id = ? AND user_id = ?",
+        (workout_id, user_id),
+    )
+    workout = await cur.fetchone()
+    if workout is None or workout["status"] != "active":
+        return None
+    if workout["bodyweight_prompt"] == BODYWEIGHT_PROMPT_LATER:
+        return None
+    cur = await conn().execute(
+        "SELECT 1 FROM sets s JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE b.workout_id = ? AND e.bodyweight_load != 'none' LIMIT 1",
+        (workout_id,),
+    )
+    if await cur.fetchone() is None:
+        return None
+    latest = await get_latest_bodyweight(user_id)
+    if latest is None:
+        return {"kind": "missing"}
+    try:
+        logged = dt.datetime.fromisoformat(latest["logged_at"])
+    except (TypeError, ValueError):
+        return None
+    if logged.tzinfo is not None:
+        logged = logged.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    age = _utc_now().replace(tzinfo=None) - logged
+    if age < dt.timedelta(days=config.BODYWEIGHT_STALE_DAYS):
+        return None
+    user = await get_user(user_id)
+    return {
+        "kind": "stale",
+        "weight": float(latest["weight"]),
+        "unit": (user["unit"] if user else None) or "kg",
+        "logged_at": latest["logged_at"][:10],
+    }
+
+
+async def set_bodyweight_prompt_state(workout_id: int, state: str) -> None:
+    """'shown' — бот задал вопрос (второй раз в этой тренировке не задаст),
+    'later' — «Позже»: в этой тренировке не спрашивать ни боту, ни /v1."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET bodyweight_prompt = ? WHERE id = ?", (state, workout_id)
+        )
+        await conn().commit()
 
 
 async def list_bodyweight_logs(telegram_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:

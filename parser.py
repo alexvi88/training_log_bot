@@ -36,6 +36,19 @@ class ParsedSet:
     unit_explicit: bool = False
 
 
+def as_reps_only(parsed: "list[ParsedSet]") -> "list[ParsedSet] | None":
+    """Разобранная строка для упражнения «только повторы» (seed_data.is_reps_only):
+    голые повторы («7») и явный ноль — подходы с весом 0, не «вес прошлого
+    подхода»; хоть один явный вес ≠ 0 («60 8») — None, такой ввод отвергается
+    подсказкой про вариант «с весом»."""
+    if any(not ps.weight_omitted and ps.weight for ps in parsed):
+        return None
+    return [
+        ParsedSet(weight=0.0, reps=ps.reps, rpe=ps.rpe, unit_explicit=ps.unit_explicit)
+        for ps in parsed
+    ]
+
+
 _SEP = r"[xXхХ*/-]"
 _WEIGHT = r"\+?(?P<weight>\d+(?:[.,]\d+)?)"
 # Optional trailing "@RPE", e.g. "@9" or "@8.5" — subjective effort 1-10.
@@ -263,6 +276,12 @@ _BODYWEIGHT_UNIT_WORDS = {
 _BODYWEIGHT_UNIT_RES = {
     unit: re.compile(pattern, re.IGNORECASE) for unit, pattern in _BODYWEIGHT_UNIT_WORDS.items()
 }
+
+
+def mentions_bodyweight_unit(text: str) -> bool:
+    """Названа ли в строке единица веса (кг, kg, lb…) — так бот отличает ответ
+    «82 кг» на вопрос о весе тела от подхода «8» посреди тренировки."""
+    return any(rx.search(text or "") for rx in _BODYWEIGHT_UNIT_RES.values())
 
 
 def parse_bodyweight_entry(

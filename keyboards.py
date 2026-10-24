@@ -726,6 +726,17 @@ def weight_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def bodyweight_prompt_keyboard(same_label: str | None) -> InlineKeyboardMarkup:
+    """Вопрос «сколько ты сейчас весишь» под первым подходом своим весом
+    (handlers.workout._maybe_ask_bodyweight): «82кг — так и есть», если вес в
+    дневнике есть, но старый, и «Позже». Новое число — ответом текстом."""
+    rows = []
+    if same_label:
+        rows.append([InlineKeyboardButton(text=same_label, callback_data="bwp:same")])
+    rows.append([InlineKeyboardButton(text=i18n.t("workout.bw_prompt.btn_later"), callback_data="bwp:later")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def bodyweight_confirm_keyboard() -> InlineKeyboardMarkup:
     """Same "looks like a typo — record it?" nudge as weight_confirm_keyboard,
     for a bodyweight entry outside the plausible range (see

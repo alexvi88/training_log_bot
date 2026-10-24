@@ -979,6 +979,11 @@ INBOX_RETENTION_DAYS = int(os.getenv("INBOX_RETENTION_DAYS", "90"))
 IMPORT_UNDO_DAYS = int(os.getenv("IMPORT_UNDO_DAYS", "30"))
 IMPORT_BATCH_RETENTION_DAYS = IMPORT_UNDO_DAYS
 
+# Вес тела, по которому считается нагрузка подходов своим весом
+# (db.effective_load), старше этого — повод переспросить «сейчас так же?» на
+# первом подходе своим весом в тренировке (db.bodyweight_prompt_for).
+BODYWEIGHT_STALE_DAYS = int(os.getenv("BODYWEIGHT_STALE_DAYS", "30"))
+
 # Сколько живёт журнал объединений упражнений (db.exercise_merges) — карточка
 # снесённого упражнения и список переехавших подходов, по которым работает
 # «Разъединить». Вместе с журналом с диска уходит и фото снесённого
