@@ -154,6 +154,8 @@ BODYWEIGHT_TEMPLATES: dict[str, tuple[str, float]] = {
 # Ключ — идентичность шаблона (exercises.original_name), не показанное имя.
 WEIGHTED_BODYWEIGHT_TEMPLATES: frozenset[str] = frozenset({
     "Подтягивания с весом",
+    # Гиперэкстензию часто делают с блином у груди — вес как добавка нужен.
+    "Гиперэкстензия",
 })
 
 # Куда отправить человека, который ввёл вес в упражнении «только повторы»:
