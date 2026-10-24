@@ -642,7 +642,7 @@ async def test_exercises_and_programs_link_each_other():
     curl = responses["/en/exercises/lying-leg-curl"].text
     assert 'href="/en/programs/ppl"' in curl
     # На каждой странице упражнения — то, чего нет у других: наша пара кадров и разбор видео.
-    assert "lying_leg_curls_1.jpg" in curl and "lying_leg_curls_2.jpg" in curl
+    assert "lying_leg_curls_r2_1.jpg" in curl and "lying_leg_curls_r2_2.jpg" in curl
     assert "/go/bot?f=ex" in curl
 
 
