@@ -876,7 +876,7 @@ async def _screen_import_resolve(db, user_id: int) -> str:
 
 
 async def _screen_exercise_bodyweight_toggle(db, user_id: int) -> str:
-    """«⚖️ Своим весом»: карточка своего упражнения сразу после создания
+    """«⚖️ Со своим весом»: карточка своего упражнения сразу после создания
     (переключатель и подсказка), то же в «✏️ Редактировать» в обоих
     положениях и оба тоста."""
     from handlers import exercises as exercises_handlers

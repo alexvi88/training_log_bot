@@ -307,7 +307,7 @@ async def test_sitemap_has_lastmod_and_image_entries():
     assert all(u.find("s:lastmod", ns).text == seo_pages.SITE_UPDATED for u in urls.values())
     squat = urls[f"{HOST}/en/exercises/back-squat"]
     images = [i.find("i:loc", ns).text for i in squat.findall("i:image", ns)]
-    assert images == [f"{HOST}/v1/media/exercises/barbell_squat_r2_1.jpg", f"{HOST}/v1/media/exercises/barbell_squat_r2_2.jpg"]
+    assert images == [f"{HOST}/v1/media/exercises/barbell_squat_r3_1.jpg", f"{HOST}/v1/media/exercises/barbell_squat_r3_2.jpg"]
     assert urls[f"{HOST}/ru"].findall("i:image", ns)
 
 
