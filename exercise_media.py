@@ -363,7 +363,7 @@ FRAME_REVISION: dict[str, int] = {
     "dumbbell_bench_press": 3,
     "wide_grip_lat_pulldown": 3,
     "leg_press": 3,
-    "side_lateral_raise": 3,
+    "side_lateral_raise": 4,
     "barbell_curl": 3,
     "triceps_pushdown": 3,
     "plank": 3,
