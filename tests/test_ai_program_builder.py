@@ -1112,7 +1112,7 @@ async def test_preview_with_a_huge_notes_block_still_fits_into_one_message(fresh
 
 
 async def test_a_day_that_dropped_entirely_gets_one_note_not_two(fresh_db, user_id):
-    """Раньше про такой день было две заметки подряд — «не нашёл в боте — …» и
+    """Раньше про такой день было две заметки подряд — «не нашёл в каталоге — …» и
     «целиком пропал» — и блок читался как повтор."""
     _payload, draft = await _propose(
         user_id,
@@ -1175,7 +1175,7 @@ def test_notes_that_do_not_fit_are_counted_not_dropped_silently():
     """Обрезанный блок обязан сказать, сколько заметок не влезло, и оставить
     место составу ниже — иначе «на заметку» съедало бы весь экран."""
     notes = [
-        f"«День {i}»: не нашёл в боте — "
+        f"«День {i}»: не нашёл в каталоге — "
         + ", ".join(f"Упражнение выдуманное номер {i}-{j}" for j in range(12))
         for i in range(1, 40)
     ]

@@ -688,7 +688,7 @@ async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypat
     today = await ai_trainer._user_today(user_id)
     assert messages[1:] == [
         *history,
-        {"role": "user", "content": f"новый вопрос\n\nСегодня {today.isoformat()}."},
+        {"role": "user", "content": f"новый вопрос\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}"},
     ]
 
 
@@ -991,7 +991,7 @@ async def test_ask_plain_sends_multimodal_content_when_image_present(fresh_db, u
     user_content = messages[-1]["content"]
     today = await ai_trainer._user_today(user_id)
     assert user_content == [
-        {"type": "text", "text": f"что на фото?\n\nСегодня {today.isoformat()}."},
+        {"type": "text", "text": f"что на фото?\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}"},
         {"type": "image_url", "image_url": {"url": _FAKE_IMAGE_DATA_URL}},
     ]
 
@@ -1004,7 +1004,7 @@ async def test_ask_plain_sends_plain_text_content_without_image(fresh_db, user_i
 
     messages = client.chat.completions.create.await_args.kwargs["messages"]
     today = await ai_trainer._user_today(user_id)
-    assert messages[-1]["content"] == f"просто текст\n\nСегодня {today.isoformat()}."
+    assert messages[-1]["content"] == f"просто текст\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}"
 
 
 async def test_photo_turn_goes_to_the_vision_model_as_input_image(fresh_db, user_id, monkeypatch):
@@ -1354,7 +1354,7 @@ async def test_ask_plain_appends_the_date_to_the_last_user_message(fresh_db, use
     last_user = messages[-1]
     assert last_user["role"] == "user"
     today = await ai_trainer._user_today(user_id)
-    assert last_user["content"] == f"Что сегодня делать?\n\nСегодня {today.isoformat()}."
+    assert last_user["content"] == f"Что сегодня делать?\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}"
 
 
 async def test_wire_history_keeps_the_dated_question_for_the_next_turn(fresh_db, user_id, monkeypatch):
@@ -1373,7 +1373,7 @@ async def test_wire_history_keeps_the_dated_question_for_the_next_turn(fresh_db,
     wire = wires[0]
     assert wire[0]["role"] == "user"
     today = await ai_trainer._user_today(user_id)
-    assert wire[0]["content"] == f"Вопрос\n\nСегодня {today.isoformat()}."
+    assert wire[0]["content"] == f"Вопрос\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}"
     assert wire[1]["role"] == "assistant" and wire[1]["content"] == "ок"
     # Сырые элементы ответа Responses едут в историю рядом с текстом — следующий
     # ход вернёт их модели как есть (см. ai_trainer.OPENAI_OUTPUT_KEY).
@@ -1820,7 +1820,9 @@ async def test_prompt_knows_about_csv_import():
     из другого приложения подтянуть не умею» — хотя импорт CSV (и автораспознавание
     колонок Hevy) в боте уже есть, просто не через инструмент тренера."""
     prompt = ai_trainer.SYSTEM_PROMPT
-    assert "Импорт CSV" in prompt
+    # Путь к экрану — в хвосте вопроса, свой у каждого клиента (_client_line).
+    assert "Импорт CSV" in ai_trainer._CLIENT_LINE_TELEGRAM
+    assert "Импорт CSV" in ai_trainer._CLIENT_LINE_APP
     assert "Hevy" in prompt
     assert "нет и что перенести историю нельзя" in prompt
 
@@ -1834,7 +1836,7 @@ async def test_coach_never_learns_to_call_itself_the_bot():
     for text in (ai_trainer.SYSTEM_PROMPT, tool_text):
         hits = re.findall(r"(?i)(?<![\w-])бот\s+(?:сам\s+)?[а-яё]+(?:[её]т|ит|ут|ят)\b|[а-яё]+(?:[её]т|ит)\s+бот\b", text)
         assert not hits, f"тренер о себе в третьем лице: {hits}"
-    assert "Словом «бот» себя не называй" in ai_trainer.SYSTEM_PROMPT
+    assert "Не называй себя чат-ботом" in ai_trainer.SYSTEM_PROMPT
     assert "never “the bot”" in i18n.t_in("en", "ai.language_tail")
 
 

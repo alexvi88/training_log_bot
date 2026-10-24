@@ -37,6 +37,7 @@ from starlette.routing import Route
 
 import achievement_sync
 import achievements
+import acquisition
 import ai_limits
 import ai_trainer
 import analytics
@@ -408,10 +409,57 @@ async def me(request: Request) -> JSONResponse:
             # «Профиле» и число на иконке, обновляется на каждом заходе в
             # приложение. Новое поле, старые сборки его не читают.
             "inbox_unread": await api_v1_inbox.unread_for(user_id),
+            # Реферальная ссылка для экрана «Пригласить» — веб, без Telegram:
+            # `<сервер>/i/ref_<id>` (referral_page.py, Universal Link). null —
+            # публичный адрес сервера не задан; тогда приложение собирает
+            # прежнюю t.me-ссылку само.
+            "invite_url": acquisition.referral_web_link(config.site_base_url(), user_id),
             # Полей ai_model/ai_model_options нет: выбора модели тренера
             # больше нет, и приложение строку «Модель тренера» не показывает.
         }
     )
+
+
+async def claim_referral(request: Request) -> JSONResponse:
+    """Код приглашения из реферальной ссылки → источник нового атлета.
+
+    Тело: `{"code": "ref_<id>"}` — последний сегмент пути `/i/<код>`, по
+    которому приложение открыли (Universal Link или `trainingdiary://i/<код>`),
+    в том числе отложенный до первого входа через Sign in with Apple.
+
+    Пишет тем же db.set_user_source, что /start в боте, и с теми же правилами:
+    первое касание побеждает (у атлета из бота источник уже есть, и ручка для
+    него ничего не меняет), своя ссылка — не приглашение, автор должен
+    существовать, а аккаунт — быть свежим (config.REFERRAL_CLAIM_DAYS).
+    Ответ `{"applied": bool}` — легла ли метка; 200 и тогда, когда нет: для
+    человека здесь нечего исправлять. Кривой код — 400 `invalid_referral`.
+    """
+    user_id, user = await common.authed_user(request)
+    body = await _json_body(request)
+    referrer_id = acquisition.referrer_from_code(str(_require(body, "code", str)))
+    if referrer_id is None:
+        raise ApiError(400, "invalid_referral", "code must look like ref_<id>")
+    applied = False
+    if (
+        referrer_id != user_id
+        and user["source"] is None
+        and _created_within(user["created_at"], config.REFERRAL_CLAIM_DAYS)
+        and await db.get_user(referrer_id) is not None
+    ):
+        applied = await db.set_user_source(user_id, acquisition.SOURCE_REFERRAL, referrer_id)
+    return JSONResponse({"applied": applied})
+
+
+def _created_within(created_at: Optional[str], days: int) -> bool:
+    if not created_at:
+        return False
+    try:
+        created = dt.datetime.fromisoformat(created_at)
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=dt.timezone.utc)
+    return dt.datetime.now(dt.timezone.utc) - created <= dt.timedelta(days=days)
 
 
 # ---------- push-уведомления (APNs) ----------
@@ -2291,6 +2339,7 @@ routes = [
     Route("/auth/logout", auth_logout, methods=["POST"]),
     Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
+    Route("/me/referral", claim_referral, methods=["POST"]),
     Route("/push/register", register_push_token, methods=["POST"]),
     Route("/push/register", unregister_push_token, methods=["DELETE"]),
     Route("/muscle-groups", list_muscle_groups, methods=["GET"]),

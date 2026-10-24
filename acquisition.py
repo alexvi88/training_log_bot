@@ -106,6 +106,43 @@ def referral_link(bot_username: str, telegram_id: int) -> str:
     return f"https://t.me/{bot_username}?start={referral_payload(telegram_id)}"
 
 
+# Та же метка `ref_<id>` — веб-страницей, для тех, кому Telegram не нужен:
+# `<config.site_base_url()>/i/ref_<id>` (referral_page.py). С приложением на
+# iPhone она открывает его Universal Link'ом, без — страницу с App Store
+# (кампания `ct=ref_<id>`), приложением по схеме и, третьей, ботом. Приложение
+# отдаёт код в `POST /v1/me/referral`, и источник ложится тем же
+# db.set_user_source, что у /start: первое касание побеждает.
+REFERRAL_WEB_PATH = "/i/"
+REFERRAL_APP_LINK_PREFIX = "trainingdiary://i/"
+
+
+def referral_web_link(base_url: Optional[str], telegram_id: int) -> Optional[str]:
+    """https-ссылка на страницу приглашения или None без публичного адреса."""
+    if not base_url:
+        return None
+    return f"{base_url}{REFERRAL_WEB_PATH}{referral_payload(telegram_id)}"
+
+
+def referrer_from_code(code: Optional[str]) -> Optional[int]:
+    """id автора из кода `ref_<id>` — строго, без догадок: None, если это не он.
+
+    Тот же разбор, что у `?start=` (parse_start_payload): минус законен
+    (синтетический id аккаунта без Telegram), не-ASCII цифры — нет.
+    """
+    raw = (code or "").strip()
+    if not raw.startswith(REFERRAL_PREFIX):
+        return None
+    rest = raw[len(REFERRAL_PREFIX):]
+    return int(rest) if _REFERRER_ID.fullmatch(rest) else None
+
+
+def with_campaign(store_url: str, telegram_id: int) -> str:
+    """Ссылка App Store с кампанией `ct=ref_<id>` (App Store Connect →
+    Analytics → Campaigns считает её вместе с `pt`, см. config.APP_STORE_URL)."""
+    joiner = "&" if "?" in store_url else "?"
+    return f"{store_url}{joiner}ct={referral_payload(telegram_id)}"
+
+
 def channel_link(bot_username: str, slug: str) -> str:
     """Ссылка под конкретный рекламный канал — её и отдаём в закупку."""
     return f"https://t.me/{bot_username}?start={CHANNEL_PREFIX}{_slug(slug)}"

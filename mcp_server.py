@@ -59,6 +59,7 @@ import i18n
 import legal_pages
 import mcp_oauth
 import mcp_wellknown
+import referral_page
 import seo_http
 import seo_pages
 import share_page
@@ -368,6 +369,8 @@ def build_server() -> MCPServer:
     # /coach/<код> — страница приглашения тренера и AASA для Universal Links
     # (см. coach_invite_page.py).
     coach_invite_page.register_routes(mcp)
+    # /i/ref_<id> — реферальная ссылка атлета без Telegram (см. referral_page.py).
+    referral_page.register_routes(mcp)
     # /p/<токен> — публичная страница визитки программы или упражнения и её
     # картинка для превью (см. share_page.py).
     share_page.register_routes(mcp)

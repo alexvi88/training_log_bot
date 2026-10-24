@@ -168,7 +168,7 @@ async def test_question_carries_gender_when_set(fresh_db, user_id, monkeypatch):
     messages = client.chat.completions.create.await_args_list[-1].kwargs["messages"]
     today = await ai_trainer._user_today(user_id)
     assert messages[-1]["content"] == (
-        f"Сколько белка мне есть?\n\nСегодня {today.isoformat()}.\nПол атлета: женский."
+        f"Сколько белка мне есть?\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}\nПол атлета: женский."
     )
     # Шапка от пола не зависит — общий кэшируемый префикс у всех один.
     assert messages[0]["content"] == ai_trainer._system_prompt()

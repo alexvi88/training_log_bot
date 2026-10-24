@@ -193,6 +193,9 @@ LOCALIZED: list[str] = [
     # Страница приглашения тренера /coach/<код> и AASA: все строки — i18n.t_in
     # в языке из Accept-Language, своих литералов нет.
     "coach_invite_page.py",
+    # Страница реферальной ссылки /i/ref_<id>: строки — referral_page.* через
+    # i18n.t_in в языке из Accept-Language, своих литералов нет.
+    "referral_page.py",
     # Страница визитки /p/<токен> и её картинка превью: строки — share_page.*
     # в каталоге внутри use_lang(язык страницы), данные — из снапшота через
     # handlers.sharing.shown_*; своих литералов нет.

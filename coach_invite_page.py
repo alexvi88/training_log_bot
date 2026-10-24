@@ -32,6 +32,7 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
+import acquisition
 import coach_service
 import config
 import db
@@ -205,13 +206,22 @@ async def invite_route(request: Request) -> HTMLResponse:
     return _html(page, lang)
 
 
+def _universal_link_paths() -> list[str]:
+    """Пути, которые iPhone с приложением открывает в нём, а не в Safari:
+    приглашение тренера, реферальная ссылка атлета (referral_page.py) и
+    страница визитки (share_page.py)."""
+    return [
+        f"{coach_service.WEB_LINK_PATH}*",
+        f"{acquisition.REFERRAL_WEB_PATH}*",
+        f"{sharing.WEB_LINK_PATH}*",
+    ]
+
+
 def aasa_json() -> dict[str, Any] | None:
-    """Пути Universal Links: приглашение тренера `/coach/*` и страница
-    визитки `/p/*` (share_page.py)."""
     app_id = config.apple_app_id()
     if not app_id:
         return None
-    prefixes = (coach_service.WEB_LINK_PATH, sharing.WEB_LINK_PATH)
+    paths = _universal_link_paths()
     return {
         "applinks": {
             # Новый формат (iOS 13+) и старый `paths` рядом — второй ничему не
@@ -219,9 +229,9 @@ def aasa_json() -> dict[str, Any] | None:
             "apps": [],
             "details": [{
                 "appIDs": [app_id],
-                "components": [{"/": f"{prefix}*"} for prefix in prefixes],
+                "components": [{"/": path} for path in paths],
                 "appID": app_id,
-                "paths": [f"{prefix}*" for prefix in prefixes],
+                "paths": paths,
             }],
         }
     }
