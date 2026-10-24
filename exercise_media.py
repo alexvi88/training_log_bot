@@ -343,29 +343,30 @@ EXERCISE_IMAGE_SLUGS = {
 # карточку, не увидел бы никогда. Поэтому новая версия кадров — новое имя
 # файла, `<слаг>_r<ревизия>_<n>.jpg`, а старое имя уходит. Ревизия 2 — кадры
 # с нашим тренером вместо стока free-exercise-db (скилл exercise-art в
-# iOS-репо). Имя кадра собирает только frame_name — не подклеивай
+# iOS-репо); 3 — второй кадр перерисован правкой первого, чтобы зал, свет
+# и обувь в паре совпадали. Имя кадра собирает только frame_name — не подклеивай
 # `f"{slug}_1.jpg"` руками.
 FRAME_REVISION: dict[str, int] = {
-    "barbell_bench_press_medium_grip": 2,
-    "pullups": 2,
-    "barbell_squat": 2,
-    "seated_dumbbell_press": 2,
-    "dumbbell_bicep_curl": 2,
-    "triceps_pushdown_rope_attachment": 2,
-    "crunches": 2,
-    "dumbbell_shrug": 2,
-    "dumbbell_bench_press": 2,
-    "wide_grip_lat_pulldown": 2,
-    "leg_press": 2,
-    "side_lateral_raise": 2,
-    "barbell_curl": 2,
-    "triceps_pushdown": 2,
-    "plank": 2,
-    "barbell_shrug": 2,
-    "barbell_incline_bench_press_medium_grip": 2,
-    "barbell_deadlift": 2,
-    "romanian_deadlift": 2,
-    "standing_military_press": 2,
+    "barbell_bench_press_medium_grip": 3,
+    "pullups": 3,
+    "barbell_squat": 3,
+    "seated_dumbbell_press": 3,
+    "dumbbell_bicep_curl": 3,
+    "triceps_pushdown_rope_attachment": 3,
+    "crunches": 3,
+    "dumbbell_shrug": 3,
+    "dumbbell_bench_press": 3,
+    "wide_grip_lat_pulldown": 3,
+    "leg_press": 3,
+    "side_lateral_raise": 3,
+    "barbell_curl": 3,
+    "triceps_pushdown": 3,
+    "plank": 3,
+    "barbell_shrug": 3,
+    "barbell_incline_bench_press_medium_grip": 3,
+    "barbell_deadlift": 3,
+    "romanian_deadlift": 3,
+    "standing_military_press": 3,
 }
 
 

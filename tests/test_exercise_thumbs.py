@@ -50,15 +50,15 @@ def test_every_catalog_thumb_url_points_at_a_thumb_file():
 def test_thumb_falls_back_to_full_frame_without_a_thumb_file(monkeypatch, tmp_path):
     monkeypatch.setattr(exercise_media, "THUMBS_DIR", str(tmp_path))
     url = exercise_media.thumb_url_for({"name": "Жим штанги лёжа", "original_name": "Жим штанги лёжа"})
-    assert url == "/media/exercises/barbell_bench_press_medium_grip_r2_1.jpg"
+    assert url == "/media/exercises/barbell_bench_press_medium_grip_r3_1.jpg"
 
 
 @pytest.mark.asyncio
 async def test_thumb_is_served_immutable():
     transport = httpx.ASGITransport(app=api_v1.build_app())
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        thumb = await client.get("/media/exercises/thumbs/barbell_bench_press_medium_grip_r2_1.jpg")
-        full = await client.get("/media/exercises/barbell_bench_press_medium_grip_r2_1.jpg")
+        thumb = await client.get("/media/exercises/thumbs/barbell_bench_press_medium_grip_r3_1.jpg")
+        full = await client.get("/media/exercises/barbell_bench_press_medium_grip_r3_1.jpg")
     assert thumb.status_code == 200
     assert thumb.headers["content-type"] == "image/jpeg"
     assert thumb.headers["cache-control"] == "public, max-age=31536000, immutable"
