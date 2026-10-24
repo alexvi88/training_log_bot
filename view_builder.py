@@ -175,6 +175,9 @@ async def build_block_views(
                 prev_set_rpes = [s.rpe for s in last.sets]
                 prev_started_at = dt.datetime.fromisoformat(last.started_at)
             if mark_records:
+                # Подходы без записанного веса — повторы, а не e1RM по весу
+                # тела (как прошлые сессии в `_prior_sessions_by_exercise`).
+                reps_only_today = all(w == 0 for w, _reps in entry["sets"])
                 record_e1rm_delta, record_reps = _session_record(
                     prior,
                     analytics.SessionStats(
@@ -182,7 +185,8 @@ async def build_block_views(
                         started_at=workout["started_at"],
                         sets=[
                             analytics.SetRow(
-                                load, reps, workout_id, workout["started_at"], rpe
+                                0.0 if reps_only_today else load,
+                                reps, workout_id, workout["started_at"], rpe,
                             )
                             for load, (_w, reps), rpe in zip(
                                 entry["loads"], entry["sets"], entry["rpes"], strict=True
@@ -404,13 +408,22 @@ async def _prior_sessions_by_exercise(
 
     Нагрузкой (db.load_of), а не записанным весом: рекорд и дельта сравниваются
     с тем же числом, по которому считается e1RM подхода.
+
+    Кроме тренировки упражнения, где ни в одном подходе вес не записан (только
+    повторы — подтягивания «×14»): её нагрузка — снимок веса тела, и с ним
+    сессия выпадала из режима повторов — «прошлая» читалась «81.5×10» вместо
+    «× 10», а рекорд 14 подтягиваний после 10 выходил «+3.3кг» по e1RM.
+    Такая сессия идёт с записанным весом (0), как в progress_data.load_sessions.
     """
-    rows_by_exercise: dict[int, list[analytics.SetRow]] = {}
-    for r in await db.list_prior_sets_for_exercises(
+    rows = await db.list_prior_sets_for_exercises(
         exercise_ids, workout_id, before, last_session_only=last_session_only
-    ):
+    )
+    weighted = {(r["exercise_id"], r["workout_id"]) for r in rows if r["weight"]}
+    rows_by_exercise: dict[int, list[analytics.SetRow]] = {}
+    for r in rows:
+        load = db.load_of(r) if (r["exercise_id"], r["workout_id"]) in weighted else r["weight"]
         rows_by_exercise.setdefault(r["exercise_id"], []).append(
-            analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+            analytics.SetRow(load, r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         )
     result: dict[int, list[analytics.SessionStats]] = {}
     for ex_id, set_rows in rows_by_exercise.items():

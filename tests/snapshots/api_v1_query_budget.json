@@ -2537,12 +2537,12 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 156.6кг (+55.3кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 156.6кг",
        "exercise_id": 334,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
-       "previous_sets_text": "80×8, 80×5 @10, 80×5 @9.5",
+       "previous_sets_text": "×8, ×5 @10, ×5 @9.5",
        "record_text": null,
        "reps_only": true,
        "sets": [
@@ -2653,12 +2653,12 @@
      "exercises": [
       {
        "display_name": "Подтягивания",
-       "e1rm_text": "↳ e1RM 208.5кг (+107.1кг к 23 мая)",
+       "e1rm_text": "↳ e1RM 208.5кг",
        "exercise_id": 334,
        "group_tag": "БИЦЕПС",
        "has_record": false,
        "note": null,
-       "previous_sets_text": "80×8, 80×5 @10, 80×5 @9.5",
+       "previous_sets_text": "×8, ×5 @10, ×5 @9.5",
        "record_text": null,
        "reps_only": true,
        "sets": [
@@ -2999,12 +2999,12 @@
      "exercises": [
       {
        "display_name": "Отжимания",
-       "e1rm_text": "↳ e1RM 244.9кг (+132.9кг к 24 мая)",
+       "e1rm_text": "↳ e1RM 244.9кг",
        "exercise_id": 335,
        "group_tag": "ГРУДЬ",
        "has_record": false,
        "note": null,
-       "previous_sets_text": "80×15 @10, 80×15, 80×12",
+       "previous_sets_text": "×15 @10, ×15, ×12",
        "record_text": null,
        "reps_only": true,
        "sets": [
@@ -13174,15 +13174,15 @@
     ],
     "prev_sets": [
      [
-      80.0,
+      0.0,
       8
      ],
      [
-      80.0,
+      0.0,
       5
      ],
      [
-      80.0,
+      0.0,
       5
      ]
     ],
@@ -13530,15 +13530,15 @@
     ],
     "prev_sets": [
      [
-      80.0,
+      0.0,
       8
      ],
      [
-      80.0,
+      0.0,
       5
      ],
      [
-      80.0,
+      0.0,
       5
      ]
     ],
@@ -14364,15 +14364,15 @@
     ],
     "prev_sets": [
      [
-      80.0,
+      0.0,
       8
      ],
      [
-      80.0,
+      0.0,
       5
      ],
      [
-      80.0,
+      0.0,
       5
      ]
     ],
@@ -14739,15 +14739,15 @@
     ],
     "prev_sets": [
      [
-      80.0,
+      0.0,
       8
      ],
      [
-      80.0,
+      0.0,
       5
      ],
      [
-      80.0,
+      0.0,
       5
      ]
     ],
@@ -15834,15 +15834,15 @@
     ],
     "prev_sets": [
      [
-      80.0,
+      0.0,
       15
      ],
      [
-      80.0,
+      0.0,
       15
      ],
      [
-      80.0,
+      0.0,
       12
      ]
     ],
@@ -16167,15 +16167,15 @@
     ],
     "prev_sets": [
      [
-      80.0,
+      0.0,
       15
      ],
      [
-      80.0,
+      0.0,
       15
      ],
      [
-      80.0,
+      0.0,
       12
      ]
     ],
