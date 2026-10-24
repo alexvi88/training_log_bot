@@ -10,6 +10,7 @@ ai_program_actions.py и progression_data.py).
 from __future__ import annotations
 
 import json
+import unicodedata
 from typing import Any, Optional
 
 import db
@@ -132,16 +133,70 @@ def _saved_profile_value(user: Any, slot: str) -> Optional[str]:
     return None
 
 
-def _with_saved_first(question: dict[str, Any], saved: Optional[str]) -> dict[str, Any]:
-    """Сохранённое значение — первой кнопкой «Как раньше: …». Переспросить надо
-    (цель и зал меняются, а программа собирается под сегодняшние), но вопрос
-    без прошлого ответа под рукой читается как «он забыл»."""
+# Сохранённый ответ (профиль тренера, свободным текстом и на том языке, на
+# котором человек тогда писал) → какой из готовых вариантов он означает.
+# Без этого «Как раньше: mass/hypertrophy» вставало над «Набрать массу» — одно
+# и то же дважды, да ещё по-английски в русском экране (владелец). Признаки —
+# на обоих языках: профиль мог быть записан на любом.
+_SAVED_MARKERS: dict[str, dict[str, tuple[str, ...]]] = {
+    "goal": {
+        "mass": ("масс", "гипертроф", "мышц", "mass", "hypertroph", "muscle", "bulk"),
+        "strength": ("сил", "пауэр", "strength", "strong", "powerlift"),
+        "lose": ("похуд", "жир", "сушк", "lose", "fat", "cut", "weight loss"),
+        "comeback": ("верну", "возвра", "comeback", "come back", "back in shape"),
+    },
+    "place": {
+        "gym": ("зал", "штанг", "тренаж", "gym", "barbell", "machine"),
+        "home_weights": ("гантел", "dumbbell"),
+        "home_bare": ("без инвентар", "свой вес", "no equipment", "bodyweight"),
+        "bar": ("турник", "брус", "pull-up", "pullup", "dip"),
+    },
+}
+_GOAL_KEYS = ("mass", "strength", "lose", "comeback")
+
+
+def _saved_choice(slot: str, saved: str, keys: tuple[str, ...]) -> Optional[str]:
+    """Ключ варианта, который означает сохранённый ответ, — только если он один.
+
+    «gym, barbell» — это «Зал с полным набором»; «зал и гантели дома» задевает
+    два варианта, и угадывать между ними — значит подставить человеку то, чего
+    он не говорил."""
+    text = saved.lower()
+    hits = [key for key, markers in _SAVED_MARKERS.get(slot, {}).items()
+            if key in keys and any(m in text for m in markers)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _in_ui_language(text: str) -> bool:
+    """Записано ли значение на языке экрана: кириллица — русский, иначе — нет."""
+    has_cyrillic = any("CYRILLIC" in unicodedata.name(ch, "") for ch in text)
+    return has_cyrillic == (i18n.get_lang() == "ru")
+
+
+def _with_saved_first(
+    question: dict[str, Any], saved: Optional[str], keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Сохранённое значение — первой кнопкой. Переспросить надо (цель и зал
+    меняются, а программа собирается под сегодняшние), но вопрос без прошлого
+    ответа под рукой читается как «он забыл».
+
+    Если прошлый ответ — это один из готовых вариантов, первым встаёт сам
+    вариант, без «Как раньше: …» над ним. Иначе — «Как раньше: …», но только
+    на языке экрана: английская строка профиля на русском экране — чужой язык
+    данными (CLAUDE.md), и вариантами ниже её всё равно не заменить."""
     if not saved:
         return question
     import ai_trainer  # локально — цикл импортов (нужны только потолки)
 
+    choices = list(question["choices"])
+    key = _saved_choice(question.get("slot", ""), saved, keys) if keys else None
+    if key is not None:
+        label = choices[keys.index(key)]
+        return {**question, "choices": [label, *[c for c in choices if c != label]]}
+    if not _in_ui_language(saved):
+        return question
     label = formatting.shorten(i18n.t("ai.screen.setup_core.as_before", value=saved), ai_trainer.SETUP_CHOICE_LIMIT)
-    rest = [choice for choice in question["choices"] if choice != label]
+    rest = [choice for choice in choices if choice != label]
     return {**question, "choices": [label, *rest][: ai_trainer.SETUP_MAX_CHOICES]}
 
 
@@ -155,14 +210,14 @@ def core_questions(user: Any = None, *, for_client: bool = False) -> list[dict[s
     поставлено (см. questions_with_core)."""
     prefix = "coach.ai_chat.setup_fresh" if for_client else "ai.screen.setup_fresh"
     goal = setup_goal_question(for_client=for_client)
-    questions = [_with_saved_first({**goal, "slot": "goal"}, _saved_profile_value(user, "goal"))]
+    questions = [_with_saved_first({**goal, "slot": "goal"}, _saved_profile_value(user, "goal"), _GOAL_KEYS)]
     for slot in CORE_SLOTS[1:]:
         question = {
             "question": i18n.t(f"{prefix}.{slot}.question"),
             "choices": [i18n.t(f"ai.screen.setup_fresh.{slot}.choice_{choice}") for choice in _SLOT_CHOICES[slot]],
             "slot": slot,
         }
-        questions.append(_with_saved_first(question, _saved_profile_value(user, slot)))
+        questions.append(_with_saved_first(question, _saved_profile_value(user, slot), _SLOT_CHOICES[slot]))
     return questions
 
 

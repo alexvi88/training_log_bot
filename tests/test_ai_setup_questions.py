@@ -344,7 +344,9 @@ async def test_saved_profile_becomes_first_choice_not_a_skipped_question(fresh_d
 
     by_slot = {q["slot"]: q for q in (await state.get_data())["ai_setup"]["questions"] if q.get("slot")}
     with i18n.use_lang("ru"):
-        assert by_slot["goal"]["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="набрать массу")
+        # Совпало с готовым вариантом — первым встаёт он сам, без дубля «Как раньше».
+        assert by_slot["goal"]["choices"][0] == i18n.t("ai.screen.setup_goal.choice_mass")
+        assert not any(c.startswith("Как раньше") for c in by_slot["goal"]["choices"])
         assert by_slot["experience"]["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="3 года")
         assert by_slot["place"]["choices"][0] == i18n.t(
             "ai.screen.setup_core.as_before", value="штанга, гантели"
@@ -849,3 +851,24 @@ def test_is_build_program_seed_matches_both_languages_only_exactly():
         assert ai_setup_flow.is_build_program_seed(f"  {seed}\n")
         assert not ai_setup_flow.is_build_program_seed(seed + " И ещё про ноги")
     assert not ai_setup_flow.is_build_program_seed("")
+
+
+def test_saved_profile_in_another_language_is_not_shown_as_is():
+    """Профиль записан по-английски, экран русский: «Как раньше: mass/hypertrophy»
+    над «Набрать массу» — дубль на чужом языке (владелец)."""
+    import ai_setup_flow
+    import i18n
+
+    user = {"goal": "mass/hypertrophy", "experience": "3 years of lifting", "equipment": '["gym", "barbell"]'}
+    with i18n.use_lang("ru"):
+        by_slot = {q["slot"]: q for q in ai_setup_flow.core_questions(user)}
+        assert by_slot["goal"]["choices"][0] == i18n.t("ai.screen.setup_goal.choice_mass")
+        assert by_slot["place"]["choices"][0] == i18n.t("ai.screen.setup_fresh.place.choice_gym")
+        # опыт свободной фразой ни на один вариант не ложится — на чужом языке не показываем
+        assert by_slot["experience"]["choices"][0] == i18n.t("ai.screen.setup_fresh.experience.choice_new")
+        for q in by_slot.values():
+            assert not any(c.startswith("Как раньше") for c in q["choices"])
+            assert len(q["choices"]) == len(set(q["choices"]))
+    with i18n.use_lang("en"):
+        by_slot = {q["slot"]: q for q in ai_setup_flow.core_questions(user)}
+        assert by_slot["experience"]["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="3 years of lifting")

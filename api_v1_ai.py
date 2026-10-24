@@ -544,6 +544,7 @@ async def _run_turn(
     # Начало хода для журнала /aichats (ai_chat_log): модель и цена — из
     # cost_events с этой метки.
     turn_started_at = db.now_iso()
+    app_token = ai_trainer.APP_CLIENT.set(True)
     try:
         with i18n.use_lang(lang):
             answer = await asyncio.wait_for(
@@ -559,6 +560,8 @@ async def _run_turn(
         raise ApiError(504, "timeout", "ai trainer did not answer in time") from exc
     except Exception as exc:
         raise ApiError(502, "answer_failed", "ai trainer failed to answer") from exc
+    finally:
+        ai_trainer.APP_CLIENT.reset(app_token)
 
     # Квота тратится за состоявшийся ответ, как и в боте (db.try_increment_ai_question_count
     # уже сам не даёт перескочить лимит атомарным UPDATE ... WHERE count < limit)
@@ -631,16 +634,40 @@ async def _store_undo_actions(
     `ai_undo.apply` для `kind="batch"`.
     """
     undos = [a for a in actions if a.get("undo") is not None]
-    if not undos:
-        return []
+    items: list[tuple[str, dict[str, Any]]] = []
     if len(undos) > 1:
         user = await db.get_user(user_id)
         with i18n.use_lang(user["lang"] if user is not None else "ru"):
             label = i18n.t("ai.screen.actions_folded_label", n=len(undos))
         items = [(label, {"kind": "batch", "items": [a["undo"] for a in undos]})]
-    else:
+    elif undos:
         items = [(undos[0]["label"], undos[0]["undo"])]
+    items += _proposals_as_actions(actions)
+    if not items:
+        return []
     return await db.add_ai_undo_actions(user_id, turn_id, items)
+
+
+def _proposals_as_actions(actions: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
+    """Предложения тренера, которые приложение умеет выполнить той же кнопкой
+    под ответом, что и откат (`POST /ai/undo`, ai_undo.apply).
+
+    Раньше они молча выбрасывались, а тренер писал «нажми кнопку ниже» —
+    кнопки в приложении не было (владелец: «а где блять кнопка», 34
+    упражнения в архив). Архив — обратим (⚙️ Упражнения → 🗄 Архив), письмо
+    разработчику уходит тапом, как в боте. Удаление, объединение и «поделиться»
+    сюда не попадают: им нужен экран с «точно?» или системный лист, и в
+    приложении тренер их кнопкой не предлагает (ai_trainer.APP_CLIENT)."""
+    out: list[tuple[str, dict[str, Any]]] = []
+    for action in actions:
+        callback = str(action.get("callback") or "")
+        if action.get("archive_ids"):
+            out.append((action["label"], {"kind": "archive_exercises", "ids": list(action["archive_ids"])}))
+        elif callback.startswith("ai:exarchask:"):
+            out.append((action["label"], {"kind": "archive_exercises", "ids": [int(callback.rsplit(":", 1)[1])]}))
+        elif action.get("feedback"):
+            out.append((action["label"], {"kind": "feedback", **action["feedback"]}))
+    return out
 
 
 def _program_json(
