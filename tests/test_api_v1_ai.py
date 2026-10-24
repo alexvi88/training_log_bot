@@ -997,7 +997,8 @@ async def test_ask_returns_setup_questions(fresh_db, client_factory, monkeypatch
     assert questions["total"] == 7
     with i18n.use_lang("ru"):
         assert questions["question"] == i18n.t("ai.screen.setup_goal.question")
-        assert questions["choices"][0] == i18n.t("ai.screen.setup_core.as_before", value="набор массы")
+        # «набор массы» — это готовый вариант «Набрать массу»: он и встаёт первым.
+        assert questions["choices"][0] == i18n.t("ai.screen.setup_goal.choice_mass")
     assert questions["skip_label"]
     state = await fresh_db.get_ai_setup_state(111)
     texts = [q["question"] for q in state["questions"]]
@@ -2596,3 +2597,58 @@ async def test_second_edit_without_replaces_program_still_replaces(fresh_db, cli
     assert saved.json()["program_id"] == program_id
     programs = await fresh_db.list_programs(111)
     assert len([p for p in programs if p["name"] == "Фуллбоди"]) == 1
+
+
+# ---------- предложения тренера, которые приложение выполняет кнопкой ----------
+
+
+@pytest.mark.asyncio
+async def test_archive_proposal_is_a_working_button_in_the_app(fresh_db, client_factory, monkeypatch):
+    """Владелец: тренер написал «нажми кнопку ниже, чтобы убрать 34 упражнения
+    в архив», а кнопки в приложении не было — /v1 выбрасывал archive_ids."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    ids = [await db.create_exercise(111, n, None) for n in ("Тяга с плинтов", "Жим в смите узко")]
+
+    async def fake_ask(user_id, question, history, on_action=None, on_wire=None, **kwargs):
+        await ai_trainer.execute_tool(
+            user_id, "archive_exercises", {"names": ["Тяга с плинтов", "Жим в смите узко"]}, on_action=on_action,
+        )
+        return "Нашёл два. Нажми кнопку ниже."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    ask = await client.post("/ai/ask", json={"question": "удали неиспользуемые"})
+    assert ask.status_code == 200, ask.text
+    actions = ask.json()["actions"]
+    assert len(actions) == 1 and "2" in actions[0]["label"]
+    assert [(await db.get_exercise(i))["is_archived"] for i in ids] == [0, 0]
+
+    done = await client.post("/ai/undo", json={"key": actions[0]["key"]})
+    assert done.status_code == 200, done.text
+    assert [(await db.get_exercise(i))["is_archived"] for i in ids] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_app_does_not_promise_a_button_it_cannot_press(fresh_db, client_factory, monkeypatch):
+    """Удалить программу в приложении кнопкой нельзя (нужен «точно?»): тренер
+    получает записку «кнопки не будет», а ответ — без кнопки."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    seen = {}
+
+    async def fake_ask(user_id, question, history, on_action=None, on_wire=None, **kwargs):
+        programs = (await ai_trainer._saved_programs(user_id))["programs"]
+        name = programs[0]["name"] if programs else "нет"
+        seen["payload"] = await ai_trainer.execute_tool(user_id, "delete_program", {"name": name}, on_action=on_action)
+        seen["had_program"] = bool(programs)
+        return "Готово."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    await fresh_db.create_routine(111, "Ноги")
+    ask = await client.post("/ai/ask", json={"question": "удали программу ноги"})
+    assert ask.status_code == 200, ask.text
+    assert ask.json()["actions"] == []
+    assert seen["had_program"]
+    assert "НЕ БУДЕТ" in str(seen["payload"])
+    # вне приложения (бот) записка прежняя
+    assert ai_trainer.APP_CLIENT.get() is False

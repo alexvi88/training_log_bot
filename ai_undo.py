@@ -53,6 +53,35 @@ async def apply(user_id: int, undo: dict) -> Optional[str]:
             return i18n.t("ai.screen.undo.batch_partial", done=done, total=len(items))
         return i18n.t("ai.screen.undo.batch_all", done=done)
 
+    # Не откаты, а предложения тренера, которые в приложении выполняет та же
+    # кнопка под ответом (api_v1_ai._store_undo_actions): «🗄 В архив» и
+    # «📬 Передать разработчику». В Telegram у них свои экраны с «точно?»;
+    # в приложении подпись кнопки сама называет действие, а архив обратим.
+    if kind == "archive_exercises":
+        archived = 0
+        for ex_id in undo.get("ids") or []:
+            ex = await db.get_exercise(int(ex_id))
+            if ex is None or ex["user_id"] != user_id or ex["is_template"] or ex["is_archived"]:
+                continue
+            await db.archive_exercise(int(ex_id))
+            archived += 1
+        return i18n.t("ai.screen.archived_count", n=archived) if archived else i18n.t("ai.screen.already_archived")
+
+    if kind == "feedback":
+        import api_v1_feedback
+        from api_v1_common import ApiError
+
+        # Шапка — админу, по-русски при любом языке атлета (как в боте,
+        # handlers/ai_trainer.ai_send_feedback).
+        with i18n.use_lang("ru"):
+            label = undo.get("label") or i18n.t("ai.screen.feedback.default_label")
+            header = i18n.t("ai.screen.feedback_header", label=label, who=str(user_id), id=user_id)
+        try:
+            await api_v1_feedback.store_and_forward(user_id, f"{header}\n\n{undo.get('text') or ''}", None)
+        except ApiError:
+            return None
+        return i18n.t("ai.screen.feedback.sent")
+
     if kind == "bodyweight":
         if await db.delete_bodyweight_log(int(undo["id"]), user_id):
             return i18n.t("ai.screen.undo.bodyweight")

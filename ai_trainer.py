@@ -25,6 +25,7 @@ web_search (_openai_web_search_findings), без наших DB-инструме�
 
 import asyncio
 import contextlib
+import contextvars
 import datetime as dt
 import json
 import logging
@@ -6154,6 +6155,27 @@ async def _save_athlete_profile(
 # Инструменты, которые ничего не делают сами, а возвращают (payload, действие
 # для кнопки под ответом) — см. ActionCallback. Всё необратимое или уходящее
 # наружу живёт здесь; обратимое диспетчер вызывает напрямую.
+
+# Ход тренера идёт из приложения (/v1/ai/ask ставит True на время вызова). Там
+# под ответом бывают только кнопки, которые `POST /ai/undo` умеет выполнить
+# (api_v1_ai._proposals_as_actions): откаты, «🗄 В архив», «📬 Передать
+# разработчику». Удалить, объединить, поделиться — в Telegram это экраны с
+# «точно?» и визитка в чат; в приложении тренер такую кнопку не обещает.
+APP_CLIENT: contextvars.ContextVar[bool] = contextvars.ContextVar("ai_app_client", default=False)
+
+_APP_NO_BUTTON_NOTE = (
+    "НИЧЕГО НЕ СДЕЛАНО, и кнопки под ответом НЕ БУДЕТ: разговор идёт в приложении, "
+    "а там это делается руками. Не пиши «кнопка ниже». Скажи коротко, что сделать "
+    "это можно самому в разделе «Программы», в меню этой программы."
+)
+
+
+def _app_can_run(action: dict[str, Any]) -> bool:
+    """Выполнит ли приложение эту кнопку (см. api_v1_ai._proposals_as_actions)."""
+    if action.get("undo") is not None or action.get("archive_ids") or action.get("feedback"):
+        return True
+    return str(action.get("callback") or "").startswith(("ai:exarchask:", "menu:"))
+
 _ACTION_TOOLS = {
     "delete_program": _delete_program,
     "merge_programs": _merge_programs,
@@ -6248,6 +6270,11 @@ async def execute_tool(
         # _ACTION_TOOLS она делает дело, у _UNDOABLE_TOOLS отменяет уже сделанное.
         tool = _ACTION_TOOLS.get(name) or _UNDOABLE_TOOLS[name]
         payload, action = await tool(user_id, tool_input)
+        if action is not None and APP_CLIENT.get() and not _app_can_run(action):
+            # В приложении эту кнопку нечем нажать (api_v1_ai._proposals_as_actions):
+            # тренер не должен обещать её — пусть скажет, где сделать руками.
+            action = None
+            payload = {**payload, "note": _APP_NO_BUTTON_NOTE}
         if action is not None and on_action is not None:
             await on_action(action)
             # Запись веса — единственное действие тут, у которого есть свой
