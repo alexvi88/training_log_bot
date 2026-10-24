@@ -549,3 +549,35 @@ async def test_migration_gives_old_copies_the_catalog_bodyweight_mode(fresh_db, 
     assert (await db.get_exercise(bench))["bodyweight_load"] == "none"
     assert await db._sync_bodyweight_load_of_old_copies() == 0
 
+
+
+@pytest.mark.asyncio
+async def test_v1_finished_reps_only_record_and_last_time_ignore_bodyweight(fresh_db):
+    """Вес тела записан — подходы «×10» несут нагрузку 81.5, но готовая
+    тренировка показывает их повторами: «прошлая» — «× 10», а не «81.5×10»,
+    рекорд 14 после 10 — повторами, а не «+3.3кг» по e1RM (кадр прогона)."""
+    client = await _linked(fresh_db)
+    pull = await _fork(client, "Подтягивания")
+    assert (await client.post("/bodyweight", json={"weight": 81.5})).status_code == 201
+    first = (await client.post("/workouts/active", json={})).json()["id"]
+    for reps in (10, 9):
+        await client.post(f"/workouts/{first}/sets", json={"exercise_id": pull, "weight": 0, "reps": reps})
+    assert (await client.post(f"/workouts/{first}/finish", json={})).status_code == 200
+    await fresh_db.conn().execute(
+        "UPDATE workouts SET started_at = datetime(started_at, '-2 days') WHERE id = ?", (first,)
+    )
+    await fresh_db.conn().commit()
+    second = (await client.post("/workouts/active", json={})).json()["id"]
+    for reps in (12, 14):
+        logged = (await client.post(
+            f"/workouts/{second}/sets", json={"exercise_id": pull, "weight": 0, "reps": reps}
+        )).json()
+        assert logged["load_weight"] == 81.5
+    assert (await client.post(f"/workouts/{second}/finish", json={})).status_code == 200
+
+    detail = (await client.get(f"/workouts/{second}")).json()
+    block = next(e for b in detail["blocks"] for e in b["exercises"] if e["exercise_id"] == pull)
+    assert block["record_text"] and "14" in block["record_text"], block["record_text"]
+    assert "кг" not in block["record_text"]
+    assert "81" not in (block["previous_sets_text"] or ""), block["previous_sets_text"]
+    assert "10" in (block["previous_sets_text"] or "")
