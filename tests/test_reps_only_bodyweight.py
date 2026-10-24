@@ -166,6 +166,8 @@ async def test_v1_bodyweight_prompt_missing_then_answer_recounts_load(fresh_db):
     assert logged["bodyweight_prompt"] == {"kind": "missing"}
     assert logged["load_weight"] == 0  # веса тела нет — нагрузка как записано
     assert (await client.get("/workouts/active")).json()["bodyweight_prompt"] == {"kind": "missing"}
+    # Приложение перечитывает тренировку по id после каждого подхода.
+    assert (await client.get(f"/workouts/{wid}")).json()["bodyweight_prompt"] == {"kind": "missing"}
 
     assert (await client.post("/bodyweight", json={"weight": 80})).status_code == 201
     row = await fresh_db.get_set(logged["id"])
