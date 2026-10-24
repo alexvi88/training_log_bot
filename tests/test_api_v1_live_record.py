@@ -161,3 +161,73 @@ async def test_finished_workout_has_no_gold_marks(fresh_db, client_factory):
     body = (await client.get(f"/workouts/{workout_id}")).json()
     sets = _exercise_entry(body, exercise_id)["sets"]
     assert all(s["is_gold"] is False for s in sets)
+
+
+async def _reps_only_exercise(client, fresh_db) -> int:
+    """Подтягивания своим весом — как их заводит каталог (bodyweight_load='full'):
+    вес не вводится, подход — одни повторы (seed_data.is_reps_only)."""
+    exercise_id = (await client.post("/exercises", json={"name": "Подтягивания"})).json()["id"]
+    await fresh_db.conn().execute(
+        "UPDATE exercises SET bodyweight_load = 'full', bodyweight_factor = 1.0 WHERE id = ?",
+        (exercise_id,),
+    )
+    await fresh_db.conn().commit()
+    return exercise_id
+
+
+async def _reps_only_gold(client, fresh_db, prior_reps: int, today_reps: list[int]) -> list[bool]:
+    exercise_id = await _reps_only_exercise(client, fresh_db)
+    first = (await client.post("/workouts/backfill", json={"date": "2024-01-01"})).json()["id"]
+    resp = await client.post(
+        f"/workouts/{first}/sets", json={"exercise_id": exercise_id, "weight": 0, "reps": prior_reps}
+    )
+    assert resp.status_code == 201, resp.text
+    await client.post(f"/workouts/{first}/finish", json={})
+    second = (await client.post("/workouts/active")).json()["id"]
+    for reps in today_reps:
+        resp = await client.post(
+            f"/workouts/{second}/sets", json={"exercise_id": exercise_id, "weight": 0, "reps": reps}
+        )
+        assert resp.status_code == 201, resp.text
+    body = (await client.get("/workouts/active")).json()
+    return [s["is_gold"] for s in _exercise_entry(body, exercise_id)["sets"]]
+
+
+@pytest.mark.asyncio
+async def test_reps_only_gold_moves_to_the_better_set(fresh_db, client_factory):
+    """Своим весом рекорд — повторы в подходе (как 🔥 у view_builder._session_record):
+    12 бьёт прошлые 10 — 🥇 на нём, следом 14 — 🥇 переезжает на 14. Раньше
+    🥇 считался по e1RM, а подход длиннее config.E1RM_MAX_REPS (12) в e1RM
+    не участвует: 14 повторов не перебивали 12 никогда (владелец)."""
+    client = await _linked_client(fresh_db, client_factory)
+    assert await _reps_only_gold(client, fresh_db, 10, [12, 14]) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_reps_only_gold_stays_on_best_when_later_set_is_weaker(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    assert await _reps_only_gold(client, fresh_db, 10, [14, 11, 9]) == [True, False, False]
+
+
+@pytest.mark.asyncio
+async def test_reps_only_set_that_only_ties_prior_best_is_not_gold(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    assert await _reps_only_gold(client, fresh_db, 15, [15, 13]) == [False, False]
+
+
+@pytest.mark.asyncio
+async def test_reps_only_gold_moves_when_bodyweight_is_known(fresh_db, client_factory):
+    """Вес тела известен — нагрузка подхода уже не 0, и e1RM-🥇 ставился на 12,
+    но 14 (длиннее config.E1RM_MAX_REPS) его не забирал. По повторам — забирает."""
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.add_bodyweight_log(111, 80.0, logged_at="2023-12-01T08:00:00")
+    assert await _reps_only_gold(client, fresh_db, 10, [12, 14]) == [False, True]
+
+
+def test_best_reps_gold_index_rules():
+    import view_builder
+
+    assert view_builder.best_reps_gold_index([12, 14], None) is None
+    assert view_builder.best_reps_gold_index([12, 14], 10) == 1
+    assert view_builder.best_reps_gold_index([14, 14], 10) == 0
+    assert view_builder.best_reps_gold_index([8, 10], 10) is None

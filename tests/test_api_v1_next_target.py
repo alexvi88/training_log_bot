@@ -111,6 +111,35 @@ async def test_achieved_flips_once_the_target_is_taken_today(fresh_db, client_fa
     assert after["achieved"] is True
 
 
+async def test_achieved_flips_back_after_every_set_is_deleted(fresh_db, client_factory):
+    """Сняли все сегодняшние подходы (крестиком в приложении) — блок упражнения
+    уходит из тренировки, а цель снова «🎯», не «✅» и не 404: приложение
+    перезапрашивает её после DELETE и верит ответу."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _exercise(user_id)
+    await _finished(user_id, ex_id, 1, [(50.0, 10)])
+    workout_id = await _open_workout(user_id)
+    url = f"/workouts/{workout_id}/exercises/{ex_id}/next-target"
+    before = (await client.get(url)).json()["hint"]
+
+    set_ids = []
+    for _ in range(2):
+        resp = await client.post(
+            f"/workouts/{workout_id}/sets",
+            json={"exercise_id": ex_id, "weight": before["target_weight"], "reps": before["target_reps"]},
+        )
+        assert resp.status_code == 201, resp.text
+        set_ids.append(resp.json()["id"])
+    assert (await client.get(url)).json()["hint"]["achieved"] is True
+
+    for set_id in set_ids:
+        assert (await client.delete(f"/workouts/{workout_id}/sets/{set_id}")).status_code == 200
+    resp = await client.get(url)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["hint"] == before
+
+
 async def test_todays_sets_do_not_become_the_baseline(fresh_db, client_factory):
     """Отталкиваться надо от ПРОШЛОЙ тренировки, а не от сегодняшней: иначе
     подсказка сравнивала бы сегодняшний подход сам с собой и росла бы после
