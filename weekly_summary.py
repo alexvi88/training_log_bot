@@ -60,10 +60,11 @@ USUAL_MIN_WEEKS = 3
 # лишней тренировки.
 STRONG_TONNAGE_GAIN = 0.10
 
-# Окно роста e1RM — как у сводки (dashboard_data): 8 недель, у короткой истории 4.
+# Окно роста e1RM и порог тренировок — как у сводки (dashboard_data): 8 недель,
+# у короткой истории 4; упражнение — хотя бы с 4 тренировок окна.
 LIFT_WINDOW_WEEKS = 8
 LIFT_FALLBACK_WINDOW_WEEKS = 4
-LIFT_CANDIDATES = 12
+LIFT_MIN_SESSIONS = 4
 
 
 def week_monday(day: dt.date) -> dt.date:
@@ -358,7 +359,8 @@ async def _top_lift(
     lift_start = week_end - dt.timedelta(weeks=weeks) + dt.timedelta(days=1)
     best: Optional[tuple[float, int, str, float, float]] = None
     for row in await db.top_exercises_by_frequency(
-        user_id, lift_start.isoformat(), week_end.isoformat(), limit=LIFT_CANDIDATES, tz_offset=tz
+        user_id, lift_start.isoformat(), week_end.isoformat(), limit=None,
+        min_sessions=LIFT_MIN_SESSIONS, tz_offset=tz
     ):
         before, window = await db.exercise_e1rm_growth(
             user_id, row["id"], lift_start.isoformat(), formula, tz_offset=tz,

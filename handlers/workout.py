@@ -882,13 +882,12 @@ def _try_claim_weight_confirm(user_id: int) -> bool:
     return True
 
 
-# Окно роста e1RM и число кандидатов переехали в dashboard_data вместе со
+# Окно роста e1RM и порог тренировок переехали в dashboard_data вместе со
 # сбором сводки. Здесь остаются алиасы: на эти имена ссылаются и код, и
 # комментарии (formatting.menu_lifts_title), и ломать их переездом незачем —
 # значение по-прежнему одно на обоих потребителей сводки, бота и REST.
 _LIFT_WINDOW_WEEKS = dashboard_data.LIFT_WINDOW_WEEKS
 _LIFT_FALLBACK_WINDOW_WEEKS = dashboard_data.LIFT_FALLBACK_WINDOW_WEEKS
-_LIFT_CANDIDATES = dashboard_data.LIFT_CANDIDATES
 
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:

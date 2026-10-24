@@ -29,10 +29,11 @@ import timeutil
 # свежим аккаунтам шанс увидеть плитку до восьмой недели.
 LIFT_WINDOW_WEEKS = 8
 LIFT_FALLBACK_WINDOW_WEEKS = 4
-# Кандидатов берётся больше, чем плиток: рост считается честно (максимум ДО окна
-# против максимума ВНУТРИ), и у многих частых движений он окажется нулевым —
-# форматтер их отбросит. Без запаса сводка часто оставалась бы вовсе без плиток.
-LIFT_CANDIDATES = 12
+# Кандидаты в плитки роста — все движения, сделанные хотя бы на стольких
+# тренировках окна, без потолка по числу: топ по частоте отрезал редкие, но
+# настоящие подъёмы. Порог отсекает шум: упражнение, попробованное раз-другой,
+# давало «+40%» с одного захода и вытесняло стабильный рост.
+LIFT_MIN_SESSIONS = 4
 
 # Фигура «ТЫ» в сцене зала приложения растёт по группам мышц от настоящего
 # объёма: среднее число рабочих подходов в неделю за последние BODY_VOLUME_WEEKS
@@ -98,7 +99,7 @@ async def collect(
         return None
     today = timeutil.user_today(user)
     # Смещение — из уже прочитанной строки: без него каждый из агрегатов ниже
-    # (а движений их до LIFT_CANDIDATES штук) перечитывал бы users.tz_offset сам.
+    # (а движений их — все, что прошли LIFT_MIN_SESSIONS) перечитывал бы users.tz_offset сам.
     tz = timeutil.offset_hours(user)
     dates = [
         dt.date.fromisoformat(d)
@@ -217,7 +218,7 @@ async def lift_growth(
     excluded = tuple(exclude_workout_ids)
     tz = timeutil.offset_hours(user)
     formula = user["e1rm_formula"]
-    # Движения — самые частые за окно, по числу тренировок. Не «базовые»: типа
+    # Движения — все, что были хотя бы на LIFT_MIN_SESSIONS тренировках окна. Не «базовые»: типа
     # движения в базе нет, и выбирать жим/присед/тягу пришлось бы по каталожным
     # именам, а у человека со своими названиями список оказался бы пустым.
     history_age_weeks = (today - min(dates)).days / 7
@@ -227,7 +228,8 @@ async def lift_growth(
     lift_start = today - dt.timedelta(weeks=lift_window_weeks)
     growth: list[tuple[str, float, float, int]] = []
     for row in await db.top_exercises_by_frequency(
-        user_id, lift_start.isoformat(), today.isoformat(), limit=LIFT_CANDIDATES, tz_offset=tz,
+        user_id, lift_start.isoformat(), today.isoformat(), limit=None,
+        min_sessions=LIFT_MIN_SESSIONS, tz_offset=tz,
         exclude_workout_ids=excluded,
     ):
         before_max, window_max = await db.exercise_e1rm_growth(
