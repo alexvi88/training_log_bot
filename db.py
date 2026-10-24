@@ -46,6 +46,7 @@ from seed_data import (
     MUSCLE_GROUP_PRESETS,
     OTHER_GROUP_NAME,
     PROGRAM_BY_KEY,
+    _fold_identity,
     canonical_exercise_name,
     canonical_muscle_group_name,
     catalog_popularity,
@@ -2313,7 +2314,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 16
+_SCHEMA_VERSION = 17
 
 
 async def _run_one_shot_migrations() -> None:
@@ -2361,6 +2362,8 @@ async def _run_one_shot_migrations() -> None:
         await _reset_e1rm_formula_to_epley()
     if version < 16:
         await _show_extra_stats_for_everyone()
+    if version < 17:
+        await _sync_bodyweight_load_of_old_copies()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -2589,6 +2592,39 @@ async def _backfill_bodyweight_load() -> None:
     """
     await _fill_null_bodyweight_loads()
     await _conn.commit()
+
+
+async def _sync_bodyweight_load_of_old_copies() -> int:
+    """Режим нагрузки каталога — старым копиям, заведённым до колонки
+    `bodyweight_load`: им досталось 'none' по умолчанию, и «Подтягивания»,
+    записанные полгода, жили как железо — «0кг ×» в трекере, «0×14» в ленте,
+    вес можно ввести, — пока свежая копия того же движения была «только
+    повторы» (владелец: «подтягивания почему ввод через 0»).
+
+    Копия узнаётся по идентичности каталога (`original_name`, у своего
+    упражнения без неё — по имени). Свои упражнения с этим именем и копии,
+    режим которых уже не 'none', не трогаются. Подходам своим весом сразу
+    ставится снимок нагрузки (`_fill_null_bodyweight_loads`)."""
+    loads = {_fold_identity(name): value for name, value in BODYWEIGHT_TEMPLATES.items()}
+    cur = await _conn.execute(
+        "SELECT id, name, original_name FROM exercises "
+        "WHERE user_id IS NOT NULL AND is_template = 0 AND bodyweight_load = 'none'"
+    )
+    fixed = 0
+    for row in await cur.fetchall():
+        identity = row["original_name"] or row["name"]
+        load = loads.get(_fold_identity(identity or ""))
+        if load is None:
+            continue
+        await _conn.execute(
+            "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = ? WHERE id = ?",
+            (load[0], load[1], row["id"]),
+        )
+        fixed += 1
+    await _fill_null_bodyweight_loads()
+    await _conn.commit()
+    logger.info("bodyweight_load synced for %s old copies", fixed)
+    return fixed
 
 
 async def _fill_null_bodyweight_loads(user_id: Optional[int] = None) -> int:
