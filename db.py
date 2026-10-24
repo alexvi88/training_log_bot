@@ -185,7 +185,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- только через set_user_gender. Тренер знает его, только когда он выбран,
     -- и никогда не угадывает по имени или данным (ai_trainer._profile_block).
     -- Приложение рисует по нему фигуру «ТЫ» в сцене зала.
-    gender TEXT
+    gender TEXT,
+    -- Самая большая веха (дней с первой тренировки: 7, 30, 90, 180, 365), о
+    -- которой ушёл iOS-пуш «смотри, как ты вырос» (engagement.you_video_
+    -- milestone). 0 — ни одной. Колонкой, а не строкой в `pushes`: те чистятся
+    -- через admin_tasks.PUSH_RETENTION_DAYS, а «каждая веха — один раз»
+    -- должно пережить и чистку, и год до последней вехи.
+    you_video_milestone INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1972,6 +1978,12 @@ async def _migrate_schema() -> None:
     if "gender" not in user_cols:
         # NULL всем существующим: пол никто не выбирал, угадывать нельзя.
         await _conn.execute("ALTER TABLE users ADD COLUMN gender TEXT")
+    if "you_video_milestone" not in user_cols:
+        # 0 всем существующим: вехи считаются с выкладки пуша, а прошедшие
+        # отсекает окно engagement.YOU_VIDEO_GRACE_DAYS, а не эта колонка.
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN you_video_milestone INTEGER NOT NULL DEFAULT 0"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -12457,6 +12469,50 @@ async def list_feedback_push_candidates() -> list[aiosqlite.Row]:
         "GROUP BY u.telegram_id"
     )
     return list(await cur.fetchall())
+
+
+async def list_you_video_candidates() -> list[aiosqlite.Row]:
+    """Пул iOS-пуша о вехе «смотри, как ты вырос» (engagement._send_you_video_
+    pushes): законченная тренировка есть, iOS-токен есть, пуши не выключены.
+    Демо-аккаунты App Review и прогона скриншотов (провайдер `review_demo`) —
+    никогда, как и у пуша с запросом отзыва.
+
+    Строка: telegram_id, tz_offset, gender, lang, you_video_milestone.
+    Вехи, окно и активность решает engagement."""
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.tz_offset, u.gender, u.lang, u.you_video_milestone "
+        "FROM users u WHERE u.pushes_enabled = 1 "
+        "AND EXISTS (SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id AND w.status = 'finished') "
+        "AND EXISTS (SELECT 1 FROM push_tokens t WHERE t.user_id = u.telegram_id AND t.platform = 'ios') "
+        "AND NOT EXISTS (SELECT 1 FROM auth_identities a "
+        "WHERE a.user_id = u.telegram_id AND a.provider = 'review_demo')"
+    )
+    return list(await cur.fetchall())
+
+
+async def last_in_app_workout_date(user_id: int, *, tz_offset: Optional[int] = None) -> Optional[str]:
+    """Местный день (YYYY-MM-DD) последней законченной тренировки, записанной
+    у нас, — без перенесённых импортом (IMPORTED_WORKOUT_SQL). None — таких
+    нет. Тот же местный день, что у list_finished_workout_dates."""
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT MAX({day}) FROM workouts "
+        f"WHERE user_id = ? AND status = 'finished' AND NOT {IMPORTED_WORKOUT_SQL}",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def mark_you_video_milestone(telegram_id: int, days: int) -> None:
+    """Запомнить веху, о которой ушёл пуш «смотри, как ты вырос». Только
+    вверх: меньшая веха после большей не пишется."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET you_video_milestone = MAX(you_video_milestone, ?) WHERE telegram_id = ?",
+            (int(days), telegram_id),
+        )
+        await conn().commit()
 
 
 async def mark_feedback_push_sent(telegram_id: int, sent_at: str) -> None:

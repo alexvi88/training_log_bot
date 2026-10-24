@@ -56,6 +56,11 @@ NEWBIE_NUDGE = "newbie_nudge"
 # пула (engagement._send_feedback_pushes, короткий текст — push.ios.feedback_ask.*).
 # Ключ — метка для pushes/дедупа и для push_open в аналитике.
 FEEDBACK_ASK = "feedback_ask"
+# Веха «смотри, как ты вырос» (неделя, месяц, 3 месяца, полгода, год с первой
+# тренировки) — только iOS, вне цепочки приоритетов и без телеграмного пула:
+# видео живёт в приложении (engagement._send_you_video_pushes, короткий текст —
+# push.ios.you_video.<веха>.*, см. push_ios.you_video_alert).
+YOU_VIDEO = "you_video"
 
 SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
 SKIP_CATEGORY_BY_DAY: dict[int, str] = {
@@ -131,6 +136,7 @@ CATEGORY_LABELS: dict[str, str] = {
     AI_WEEKLY: "AI-дайджест",
     NEWBIE_NUDGE: "Новичок без тренировок",
     FEEDBACK_ASK: "Запрос отзыва (iOS)",
+    YOU_VIDEO: "Веха: видео «как ты рос» (iOS)",
 }
 
 

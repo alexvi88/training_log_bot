@@ -293,7 +293,11 @@ def test_you_video_events_keep_source_enum_and_capped_activity():
     assert product_metrics.clean_props("you_video_open", {"source": "menu", "text": "что ввёл человек"}) == {
         "source": "menu"
     }
-    assert product_metrics.clean_props("you_video_open", {"source": "push"}) == {}
+    for source in ("menu", "finish", "push"):
+        for event in ("you_video_open", "you_video_shared"):
+            assert product_metrics.clean_props(event, {"source": source}) == {"source": source}
+    assert product_metrics.clean_props("you_video_open", {"source": "lock_screen"}) == {}
+    assert product_metrics.clean_props("you_video_shared", {"source": "deeplink"}) == {}
     save = "com.apple.UIKit.activity.SaveToCameraRoll"
     assert product_metrics.clean_props(
         "you_video_shared", {"source": "menu", "activity": save, "caption": "подпись"}

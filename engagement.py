@@ -952,6 +952,14 @@ async def _send_daily_pushes(bot: Bot) -> None:
     # После обоих пулов выше и в том же тике: у пуша с запросом отзыва
     # приоритет ниже любого сигнала дневника, и раз сигнальный пуш уже ушёл
     # сегодня, has_push_today отложит отзыв на другой день.
+    # Веха «смотри, как ты вырос» — тоже после сигнальных пулов: окно у неё в
+    # несколько дней, и занятый сегодня слот (has_push_today) просто сдвигает
+    # её на завтра. Перед отзывом: праздник важнее вопроса, а вопрос подождёт.
+    try:
+        await _send_you_video_pushes(hour)
+    except Exception:
+        logger.exception("Failed to send you-video milestone pushes")
+
     try:
         await _send_feedback_pushes(hour)
     except Exception:
@@ -1125,6 +1133,157 @@ async def _send_feedback_push(telegram_id: int, local_date: dt.date, *, first: b
         telegram_id, "feedback_push_sent", {"round": "first" if first else "repeat"},
         platform=product_metrics.PLATFORM_IOS,
     )
+    return True
+
+
+# ---------- Веха «смотри, как ты вырос»: видео в приложении, только iOS ----------
+#
+# Неделя, месяц, 3 месяца, полгода и год с первой законченной тренировки — тот
+# же первый день, от которого GET /v1/dashboard/timeline
+# (dashboard_data.you_timeline) строит видео «как ты рос». Банер ведёт в это
+# видео (push_ios.you_video_route). Telegram — мимо: видео живёт в приложении,
+# открыть его из чата нечем.
+#
+# Кому (решает you_video_milestone, чистая функция):
+# - веха наступила не больше YOU_VIDEO_GRACE_DAYS дней назад: окно в несколько
+#   дней — потому что в сам день вехи слот может занять сигнальный пуш
+#   (has_push_today), а пропущенный праздник через месяц — уже не праздник;
+#   из окна вышла — молчим, и о прошлой вехе не вспоминаем;
+# - к дню вехи тренировок не меньше порога вехи (YOU_VIDEO_MILESTONES): «смотри,
+#   как ты вырос» должно быть правдой, а три точки за полгода — не рост;
+# - последняя тренировка, записанная у нас (не перенесённая импортом), не
+#   старше YOU_VIDEO_ACTIVE_DAYS: мёртвому аккаунту празднуют пустоту;
+# - каждая веха — один раз (users.you_video_milestone, только вверх).
+#
+# Перенос истории. Перенесённые тренировки — данные (CLAUDE.md): первый день
+# видео считается и по ним, как в самом видео. Но веха, которую атлет
+# «перешагнул» в день переезда из Hevy, — не его путь с нами, а старые даты:
+# назавтра после импорта пришло бы «полгода позади». Поэтому веха должна
+# наступить не раньше YOU_VIDEO_IMPORT_SETTLE_DAYS после последнего переноса
+# (db.last_import_at) — к этому дню у человека уже неделя жизни с дневником,
+# а свежая тренировка «у нас» (условие выше) подтверждает, что он здесь.
+# Прошедшие при переезде вехи не догоняем: следующая наступит сама.
+#
+# Когда: то же окно, что у запроса отзыва (should_send_feedback_now) — от часа
+# сигнальных пушей до тихих часов по местному, без пояса — безопасный час UTC.
+# Один пуш в день держит has_push_today, выключенные пуши — пул.
+
+# (дней с первой тренировки, тренировок к этому дню не меньше)
+YOU_VIDEO_MILESTONES: tuple[tuple[int, int], ...] = (
+    (7, 3),
+    (30, 6),
+    (90, 12),
+    (180, 20),
+    (365, 30),
+)
+YOU_VIDEO_GRACE_DAYS = 4
+YOU_VIDEO_ACTIVE_DAYS = 14
+YOU_VIDEO_IMPORT_SETTLE_DAYS = 7
+
+
+def you_video_milestone(
+    dates: list[dt.date],
+    today: dt.date,
+    *,
+    last_in_app: Optional[dt.date],
+    last_import: Optional[dt.date],
+    already: int = 0,
+) -> Optional[int]:
+    """Веха (дней с первой тренировки) для пуша сегодня, или None.
+
+    `dates` — местные дни законченных тренировок, с перенесёнными (как у
+    видео); `last_in_app` — последний день тренировки, записанной у нас;
+    `last_import` — день последнего переноса истории; `already` — самая
+    большая веха, о которой пуш уже ушёл."""
+    if not dates:
+        return None
+    first = min(dates)
+    since = (today - first).days
+    reached = [(days, need) for days, need in YOU_VIDEO_MILESTONES if days <= since]
+    if not reached:
+        return None
+    days, need = reached[-1]
+    if days <= already or since > days + YOU_VIDEO_GRACE_DAYS:
+        return None
+    reached_on = first + dt.timedelta(days=days)
+    if sum(1 for d in dates if d <= reached_on) < need:
+        return None
+    if last_in_app is None or (today - last_in_app).days > YOU_VIDEO_ACTIVE_DAYS:
+        return None
+    if last_import is not None and reached_on < last_import + dt.timedelta(days=YOU_VIDEO_IMPORT_SETTLE_DAYS):
+        return None
+    return days
+
+
+def _parse_day(value: Optional[str]) -> Optional[dt.date]:
+    if not value:
+        return None
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+async def _send_you_video_pushes(hour: int) -> None:
+    """Один проход по пулу: у кого сейчас окно и наступила веха — банер на
+    каждое iOS-устройство, маршрут — видео «как ты рос»."""
+    if not apns.is_configured():
+        return
+    for row in await db.list_you_video_candidates():
+        telegram_id = row["telegram_id"]
+        if telegram_id in REVIEW_ACCOUNT_IDS:
+            continue
+        tz_offset = row["tz_offset"]
+        if not should_send_feedback_now(tz_offset, hour):
+            continue
+        local_date = _local_now(tz_offset).date()
+        try:
+            dates = [
+                d for d in (
+                    dt.date.fromisoformat(s)
+                    for s in await db.list_finished_workout_dates(telegram_id, tz_offset=tz_offset)
+                )
+                if d <= local_date
+            ]
+            days = you_video_milestone(
+                dates, local_date,
+                last_in_app=_parse_day(await db.last_in_app_workout_date(telegram_id, tz_offset=tz_offset)),
+                last_import=_parse_day(await db.last_import_at(telegram_id)),
+                already=row["you_video_milestone"] or 0,
+            )
+            if days is None:
+                continue
+            with i18n.use_lang(row["lang"] if row["lang"] in i18n.SUPPORTED else i18n.DEFAULT_LANG):
+                await _send_you_video_push(telegram_id, days, row["gender"], local_date)
+            await asyncio.sleep(SEND_DELAY)
+        except Exception:
+            logger.exception("Failed to send the you-video push to user %s", telegram_id)
+
+
+async def _send_you_video_push(
+    telegram_id: int, days: int, gender: Optional[str], local_date: dt.date
+) -> bool:
+    """Отправить и записать. True — Apple принял хотя бы на одно устройство
+    или банер лёг во «Уведомления». Ни того, ни другого — веху не отмечаем:
+    в следующий тик окна попробуем снова."""
+    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES):
+        return False
+    if not await db.get_push_tokens(telegram_id, "ios"):
+        return False
+    category = push_texts.YOU_VIDEO
+    lang = i18n.get_lang()
+    title, body = push_ios.you_video_alert(days, gender)
+    delivery = await inbox.deliver(
+        telegram_id, category, title, body, lang=lang, route=push_ios.you_video_route(days)
+    )
+    if not delivery.accepted and delivery.inbox_id is None:
+        return False
+    # Только iOS-баннер: доставку в сводке считает push_sent из apns.send_alert
+    # (pushes_sent:you_video), тап — push_open от приложения (push_opens:you_video).
+    await db.record_push(
+        telegram_id, category, f"{title}\n{body}", local_date.isoformat(), channel=None
+    )
+    await db.mark_you_video_milestone(telegram_id, days)
     return True
 
 
