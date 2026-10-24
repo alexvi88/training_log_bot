@@ -780,6 +780,11 @@
     "groupTag": {
      "type": "String",
      "optional": true
+    },
+    "repsOnly": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -797,6 +802,27 @@
     "loggedAt": {
      "type": "String",
      "optional": false
+    }
+   }
+  },
+  "BodyweightPromptPayload": {
+   "file": "TrainingLog/Features/ActiveWorkout/BodyweightPrompt.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": true
+    },
+    "weight": {
+     "type": "Double",
+     "optional": true
+    },
+    "unit": {
+     "type": "String",
+     "optional": true
+    },
+    "loggedAt": {
+     "type": "String",
+     "optional": true
     }
    }
   },
@@ -1837,6 +1863,11 @@
     "lastWorkoutAt": {
      "type": "String",
      "optional": true,
+     "default": true
+    },
+    "repsOnly": {
+     "type": "Bool",
+     "optional": false,
      "default": true
     }
    }
@@ -4257,6 +4288,11 @@
      "type": "Bool",
      "optional": true,
      "default": true
+    },
+    "bodyweightPrompt": {
+     "type": "BodyweightPromptPayload",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5523,5 +5559,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "4e278c7f057daee0635cb56a1cb307edb1465f26"
+ "_ios_commit": "e9e1d0e1caec083da045ff75054b0a369a2390d7"
 }
