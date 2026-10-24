@@ -228,7 +228,7 @@ async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
         animation = getattr(sent, "animation", None)
         exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
         return [sent.message_id]
-    images = exercise_media.get_images_for(ex)
+    images = exercise_media.get_images_for(ex, await exercise_media.image_style(chat_id))
     if not images:
         if not exercise_descriptions.effective_description(ex):
             return []
@@ -2177,7 +2177,9 @@ async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
     text = _exercise_info_text(template, with_created=False)
     kb = keyboards.template_preview_keyboard(template_id, prefix="pick")
     confirm_kb = keyboards.template_preview_keyboard(template_id, prefix="pick", as_question=True)
-    images = exercise_media.get_images(template["name"])
+    images = exercise_media.get_images(
+        template["name"], await exercise_media.image_style(callback.from_user.id)
+    )
     # Обе позиции, а не images[0]: пара кадров — начальное и конечное положение,
     # и по одному не видно самого движения. Помощник общий с экраном каталога,
     # там же и разбор, почему клавиатура едет отдельным сообщением.

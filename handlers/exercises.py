@@ -261,7 +261,9 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     confirm_kb = keyboards.template_preview_keyboard(template_id, as_question=True, with_copy=True)
     # Media lookup stays on the raw (Russian) template name — that's the
     # catalog key `exercise_media` is built on, not what gets shown.
-    images = exercise_media.get_images(template["name"])
+    images = exercise_media.get_images(
+        template["name"], await exercise_media.image_style(callback.from_user.id)
+    )
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     # Rich-сообщение (Bot API 10.2, InputRichMessage) пробовали вместо
@@ -723,7 +725,9 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
         exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
-    images = exercise_media.get_images_for(ex)
+    # Чей выбор «Картинки упражнений» — хозяина упражнения, то есть того, кто
+    # открыл свою карточку (message здесь — сообщение бота, его from_user — бот).
+    images = exercise_media.get_images_for(ex, await exercise_media.image_style(ex["user_id"]))
     if not images:
         return False
     media = [
