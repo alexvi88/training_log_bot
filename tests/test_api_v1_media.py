@@ -81,8 +81,8 @@ async def test_media_for_exercise_with_known_template(fresh_db, client_factory):
     assert body["has_media"] is True
     assert len(body["images"]) == 2
     assert all(u.startswith("/media/exercises/") for u in body["images"])
-    assert body["images"][0].endswith(f"{KNOWN_SLUG}_1.jpg")
-    assert body["images"][1].endswith(f"{KNOWN_SLUG}_2.jpg")
+    assert body["images"][0].endswith(exercise_media.frame_name(KNOWN_SLUG, 1))
+    assert body["images"][1].endswith(exercise_media.frame_name(KNOWN_SLUG, 2))
     # никакого клипа для этого упражнения ещё не снято
     assert body["animation"] is None
 
@@ -158,7 +158,7 @@ async def test_serves_existing_media_file_with_correct_type(fresh_db, client_fac
     # Статика без токена: см. комментарий в api_v1_media.get_media_file про
     # осознанный отказ от Bearer-токена для этого маршрута.
     client = client_factory()
-    resp = await client.get(f"/media/exercises/{KNOWN_SLUG}_1.jpg")
+    resp = await client.get(f"/media/exercises/{exercise_media.frame_name(KNOWN_SLUG, 1)}")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/jpeg"
     assert "cache-control" in resp.headers

@@ -250,8 +250,8 @@ async def test_copy_of_catalog_exercise_shares_media_but_not_identity(fresh_db, 
     media_dir = tmp_path / "media"
     media_dir.mkdir()
     slug = exercise_media.EXERCISE_IMAGE_SLUGS[BENCH]
-    for suffix in ("_1.jpg", "_2.jpg", "_demo.mp4"):
-        (media_dir / f"{slug}{suffix}").write_bytes(b"x")
+    for name in (exercise_media.frame_name(slug, 1), exercise_media.frame_name(slug, 2), f"{slug}_demo.mp4"):
+        (media_dir / name).write_bytes(b"x")
     monkeypatch.setattr(exercise_media, "MEDIA_DIR", str(media_dir))
 
     src = await _bench_fork(db, user_id)

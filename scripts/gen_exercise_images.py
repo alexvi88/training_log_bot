@@ -269,7 +269,7 @@ def target_path(slug: str, phase: int) -> pathlib.Path:
 
 def pose_reference(slug: str, phase: int) -> pathlib.Path | None:
     """Кадр из free-exercise-db под ту же фазу — он и есть образец позы."""
-    path = SOURCE_DIR / f"{slug}_{phase}.jpg"
+    path = SOURCE_DIR / exercise_media.frame_name(slug, phase)
     return path if path.exists() else None
 
 

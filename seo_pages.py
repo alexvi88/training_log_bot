@@ -2190,7 +2190,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     article = {
         "@context": "https://schema.org", "@type": "Article",
         "headline": t("seo.exercise.title", name=name)[:110], "description": lead, "inLanguage": lang,
-        "image": [base + _media_url(f"{slug}_1.jpg"), base + _media_url(f"{slug}_2.jpg")],
+        "image": [base + _media_url(exercise_media.frame_name(slug, 1)), base + _media_url(exercise_media.frame_name(slug, 2))],
         "mainEntityOfPage": base + url_for(page, lang),
         "author": {"@type": "Organization", "name": t("seo.brand"), "url": home},
         "publisher": {"@type": "Organization", "name": t("seo.brand"), "url": home},
@@ -2343,17 +2343,17 @@ def page_images(page: Page, lang: str) -> list[str]:
         return [seo_static.asset_url(f"screens/{lang}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[lang]]
     if page.kind == "exercise":
         slug = _EXERCISE_BY_URL[page.arg]
-        return [_media_url(f"{slug}_1.jpg"), _media_url(f"{slug}_2.jpg")]
+        return [_media_url(exercise_media.frame_name(slug, 1)), _media_url(exercise_media.frame_name(slug, 2))]
     if page.kind == "pair":
         import seo_library
 
-        return [_media_url(f"{_EXERCISE_BY_URL[u]}_1.jpg") for u in seo_library.pair_exercises(page.arg)]
+        return [_media_url(exercise_media.frame_name(_EXERCISE_BY_URL[u], 1)) for u in seo_library.pair_exercises(page.arg)]
     if page.kind == "exercise_alt":
         import seo_catalog
         import seo_swaps
 
         alts = seo_catalog.swaps(seo_swaps.identity_of(page.arg))
-        return [_media_url(f"{exercise_media.EXERCISE_IMAGE_SLUGS[a]}_2.jpg") for a in alts]
+        return [_media_url(exercise_media.frame_name(exercise_media.EXERCISE_IMAGE_SLUGS[a], 2)) for a in alts]
     return []
 
 

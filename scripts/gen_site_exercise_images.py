@@ -63,7 +63,7 @@ def main() -> int:
     jobs += [(exercise_media.EXERCISE_IMAGE_SLUGS[name], (2,), WIDTHS[:1]) for name in seo_catalog.card_identities()]
     for slug, frames, widths in jobs:
         for frame in frames:
-            src = os.path.join(SRC, f"{slug}_{frame}.jpg")
+            src = os.path.join(SRC, exercise_media.frame_name(slug, frame))
             base = grade(Image.open(src))
             for width in widths:
                 if frame == 1 and width == 360:
