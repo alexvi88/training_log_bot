@@ -255,6 +255,10 @@ def test_review_prompt_event_keeps_reason_and_counts():
     assert product_metrics.clean_props(
         "review_prompt_requested", {"reason": "finish", "workouts": 1, "nth": 1, "text": "что ввёл человек"}
     ) == {"reason": "finish", "workouts": 1, "nth": 1}
+    # «Оценить приложение» в настройках iOS — свой reason, не веха.
+    assert product_metrics.clean_props(
+        "review_prompt_requested", {"reason": "settings", "workouts": 12, "nth": 2}
+    ) == {"reason": "settings", "workouts": 12, "nth": 2}
     assert product_metrics.clean_props(
         "review_prompt_requested", {"reason": "hack", "workouts": "1", "nth": True}
     ) == {}

@@ -875,6 +875,26 @@ async def _screen_import_resolve(db, user_id: int) -> str:
     return i18n.t("resolve.progress_similar", position=1, total=4, name="Bench Press") + " " + _kb_texts(kb)
 
 
+async def _screen_exercise_bodyweight_toggle(db, user_id: int) -> str:
+    """«⚖️ Своим весом»: карточка своего упражнения сразу после создания
+    (переключатель и подсказка), то же в «✏️ Редактировать» в обоих
+    положениях и оба тоста."""
+    from handlers import exercises as exercises_handlers
+
+    group_id = await db.create_muscle_group(user_id, "Back")
+    ex = await db.get_exercise(await db.create_exercise(user_id, "Ring muscle-up", group_id))
+    text, kb = exercises_handlers._exercise_detail_view(ex, bodyweight_toggle=True)
+    text += " " + _kb_texts(kb)
+    for bodyweight in (True, False):
+        await db.set_exercise_bodyweight(ex["id"], bodyweight)
+        ex = await db.get_exercise(ex["id"])
+        _, kb = await exercises_handlers._exercise_edit_menu_payload(ex)
+        text += " " + _kb_texts(kb)
+    for key in ("exercises.bodyweight_toast_on", "exercises.bodyweight_toast_off"):
+        text += " " + i18n.t(key)
+    return text
+
+
 async def _screen_exercise_copy(db, user_id: int) -> str:
     """«⧉ Сделать копию»: кнопка в меню правки, вопрос об имени с «Отменой»,
     три отказа и подтверждение — всё, что человек видит по дороге."""
@@ -1201,6 +1221,7 @@ SCREENS: list[tuple[str, object]] = [
     ("import_resolve_templates", _screen_import_resolve),
     ("exercise_merge_done", _screen_merge_done),
     ("exercise_copy", _screen_exercise_copy),
+    ("exercise_bodyweight_toggle", _screen_exercise_bodyweight_toggle),
     ("coach_hub_and_invite", _screen_coach_hub_and_invite),
     ("coach_athlete_side", _screen_coach_athlete_side),
     ("coach_clients_and_card", _screen_coach_clients),

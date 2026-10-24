@@ -146,7 +146,8 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # идут к тренеру собирать программу и сколько откладывают на неделю.
     "plan_offer": frozenset({"action"}),
     # Приложение попросило у iOS окно оценки (ReviewPrompt): reason
-    # record|rank|finish, workouts — законченных у нас тренировок, nth — какой
+    # record|rank|finish — само после вехи, settings — человек тапнул «Оценить
+    # приложение» в настройках; workouts — законченных у нас тренировок, nth — какой
     # это запрос у аккаунта. Показала ли система окно, iOS не говорит.
     "review_prompt_requested": frozenset({"reason", "workouts", "nth"}),
     # Сервис для тренеров: тренер отправил код приглашения (action shared|copied).
@@ -191,7 +192,7 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("you_video_shared", "source"): frozenset({"menu"}),
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
-    ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish"}),
+    ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
 }
 
 # Свойства-счётчики (не токены): целое от 0 до потолка, остальное выкидывается.

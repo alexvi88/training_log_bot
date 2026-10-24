@@ -385,3 +385,137 @@ async def test_bot_later_marks_workout(fresh_db, user_id):
     await db.add_block_exercise(block, ex_id, 0)
     await db.append_set(block, ex_id, 0, 0, 8)
     assert await db.bodyweight_prompt_for(user_id, wid2) == {"kind": "missing"}
+
+
+# ---------- «⚖️ Своим весом» у своего упражнения в боте ----------
+
+
+def _buttons(kb) -> list[tuple[str, str]]:
+    return [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row]
+
+
+def _exm_callback(user_id: int, data: str):
+    cb = _callback(user_id)
+    cb.data = data
+    return cb
+
+
+async def _exm_state(user_id: int, group_id: int) -> FSMContext:
+    from fsm import ExerciseManage
+
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    await state.update_data(exm_group_id=group_id)
+    return state
+
+
+@pytest.fixture
+def screens(monkeypatch):
+    """Перехват ui.safe_edit: что тап по кнопке показал на месте экрана."""
+    import ui
+
+    shown: list[tuple[str, object]] = []
+
+    async def _safe_edit(callback, text, reply_markup=None, parse_mode=None, delete=True):
+        shown.append((text, reply_markup))
+
+    monkeypatch.setattr(ui, "safe_edit", _safe_edit)
+    return shown
+
+
+@pytest.mark.asyncio
+async def test_bot_new_own_exercise_bodyweight_toggle_and_reps_only_sets(fresh_db, user_id, screens):
+    """Своё упражнение: на карточке сразу после создания — переключатель
+    «⚖️ Своим весом», выключенный. Включил — та же запись, что у галки
+    `bodyweight` в /v1 (db.set_exercise_bodyweight), и подход в тренировке —
+    только повторы: «12» — это 0×12, «40 8» — отказ."""
+    from handlers import exercises
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    state = await _exm_state(user_id, group_id)
+    msg = _message(user_id, "Подтягивания на кольцах")
+    await exercises.exm_new_exercise_name_entered(msg, state)
+
+    ex_id = (await state.get_data())["exm_exercise_id"]
+    assert (await db.get_exercise(ex_id))["bodyweight_load"] == "none"
+    text = msg.answer.await_args.args[0]
+    kb = msg.answer.await_args.kwargs["reply_markup"]
+    assert "Нажми «⚖️ Своим весом»" in text
+    assert _buttons(kb)[0] == ("⚖️ Своим весом: нет", f"exm:bw:{ex_id}:new")
+
+    tap = _exm_callback(user_id, f"exm:bw:{ex_id}:new")
+    await exercises.exm_toggle_bodyweight(tap, state)
+    ex = await db.get_exercise(ex_id)
+    assert (ex["bodyweight_load"], ex["bodyweight_factor"]) == ("full", 1.0)
+    assert seed_data.exercise_is_reps_only(ex)
+    _, kb = screens[-1]
+    assert _buttons(kb)[0] == ("⚖️ Своим весом: да, только повторы", f"exm:bw:{ex_id}:new")
+    assert "только повторы" in tap.answer.await_args.args[0]
+
+    wid = await db.create_workout(user_id)
+    wstate = await _state(user_id, wid)
+    await workout._on_exercise_chosen(_callback(user_id), wstate, ex_id)
+    await workout.log_set_text(_message(user_id, "12"), wstate)
+    sets = await db.list_sets_for_workout_exercise(wid, ex_id)
+    assert [(s["weight"], s["reps"]) for s in sets] == [(0, 12)]
+    refused = _message(user_id, "40 8", message_id=56)
+    await workout.log_set_text(refused, wstate)
+    assert len(await db.list_sets_for_workout_exercise(wid, ex_id)) == 1
+    assert refused.reply.call_args.args[0] == i18n.t("workout.reps_only_weight")
+
+    # Та же галка в «✏️ Редактировать» — снял, и вес снова принимается.
+    text, kb = await exercises._exercise_edit_menu_payload(await db.get_exercise(ex_id))
+    assert ("⚖️ Своим весом: да, только повторы", f"exm:bw:{ex_id}:edit") in _buttons(kb)
+    off = _exm_callback(user_id, f"exm:bw:{ex_id}:edit")
+    await exercises.exm_toggle_bodyweight(off, state)
+    assert (await db.get_exercise(ex_id))["bodyweight_load"] == "none"
+    _, kb = screens[-1]
+    assert ("⚖️ Своим весом: нет", f"exm:bw:{ex_id}:edit") in _buttons(kb)
+    assert "✏️ Название" in [t for t, _ in _buttons(kb)]
+    await workout.log_set_text(_message(user_id, "40 8", message_id=57), wstate)
+    sets = await db.list_sets_for_workout_exercise(wid, ex_id)
+    assert [(s["weight"], s["reps"]) for s in sets] == [(0, 12), (40, 8)]
+
+
+@pytest.mark.asyncio
+async def test_bot_bodyweight_toggle_not_offered_for_catalog_copy(fresh_db, user_id, screens):
+    """У копии каталога режим задан каталогом — как 400 у PATCH /v1: кнопки
+    нет, а старый тап не меняет ничего и объясняет почему."""
+    from handlers import exercises
+
+    db = fresh_db
+    cur = await db.conn().execute(
+        "SELECT id FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name = 'Подтягивания'"
+    )
+    ex_id = await db.fork_exercise_from_template(user_id, (await cur.fetchone())["id"])
+    _, kb = await exercises._exercise_edit_menu_payload(await db.get_exercise(ex_id))
+    assert not any(cb.startswith("exm:bw:") for _, cb in _buttons(kb))
+
+    tap = _exm_callback(user_id, f"exm:bw:{ex_id}:edit")
+    await exercises.exm_toggle_bodyweight(tap, await _exm_state(user_id, None))
+    assert (await db.get_exercise(ex_id))["bodyweight_load"] == "full"
+    assert tap.answer.await_args.kwargs.get("show_alert") is True
+    assert not screens
+
+
+@pytest.mark.asyncio
+async def test_bot_bodyweight_toggle_in_english(fresh_db, user_id, screens):
+    from handlers import exercises
+
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+    group_id = await db.create_muscle_group(user_id, "Back")
+    with i18n.use_lang("en"):
+        state = await _exm_state(user_id, group_id)
+        msg = _message(user_id, "Ring muscle-up")
+        await exercises.exm_new_exercise_name_entered(msg, state)
+        ex_id = (await state.get_data())["exm_exercise_id"]
+        kb = msg.answer.await_args.kwargs["reply_markup"]
+        assert _buttons(kb)[0] == ("⚖️ Bodyweight: no", f"exm:bw:{ex_id}:new")
+        assert 'Tap "⚖️ Bodyweight"' in msg.answer.await_args.args[0]
+        tap = _exm_callback(user_id, f"exm:bw:{ex_id}:new")
+        await exercises.exm_toggle_bodyweight(tap, state)
+        _, kb = screens[-1]
+        assert _buttons(kb)[0][0] == "⚖️ Bodyweight: yes, reps only"
+        assert "just log reps" in tap.answer.await_args.args[0]
