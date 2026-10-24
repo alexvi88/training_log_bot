@@ -35,10 +35,24 @@ async def load_sessions(exercise_id: int, formula: str) -> list[analytics.Sessio
 
     Арифметика идёт по db.load_of, а не по `weight`: у подходов со своим весом
     и с резиной записанный вес и реальная нагрузка — разные величины.
+
+    Кроме тренировки, где ни в одном подходе вес не записан (только повторы —
+    подтягивания «×14»). Её нагрузка — снимок веса тела (load_weight), и
+    стоит атлету ответить «сколько весишь», как db.add_bodyweight_log
+    дозаполняет им всю историю: 0×14 превращался в «80×14», сессия выпадала из
+    режима повторов в e1RM, а e1RM у подхода длиннее E1RM_MAX_REPS — ноль, и
+    chart_series выкидывал все точки: «3 тренировки» в списке и пустой экран
+    прогресса. Такая тренировка — про повторы, ровно как до взвешивания, поэтому
+    здесь она идёт с записанным весом (0). Тоннаж по весу тела у неё никуда не
+    девается — его считают сводки по load_of, а не этот экран.
     """
     rows = await db.list_sets_for_exercise(exercise_id)
+    weighted_workouts = {r["workout_id"] for r in rows if r["weight"]}
     set_rows = [
-        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+        analytics.SetRow(
+            db.load_of(r) if r["workout_id"] in weighted_workouts else r["weight"],
+            r["reps"], r["workout_id"], r["started_at"], r["rpe"],
+        )
         for r in rows
     ]
     sessions = analytics.group_sets_by_session(set_rows)
