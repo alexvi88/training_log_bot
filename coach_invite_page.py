@@ -206,9 +206,12 @@ async def invite_route(request: Request) -> HTMLResponse:
 
 
 def aasa_json() -> dict[str, Any] | None:
+    """Пути Universal Links: приглашение тренера `/coach/*` и страница
+    визитки `/p/*` (share_page.py)."""
     app_id = config.apple_app_id()
     if not app_id:
         return None
+    prefixes = (coach_service.WEB_LINK_PATH, sharing.WEB_LINK_PATH)
     return {
         "applinks": {
             # Новый формат (iOS 13+) и старый `paths` рядом — второй ничему не
@@ -216,9 +219,9 @@ def aasa_json() -> dict[str, Any] | None:
             "apps": [],
             "details": [{
                 "appIDs": [app_id],
-                "components": [{"/": f"{coach_service.WEB_LINK_PATH}*"}],
+                "components": [{"/": f"{prefix}*"} for prefix in prefixes],
                 "appID": app_id,
-                "paths": [f"{coach_service.WEB_LINK_PATH}*"],
+                "paths": [f"{prefix}*" for prefix in prefixes],
             }],
         }
     }

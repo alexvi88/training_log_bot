@@ -61,6 +61,7 @@ import mcp_oauth
 import mcp_wellknown
 import seo_http
 import seo_pages
+import share_page
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +368,9 @@ def build_server() -> MCPServer:
     # /coach/<код> — страница приглашения тренера и AASA для Universal Links
     # (см. coach_invite_page.py).
     coach_invite_page.register_routes(mcp)
+    # /p/<токен> — публичная страница визитки программы или упражнения и её
+    # картинка для превью (см. share_page.py).
+    share_page.register_routes(mcp)
     # Публичные страницы для поиска: /ru/..., /en/..., sitemap и robots
     # (см. seo_pages.py).
     seo_pages.register_routes(mcp)
