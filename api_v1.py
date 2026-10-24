@@ -2233,12 +2233,18 @@ async def _workout_detail_json(workout, user=None, *, group_lang: Optional[str] 
     if workout["status"] != "finished":
         gold_formula = lang_user["e1rm_formula"]
     best_before: dict[int, float] = {}
+    best_reps_before: dict[int, int] = {}
     if gold_formula is not None:
         with_sets = {
             s["exercise_id"] for sets in rows.sets_by_block.values() for s in sets
         }
-        best_before = await db.max_e1rm_before_workout_by_exercise(
-            workout["user_id"], with_sets, workout["id"], gold_formula
+        # Своим весом 🥇 — по повторам, а не по e1RM (view_builder.gold_bars).
+        reps_only_ids = {
+            ex_id for ex_id in with_sets
+            if seed_data.exercise_is_reps_only(rows.exercises.get(ex_id))
+        }
+        best_before, best_reps_before = await view_builder.gold_bars(
+            workout["user_id"], with_sets, reps_only_ids, workout["id"], gold_formula
         )
     blocks_json = []
     for block in rows.blocks:
@@ -2255,10 +2261,14 @@ async def _workout_detail_json(workout, user=None, *, group_lang: Optional[str] 
             if gold_formula is not None and own_sets:
                 # None — упражнение делается впервые: 🥇 (и анимации рекорда в
                 # приложении) нет, бить нечего (см. best_gold_index).
-                previous_best = best_before.get(be["exercise_id"])
-                gold_index = view_builder.best_gold_index(
+                gold_index = view_builder.gold_index_for(
                     [(db.load_of(s), s["reps"], s["rpe"]) for s in own_sets],
-                    previous_best, gold_formula,
+                    raw_weights=[s["weight"] for s in own_sets],
+                    reps_only=seed_data.exercise_is_reps_only(rows.exercises.get(be["exercise_id"])),
+                    e1rm_bars=best_before,
+                    reps_bars=best_reps_before,
+                    exercise_id=be["exercise_id"],
+                    formula=gold_formula,
                 )
             exercises_json.append(
                 {

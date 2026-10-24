@@ -27,6 +27,13 @@ def _clear_file_id_cache():
     exercise_media._FILE_IDS.clear()
 
 
+@pytest.fixture(autouse=True)
+def _drawing_without_db(monkeypatch):
+    """Выбор «Картинки упражнений» живёт в users, а базы у этих тестов нет:
+    развилка клип/фото от него не зависит — берём умолчание."""
+    monkeypatch.setattr(exercise_media, "image_style", AsyncMock(return_value="drawing"))
+
+
 def _exercise_row(name: str = EX_WITH_PHOTO):
     return {
         "id": 1,

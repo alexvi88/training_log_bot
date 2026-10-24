@@ -371,6 +371,36 @@ FRAME_REVISION: dict[str, int] = {
     "barbell_deadlift": 3,
     "romanian_deadlift": 3,
     "standing_military_press": 3,
+    "hammer_curls": 2,
+    "ez_bar_skullcrusher": 2,
+    "hanging_leg_raise": 2,
+    "leverage_shrug": 2,
+    "incline_dumbbell_press": 2,
+    "bent_over_barbell_row": 2,
+    "dumbbell_lunges": 2,
+    "face_pull": 2,
+    "ez_bar_curl": 2,
+    "close_grip_barbell_bench_press": 2,
+    "knee_hip_raise_on_parallel_bars": 2,
+    "seated_palm_up_barbell_wrist_curl": 2,
+    "dips_chest_version": 2,
+    "one_arm_dumbbell_row": 2,
+    "split_squat_with_dumbbells": 2,
+    "reverse_flyes": 2,
+    "preacher_curl": 2,
+    "cable_rope_overhead_triceps_extension": 2,
+    "cable_crunch": 2,
+    "seated_palms_down_barbell_wrist_curl": 2,
+    "cable_crossover": 2,
+    "seated_cable_rows": 2,
+    "leg_extensions": 2,
+    "standing_low_pulley_deltoid_raise": 2,
+    "standing_biceps_cable_curl": 2,
+    "dips_triceps_version": 2,
+    "ab_roller": 2,
+    "cable_shrugs": 2,
+    "butterfly": 2,
+    "t_bar_row_with_handle": 2,
 }
 
 
@@ -400,12 +430,20 @@ def catalog_key(ex) -> str:
     return original or ex["name"]
 
 
-def get_images(exercise_name: str) -> list[str]:
+# «🖼 Картинки упражнений» в настройках бота (users.exercise_images):
+# 'drawing' — рисунок с нашим тренером там, где он есть (FRAME_REVISION),
+# 'photo' — стоковый кадр под исходным именем. В приложении тот же выбор
+# локальный (ExerciseImageStyle), API всегда отдаёт рисунок.
+IMAGE_STYLES = ("drawing", "photo")
+
+
+def get_images(exercise_name: str, style: str = "drawing") -> list[str]:
     """Absolute paths to the [start, end] position photos, or [] if none exist."""
     slug = EXERCISE_IMAGE_SLUGS.get(exercise_name)
     if slug is None:
         return []
-    paths = [os.path.join(MEDIA_DIR, frame_name(slug, 1)), os.path.join(MEDIA_DIR, frame_name(slug, 2))]
+    name = (lambda n: f"{slug}_{n}.jpg") if style == "photo" else (lambda n: frame_name(slug, n))
+    paths = [os.path.join(MEDIA_DIR, name(1)), os.path.join(MEDIA_DIR, name(2))]
     return paths if all(os.path.exists(p) for p in paths) else []
 
 
@@ -433,9 +471,18 @@ def media_key(ex) -> str:
     return media_from or ex["name"]
 
 
-def get_images_for(ex) -> list[str]:
+def get_images_for(ex, style: str = "drawing") -> list[str]:
     """get_images for an exercise row, keyed the rename-proof way (media_key)."""
-    return get_images(media_key(ex))
+    return get_images(media_key(ex), style)
+
+
+async def image_style(telegram_id: int) -> str:
+    """Выбор «Картинки упражнений» атлета в боте; нет записи — рисунок."""
+    import db  # здесь, а не наверху: exercise_media импортируют модули, которые db тянет сам
+
+    user = await db.get_user(telegram_id)
+    style = user["exercise_images"] if user is not None else None
+    return style if style in IMAGE_STYLES else "drawing"
 
 
 def media_url(path: str, sub: str = "") -> str:

@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- у всех; кто включит снова — тому рестарт его не выключит.
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
+    -- «🖼 Картинки упражнений» в настройках бота: 'drawing' — рисунок с нашим
+    -- тренером, 'photo' — стоковое фото (exercise_media.IMAGE_STYLES).
+    exercise_images TEXT NOT NULL DEFAULT 'drawing',
     -- Диапазон повторов для подсказки «Цель» (analytics.REP_RANGE_PRESETS).
     -- NULL у обоих — 5–12 по умолчанию; пишутся только парой.
     rep_range_min INTEGER,
@@ -1837,6 +1840,8 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
         )
+    if "exercise_images" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN exercise_images TEXT NOT NULL DEFAULT 'drawing'")
     for range_col in ("rep_range_min", "rep_range_max"):
         # NULL — «не выбирал», то есть 5–12 (analytics.user_rep_range).
         if range_col not in user_cols:
@@ -6697,6 +6702,29 @@ async def max_e1rm_before_workout_by_exercise(
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished' AND w.id != ? "
         f"AND s.exercise_id IN ({_placeholders(ids)}) AND s.reps > 0 "
+        "GROUP BY s.exercise_id",
+        (user_id, workout_id, *ids),
+    )
+    return {r["exercise_id"]: r["mx"] for r in await cur.fetchall() if r["mx"] is not None}
+
+
+async def max_reps_before_workout_by_exercise(
+    user_id: int, exercise_ids, workout_id: int
+) -> dict[int, int]:
+    """Лучшие повторы в одном подходе по упражнениям — планка 🥇 у упражнений
+    своим весом (seed_data.is_reps_only): там рекорд — повторы, а не e1RM
+    (как 🔥 у view_builder._session_record). Тот же круг, что у
+    max_e1rm_before_workout_by_exercise: законченные тренировки, кроме этой;
+    упражнения без истории в словарь не попадают — «делается впервые»."""
+    ids = sorted(set(exercise_ids))
+    if not ids:
+        return {}
+    cur = await conn().execute(
+        "SELECT s.exercise_id, MAX(s.reps) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.id != ? "
+        f"AND s.exercise_id IN ({_placeholders(ids)}) "
         "GROUP BY s.exercise_id",
         (user_id, workout_id, *ids),
     )

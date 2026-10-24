@@ -56,6 +56,7 @@ async def show_settings(
         show_feedback=config.feedback_available(),
         rep_range=analytics.user_rep_range(user),
         gender=user["gender"],
+        exercise_images=user["exercise_images"],
     )
     # Заголовки блоков говорят самим текстом экрана — жирной строкой перед
     # каждой группой кнопок, в том же порядке, в каком идут кнопки ниже (см.
@@ -481,6 +482,17 @@ async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
     enabled = not user["ai_comments_enabled"]
     await db.update_user(callback.from_user.id, ai_comments_enabled=1 if enabled else 0)
     toast = i18n.t("settings.ai_comments.toast_on" if enabled else "settings.ai_comments.toast_off")
+    await show_settings(callback, state, alert=toast, show_alert=False)
+
+
+@router.callback_query(F.data == "settings:exercise_images")
+async def settings_exercise_images(callback: CallbackQuery, state: FSMContext):
+    """Тумблер «🖼 Картинки упражнений»: рисунок с нашим тренером ↔ стоковое
+    фото (exercise_media.get_images). Упражнения без рисунка — фото в обоих."""
+    user = await db.get_user(callback.from_user.id)
+    style = "drawing" if user["exercise_images"] == "photo" else "photo"
+    await db.update_user(callback.from_user.id, exercise_images=style)
+    toast = i18n.t(f"settings.exercise_images.toast_{style}")
     await show_settings(callback, state, alert=toast, show_alert=False)
 
 
