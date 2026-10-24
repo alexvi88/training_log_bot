@@ -153,8 +153,11 @@ async def test_aasa_served_as_json_without_redirect(monkeypatch):
     data = json.loads(resp.text)
     detail = data["applinks"]["details"][0]
     assert detail["appIDs"] == ["H93ZYM2S8U.com.trainingdiary.ios"]
-    assert detail["components"] == [{"/": "/coach/*"}]
-    assert detail["paths"] == ["/coach/*"]
+    assert {"/": "/coach/*"} in detail["components"]
+    assert "/coach/*" in detail["paths"]
+    # Реферальная ссылка атлета (referral_page.py) — тоже Universal Link.
+    assert {"/": "/i/*"} in detail["components"]
+    assert "/i/*" in detail["paths"]
 
 
 async def test_aasa_absent_without_team(monkeypatch):

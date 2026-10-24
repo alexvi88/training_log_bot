@@ -193,6 +193,9 @@ LOCALIZED: list[str] = [
     # Страница приглашения тренера /coach/<код> и AASA: все строки — i18n.t_in
     # в языке из Accept-Language, своих литералов нет.
     "coach_invite_page.py",
+    # Страница реферальной ссылки /i/ref_<id>: строки — referral_page.* через
+    # i18n.t_in в языке из Accept-Language, своих литералов нет.
+    "referral_page.py",
     # Публичные страницы для поиска (/ru/..., /en/...): все строки — seo.* в
     # каталоге через i18n.t_in(язык из пути), данные каталога — через
     # seed_data.localized_*/exercise_descriptions; русское имя упражнения там

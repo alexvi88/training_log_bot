@@ -522,6 +522,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
 
     # --- аккаунт ---
     await w.call("GET", "/me", expect=200)
+    # Код реферальной ссылки (/i/ref_<id>): кривой — ошибка на языке атлета,
+    # чужой — 200 (у атлета из бота источник уже есть или автора нет).
+    await w.call("POST", "/me/referral", json={"code": "nope"}, expect=400)
+    await w.call("POST", "/me/referral", json={"code": "ref_999"}, expect=200)
     # Выбора модели тренера больше нет: /me без ai_model/ai_model_options (iOS
     # строку «Модель тренера» не показывает), PATCH /ai/model — 410 текстом на
     # языке атлета, и своему аккаунту тоже.

@@ -164,7 +164,7 @@ async def test_wire_carries_the_answer_so_the_next_question_appends(
     wire = seen[0]
     assert [m["role"] for m in wire] == ["user", "assistant"]
     today = await ai_trainer._user_today(user_id)
-    assert wire[0]["content"] == f"как прогресс?\n\nСегодня {today.isoformat()}."
+    assert wire[0]["content"] == f"как прогресс?\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}"
     assert wire[-1]["content"] == "жми дальше"
     # Элементы ответа Responses (с рассуждением, если оно было) обязаны уехать
     # назад рядом с текстом — следующий ход вернёт их модели как есть.
@@ -196,7 +196,7 @@ async def test_photo_is_not_stored_in_history(fresh_db, user_id, monkeypatch):
     # видно: без неё следующий ход достраивал детали снимка, которого нет.
     today = await ai_trainer._user_today(user_id)
     assert seen[0][0]["content"] == (
-        f"что тут по калориям?\n\nСегодня {today.isoformat()}.\n\n{ai_trainer.PHOTO_GONE_NOTE}"
+        f"что тут по калориям?\n\nСегодня {today.isoformat()}.\n{ai_trainer._CLIENT_LINE_TELEGRAM}\n\n{ai_trainer.PHOTO_GONE_NOTE}"
     )
 
 
