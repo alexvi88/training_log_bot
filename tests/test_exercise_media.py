@@ -17,8 +17,8 @@ def test_slugs_are_unique():
 
 def test_every_slug_has_both_image_files_on_disk():
     for ex_name, slug in exercise_media.EXERCISE_IMAGE_SLUGS.items():
-        for suffix in ("_1.jpg", "_2.jpg"):
-            path = os.path.join(exercise_media.MEDIA_DIR, f"{slug}{suffix}")
+        for n in (1, 2):
+            path = os.path.join(exercise_media.MEDIA_DIR, exercise_media.frame_name(slug, n))
             assert os.path.isfile(path), f"missing {path} for {ex_name!r}"
 
 

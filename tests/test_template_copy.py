@@ -96,8 +96,8 @@ async def test_copy_shows_template_pictures(fresh_db, user_id, tmp_path, monkeyp
     media_dir = tmp_path / "media"
     media_dir.mkdir()
     slug = exercise_media.EXERCISE_IMAGE_SLUGS[BENCH]
-    for suffix in ("_1.jpg", "_2.jpg", "_demo.mp4"):
-        (media_dir / f"{slug}{suffix}").write_bytes(b"x")
+    for name in (exercise_media.frame_name(slug, 1), exercise_media.frame_name(slug, 2), f"{slug}_demo.mp4"):
+        (media_dir / name).write_bytes(b"x")
     monkeypatch.setattr(exercise_media, "MEDIA_DIR", str(media_dir))
     template = await _template(db)
     _, copy_id = await db.copy_template_exercise(user_id, template["id"], "Жим с паузой")

@@ -337,6 +337,44 @@ EXERCISE_IMAGE_SLUGS = {
 }
 
 
+# Ревизия пары кадров. Файлы каталога раздаются с `immutable` на год
+# (api_v1_media._CACHE_CONTROL), и приложение кладёт их в дисковый кэш по
+# адресу: перерисованный кадр под старым именем телефон, уже открывавший
+# карточку, не увидел бы никогда. Поэтому новая версия кадров — новое имя
+# файла, `<слаг>_r<ревизия>_<n>.jpg`, а старое имя уходит. Ревизия 2 — кадры
+# с нашим тренером вместо стока free-exercise-db (скилл exercise-art в
+# iOS-репо). Имя кадра собирает только frame_name — не подклеивай
+# `f"{slug}_1.jpg"` руками.
+FRAME_REVISION: dict[str, int] = {
+    "barbell_bench_press_medium_grip": 2,
+    "pullups": 2,
+    "barbell_squat": 2,
+    "seated_dumbbell_press": 2,
+    "dumbbell_bicep_curl": 2,
+    "triceps_pushdown_rope_attachment": 2,
+    "crunches": 2,
+    "dumbbell_shrug": 2,
+    "dumbbell_bench_press": 2,
+    "wide_grip_lat_pulldown": 2,
+    "leg_press": 2,
+    "side_lateral_raise": 2,
+    "barbell_curl": 2,
+    "triceps_pushdown": 2,
+    "plank": 2,
+    "barbell_shrug": 2,
+    "barbell_incline_bench_press_medium_grip": 2,
+    "barbell_deadlift": 2,
+    "romanian_deadlift": 2,
+    "standing_military_press": 2,
+}
+
+
+def frame_name(slug: str, n: int) -> str:
+    """Имя файла кадра `n` (1 — старт, 2 — конец) упражнения со слагом `slug`."""
+    rev = FRAME_REVISION.get(slug)
+    return f"{slug}_r{rev}_{n}.jpg" if rev else f"{slug}_{n}.jpg"
+
+
 def catalog_key(ex) -> str:
     """The name this exercise's catalog assets are filed under.
 
@@ -362,7 +400,7 @@ def get_images(exercise_name: str) -> list[str]:
     slug = EXERCISE_IMAGE_SLUGS.get(exercise_name)
     if slug is None:
         return []
-    paths = [os.path.join(MEDIA_DIR, f"{slug}_1.jpg"), os.path.join(MEDIA_DIR, f"{slug}_2.jpg")]
+    paths = [os.path.join(MEDIA_DIR, frame_name(slug, 1)), os.path.join(MEDIA_DIR, frame_name(slug, 2))]
     return paths if all(os.path.exists(p) for p in paths) else []
 
 

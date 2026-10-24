@@ -251,7 +251,7 @@ def _work(slug: str, create: bool = True) -> pathlib.Path:
 def cmd_frames(exercise: str, dry_run: bool, force: bool) -> None:
     slug = _slug(exercise)
     work = _work(slug, create=not dry_run)
-    sources = [MEDIA_DIR / f"{slug}_1.jpg", MEDIA_DIR / f"{slug}_2.jpg"]
+    sources = [MEDIA_DIR / exercise_media.frame_name(slug, 1), MEDIA_DIR / exercise_media.frame_name(slug, 2)]
     for source, name in zip(sources, ("start.jpg", "end.jpg"), strict=True):
         dest = work / name
         if dest.exists() and not force:

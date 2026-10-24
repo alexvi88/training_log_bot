@@ -29,6 +29,7 @@ import re
 from typing import Optional
 
 import config
+import exercise_media
 import seed_data
 import seo_design
 import seo_pages as sp
@@ -801,7 +802,7 @@ def _render_pair(lang: str, page: Page, request) -> str:
     article = {
         "@context": "https://schema.org", "@type": "Article", "headline": title[:110], "description": description,
         "inLanguage": lang, "mainEntityOfPage": base + sp.url_for(page, lang),
-        "image": [base + sp._media_url(f"{sp._EXERCISE_BY_URL[u]}_1.jpg") for u in (a, b)],
+        "image": [base + sp._media_url(exercise_media.frame_name(sp._EXERCISE_BY_URL[u], 1)) for u in (a, b)],
         "author": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "publisher": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "about": [{"@type": "Thing", "name": na}, {"@type": "Thing", "name": nb}],
