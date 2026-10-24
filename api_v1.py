@@ -413,7 +413,7 @@ async def me(request: Request) -> JSONResponse:
             # `<сервер>/i/ref_<id>` (referral_page.py, Universal Link). null —
             # публичный адрес сервера не задан; тогда приложение собирает
             # прежнюю t.me-ссылку само.
-            "invite_url": acquisition.referral_web_link(config.public_base_url(), user_id),
+            "invite_url": acquisition.referral_web_link(config.site_base_url(), user_id),
             # Полей ai_model/ai_model_options нет: выбора модели тренера
             # больше нет, и приложение строку «Модель тренера» не показывает.
         }

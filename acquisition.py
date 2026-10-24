@@ -107,7 +107,7 @@ def referral_link(bot_username: str, telegram_id: int) -> str:
 
 
 # Та же метка `ref_<id>` — веб-страницей, для тех, кому Telegram не нужен:
-# `<config.public_base_url()>/i/ref_<id>` (referral_page.py). С приложением на
+# `<config.site_base_url()>/i/ref_<id>` (referral_page.py). С приложением на
 # iPhone она открывает его Universal Link'ом, без — страницу с App Store
 # (кампания `ct=ref_<id>`), приложением по схеме и, третьей, ботом. Приложение
 # отдаёт код в `POST /v1/me/referral`, и источник ложится тем же
