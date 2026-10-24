@@ -3360,6 +3360,7 @@
   "seo.tool.card.dots": "Мои очки DOTS — {v}",
   "seo.tool.card.tonnage": "Поднял за тренировку {v}",
   "seo.tool.card.level": "Мой уровень в упражнении «{lift}» — {level}",
+  "seo.tool.card.level_full": "{lift}: {weight} при весе {bw} — {level}",
   "seo.tool.unit_t": "т",
   "seo.program.card_days": "{n, plural, one{# день в программе} few{# дня в программе} many{# дней в программе} other{# дня в программе}}",
   "seo.exercise.cap_start_short": "Старт",

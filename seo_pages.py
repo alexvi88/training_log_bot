@@ -1825,7 +1825,7 @@ def _strength_tool(lang: str, lift: str = "bench", sex: str = "m", *, bw: Option
         "w=parseFloat($('lw').value),r=parseInt($('lr').value,10)||1,out=$('lvl'),note=$('note');"
         "if(!(bw>0)||!(w>0)){out.textContent='—';note.textContent='';done(0);return;}var m=e1rm(w,r,'epley',null);"
         "if(!m){out.textContent='—';note.textContent=TOO;done(0);return;}"
-        "var sc=liftScore(m*k,lift,bw,s),i=levelIndex(sc);out.textContent=i<0?BELOW:NAMES[i];share(i<0?'':'level',i<0?'':'l='+i+'&lift='+lift);"
+        "var sc=liftScore(m*k,lift,bw,s),i=levelIndex(sc);out.textContent=i<0?BELOW:NAMES[i];share(i<0?'':'level',i<0?'':'l='+i+'&lift='+lift+'&w='+w+'&r='+r+'&bw='+$('bw').value+'&u='+u);"
         "var txt=SCORE.replace('{score}',Math.round(sc));if(i<C.levels.length-1){var nw=levelWeight(C.levels[i+1],lift,bw,s)/k;"
         "txt+=' '+NEXT.replace('{weight}',fmt(nw)+'\u00a0'+UNITS[u]).replace('{level}',NAMES[i+1]);}else{txt+=' '+TOP;}note.textContent=txt;done(1);}"
         "bind(run);"
