@@ -291,6 +291,7 @@ EXERCISE_IMAGE_SLUGS = {
     'Австралийские подтягивания': 'inverted_row',
     'Тяга на петлях': 'suspended_row',
     'Подтягивания с весом': 'weighted_pull_ups',
+    'Отжимания на брусьях с весом': 'weighted_dips',
     'Подтягивания с резинкой': 'band_assisted_pull_up',
     'Лопаточные подтягивания': 'scapular_pull_up',
     'Пулловер со штангой': 'bent_arm_barbell_pullover',
@@ -384,6 +385,8 @@ FRAME_REVISION: dict[str, int] = {
     "knee_hip_raise_on_parallel_bars": 2,
     "seated_palm_up_barbell_wrist_curl": 2,
     "dips_chest_version": 2,
+    # Кадры брусьев без пояса — пока не нарисованы свои, та же пара.
+    "weighted_dips": 2,
     "one_arm_dumbbell_row": 2,
     "split_squat_with_dumbbells": 2,
     "reverse_flyes": 2,

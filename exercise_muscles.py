@@ -43,6 +43,7 @@ MUSCLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "Жим в тренажёре Хаммер": (("chest",), ("deltoids", "triceps")),
     "Отжимания от пола": (("chest", "triceps"), ("deltoids", "abs")),
     "Отжимания на брусьях": (("chest", "triceps"), ("deltoids",)),
+    "Отжимания на брусьях с весом": (("chest", "triceps"), ("deltoids",)),
     "Сведение рук в кроссовере": (("chest",), ("deltoids",)),
     "Сведение рук в тренажёре «бабочка»": (("chest",), ("deltoids",)),
     "Разведение гантелей лёжа": (("chest",), ("deltoids",)),

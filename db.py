@@ -50,6 +50,7 @@ from seed_data import (
     canonical_exercise_name,
     canonical_muscle_group_name,
     catalog_popularity,
+    exercise_is_reps_only,
     is_catalog_hidden,
     legacy_program_texts,
     localized_exercise_name,
@@ -59,6 +60,7 @@ from seed_data import (
     localized_target,
     progression_kind,
     relocalized_target,
+    weighted_variant_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -2331,7 +2333,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 17
+_SCHEMA_VERSION = 18
 
 
 async def _run_one_shot_migrations() -> None:
@@ -2381,6 +2383,10 @@ async def _run_one_shot_migrations() -> None:
         await _show_extra_stats_for_everyone()
     if version < 17:
         await _sync_bodyweight_load_of_old_copies()
+    if version < 18:
+        # После v17: она ставит старым копиям режим каталога, и только тогда
+        # «Подтягивания» узнаются как «только повторы».
+        await _move_weighted_sets_to_weighted_variant()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -2642,6 +2648,291 @@ async def _sync_bodyweight_load_of_old_copies() -> int:
     await _conn.commit()
     logger.info("bodyweight_load synced for %s old copies", fixed)
     return fixed
+
+
+async def weighted_variant_copy(
+    user_id: int, variant_name: str
+) -> tuple[Optional[int], Optional[str]]:
+    """Своя копия варианта «с весом» (seed_data.weighted_variant_for) — куда
+    ложатся подходы с поясом упражнения «только повторы». Одна точка у
+    миграции v18 и у импорта истории.
+
+    По идентичности (`original_name`): есть — она, из архива возвращается
+    (подходы в ней должны быть видны); нет — заводится из шаблона каталога
+    так же, как это делает приложение (fork_exercise_from_template, имя на
+    языке атлета). Возвращает (id, как: "found" | "revived" | "forked" —
+    заведена сейчас), или
+    (None, None), если шаблона в каталоге нет."""
+    target = await find_exercise_by_original_name(user_id, variant_name)
+    if target is not None:
+        if target["is_archived"]:
+            await _revive_existing_exercise(target, target["primary_group_id"])
+            return target["id"], "revived"
+        return target["id"], "found"
+    cur = await conn().execute(
+        "SELECT id FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name = ?",
+        (variant_name,),
+    )
+    template = await cur.fetchone()
+    if template is None:
+        return None, None
+    # fork может и не завести строку: create_exercise отдаёт уже живущее у
+    # атлета упражнение с тем же показанным именем. "forked" — только новая
+    # строка (импорт по нему решает, помечать ли её своей пачкой).
+    cur = await conn().execute("SELECT COALESCE(MAX(id), 0) FROM exercises")
+    (last_id,) = await cur.fetchone()
+    ex_id = await fork_exercise_from_template(user_id, template["id"])
+    return ex_id, "forked" if ex_id > last_id else "found"
+
+
+async def _move_weighted_sets_to_weighted_variant() -> dict[str, int]:
+    """Подходы с поясом — из «только повторы» в вариант «с весом» (владелец).
+
+    С v17 упражнения своим весом без доп. веса (seed_data.is_reps_only) веса
+    не принимают: «Подтягивания» с 10 кг — это «Подтягивания с весом»
+    (seed_data.weighted_variant_for). Старые подходы с весом > 0 лежали в
+    простом упражнении, и у обоих выходила смешанная история. Здесь каждый
+    такой подход переезжает в свою копию варианта — найденную по
+    идентичности (`original_name`; архивная возвращается из архива) или
+    заведённую из каталога так же, как это делает приложение
+    (fork_exercise_from_template: имя на языке атлета).
+
+    По тренировке и блоку:
+    - все подходы упражнения в блоке с весом, а варианта в тренировке нет —
+      блок просто сменяет упражнение на месте (порядок, суперсет, раунды и
+      order_in_round не трогаются);
+    - иначе (в блоке остались подходы без веса, или вариант в тренировке уже
+      есть) подходы с весом дописываются в блок варианта — тот же блок, если
+      вариант в нём, иначе первый его блок в тренировке, иначе новый
+      одиночный блок сразу за исходным — раундами после уже записанных. Без
+      веса остаются на месте; пропуски в round_index — как после удаления
+      подхода. Опустевшее место упражнения в блоке убирается, опустевший
+      блок — тоже.
+    - заметка к упражнению в тренировке уезжает с ним, только если простого
+      упражнения в этой тренировке не осталось (склеивается с заметкой
+      варианта, если та уже есть).
+    Снимок нагрузки (load_weight) сохраняется, если режим нагрузки у обоих
+    одинаковый (у подтягиваний — 'full' × 1.0), иначе пересчитывается по
+    взвешиванию на дату (_fill_null_bodyweight_loads).
+
+    Идёт по всем тренировкам, включая перенесённые импортом (import_batch_id
+    у тренировки остаётся, новый блок принадлежит ей же и уйдёт при «Отменить
+    импорт»), кроме открытой: её блоки и упражнения держит FSM/приложение.
+    Событий жизненного цикла не пишет — это перенос данных, а не действие.
+    Повтор безопасен: подходов с весом в «только повторы» после неё нет, а
+    копия варианта находится по идентичности, второй не заводится.
+    Упражнение, которое не удалось перенести, откатывается целиком и
+    пропускается с записью в лог — старт бота из-за него не падает.
+    """
+    stats = {
+        "exercises": 0, "workouts": 0, "sets": 0, "forked": 0, "revived": 0,
+        "blocks_created": 0, "blocks_removed": 0, "notes_moved": 0,
+        "skipped_active": 0, "no_template": 0, "failed": 0,
+    }
+    cur = await _conn.execute(
+        "SELECT e.* FROM exercises e "
+        "WHERE e.user_id IS NOT NULL AND e.is_template = 0 AND e.bodyweight_load != 'none' "
+        "AND EXISTS (SELECT 1 FROM sets s WHERE s.exercise_id = e.id AND s.weight > 0) "
+        "ORDER BY e.user_id, e.id"
+    )
+    sources = [
+        row for row in await cur.fetchall()
+        if exercise_is_reps_only(row) and weighted_variant_for(row["original_name"]) is not None
+    ]
+    for source in sources:
+        user_id = source["user_id"]
+        cur = await _conn.execute(
+            "SELECT DISTINCT w.id, w.status, w.started_at FROM sets s "
+            "JOIN workout_blocks b ON b.id = s.block_id "
+            "JOIN workouts w ON w.id = b.workout_id "
+            "WHERE s.exercise_id = ? AND s.weight > 0 AND w.user_id = ? ORDER BY w.id",
+            (source["id"], user_id),
+        )
+        workouts = await cur.fetchall()
+        stats["skipped_active"] += sum(1 for w in workouts if w["status"] == "active")
+        workouts = [w for w in workouts if w["status"] != "active"]
+        if not workouts:
+            continue
+        variant_name = weighted_variant_for(source["original_name"])
+        target_id, how = await weighted_variant_copy(user_id, variant_name)
+        if target_id is None:
+            stats["no_template"] += 1
+            logger.warning("weighted variant %r has no catalog template", variant_name)
+            continue
+        if how in ("forked", "revived"):
+            stats[how] += 1
+        target = await get_exercise(target_id)
+        keep_load = (source["bodyweight_load"], source["bodyweight_factor"]) == (
+            target["bodyweight_load"], target["bodyweight_factor"]
+        )
+        try:
+            moved = 0
+            for workout in workouts:
+                result = await _move_weighted_sets_in_workout(
+                    workout["id"], source["id"], target_id, keep_load
+                )
+                moved += result["sets"]
+                stats["blocks_created"] += result["blocks_created"]
+                stats["blocks_removed"] += result["blocks_removed"]
+                stats["notes_moved"] += result["notes_moved"]
+            if not keep_load:
+                await _fill_null_bodyweight_loads(user_id)
+            latest = max(w["started_at"] for w in workouts)
+            await _conn.execute(
+                "UPDATE exercises SET last_used_at = ? "
+                "WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)",
+                (latest, target_id, latest),
+            )
+            await _conn.commit()
+        except Exception:
+            await _conn.rollback()
+            stats["failed"] += 1
+            logger.exception(
+                "moving weighted sets of exercise %s to %s failed", source["id"], target_id
+            )
+            continue
+        stats["exercises"] += 1
+        stats["workouts"] += len(workouts)
+        stats["sets"] += moved
+    logger.info("weighted sets moved to the weighted variant: %s", stats)
+    return stats
+
+
+async def _move_weighted_sets_in_workout(
+    workout_id: int, source_id: int, target_id: int, keep_load: bool
+) -> dict[str, int]:
+    """Тело `_move_weighted_sets_to_weighted_variant` для одной тренировки.
+    Без commit — вызывающий держит транзакцию на всё упражнение."""
+    result = {"sets": 0, "blocks_created": 0, "blocks_removed": 0, "notes_moved": 0}
+    load_sql = "" if keep_load else ", load_weight = NULL"
+    cur = await _conn.execute(
+        "SELECT DISTINCT b.id, b.order_index FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "WHERE b.workout_id = ? AND s.exercise_id = ? AND s.weight > 0 "
+        "ORDER BY b.order_index, b.id",
+        (workout_id, source_id),
+    )
+    for block in await cur.fetchall():
+        block_id = block["id"]
+        q = await _conn.execute(
+            "SELECT id FROM sets WHERE block_id = ? AND exercise_id = ? AND weight > 0 "
+            "ORDER BY round_index, order_in_round, id",
+            (block_id, source_id),
+        )
+        weighted = [r["id"] for r in await q.fetchall()]
+        q = await _conn.execute(
+            "SELECT 1 FROM sets WHERE block_id = ? AND exercise_id = ? AND weight <= 0 LIMIT 1",
+            (block_id, source_id),
+        )
+        has_plain = await q.fetchone() is not None
+        # Блок варианта в этой тренировке: этот же, если вариант уже в нём
+        # (суперсет простого и «с весом»), иначе первый по порядку.
+        q = await _conn.execute(
+            "SELECT b.id FROM workout_blocks b JOIN block_exercises be ON be.block_id = b.id "
+            "WHERE b.workout_id = ? AND be.exercise_id = ? "
+            "ORDER BY (b.id = ?) DESC, b.order_index, b.id LIMIT 1",
+            (workout_id, target_id, block_id),
+        )
+        row = await q.fetchone()
+        target_block = row["id"] if row else None
+
+        if not has_plain and target_block is None:
+            # Весь блок упражнения — с весом: меняем упражнение на месте.
+            await _conn.execute(
+                "UPDATE block_exercises SET exercise_id = ? WHERE block_id = ? AND exercise_id = ?",
+                (target_id, block_id, source_id),
+            )
+            await _conn.execute(
+                f"UPDATE sets SET exercise_id = ?{load_sql} "
+                f"WHERE id IN ({_placeholders(weighted)})",
+                (target_id, *weighted),
+            )
+            result["sets"] += len(weighted)
+            continue
+
+        if target_block is None:
+            await _conn.execute(
+                "UPDATE workout_blocks SET order_index = order_index + 1 "
+                "WHERE workout_id = ? AND order_index > ?",
+                (workout_id, block["order_index"]),
+            )
+            ins = await _conn.execute(
+                "INSERT INTO workout_blocks (workout_id, order_index, type) VALUES (?, ?, 'single')",
+                (workout_id, block["order_index"] + 1),
+            )
+            target_block = ins.lastrowid
+            await _conn.execute(
+                "INSERT INTO block_exercises (block_id, exercise_id, order_in_block) VALUES (?, ?, 0)",
+                (target_block, target_id),
+            )
+            result["blocks_created"] += 1
+        q = await _conn.execute(
+            "SELECT order_in_block FROM block_exercises WHERE block_id = ? AND exercise_id = ?",
+            (target_block, target_id),
+        )
+        order_in_round = (await q.fetchone())["order_in_block"]
+        q = await _conn.execute(
+            "SELECT COALESCE(MAX(round_index), 0) FROM sets WHERE block_id = ? AND exercise_id = ?",
+            (target_block, target_id),
+        )
+        (base,) = await q.fetchone()
+        for offset, set_id in enumerate(weighted, start=1):
+            await _conn.execute(
+                f"UPDATE sets SET exercise_id = ?, block_id = ?, round_index = ?, "
+                f"order_in_round = ?{load_sql} WHERE id = ?",
+                (target_id, target_block, base + offset, order_in_round, set_id),
+            )
+        result["sets"] += len(weighted)
+        if has_plain:
+            continue
+        # Простого упражнения в этом блоке не осталось — его место в блоке уходит.
+        await _conn.execute(
+            "DELETE FROM block_exercises WHERE block_id = ? AND exercise_id = ?",
+            (block_id, source_id),
+        )
+        q = await _conn.execute(
+            "SELECT (SELECT COUNT(*) FROM block_exercises WHERE block_id = ?) AS exercises, "
+            "(SELECT COUNT(*) FROM sets WHERE block_id = ?) AS sets",
+            (block_id, block_id),
+        )
+        left = await q.fetchone()
+        if left["exercises"] == 0 and left["sets"] == 0:
+            await _conn.execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
+            result["blocks_removed"] += 1
+        elif left["exercises"] == 1:
+            await _conn.execute(
+                "UPDATE workout_blocks SET type = 'single' WHERE id = ? AND type = 'superset'",
+                (block_id,),
+            )
+
+    # Заметка к упражнению в этой тренировке — за ним, если простого здесь не
+    # осталось; иначе она про оставшиеся подходы и остаётся на месте.
+    cur = await _conn.execute(
+        "SELECT 1 FROM block_exercises be JOIN workout_blocks b ON b.id = be.block_id "
+        "WHERE b.workout_id = ? AND be.exercise_id = ? LIMIT 1",
+        (workout_id, source_id),
+    )
+    if await cur.fetchone() is None:
+        cur = await _conn.execute(
+            "SELECT exercise_id, note FROM exercise_notes "
+            "WHERE workout_id = ? AND exercise_id IN (?, ?)",
+            (workout_id, source_id, target_id),
+        )
+        notes = {r["exercise_id"]: r["note"] for r in await cur.fetchall()}
+        if source_id in notes:
+            own = notes.get(target_id)
+            note = notes[source_id] if not own or own == notes[source_id] else f"{own}\n{notes[source_id]}"
+            await _conn.execute(
+                "INSERT INTO exercise_notes (workout_id, exercise_id, note) VALUES (?, ?, ?) "
+                "ON CONFLICT (workout_id, exercise_id) DO UPDATE SET note = excluded.note",
+                (workout_id, target_id, note),
+            )
+            await _conn.execute(
+                "DELETE FROM exercise_notes WHERE workout_id = ? AND exercise_id = ?",
+                (workout_id, source_id),
+            )
+            result["notes_moved"] += 1
+    return result
 
 
 async def _fill_null_bodyweight_loads(user_id: Optional[int] = None) -> int:

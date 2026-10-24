@@ -97,6 +97,11 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "2. На вдохе опустись, почти касаясь пола грудью.\n"
         "3. На выдохе выжми корпус обратно вверх, сжимая грудь."
     ),
+    "Отжимания на брусьях с весом": (
+        "1. Повесь блин или гантель на пояс с цепью, обопрись на брусья на прямых руках.\n"
+        "2. На вдохе наклони корпус вперёд и медленно опустись, пока плечо не станет параллельно полу.\n"
+        "3. На выдохе выжми себя вверх, не раскачивая груз."
+    ),
     "Отжимания на брусьях": (
         "1. Обопрись на брусья на прямых руках — исходное положение.\n"
         "2. На вдохе наклони корпус вперёд и медленно опустись, разводя "
@@ -1982,6 +1987,11 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "2. Inhale and lower yourself until your chest nearly touches the "
         "floor.\n"
         "3. Exhale and press back up, squeezing your chest."
+    ),
+    "Отжимания на брусьях с весом": (
+        "1. Hang a plate or dumbbell from a dip belt and support yourself on straight arms above the bars.\n"
+        "2. Inhale, lean forward and lower slowly until your upper arms are parallel to the floor.\n"
+        "3. Exhale and press back up without letting the weight swing."
     ),
     "Отжимания на брусьях": (
         "1. Support yourself on straight arms above the bars — starting "
