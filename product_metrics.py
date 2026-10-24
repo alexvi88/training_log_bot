@@ -188,8 +188,10 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("you_story_open", "source"): frozenset({"menu", "finish"}),
     ("you_story_share", "source"): frozenset({"menu", "finish"}),
     ("you_story_shared", "source"): frozenset({"menu", "finish"}),
-    ("you_video_open", "source"): frozenset({"menu"}),
-    ("you_video_shared", "source"): frozenset({"menu"}),
+    # Видео «как ты рос»: из меню, с экрана итогов тренировки и из пуша о вехе
+    # (push_texts.YOU_VIDEO).
+    ("you_video_open", "source"): frozenset({"menu", "finish", "push"}),
+    ("you_video_shared", "source"): frozenset({"menu", "finish", "push"}),
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),

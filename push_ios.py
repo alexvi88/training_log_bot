@@ -369,3 +369,37 @@ def coach_clients_route(client_id: Optional[int] = None) -> dict:
 # последнюю программу от этого тренера, если она у атлета есть.
 COACH_CLIENT_LEFT = "coach_client_left"
 COACH_UNLINKED = "coach_unlinked"
+
+
+# Веха «смотри, как ты вырос» (engagement._send_you_video_pushes): неделя,
+# месяц, 3 месяца, полгода и год с первой законченной тренировки. Не категория
+# ротации: на каждую веху один текст, у русского — в роде атлета (users.gender,
+# ICU select; пол не выбран — нейтральная фраза без рода). Банер ведёт в
+# видео «как ты рос» (`{"screen": "you_video", "days": 30}`): `days` — веха,
+# до которой приложение крутит историю (GET /v1/dashboard/timeline). Старые
+# сборки экран не знают и просто открываются.
+SCREEN_YOU_VIDEO = "you_video"
+
+# Веха (дней с первой тренировки) → часть ключа каталога
+# push.ios.you_video.<часть>.title / .body.
+YOU_VIDEO_COPY_KEYS: dict[int, str] = {
+    7: "week",
+    30: "month",
+    90: "three_months",
+    180: "half_year",
+    365: "year",
+}
+
+
+def you_video_alert(days: int, gender: Optional[str]) -> tuple[str, str]:
+    """(title, body) банера о вехе `days` на языке вокруг (i18n.use_lang у
+    вызывающего). `gender` — users.gender: 'male'/'female' или None."""
+    key = YOU_VIDEO_COPY_KEYS[days]
+    title = i18n.t(f"push.ios.you_video.{key}.title")
+    body = i18n.t(f"push.ios.you_video.{key}.body", gender=gender or "none")
+    return title, body
+
+
+def you_video_route(days: int) -> dict:
+    """Маршрут банера о вехе: `{"screen": "you_video", "days": <веха>}`."""
+    return {"screen": SCREEN_YOU_VIDEO, "days": int(days)}
