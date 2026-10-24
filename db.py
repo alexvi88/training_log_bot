@@ -6436,6 +6436,29 @@ async def max_e1rm_before_workout_by_exercise(
     return {r["exercise_id"]: r["mx"] for r in await cur.fetchall() if r["mx"] is not None}
 
 
+async def max_reps_before_workout_by_exercise(
+    user_id: int, exercise_ids, workout_id: int
+) -> dict[int, int]:
+    """Лучшие повторы в одном подходе по упражнениям — планка 🥇 у упражнений
+    своим весом (seed_data.is_reps_only): там рекорд — повторы, а не e1RM
+    (как 🔥 у view_builder._session_record). Тот же круг, что у
+    max_e1rm_before_workout_by_exercise: законченные тренировки, кроме этой;
+    упражнения без истории в словарь не попадают — «делается впервые»."""
+    ids = sorted(set(exercise_ids))
+    if not ids:
+        return {}
+    cur = await conn().execute(
+        "SELECT s.exercise_id, MAX(s.reps) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.id != ? "
+        f"AND s.exercise_id IN ({_placeholders(ids)}) "
+        "GROUP BY s.exercise_id",
+        (user_id, workout_id, *ids),
+    )
+    return {r["exercise_id"]: r["mx"] for r in await cur.fetchall() if r["mx"] is not None}
+
+
 async def achievement_extremes(
     user_id: int, *, tz_offset: Optional[int] = None
 ) -> dict[str, Any]:

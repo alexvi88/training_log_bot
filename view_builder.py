@@ -7,6 +7,7 @@ from typing import Any
 import analytics
 import db
 import i18n
+import seed_data
 from formatting import BlockView, ExerciseBlockView
 
 
@@ -125,9 +126,13 @@ async def build_block_views(
     # тренировки, а не по запросу на каждое. Планка — при любой выбранной
     # строке тренировки (и при mark_records тоже), как считалось и раньше.
     best_before: dict[int, float] = {}
+    best_reps_before: dict[int, int] = {}
+    reps_only_ids = {
+        ex_id for ex_id in order if seed_data.exercise_is_reps_only(merged[ex_id]["exercise"])
+    }
     if workout is not None and order:
-        best_before = await db.max_e1rm_before_workout_by_exercise(
-            workout["user_id"], order, workout_id, formula
+        best_before, best_reps_before = await gold_bars(
+            workout["user_id"], order, reps_only_ids, workout_id, formula
         )
     before = previous_before or (workout["started_at"] if mark_records else None)
     prior_by_exercise: dict[int, list[analytics.SessionStats]] = {}
@@ -143,15 +148,19 @@ async def build_block_views(
         gname = group_info(ex["primary_group_id"])
         gold_index = None
         if workout is not None:
-            gold_index = best_gold_index(
+            gold_index = gold_index_for(
                 [
                     (load, reps, rpe)
                     for load, (_w, reps), rpe in zip(
                         entry["loads"], entry["sets"], entry["rpes"], strict=True
                     )
                 ],
-                best_before.get(ex_id),
-                formula,
+                raw_weights=[w for w, _reps in entry["sets"]],
+                reps_only=ex_id in reps_only_ids,
+                e1rm_bars=best_before,
+                reps_bars=best_reps_before,
+                exercise_id=ex_id,
+                formula=formula,
             )
         prev_sets = None
         prev_set_rpes = None
@@ -202,6 +211,66 @@ async def build_block_views(
         )
 
     return views
+
+
+def best_reps_gold_index(reps: list[int], previous_best_reps: int | None) -> int | None:
+    """🥇 упражнения своим весом (seed_data.is_reps_only): рекорд там —
+    повторы в подходе, как у 🔥 (`_session_record`). По e1RM его искать
+    нельзя: вес у подхода 0 (или вес тела, если он известен), а подход длиннее
+    config.E1RM_MAX_REPS повторов в e1RM не участвует вовсе — 14 подтягиваний
+    после 12 не забирали 🥇 никогда (владелец).
+
+    Правила те же, что у `best_gold_index`: истории нет (None) — 🥇 нет;
+    отмечен один подход — лучший в сессии, если он строго выше прошлого
+    лучшего; следующий подход, который лучше, забирает метку себе.
+    """
+    if previous_best_reps is None:
+        return None
+    best_index = None
+    best = previous_best_reps
+    for i, count in enumerate(reps):
+        if count > best:
+            best, best_index = count, i
+    return best_index
+
+
+async def gold_bars(
+    user_id: int, exercise_ids, reps_only_ids, workout_id: int, formula: str
+) -> tuple[dict[int, float], dict[int, int]]:
+    """Планки 🥇 для упражнений тренировки: e1RM — у железа, повторы — у
+    упражнений своим весом (`reps_only_ids`). Одна точка для живого трекера
+    бота и GET тренировки в /v1, чтобы они не разошлись."""
+    reps_only = set(reps_only_ids)
+    # e1RM-планка — у всех: в упражнение своим весом мог лечь подход с
+    # добавкой (старые записи «подтягивания 10кг»), и тогда 🥇 считается по ней.
+    e1rm_bars = await db.max_e1rm_before_workout_by_exercise(
+        user_id, exercise_ids, workout_id, formula
+    )
+    reps_bars = (
+        await db.max_reps_before_workout_by_exercise(user_id, reps_only, workout_id)
+        if reps_only else {}
+    )
+    return e1rm_bars, reps_bars
+
+
+def gold_index_for(
+    loaded_sets: list[tuple[float, int, float | None]],
+    *,
+    raw_weights: list[float],
+    reps_only: bool,
+    e1rm_bars: dict[int, float],
+    reps_bars: dict[int, int],
+    exercise_id: int,
+    formula: str,
+) -> int | None:
+    """Какой подход упражнения несёт 🥇 — по повторам или по e1RM.
+
+    По повторам — упражнение своим весом, и все сегодняшние подходы без
+    записанной добавки (`raw_weights` — что ввёл человек, а не нагрузка): то же
+    условие, что у 🔥 в `sets_beat_record`. С добавкой — по e1RM, как раньше."""
+    if reps_only and all(w == 0 for w in raw_weights):
+        return best_reps_gold_index([reps for _load, reps, _rpe in loaded_sets], reps_bars.get(exercise_id))
+    return best_gold_index(loaded_sets, e1rm_bars.get(exercise_id), formula)
 
 
 def best_gold_index(
