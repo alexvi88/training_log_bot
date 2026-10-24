@@ -208,10 +208,12 @@ async def invite_route(request: Request) -> HTMLResponse:
 
 def _universal_link_paths() -> list[str]:
     """Пути, которые iPhone с приложением открывает в нём, а не в Safari:
-    приглашение тренера и реферальная ссылка атлета (referral_page.py)."""
+    приглашение тренера, реферальная ссылка атлета (referral_page.py) и
+    страница визитки (share_page.py)."""
     return [
         f"{coach_service.WEB_LINK_PATH}*",
         f"{acquisition.REFERRAL_WEB_PATH}*",
+        f"{sharing.WEB_LINK_PATH}*",
     ]
 
 
