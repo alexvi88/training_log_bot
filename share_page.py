@@ -263,7 +263,7 @@ def _html(content: str, lang: str, status: int = 200) -> HTMLResponse:
 
 
 def _base(request: Request) -> str:
-    return config.public_base_url() or str(request.base_url).rstrip("/")
+    return config.site_base_url() or str(request.base_url).rstrip("/")
 
 
 async def share_route(request: Request) -> HTMLResponse:

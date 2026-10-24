@@ -119,10 +119,13 @@ APP_LINK_PREFIX = "trainingdiary://share/"
 def web_link(token: str) -> Optional[str]:
     """https-ссылка на страницу визитки или None без публичного адреса сервера.
 
-    Хост — тот же, что у приглашения тренера (config.public_base_url), а не
-    домен сайта: Universal Links приложение принимает только с него
-    (associated domains в entitlements iOS-приложения)."""
-    base = config.public_base_url()
+    Хост — домен сайта (config.site_base_url, athletediary.app): ссылку видят
+    чужие люди, и наш адрес им понятнее адреса сервера. Сервер один, страница
+    и AASA отвечают на обоих доменах; в entitlements iOS-приложения — оба
+    (applinks:athletediary.app с версии 1.0.7, раньше только адрес сервера —
+    у старых сборок ссылка откроет страницу, а с неё «Открыть в приложении»
+    уводит в приложение схемой trainingdiary://share/)."""
+    base = config.site_base_url()
     return f"{base}{WEB_LINK_PATH}{token}" if base else None
 
 
