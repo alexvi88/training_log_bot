@@ -319,7 +319,7 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    text, kb = await _exercise_detail_payload(ex, state)
+    text, kb = await _exercise_detail_payload(ex, state, bodyweight_toggle=await _bodyweight_editable(ex))
     if was_archived:
         text = i18n.t("exercises.name.revived") + "\n\n" + text
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -399,7 +399,7 @@ async def exm_new_exercise_group_picked(callback: CallbackQuery, state: FSMConte
     await state.update_data(exm_exercise_id=ex_id, exm_new_name=None)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    text, kb = await _exercise_detail_payload(ex, state)
+    text, kb = await _exercise_detail_payload(ex, state, bodyweight_toggle=await _bodyweight_editable(ex))
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -524,7 +524,9 @@ async def _send_template_preview(
     )
 
 
-async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True):
+async def _exercise_detail_payload(
+    ex, state: FSMContext, with_info: bool = True, bodyweight_toggle: bool = False
+):
     """_exercise_detail_view with the exercise's group name looked up for it and
     "⬅️ Назад" pointed wherever this card was actually reached from: closing it
     to reveal the AI-тренер reply underneath (from the AI chat), returning to
@@ -540,14 +542,24 @@ async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True
     else:
         back_cb = "exm:backlist"
     return _exercise_detail_view(
-        ex, with_info=with_info, group_name=await _exercise_group_name(ex), back_cb=back_cb
+        ex, with_info=with_info, group_name=await _exercise_group_name(ex), back_cb=back_cb,
+        bodyweight_toggle=bodyweight_toggle,
     )
 
 
 def _exercise_detail_view(
-    ex, with_info: bool = True, group_name: str | None = None, back_cb: str = "exm:backlist"
+    ex,
+    with_info: bool = True,
+    group_name: str | None = None,
+    back_cb: str = "exm:backlist",
+    bodyweight_toggle: bool = False,
 ):
+    """bodyweight_toggle — карточка сразу после создания своего упражнения:
+    сверху переключатель «⚖️ Своим весом» (по умолчанию выключен) и подсказка,
+    зачем он. Дальше тот же переключатель живёт в «✏️ Редактировать»."""
     b = InlineKeyboardBuilder()
+    if bodyweight_toggle:
+        b.button(**_bodyweight_button(ex, "new"))
     b.button(text=i18n.t("exercises.btn.progress"), callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text=i18n.t("exercises.btn.edit"), callback_data=f"exm:editmenu:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.share"), callback_data=f"share:ex:{ex['id']}")
@@ -559,7 +571,10 @@ def _exercise_detail_view(
     if can_swap:
         b.button(text=i18n.t("btn.swap"), callback_data=f"exm:alt:{ex['id']}")
     b.button(text=i18n.t("btn.back"), callback_data=back_cb)
-    b.adjust(2, 2, 1)
+    if bodyweight_toggle:
+        b.adjust(1, 2, 2, 1)
+    else:
+        b.adjust(2, 2, 1)
     # Even when the details went out as a photo caption, the button screen keeps
     # the name: the photo can scroll out of view, and a bare "Manage:" doesn't
     # say which exercise the buttons act on.
@@ -568,10 +583,30 @@ def _exercise_detail_view(
         if with_info
         else f"<b>{escape(ex['display_name'])}</b>\n{i18n.t('exercises.manage_hint')}"
     )
+    if bodyweight_toggle:
+        text += "\n\n" + i18n.t("exercises.new.bodyweight_hint")
     return text, b.as_markup()
 
 
-def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
+def _is_bodyweight(ex) -> bool:
+    """Галка «Своим весом» стоит — тот же признак, что у PATCH /v1/exercises."""
+    return (ex["bodyweight_load"] or "none") != "none"
+
+
+def _bodyweight_button(ex, origin: str) -> dict:
+    """Переключатель «⚖️ Своим весом»; origin — какой экран перерисовать после
+    нажатия: «new» — карточка нового упражнения, «edit» — меню правки."""
+    key = "exercises.btn.bodyweight_on" if _is_bodyweight(ex) else "exercises.btn.bodyweight_off"
+    return {"text": i18n.t(key), "callback_data": f"exm:bw:{ex['id']}:{origin}"}
+
+
+async def _bodyweight_editable(ex) -> bool:
+    """Галку можно ставить только своему упражнению: у копии каталога режим
+    «своим весом» задан каталогом (db.is_catalog_exercise) — как в /v1."""
+    return not await db.is_catalog_exercise(ex)
+
+
+def _exercise_edit_menu_keyboard(ex, bodyweight_editable: bool = False) -> InlineKeyboardMarkup:
     """The "✏️ Edit" drill-down: renaming, changing group, description and
     photo are all edits — grouping them behind one button keeps the card
     itself down to Progress/Edit/Archive/Back. Same ✏️ on all four (they're
@@ -598,11 +633,11 @@ def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
     # у фото, приехавшего из приложения, file_id пустой, но удалять там есть что.
     if exercise_photos.has_photo(ex):
         b.button(text=i18n.t("exercises.btn.delete_photo"), callback_data=f"exm:delphotoask:{ex['id']}")
-        b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
-        b.adjust(2, 2, 2, 1, 1)
-    else:
-        b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
-        b.adjust(2, 2, 2, 1)
+    if bodyweight_editable:
+        b.button(**_bodyweight_button(ex, "edit"))
+    b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
+    # Дальше по одной в ряд: «Удалить фото», «Своим весом», «Назад» — что есть.
+    b.adjust(2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -611,7 +646,34 @@ async def _exercise_edit_menu_payload(ex):
     "✏️ Редактировать" swaps to, and where every edit's "❌ Отмена" now returns
     (see exm:editmenu: callers below) instead of the full card."""
     group_name = await _exercise_group_name(ex)
-    return _exercise_info_text(ex, group_name=group_name), _exercise_edit_menu_keyboard(ex)
+    kb = _exercise_edit_menu_keyboard(ex, bodyweight_editable=await _bodyweight_editable(ex))
+    return _exercise_info_text(ex, group_name=group_name), kb
+
+
+@router.callback_query(F.data.startswith("exm:bw:"))
+async def exm_toggle_bodyweight(callback: CallbackQuery, state: FSMContext):
+    """«⚖️ Своим весом» — та же галка, что `bodyweight` у POST/PATCH
+    /v1/exercises, и та же запись (db.set_exercise_bodyweight): вес у такого
+    упражнения не вводится, подход — только повторы (seed_data.is_reps_only)."""
+    _, _, raw_id, origin = callback.data.split(":")
+    ex = await db.get_exercise(int(raw_id))
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await ui.alert_exercise_not_found(callback)
+        return
+    if not await _bodyweight_editable(ex):
+        await callback.answer(i18n.t("api.error.bodyweight_not_editable"), show_alert=True)
+        return
+    bodyweight = not _is_bodyweight(ex)
+    await db.set_exercise_bodyweight(ex["id"], bodyweight)
+    ex = await db.get_exercise(ex["id"])
+    await state.set_state(ExerciseManage.picking_exercise)
+    if origin == "new":
+        text, kb = await _exercise_detail_payload(ex, state, bodyweight_toggle=True)
+    else:
+        text, kb = await _exercise_edit_menu_payload(ex)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    toast = "exercises.bodyweight_toast_on" if bodyweight else "exercises.bodyweight_toast_off"
+    await callback.answer(i18n.t(toast))
 
 
 @router.callback_query(F.data.startswith("exm:editmenu:"))
