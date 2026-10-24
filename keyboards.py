@@ -842,9 +842,11 @@ def logging_keyboard(
     "↩️ Удалить последний" appears directly above "✅ Закончить упражнение".
 
     can_swap — у активного упражнения есть замены из каталога
-    (exercise_alternatives): в тот же ряд встаёт «🔁 Альтернативы» на случай, когда
-    тренажёр занят. Своё упражнение не из каталога кнопку не получает — замен
-    ему мы не знаем, и тап вёл бы в пустой экран.
+    (exercise_alternatives) и подходов в нём ещё нет: «🔁 Альтернативы» на случай,
+    когда тренажёр занят. Отдельным рядом: третьей в ряду с «Суперсет» и
+    «Заметка» она обрезала все три до «…рсет / З…етка / …ивы» (Telegram Desktop).
+    Своё упражнение не из каталога кнопку не получает — замен ему мы не знаем, и
+    тап вёл бы в пустой экран.
 
     last_reps — повторы последнего записанного подхода. Есть они, значит есть и
     вес, и над остальными кнопками встаёт ряд цифр «тот же вес, другие
@@ -895,9 +897,9 @@ def logging_keyboard(
     top_row = [InlineKeyboardButton(text=i18n.t("btn.superset"), callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text=i18n.t("btn.note"), callback_data=f"live:note:{active_id}"))
-        if can_swap:
-            top_row.append(InlineKeyboardButton(text=i18n.t("btn.swap"), callback_data="live:swap"))
     b.row(*top_row)
+    if active_id is not None and can_swap:
+        b.row(InlineKeyboardButton(text=i18n.t("btn.swap"), callback_data="live:swap"))
     if has_sets:
         b.row(InlineKeyboardButton(text=i18n.t("btn.undo_last"), callback_data="live:undo"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.finish_exercise"), callback_data="live:finish_exercise"))
