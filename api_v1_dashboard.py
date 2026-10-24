@@ -124,6 +124,37 @@ async def get_dashboard(request: Request) -> JSONResponse:
         return JSONResponse(payload)
 
 
+def _timeline_point_json(point: dashboard_data.TimelinePoint) -> dict[str, Any]:
+    return {
+        "day": point.day,
+        "date": point.date.isoformat(),
+        "workouts": point.workouts,
+        "tonnage": point.tonnage,
+        "records": point.records,
+        "rank": {"level": point.rank.level, "name": point.rank.name},
+        "body_volume": dict(point.body_volume),
+    }
+
+
+async def get_you_timeline(request: Request) -> JSONResponse:
+    """«ТЫ» по дням истории — кадры видео «Как ты рос» (приложение собирает
+    его на телефоне тем же рисунком, что «ТЫ» в подвале). Точка на каждый
+    день с тренировкой и последняя — сегодня; вехи выбирает приложение.
+    `null`, как у `/dashboard`, — законченных тренировок нет. Имя звания —
+    на языке атлета, поэтому сбор под `use_lang`."""
+    user_id, user = await authed_user(request)
+    with i18n.use_lang(user["lang"]):
+        points = await dashboard_data.you_timeline(user_id, user)
+        if not points:
+            return JSONResponse(None)
+        return JSONResponse({
+            "first_date": points[0].date.isoformat(),
+            "unit": user["unit"],
+            "points": [_timeline_point_json(p) for p in points],
+        })
+
+
 routes = [
     Route("/dashboard", get_dashboard, methods=["GET"]),
+    Route("/dashboard/timeline", get_you_timeline, methods=["GET"]),
 ]

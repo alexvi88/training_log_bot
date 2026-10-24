@@ -287,6 +287,20 @@ def test_you_story_events_keep_source_enum_and_capped_activity():
         assert product_metrics.clean_props("you_story_shared", {"activity": junk}) == {}
 
 
+def test_you_video_events_keep_source_enum_and_capped_activity():
+    """Видео «Как ты рос» — тем же белым списком, что сторис «ТЫ»: источник
+    только из списка, activity — тип действия iOS, текст человека не проходит."""
+    assert product_metrics.clean_props("you_video_open", {"source": "menu", "text": "что ввёл человек"}) == {
+        "source": "menu"
+    }
+    assert product_metrics.clean_props("you_video_open", {"source": "push"}) == {}
+    save = "com.apple.UIKit.activity.SaveToCameraRoll"
+    assert product_metrics.clean_props(
+        "you_video_shared", {"source": "menu", "activity": save, "caption": "подпись"}
+    ) == {"source": "menu", "activity": save}
+    assert product_metrics.clean_props("you_video_shared", {"activity": "жим лёжа"}) == {}
+
+
 @pytest.mark.asyncio
 async def test_app_stores_you_story_events_and_drops_unknown_props(fresh_db):
     await db.get_or_create_user(telegram_id=7, username="c")

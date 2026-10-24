@@ -168,6 +168,11 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "you_story_open": frozenset({"source"}),
     "you_story_share": frozenset({"source"}),
     "you_story_shared": frozenset({"source", "activity"}),
+    # Видео «Как ты рос» (таймлапс «ТЫ», кнопка в сторис «ТЫ»): нажал —
+    # собирается на телефоне; системный лист закрылся — activity, как у
+    # сторис. По паре видно, доходит ли видео до чужих глаз.
+    "you_video_open": frozenset({"source"}),
+    "you_video_shared": frozenset({"source", "activity"}),
     # Партия игры началась (RestGameSheet в приложении): game — catch|weigh|
     # sort|runner, source — rest (между подходами), menu_arcade (автомат в
     # подвале «Меню»), achievements («Играть» у рекорда). По паре видно,
@@ -183,6 +188,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("you_story_open", "source"): frozenset({"menu", "finish"}),
     ("you_story_share", "source"): frozenset({"menu", "finish"}),
     ("you_story_shared", "source"): frozenset({"menu", "finish"}),
+    ("you_video_open", "source"): frozenset({"menu"}),
+    ("you_video_shared", "source"): frozenset({"menu"}),
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
