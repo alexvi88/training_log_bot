@@ -251,6 +251,15 @@ def test_plan_offer_event_keeps_only_action():
     assert product_metrics.clean_props("plan_offer", {}) == {}
 
 
+def test_review_prompt_event_keeps_reason_and_counts():
+    assert product_metrics.clean_props(
+        "review_prompt_requested", {"reason": "finish", "workouts": 1, "nth": 1, "text": "что ввёл человек"}
+    ) == {"reason": "finish", "workouts": 1, "nth": 1}
+    assert product_metrics.clean_props(
+        "review_prompt_requested", {"reason": "hack", "workouts": "1", "nth": True}
+    ) == {}
+
+
 def test_you_story_events_keep_source_enum_and_capped_activity():
     for event in ("you_story_open", "you_story_share"):
         assert product_metrics.clean_props(event, {"source": "menu", "text": "что ввёл человек"}) == {

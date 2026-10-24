@@ -145,6 +145,10 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # shown|accept|later. По тройке видно, сколько видят предложение, сколько
     # идут к тренеру собирать программу и сколько откладывают на неделю.
     "plan_offer": frozenset({"action"}),
+    # Приложение попросило у iOS окно оценки (ReviewPrompt): reason
+    # record|rank|finish, workouts — законченных у нас тренировок, nth — какой
+    # это запрос у аккаунта. Показала ли система окно, iOS не говорит.
+    "review_prompt_requested": frozenset({"reason", "workouts", "nth"}),
     # Сервис для тренеров: тренер отправил код приглашения (action shared|copied).
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
@@ -180,7 +184,12 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("you_story_shared", "source"): frozenset({"menu", "finish"}),
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
+    ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish"}),
 }
+
+# Свойства-счётчики (не токены): целое от 0 до потолка, остальное выкидывается.
+_COUNT_PROPS = frozenset({"workouts", "nth"})
+_MAX_COUNT = 100_000
 
 # Тип действия системного листа iOS — reverse-DNS id (точки, регистр), а не
 # наш токен; длиннее потолка — обрезается.
@@ -226,6 +235,9 @@ def clean_props(event: str, props: Any) -> Optional[dict]:
                 and 0 <= value <= _MAX_SESSION_SECONDS
             ):
                 out[key] = int(value)
+        elif key in _COUNT_PROPS:
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MAX_COUNT:
+                out[key] = value
         elif key == "activity":
             activity = clean_activity(value)
             if activity:
