@@ -387,7 +387,7 @@ async def test_bot_later_marks_workout(fresh_db, user_id):
     assert await db.bodyweight_prompt_for(user_id, wid2) == {"kind": "missing"}
 
 
-# ---------- «⚖️ Своим весом» у своего упражнения в боте ----------
+# ---------- «⚖️ Со своим весом» у своего упражнения в боте ----------
 
 
 def _buttons(kb) -> list[tuple[str, str]]:
@@ -426,7 +426,7 @@ def screens(monkeypatch):
 @pytest.mark.asyncio
 async def test_bot_new_own_exercise_bodyweight_toggle_and_reps_only_sets(fresh_db, user_id, screens):
     """Своё упражнение: на карточке сразу после создания — переключатель
-    «⚖️ Своим весом», выключенный. Включил — та же запись, что у галки
+    «⚖️ Со своим весом», выключенный. Включил — та же запись, что у галки
     `bodyweight` в /v1 (db.set_exercise_bodyweight), и подход в тренировке —
     только повторы: «12» — это 0×12, «40 8» — отказ."""
     from handlers import exercises
@@ -441,8 +441,8 @@ async def test_bot_new_own_exercise_bodyweight_toggle_and_reps_only_sets(fresh_d
     assert (await db.get_exercise(ex_id))["bodyweight_load"] == "none"
     text = msg.answer.await_args.args[0]
     kb = msg.answer.await_args.kwargs["reply_markup"]
-    assert "Нажми «⚖️ Своим весом»" in text
-    assert _buttons(kb)[0] == ("⚖️ Своим весом: нет", f"exm:bw:{ex_id}:new")
+    assert "Нажми «⚖️ Со своим весом»" in text
+    assert _buttons(kb)[0] == ("⚖️ Со своим весом: нет", f"exm:bw:{ex_id}:new")
 
     tap = _exm_callback(user_id, f"exm:bw:{ex_id}:new")
     await exercises.exm_toggle_bodyweight(tap, state)
@@ -450,7 +450,7 @@ async def test_bot_new_own_exercise_bodyweight_toggle_and_reps_only_sets(fresh_d
     assert (ex["bodyweight_load"], ex["bodyweight_factor"]) == ("full", 1.0)
     assert seed_data.exercise_is_reps_only(ex)
     _, kb = screens[-1]
-    assert _buttons(kb)[0] == ("⚖️ Своим весом: да, только повторы", f"exm:bw:{ex_id}:new")
+    assert _buttons(kb)[0] == ("⚖️ Со своим весом: да, только повторы", f"exm:bw:{ex_id}:new")
     assert "только повторы" in tap.answer.await_args.args[0]
 
     wid = await db.create_workout(user_id)
@@ -466,12 +466,12 @@ async def test_bot_new_own_exercise_bodyweight_toggle_and_reps_only_sets(fresh_d
 
     # Та же галка в «✏️ Редактировать» — снял, и вес снова принимается.
     text, kb = await exercises._exercise_edit_menu_payload(await db.get_exercise(ex_id))
-    assert ("⚖️ Своим весом: да, только повторы", f"exm:bw:{ex_id}:edit") in _buttons(kb)
+    assert ("⚖️ Со своим весом: да, только повторы", f"exm:bw:{ex_id}:edit") in _buttons(kb)
     off = _exm_callback(user_id, f"exm:bw:{ex_id}:edit")
     await exercises.exm_toggle_bodyweight(off, state)
     assert (await db.get_exercise(ex_id))["bodyweight_load"] == "none"
     _, kb = screens[-1]
-    assert ("⚖️ Своим весом: нет", f"exm:bw:{ex_id}:edit") in _buttons(kb)
+    assert ("⚖️ Со своим весом: нет", f"exm:bw:{ex_id}:edit") in _buttons(kb)
     assert "✏️ Название" in [t for t, _ in _buttons(kb)]
     await workout.log_set_text(_message(user_id, "40 8", message_id=57), wstate)
     sets = await db.list_sets_for_workout_exercise(wid, ex_id)
@@ -519,3 +519,26 @@ async def test_bot_bodyweight_toggle_in_english(fresh_db, user_id, screens):
         _, kb = screens[-1]
         assert _buttons(kb)[0][0] == "⚖️ Bodyweight: yes, reps only"
         assert "just log reps" in tap.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_migration_gives_old_copies_the_catalog_bodyweight_mode(fresh_db, user_id):
+    """Копии, заведённые до колонки bodyweight_load, лежали с 'none' — старые
+    «Подтягивания» вводились с весом. Миграция v17 ставит им режим каталога,
+    а свои железные упражнения и «… с весом» не трогает."""
+    db = fresh_db
+    cur = await db.conn().execute(
+        "SELECT id FROM exercises WHERE is_template = 1 AND user_id IS NULL AND name = 'Подтягивания'"
+    )
+    old = await db.fork_exercise_from_template(user_id, (await cur.fetchone())["id"])
+    group_id = (await db.get_exercise(old))["primary_group_id"]
+    bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    await db.conn().execute("UPDATE exercises SET bodyweight_load = 'none' WHERE id = ?", (old,))
+    await db.conn().commit()
+    assert not seed_data.exercise_is_reps_only(await db.get_exercise(old))
+
+    assert await db._sync_bodyweight_load_of_old_copies() == 1
+    assert seed_data.exercise_is_reps_only(await db.get_exercise(old))
+    assert (await db.get_exercise(bench))["bodyweight_load"] == "none"
+    assert await db._sync_bodyweight_load_of_old_copies() == 0
+

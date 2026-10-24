@@ -844,8 +844,8 @@
   "exercises.btn.replace_photo": "✏️ Заменить фото",
   "exercises.btn.retype": "✏️ Написать заново",
   "exercises.btn.share": "📤 Поделиться",
-  "exercises.btn.bodyweight_off": "⚖️ Своим весом: нет",
-  "exercises.btn.bodyweight_on": "⚖️ Своим весом: да, только повторы",
+  "exercises.btn.bodyweight_off": "⚖️ Со своим весом: нет",
+  "exercises.btn.bodyweight_on": "⚖️ Со своим весом: да, только повторы",
   "exercises.description.current": "\n\nТекущее описание:\n<i>{text}</i>",
   "exercises.description.prompt": "Напиши описание или технику выполнения для «{name}».{current}\n\nПришли «-», чтобы убрать своё описание.",
   "exercises.description.too_long": "Описание длиннее {max} символов ({n}) — столько не влезает в подпись к фото. Сократи и пришли снова.",
@@ -882,7 +882,7 @@
   "exercises.name_reason.too_long": "длинновато для упражнения ({n, plural, one{# символ} few{# символа} many{# символов} other{# символа}})",
   "exercises.new.prompt_no_group": "Напиши название нового упражнения — группу мышц выберешь следом:",
   "exercises.new.prompt_with_templates": "Напиши название нового упражнения или выбери из шаблонов:",
-  "exercises.new.bodyweight_hint": "💡 Делаешь своим весом — подтягивания, отжимания, брусья? Нажми «⚖️ Своим весом», и вес я спрашивать не буду, только повторы.",
+  "exercises.new.bodyweight_hint": "💡 Делаешь своим весом — подтягивания, отжимания, брусья? Нажми «⚖️ Со своим весом», и вес я спрашивать не буду, только повторы.",
   "exercises.new_group.empty": "Не вижу названия — напиши хоть слово",
   "exercises.new_group.prompt": "Напиши название новой группы мышц:",
   "exercises.photo.delete_confirm": "Удалить фото «{name}»?",
@@ -2226,7 +2226,7 @@
   "import.overview_join": "{head} и {last}",
   "resolve.progress_similar": "Упражнение {position} из {total}.\nНашёл похожие на «{name}», но какое из них — не знаю наверняка.\nВыбери своё, шаблон или создай новое — или напиши другое название для поиска:",
   "exercises.merge.done_undo": "🔀 Объединил «{source}» с «{target}». Передумал — жми «↩️ Разъединить», верну как было.",
-  "exercises.bodyweight_toast_on": "Понял: своим весом. Вес не спрашиваю — пиши только повторы.",
+  "exercises.bodyweight_toast_on": "Понял: со своим весом. Вес не спрашиваю — пиши только повторы.",
   "exercises.bodyweight_toast_off": "Снял. Снова спрашиваю вес и повторы.",
   "exercise.unmerged": "↩️ Разъединил: вернул «{name}» и {n, plural, one{# подход} few{# подхода} many{# подходов} other{# подхода}}.",
   "exercise.unmerge_gone": "Это объединение уже разъединено или ему больше 30 дней — вернуть нечего.",
@@ -5807,5 +5807,5 @@
   "workout.bw_prompt.saved": "Записал вес: {weight}{u}. Нагрузку подходов своим весом пересчитал.",
   "workout.bw_prompt.later": "Хорошо, спрошу на следующей тренировке",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{упражнение} few{упражнения} many{упражнений} other{упражнения}} · {sets} {s, plural, one{подход} few{подхода} many{подходов} other{подхода}}",
-  "api.error.bodyweight_not_editable": "Режим «своим весом» у упражнения из каталога задан каталогом, его я не меняю. Нужен другой — сделай копию упражнения и поставь галку у неё."
+  "api.error.bodyweight_not_editable": "Режим «со своим весом» у упражнения из каталога задан каталогом, его я не меняю. Нужен другой — сделай копию упражнения и поставь галку у неё."
 }
