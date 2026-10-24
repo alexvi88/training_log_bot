@@ -206,19 +206,20 @@ async def test_settings_keyboard_groups_into_three_blocks():
     assert rows[3] == ["settings:rep_range"]
     assert rows[4] == ["settings:pushes"]
     assert rows[5] == ["settings:ai_comments"]
+    assert rows[6] == ["settings:exercise_images"]
     # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
-    assert rows[6] == ["settings:profile"]
-    assert rows[7] == ["settings:export"]
-    assert rows[8] == ["settings:import"]
-    assert rows[9] == ["settings:mcp"]
-    assert rows[10] == ["feedback:open"]
+    assert rows[7] == ["settings:profile"]
+    assert rows[8] == ["settings:export"]
+    assert rows[9] == ["settings:import"]
+    assert rows[10] == ["settings:mcp"]
+    assert rows[11] == ["feedback:open"]
     # Сервис для тренеров — кто видит твой дневник (handlers/coach.py).
-    assert rows[11] == ["coach:hub"]
-    assert rows[12] == ["invite:show"]
+    assert rows[12] == ["coach:hub"]
+    assert rows[13] == ["invite:show"]
     # Снос аккаунта — последним в блоке и отдельной строкой: единственная
     # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
-    assert rows[13] == ["settings:delete"]
-    assert rows[14] == ["settings:back"]
+    assert rows[14] == ["settings:delete"]
+    assert rows[15] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
@@ -456,3 +457,37 @@ async def test_migration_turns_extra_stats_on_for_everyone(fresh_db, user_id):
     await fresh_db.update_user(user_id, show_extra_stats=0)
     await fresh_db._show_extra_stats_for_everyone()
     assert (await fresh_db.get_user(user_id))["show_extra_stats"] == 1
+
+
+async def test_exercise_images_toggle_and_frames(fresh_db, user_id):
+    """«🖼 Картинки упражнений»: по умолчанию рисунок, тап — фото и обратно;
+    кадры каталога берутся по выбору атлета (exercise_media.get_images)."""
+    import os
+
+    import exercise_media
+
+    db = fresh_db
+    state = await _make_state(user_id)
+    assert await exercise_media.image_style(user_id) == "drawing"
+
+    callback = _make_callback(user_id, "menu:settings")
+    await settings.show_settings(callback, state)
+    markup = callback.message.answer.call_args.kwargs["reply_markup"]
+    assert "🖼 Картинки упражнений: показываю рисунок" in [b.text for row in markup.inline_keyboard for b in row]
+
+    await settings.settings_exercise_images(_make_callback(user_id, "settings:exercise_images"), state)
+    assert (await db.get_user(user_id))["exercise_images"] == "photo"
+    assert await exercise_media.image_style(user_id) == "photo"
+
+    slug = next(iter(exercise_media.FRAME_REVISION))
+    name = next(n for n, s in exercise_media.EXERCISE_IMAGE_SLUGS.items() if s == slug)
+    photo = exercise_media.get_images(name, "photo")
+    drawing = exercise_media.get_images(name, "drawing")
+    assert [os.path.basename(p) for p in photo] == [f"{slug}_1.jpg", f"{slug}_2.jpg"]
+    assert [os.path.basename(p) for p in drawing] == [exercise_media.frame_name(slug, n) for n in (1, 2)]
+    # Без рисунка — одинаково в обоих режимах.
+    plain = next(n for n, s in exercise_media.EXERCISE_IMAGE_SLUGS.items() if s not in exercise_media.FRAME_REVISION)
+    assert exercise_media.get_images(plain, "photo") == exercise_media.get_images(plain, "drawing")
+
+    await settings.settings_exercise_images(_make_callback(user_id, "settings:exercise_images"), state)
+    assert await exercise_media.image_style(user_id) == "drawing"

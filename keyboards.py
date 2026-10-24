@@ -1867,6 +1867,7 @@ def settings_keyboard(
     show_feedback: bool = False,
     rep_range: Optional[tuple[int, int]] = None,
     gender: Optional[str] = None,
+    exercise_images: str = "drawing",
 ) -> InlineKeyboardMarkup:
     """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
     заголовки живут в тексте экрана (settings.screen.section.*, см.
@@ -1922,6 +1923,11 @@ def settings_keyboard(
         i18n.t("btn.ai_comments_on") if ai_comments_enabled else i18n.t("btn.ai_comments_off")
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
+    images_label = (
+        i18n.t("btn.exercise_images_photo") if exercise_images == "photo"
+        else i18n.t("btn.exercise_images_drawing")
+    )
+    b.button(text=images_label, callback_data="settings:exercise_images")
     # «e1RM на карточке» тумблером больше нет: у всех и всегда
     # (db._show_extra_stats_for_everyone).
 

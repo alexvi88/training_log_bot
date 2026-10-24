@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- у всех; кто включит снова — тому рестарт его не выключит.
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
+    -- «🖼 Картинки упражнений» в настройках бота: 'drawing' — рисунок с нашим
+    -- тренером, 'photo' — стоковое фото (exercise_media.IMAGE_STYLES).
+    exercise_images TEXT NOT NULL DEFAULT 'drawing',
     -- Диапазон повторов для подсказки «Цель» (analytics.REP_RANGE_PRESETS).
     -- NULL у обоих — 5–12 по умолчанию; пишутся только парой.
     rep_range_min INTEGER,
@@ -1835,6 +1838,8 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
         )
+    if "exercise_images" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN exercise_images TEXT NOT NULL DEFAULT 'drawing'")
     for range_col in ("rep_range_min", "rep_range_max"):
         # NULL — «не выбирал», то есть 5–12 (analytics.user_rep_range).
         if range_col not in user_cols:
