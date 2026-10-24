@@ -343,6 +343,46 @@ async def test_bodyweight_exercise_zero_weight_sets(fresh_db, client_factory):
     assert body["records"]["best_reps"] == 12
 
 
+@pytest.mark.parametrize("bodyweight", [None, 80.0])
+async def test_reps_only_pullups_keep_points_after_bodyweight_is_logged(
+    fresh_db, client_factory, bodyweight
+):
+    """Баг владельца: «Подтягивания» в «Все упражнения» — «3 тренировки», а
+    экран прогресса пустой («С этим упражнением тренировок пока нет») и в
+    карточке нет истории.
+
+    Подходы только повторами (0×14, 0×13). Ответ на «сколько весишь»
+    (db.add_bodyweight_log) дозаполнял им load_weight весом тела: сессия
+    уходила из режима повторов в e1RM, у подходов длиннее E1RM_MAX_REPS e1RM
+    ноль — и chart_series выкидывал все три точки. Тренировка без единого
+    записанного веса — про повторы и с весом тела, и без него."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await _bodyweight_exercise(user_id)
+    await db.conn().execute("UPDATE exercises SET original_name = 'Подтягивания' WHERE id = ?", (ex_id,))
+    await db.conn().commit()
+    await _log_session(user_id, ex_id, 1, [(0.0, 14), (0.0, 13)])
+    await _log_session(user_id, ex_id, 8, [(0.0, 15), (0.0, 13)])
+    if bodyweight is not None:
+        # Как в приложении: вес тела спросили после истории — и вся она
+        # дозаполнена снимком нагрузки.
+        await db.add_bodyweight_log(user_id, bodyweight, logged_at="2026-03-10T08:00:00")
+    await _log_session(user_id, ex_id, 15, [(0.0, 16), (0.0, 14)])
+
+    body = (await client.get(f"/exercises/{ex_id}/progress/sessions")).json()
+
+    assert body["metric"] == "reps"
+    assert body["unit"] is None
+    assert [p["value"] for p in body["points"]] == [14, 15, 16]
+    assert [p["max_reps"] for p in body["points"]] == [14, 15, 16]
+    # Показывается то, что человек записал: «×16», а не вес тела «80×16».
+    assert [p["top_set"] for p in body["points"]] == ["×14", "×15", "×16"]
+    assert body["points"][-1]["sets_text"] == "×16, ×14"
+    assert body["records"]["best_set"] == "×16"
+    assert body["records"]["best_reps"] == 16
+    assert body["comparison"]["delta"] == 2
+
+
 async def test_bodyweight_exercise_with_added_weight_keeps_max_reps(fresh_db, client_factory):
     """Подтягивания с поясом и записанным весом тела: метрика — e1RM по
     нагрузке (вес тела + блин), но `max_reps` — лучшие повторы подхода из
