@@ -46,7 +46,9 @@ UPDATE = os.environ.get("UPDATE_QUERY_SNAPSHOT") == "1"
 # Потолки — с небольшим запасом над замеренным; сюда входят и три запроса
 # авторизации (токен, last_used_at, users). На этом сиде до пакетной выборки
 # было ~78 / ~45 / 149, после — 13 / 12 / 11.
-MAX_QUERIES_WORKOUT_DETAIL = 16
+# У идущей тренировки деталь несёт и вопрос о весе тела
+# (db.bodyweight_prompt_for) — ещё до четырёх запросов, не на упражнение.
+MAX_QUERIES_WORKOUT_DETAIL = 20
 MAX_QUERIES_ACTIVE_WORKOUT = 14
 MAX_QUERIES_HALL_OF_FAME = 13
 # GET /exercises: три запроса авторизации + сам список (usage_count и число

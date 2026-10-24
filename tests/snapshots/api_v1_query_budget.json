@@ -3939,6 +3939,9 @@
      "type": "single"
     }
    ],
+   "bodyweight_prompt": {
+    "kind": "missing"
+   },
    "client_id": null,
    "finished_at": null,
    "id": 302,

@@ -2301,7 +2301,14 @@ async def get_workout(request: Request) -> JSONResponse:
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
     user = await db.get_user(user_id)
-    return JSONResponse(await _workout_detail_json(workout, user))
+    data = await _workout_detail_json(workout, user)
+    # Приложение после каждого подхода перечитывает тренировку этой ручкой,
+    # а не `/workouts/active`: без вопроса здесь он гас с первым же
+    # перечитыванием, и новичок вопроса о весе не видел вовсе. У законченной
+    # тренировки db.bodyweight_prompt_for отдаёт None.
+    if workout["status"] == "active":
+        data["bodyweight_prompt"] = await db.bodyweight_prompt_for(user_id, workout_id)
+    return JSONResponse(data)
 
 
 async def list_workouts(request: Request) -> JSONResponse:
