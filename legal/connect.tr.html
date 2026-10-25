@@ -1,0 +1,72 @@
+<h1>Sporcu Günlüğü’nü Claude ve ChatGPT’ye bağla</h1>
+<p class="muted">Sporcu Günlüğü, antrenmanları kaydetmek için bir iPhone uygulaması ve bir Telegram botudur. Bağlayıcı, kullandığın bir AI uygulamasının kendi günlüğünü okumasını ve antrenmanınla ilgili soruları yanıtlamasını sağlar.</p>
+
+<p>Bir kez bağla — ve antrenmanını doğrudan orada sor: “Son 3 ayda bench press’im gelişti mi?”, “Hangi kasları az çalıştırıyorum?”, “Zaten yaptıklarıma göre bana 4 günlük bir program hazırla”.</p>
+
+<h2>Neye ihtiyacın var</h2>
+<ul>
+  <li>Bir Sporcu Günlüğü hesabı — iPhone uygulaması (Apple ile Giriş Yap) veya Telegram botu <a href="https://t.me/lightweight_log_bot">@lightweight_log_bot</a>. İkisi de ücretsiz.</li>
+  <li>Claude (claude.ai, masaüstü veya mobil uygulama, Claude Code) ya da ChatGPT.</li>
+</ul>
+
+<h2>Bağlayıcı adresi</h2>
+<p><code>https://athletediary.app/mcp</code></p>
+<p>Giriş OAuth ile yapılır: şifre yoktur. Onay sayfasında yalnızca senin alabileceğin tek kullanımlık 6 haneli bir kod girersin:</p>
+<ul>
+  <li>uygulamada: Profil → “Claude ve ChatGPT’ye bağlan” → “Kod al”;</li>
+  <li>botta: <code>/mcp</code> gönder ve uygulamanı seç — kod aynı mesajdadır.</li>
+</ul>
+<p>Kod 10 dakika geçerlidir ve bir kez çalışır. Yeni bir kod öncekini iptal eder.</p>
+
+<h2>Claude</h2>
+<ol>
+  <li>Ayarlar → Bağlayıcılar → Özel bağlayıcı ekle (ya da bağlayıcı dizininde Sporcu Günlüğü’nü bul).</li>
+  <li><code>https://athletediary.app/mcp</code> adresini yapıştır ve Bağlan’a dokun.</li>
+  <li>Sporcu Günlüğü onay sayfasında kodu gir ve “İzin ver”e dokun.</li>
+  <li>Kontrol et: yeni bir sohbette “son antrenmanlarımı göster” diye sor.</li>
+</ol>
+<p>Claude Code: <code>claude mcp add --transport http athlete-diary https://athletediary.app/mcp</code>, ardından <code>/mcp</code> → Authenticate.</p>
+
+<h2>ChatGPT</h2>
+<ol>
+  <li>ChatGPT uygulama dizininde Sporcu Günlüğü’nü bul ve Bağlan’a dokun. Liste yayına girene kadar: Ayarlar → Uygulamalar ve Bağlayıcılar → Gelişmiş → Geliştirici modunu aç, ardından Oluştur, <code>https://athletediary.app/mcp</code> adresini yapıştır, Kimlik doğrulama — OAuth.</li>
+  <li>Sporcu Günlüğü onay sayfasında kodu gir ve “İzin ver”e dokun.</li>
+  <li>Kontrol et: bağlayıcıyı bir sohbette aç ve “son antrenmanlarımı göster” diye sor.</li>
+</ol>
+
+<h2>Bağlayıcı neler yapabilir</h2>
+<p>Okuma — hiçbir şeyi değiştirmez:</p>
+<ul>
+  <li><code>get_training_overview</code> — birimler, istatistikler, antrenman profili ve egzersizlerinin listesi.</li>
+  <li><code>get_active_workout</code> — varsa devam eden antrenman.</li>
+  <li><code>list_recent_workouts</code> — her setiyle birlikte son 1–10 antrenman.</li>
+  <li><code>get_full_workout_history</code> — uzun vadeli sorular için son 200 antrenmana kadar.</li>
+  <li><code>get_exercise_progress</code> — tek bir egzersiz: tarihe göre setler, çalışma ağırlıkları, e1RM, rekorlar.</li>
+  <li><code>compare_periods</code> — tüm egzersizlerde son N günün önceki N günle karşılaştırması.</li>
+  <li><code>get_weekly_volume_by_group</code> — kas grubu başına çalışma setleri, bu hafta ve geçen hafta.</li>
+  <li><code>get_muscle_recovery</code> — her kas grubunun ne kadar toparlandığı.</li>
+  <li><code>get_bodyweight_history</code> — tartılmalar.</li>
+  <li><code>get_saved_programs</code> — programların, liste halinde ya da biri tam olarak.</li>
+  <li><code>get_program_adherence</code> — antrenmanlarının kayıtlı programa ne kadar uyduğu.</li>
+  <li><code>list_exercise_catalog</code> — kas grubuna göre yerleşik egzersiz kataloğu.</li>
+</ul>
+<p>Yazma — yalnızca AI uygulamasından istediğinde:</p>
+<ul>
+  <li><code>log_bodyweight</code> — bugünkü vücut ağırlığını kaydetmek.</li>
+  <li><code>delete_bodyweight_log</code> — bir tartılmayı silmek (AI uygulaması senden onay ister).</li>
+  <li><code>create_exercise</code> — özel bir egzersiz eklemek.</li>
+  <li><code>copy_program</code> — kayıtlı bir programı çoğaltmak.</li>
+</ul>
+<p>Bağlayıcı AI koçla sohbetini okuyamaz; antrenmanları, egzersizleri veya programları yeniden adlandıramaz ya da silemez; e-postanı, Apple Kimliği’ni veya Telegram hesabını göremez. Dakikada en fazla 60 istek.</p>
+
+<h2>Gizlilik ve bağlantıyı kesme</h2>
+<p>Verilerin AI uygulamasına yalnızca uygulama senin isteğin üzerine bağlayıcıyı çağırdığında ve yalnızca kodla onayladığın hesaba gider. Bundan sonra o şirketin kendi gizlilik politikası geçerlidir. Bağlantıyı kesmek için: uygulamada Profil → “Claude ve ChatGPT’ye bağlan” → “Bağlı uygulamalar”; botta <code>/mcp</code> → “Bağlı uygulamalar” — ya da bağlayıcıyı AI uygulamasından kaldır. Ayrıntılar — <a href="/privacy?lang=tr">Gizlilik Politikası</a>’nda.</p>
+
+<h2>Yardım</h2>
+<ul>
+  <li>Uygulamada: Profil → “Destek ve geri bildirim”.</li>
+  <li>Botta: /feedback komutu.</li>
+  <!-- contact-email -->
+</ul>
+
+<p class="muted"><a href="/privacy?lang=tr">Gizlilik Politikası</a> · <a href="/terms?lang=tr">Kullanım Koşulları</a> · <a href="/support?lang=tr">Destek</a> · <a href="/connect?lang=ru">Русский</a></p>

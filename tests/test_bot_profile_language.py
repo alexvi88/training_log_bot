@@ -34,7 +34,7 @@ async def test_setup_commands_uploads_default_and_english_sets(monkeypatch):
     default_calls = [
         c for c in bot.set_my_commands.call_args_list if isinstance(c.kwargs.get("scope"), BotCommandScopeDefault)
     ]
-    assert len(default_calls) == 2
+    assert len(default_calls) == 7
     # Ru-набор заливается без language_code — это дефолт, который видят все
     # языки без своего варианта, а не "применить ко всем".
     ru_call = next(c for c in default_calls if c.kwargs.get("language_code") is None)
@@ -64,11 +64,11 @@ async def test_sync_bot_profile_sets_description_on_both_languages():
 
     calls = bot.set_my_description.await_args_list
     languages = {c.kwargs.get("language_code") for c in calls}
-    assert languages == {None, "en"}
+    assert languages == {None, "en", *bot_profile.OTHER_LANGS}
 
     short_calls = bot.set_my_short_description.await_args_list
     short_languages = {c.kwargs.get("language_code") for c in short_calls}
-    assert short_languages == {None, "en"}
+    assert short_languages == {None, "en", *bot_profile.OTHER_LANGS}
 
 
 def test_english_description_has_no_cyrillic():
@@ -145,7 +145,7 @@ async def test_sync_bot_profile_sets_the_name_on_both_languages():
     await bot_profile.sync_bot_profile(bot)
 
     langs = {c.kwargs.get("language_code") for c in bot.set_my_name.call_args_list}
-    assert langs == {None, "en"}, langs
+    assert langs == {None, "en", *bot_profile.OTHER_LANGS}, langs
     by_lang = {c.kwargs.get("language_code"): c.args[0] for c in bot.set_my_name.call_args_list}
     assert by_lang[None] == "ДНЕВНИК АТЛЕТА"
     assert not _CYRILLIC_RE.search(by_lang["en"])
@@ -159,7 +159,10 @@ async def test_name_is_not_rewritten_when_it_already_matches():
     bot = AsyncMock()
 
     def _current(language_code=None):
-        name = bot_profile.NAME_EN if language_code == "en" else bot_profile.NAME
+        if language_code in bot_profile.PROFILES:
+            name = bot_profile.PROFILES[language_code][0]
+        else:
+            name = bot_profile.NAME_EN if language_code == "en" else bot_profile.NAME
         return type("N", (), {"name": name})()
 
     bot.get_my_name.side_effect = _current

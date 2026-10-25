@@ -28,9 +28,27 @@ def test_normalize_to_ru(code):
     assert i18n.normalize(code) == "ru"
 
 
-@pytest.mark.parametrize("code", ["en", "en-US", "EN", "de", "fr-FR", "es", "zh-Hans"])
+@pytest.mark.parametrize("code", ["en", "en-US", "EN", "it", "pl-PL", "zh-Hans"])
 def test_normalize_to_en(code):
     assert i18n.normalize(code) == "en"
+
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [("es", "es"), ("es-MX", "es"), ("pt-BR", "pt"), ("PT", "pt"), ("de-AT", "de"), ("fr-CA", "fr"), ("tr", "tr")],
+)
+def test_normalize_keeps_own_catalog_languages(code, expected):
+    assert i18n.normalize(code) == expected
+
+
+def test_missing_key_in_own_catalog_falls_back_to_english_not_russian(monkeypatch):
+    """Ключа ещё нет в испанском каталоге — испанец видит английский текст,
+    а не русский: английский ему понятнее."""
+    i18n.reload()
+    i18n._load_catalog("es")
+    monkeypatch.setitem(i18n._catalogs, "es", {})
+    assert i18n.t_in("es", "btn.back") == i18n.t_in("en", "btn.back")
+    i18n.reload()
 
 
 # --- плюрализация ru/en -------------------------------------------------------

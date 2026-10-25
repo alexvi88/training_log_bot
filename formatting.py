@@ -651,8 +651,11 @@ def to_kg(total: float, unit: str = "kg") -> float:
 
 def group_thousands(value: float) -> str:
     """Целое с разделителем разрядов языка: «7,050» по-английски, «7 050» (NBSP)
-    по-русски. Не через locale/babel: процесс один на всех, а язык — в ContextVar."""
-    sep = "\u00a0" if i18n.get_lang() == "ru" else ","
+    на остальных. Не через locale/babel: процесс один на всех, а язык — в ContextVar."""
+    # Не точка у es/de/pt/tr, хоть она там и принята: дробная часть во всём
+    # продукте — точкой («12.5кг»), и «7.050» читалось бы как семь с хвостом.
+    # Пробел (NBSP, как в СИ) понятен на всех языках, кроме английского.
+    sep = "," if i18n.get_lang() == "en" else "\u00a0"
     return f"{round(value):,}".replace(",", sep)
 
 

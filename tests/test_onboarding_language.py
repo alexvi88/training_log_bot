@@ -96,7 +96,7 @@ async def test_new_user_russian_client_sees_screen_with_russian_marked(fresh_db)
 async def test_new_user_unknown_client_language_defaults_to_english_marked(fresh_db):
     """i18n.normalize сводит незнакомый code к английскому (см. i18n.py) — тот
     же дефолт должен быть помечен на экране выбора."""
-    message = _make_message(555003, language_code="de")
+    message = _make_message(555003, language_code="it")
     state = await _make_state(555003)
 
     await workout.cmd_start(message, state)
@@ -139,7 +139,7 @@ async def test_unknown_language_code_in_callback_is_ignored(fresh_db):
     state = await _make_state(user_id)
     await workout.cmd_start(message, state)
 
-    callback = _make_callback(user_id, "onboarding:lang:de")
+    callback = _make_callback(user_id, "onboarding:lang:it")
     await workout.onboarding_language_set(callback, state)
 
     user = await fresh_db.get_user(user_id)

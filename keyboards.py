@@ -1821,7 +1821,15 @@ def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
 
 # Автонимы языков — не переводятся: человек, попавший не на тот язык, ищет
 # глазами родное слово, а не перевод (см. TONE_OF_VOICE.md, English voice).
-LANG_NAMES = {"ru": "Русский", "en": "English"}
+LANG_NAMES = {
+    "ru": "Русский",
+    "en": "English",
+    "es": "Español",
+    "pt": "Português",
+    "de": "Deutsch",
+    "fr": "Français",
+    "tr": "Türkçe",
+}
 
 
 def language_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -1829,7 +1837,7 @@ def language_keyboard(current: str) -> InlineKeyboardMarkup:
     текущий язык помечается той же разметкой `• label •`, чтобы приём в
     продукте был один."""
     b = InlineKeyboardBuilder()
-    for code in ("ru", "en"):
+    for code in LANG_NAMES:
         label = LANG_NAMES[code]
         b.button(text=f"• {label} •" if code == current else label, callback_data=f"settings:langset:{code}")
     b.button(text=i18n.t("btn.back"), callback_data="settings:menu")
@@ -1847,7 +1855,7 @@ def onboarding_language_keyboard(current: str) -> InlineKeyboardMarkup:
     Без «⬅️ Назад»: до выбора языка идти ещё некуда, это первый экран из
     всех."""
     b = InlineKeyboardBuilder()
-    for code in ("ru", "en"):
+    for code in LANG_NAMES:
         label = LANG_NAMES[code]
         b.button(text=f"• {label} •" if code == current else label, callback_data=f"onboarding:lang:{code}")
     b.adjust(1)

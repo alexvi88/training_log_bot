@@ -198,7 +198,15 @@ def _load_pool(lang: str, prefix: str) -> list[str]:
 POOLS: dict[str, list[str]] = {topic: _load_pool("ru", f"thinking.{topic}.") for topic in _TOPICS}
 POOLS_EN: dict[str, list[str]] = {topic: _load_pool("en", f"thinking.{topic}.") for topic in _TOPICS}
 
-_POOLS_BY_LANG: dict[str, dict[str, list[str]]] = {"ru": POOLS, "en": POOLS_EN}
+_POOLS_BY_LANG: dict[str, dict[str, list[str]]] = {
+    "ru": POOLS,
+    "en": POOLS_EN,
+    **{
+        lang: {topic: _load_pool(lang, f"thinking.{topic}.") for topic in _TOPICS}
+        for lang in i18n.SUPPORTED
+        if lang not in ("ru", "en")
+    },
+}
 
 # Разбор пересланного поста (handlers/factcheck.py) — ключи `factcheck.thinking.<n>`,
 # отдельный префикс от тематических пулов выше: это не тема вопроса, а всегда

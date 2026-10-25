@@ -30,11 +30,16 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_LANG = "ru"
-SUPPORTED: tuple[str, ...] = ("ru", "en")
+SUPPORTED: tuple[str, ...] = ("ru", "en", "es", "pt", "de", "fr", "tr")
 
 # Языки СНГ/постсоветского пространства — у их пользователей телеграмный
 # language_code часто не "ru", но продукт для них по-прежнему на русском.
 _CYRILLIC_SPHERE = {"ru", "uk", "be", "kk", "ky", "hy", "az", "uz"}
+
+# Языки с собственным каталогом, кроме ru/en. Ключа, которого в их каталоге
+# ещё нет, они ищут сначала в английском (см. _resolve), а не в русском:
+# испанцу или немцу английская строка понятнее русской.
+_OWN_LATIN = {"es", "pt", "de", "fr", "tr"}
 
 _LOCALES_DIR = Path(__file__).resolve().parent / "locales"
 
@@ -54,7 +59,13 @@ def normalize(code: str | None) -> str:
     base = code.strip().lower().replace("_", "-").split("-")[0]
     if not base:
         return DEFAULT_LANG
-    return "ru" if base in _CYRILLIC_SPHERE else "en"
+    if base in _CYRILLIC_SPHERE:
+        return "ru"
+    # es/pt/de/fr/tr — свои каталоги (es-MX → es, pt-BR → pt, fr-CA → fr);
+    # всё остальное — английский, как раньше.
+    if base in _OWN_LATIN:
+        return base
+    return "en"
 
 
 def lang_from_accept_language(header: str | None) -> str:
@@ -151,6 +162,10 @@ def _resolve(lang: str, key: str) -> tuple[str, str | None]:
     catalog = _load_catalog(lang)
     if key in catalog:
         return catalog[key], lang
+    if lang in _OWN_LATIN:
+        en_catalog = _load_catalog("en")
+        if key in en_catalog:
+            return en_catalog[key], "en"
     if lang != DEFAULT_LANG:
         ru_catalog = _load_catalog(DEFAULT_LANG)
         if key in ru_catalog:
@@ -354,7 +369,8 @@ def _plural_category(n: int, lang: str) -> str:
         if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
             return "few"
         return "many"
-    # en и всё остальное — обычное английское правило.
+    # en, es, pt, de, fr, tr — одно правило: «один» только у 1 (у ветки plural в их
+    # каталогах ровно one/other).
     return "one" if n == 1 else "other"
 
 

@@ -47,15 +47,23 @@ SHORT_DESCRIPTION_EN = i18n.t_in("en", "bot.short_description")
 NAME = i18n.t_in("ru", "bot.name")
 NAME_EN = i18n.t_in("en", "bot.name")
 
+# Остальные языки — свои варианты карточки рядом с "en", тем же текстом из
+# каталога (bot.*).
+OTHER_LANGS = ("es", "pt", "de", "fr", "tr")
+PROFILES = {
+    lang: (i18n.t_in(lang, "bot.name"), i18n.t_in(lang, "bot.description"), i18n.t_in(lang, "bot.short_description"))
+    for lang in OTHER_LANGS
+}
+
 _NAME_LIMIT = 64
 _DESCRIPTION_LIMIT = 512
 _SHORT_DESCRIPTION_LIMIT = 120
 
-for _text in (NAME, NAME_EN):
+for _text in (NAME, NAME_EN, *(p[0] for p in PROFILES.values())):
     assert len(_text) <= _NAME_LIMIT, "name превышает лимит Telegram"
-for _text in (DESCRIPTION, DESCRIPTION_EN):
+for _text in (DESCRIPTION, DESCRIPTION_EN, *(p[1] for p in PROFILES.values())):
     assert len(_text) <= _DESCRIPTION_LIMIT, "description превышает лимит Telegram"
-for _text in (SHORT_DESCRIPTION, SHORT_DESCRIPTION_EN):
+for _text in (SHORT_DESCRIPTION, SHORT_DESCRIPTION_EN, *(p[2] for p in PROFILES.values())):
     assert len(_text) <= _SHORT_DESCRIPTION_LIMIT, "short_description превышает лимит Telegram"
 
 
@@ -89,10 +97,14 @@ async def sync_bot_profile(bot: Bot) -> None:
     """Выставляет карточку бота на обоих языках, только там, где она разошлась
     с тем, что уже стоит в Telegram — иначе каждый рестарт дёргал бы все
     методы вхолостую. language_code=None — дефолт (русский, видят все языки
-    без своего варианта), "en" — отдельный вариант для англоязычных."""
+    без своего варианта), "en", "es", "pt", "de", "fr", "tr" — свои варианты."""
     await _sync_name(bot, language_code=None, text=NAME)
     await _sync_name(bot, language_code="en", text=NAME_EN)
     await _sync_description(bot, language_code=None, text=DESCRIPTION)
     await _sync_description(bot, language_code="en", text=DESCRIPTION_EN)
     await _sync_short_description(bot, language_code=None, text=SHORT_DESCRIPTION)
     await _sync_short_description(bot, language_code="en", text=SHORT_DESCRIPTION_EN)
+    for lang, (name, description, short_description) in PROFILES.items():
+        await _sync_name(bot, language_code=lang, text=name)
+        await _sync_description(bot, language_code=lang, text=description)
+        await _sync_short_description(bot, language_code=lang, text=short_description)

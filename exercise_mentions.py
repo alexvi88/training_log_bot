@@ -114,7 +114,11 @@ def _catalog_spellings(canonical: Optional[str]) -> list[str]:
     """Каталожное имя на всех языках — пусто для своего, не каталожного."""
     if not canonical or canonical not in _TEMPLATE_NAMES:
         return []
-    return sorted({seed_data.localized_exercise_name(canonical, lang) for lang in i18n.SUPPORTED})
+    # Текущий язык и два исходных (ru/en), а не все семь: у коротких имён
+    # на чужих языках слишком много совпадений с обычными словами ответа
+    # («Plancha», «Plank» против «plan»).
+    langs = {i18n.get_lang(), "ru", "en"}
+    return sorted({seed_data.localized_exercise_name(canonical, lang) for lang in langs})
 
 
 def find_mentions(

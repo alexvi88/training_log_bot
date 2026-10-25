@@ -120,7 +120,7 @@ async def test_settings_langset_unknown_code_does_not_crash_or_touch_db(fresh_db
     db = fresh_db
     state = await _make_state(user_id)
 
-    callback = _make_callback(user_id, "settings:langset:de")
+    callback = _make_callback(user_id, "settings:langset:it")
     await settings.settings_language_set(callback, state)
 
     assert (await db.get_user(user_id))["lang"] == "ru"

@@ -212,7 +212,7 @@ def language_violations(
         if data_lang is not None and shape in mixed_paths:
             continue
         lang = data_lang if data_lang is not None and shape in data_paths else default_lang
-        if lang == "en":
+        if lang != "ru":
             if key in EN_IDENTITY_KEYS:
                 continue
             if CYRILLIC.search(text):
@@ -340,6 +340,19 @@ MODEL_TEXT = {
            "food": "Рис", "verdict": "Скорее миф.", "comment": "Сильная тренировка."},
 }
 
+# Остальные языки (es, pt, de, fr, tr) проверяются по правилу английского —
+# в ответе нет кириллицы; свой текст атлета и ответы модели — английские
+# заглушки (латиница, проверке они не мешают).
+NEW_LANGS = ("es", "pt", "de", "fr", "tr")
+for _lang in NEW_LANGS:
+    USER_TEXT[_lang] = USER_TEXT["en"]
+    MODEL_TEXT[_lang] = MODEL_TEXT["en"]
+
+
+def _accept_language(lang: str) -> str:
+    return {"ru": "ru-RU,ru;q=0.9", "en": "en-US,en;q=0.9"}.get(lang, f"{lang};q=0.9")
+
+
 PNG_1PX = base64.b64encode(
     bytes.fromhex(
         "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
@@ -402,8 +415,8 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
             # Настоящий инструмент тренера, пишущий в базу: он же собирает
             # подпись кнопки отката через i18n.t — под языком хода.
             await ai_trainer.execute_tool(
-                user_id, "create_exercise", {"name": "Pallof press" if lang == "en" else "Жим Палоффа",
-                                             "group": "Chest" if lang == "en" else "Грудь"},
+                user_id, "create_exercise", {"name": "Pallof press" if lang != "ru" else "Жим Палоффа",
+                                             "group": "Chest" if lang != "ru" else "Грудь"},
                 on_action=on_action,
             )
         if on_wire is not None:
@@ -469,10 +482,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     text = USER_TEXT[lang]
     await fresh_db.get_or_create_user(telegram_id=111, username="tester")
     await fresh_db.set_user_lang(111, lang)
-    await fresh_db.update_user(111, goal="strength" if lang == "en" else "сила")
+    await fresh_db.update_user(111, goal="strength" if lang != "ru" else "сила")
 
     anon = _client()
-    headers = {"Accept-Language": "en-US,en;q=0.9" if lang == "en" else "ru-RU,ru;q=0.9"}
+    headers = {"Accept-Language": _accept_language(lang)}
     anon_walker = _Walker(anon, lang)
     await anon_walker.call("GET", "/health", expect=200)
     await anon_walker.call("POST", "/auth/link", json={"code": "nope"}, headers=headers, expect=400)
@@ -570,14 +583,14 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     chest_id = groups[0]["id"]
     await w.call("POST", "/muscle-groups", json={"name": text["group"]}, expect=201)
     await w.call("POST", "/muscle-groups", json={"name": ""}, expect=400)
-    await w.call("GET", "/exercise-templates?query=" + ("bench" if lang == "en" else "жим"), expect=200)
+    await w.call("GET", "/exercise-templates?query=" + ("bench" if lang != "ru" else "жим"), expect=200)
     templates = (await w.call("GET", f"/exercise-templates?group_id={chest_id}", expect=200)).json()
     template_id = templates[0]["id"]
     await w.call("GET", f"/exercise-templates/{template_id}", expect=200)
     forked = (await w.call("POST", f"/exercise-templates/{template_id}/add", expect=(200, 201))).json()
     forked_id = forked["id"]
     squat_template = next(
-        t for t in (await w.call("GET", "/exercise-templates?query=" + ("squat" if lang == "en" else "присед"),
+        t for t in (await w.call("GET", "/exercise-templates?query=" + ("squat" if lang != "ru" else "присед"),
                                  expect=200)).json()
     )
     squat_id = (await w.call("POST", f"/exercise-templates/{squat_template['id']}/add",
@@ -1014,7 +1027,7 @@ async def _coach_scenario(
     await fresh_db.set_user_lang(222, alang)
     athlete = _client()
     athlete.headers.update(headers)
-    athlete.headers["Accept-Language"] = "en-US,en;q=0.9" if alang == "en" else "ru-RU,ru;q=0.9"
+    athlete.headers["Accept-Language"] = _accept_language(alang)
     athlete.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(222)}"
     a = _Walker(athlete, alang)
     if client_lang is not None:
@@ -1034,7 +1047,7 @@ async def _coach_scenario(
     # Каталожное упражнение атлета: у тренера оно обязано прийти на языке
     # атлета, а не тренера (идентичность каталога — одна, показ — его).
     bench = next(
-        t for t in (await a.call("GET", "/exercise-templates?query=" + ("bench" if alang == "en" else "жим"),
+        t for t in (await a.call("GET", "/exercise-templates?query=" + ("bench" if alang != "ru" else "жим"),
                                  expect=200)).json()
         if t["original_name"] == "Жим штанги лёжа"
     )
@@ -1120,7 +1133,7 @@ async def _coach_scenario(
     w.data_lang, w.data_paths = None, {}
 
 
-@pytest.mark.parametrize("lang", ["en", "ru"])
+@pytest.mark.parametrize("lang", ["en", "ru", *NEW_LANGS])
 async def test_no_foreign_language_in_any_v1_response(fresh_db, monkeypatch, tmp_path, lang):
     walker = await _scenario(fresh_db, monkeypatch, tmp_path, lang)
     assert not walker.violations, (
@@ -1134,7 +1147,7 @@ async def test_no_foreign_language_in_any_v1_response(fresh_db, monkeypatch, tmp
     assert walker.captured["coach_prompt"].endswith(i18n.t_in(lang, "ai.language_tail"))
 
 
-@pytest.mark.parametrize("coach_lang, client_lang", [("en", "ru"), ("ru", "en")])
+@pytest.mark.parametrize("coach_lang, client_lang", [("en", "ru"), ("ru", "en"), ("ru", "es"), ("de", "ru")])
 async def test_coach_and_client_on_different_languages(fresh_db, monkeypatch, tmp_path, coach_lang, client_lang):
     """Тренер и атлет на разных языках: каждая ручка /coach* тем же
     сценарием, хром тренеру — на языке тренера, данные атлета — на языке
@@ -1145,7 +1158,7 @@ async def test_coach_and_client_on_different_languages(fresh_db, monkeypatch, tm
     await fresh_db.get_or_create_user(telegram_id=111, username="tester")
     await fresh_db.set_user_lang(111, coach_lang)
     await fresh_db.update_user(111, ai_consent_at=fresh_db.now_iso())
-    headers = {"Accept-Language": "en-US,en;q=0.9" if coach_lang == "en" else "ru-RU,ru;q=0.9"}
+    headers = {"Accept-Language": _accept_language(coach_lang)}
     client = _client()
     client.headers.update(headers)
     client.headers["Authorization"] = f"Bearer {await fresh_db.issue_api_token(111)}"
@@ -1202,7 +1215,7 @@ async def test_every_route_is_walked(fresh_db, monkeypatch, tmp_path):
     assert not stale, f"в SKIPPED лежат маршруты, которых больше нет: {stale}"
 
 
-@pytest.mark.parametrize("lang", ["en", "ru"])
+@pytest.mark.parametrize("lang", ["en", "ru", *NEW_LANGS])
 async def test_fresh_start_setup_and_history_have_no_foreign_language(fresh_db, monkeypatch, lang):
     """Короткий путь «Составь мне программу» у чистого листа (без модели) и
     видимая лента после опросника: ответ, вопросы, варианты и история — на
@@ -1212,7 +1225,7 @@ async def test_fresh_start_setup_and_history_have_no_foreign_language(fresh_db, 
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
     async def fake_ask(user_id, question, history, **kwargs):
-        return "Built." if lang == "en" else "Собрал."
+        return "Built." if lang != "ru" else "Собрал."
 
     monkeypatch.setattr(ai_trainer, "ask", fake_ask)
     await fresh_db.get_or_create_user(telegram_id=111, username="tester")

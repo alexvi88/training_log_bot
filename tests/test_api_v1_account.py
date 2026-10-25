@@ -189,7 +189,7 @@ async def test_patch_settings_invalid_unit_is_400(fresh_db, client_factory):
 @pytest.mark.asyncio
 async def test_patch_settings_invalid_lang_is_400(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
-    resp = await client.patch("/settings", json={"lang": "fr"})
+    resp = await client.patch("/settings", json={"lang": "it"})
     assert resp.status_code == 400
 
 
