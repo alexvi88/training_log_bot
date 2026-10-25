@@ -247,7 +247,9 @@ async def auth_apple(request: Request) -> JSONResponse:
     _set_pre_auth_lang(body, request)
     identity_token = str(_require(body, "identity_token", str))
     try:
-        identity = apple_signin.verify_identity_token(identity_token)
+        # Синхронный PyJWKClient ходит к Apple за ключами — в поток, чтобы
+        # медленный Apple не стопорил остальные запросы.
+        identity = await asyncio.to_thread(apple_signin.verify_identity_token, identity_token)
     except apple_signin.AppleTokenError as exc:
         raise ApiError(401, "invalid_apple_token", str(exc)) from exc
 
@@ -287,10 +289,11 @@ async def auth_apple(request: Request) -> JSONResponse:
 
     # Код авторизации → refresh_token, чтобы при удалении аккаунта отозвать
     # его у Apple (TN3194). Необязательный: старые сборки его не шлют, а
-    # сбой обмена вход не срывает (exchange_authorization_code не бросает).
+    # сбой обмена вход не срывает (exchange_authorization_code не бросает), и
+    # идёт он фоном — вход не ждёт Apple.
     authorization_code = body.get("authorization_code")
     if isinstance(authorization_code, str) and authorization_code.strip():
-        await apple_signin.exchange_authorization_code(
+        apple_signin.exchange_in_background(
             identity.apple_user_id, authorization_code.strip()
         )
 

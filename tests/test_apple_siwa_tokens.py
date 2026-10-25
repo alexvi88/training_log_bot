@@ -12,6 +12,7 @@ HTTP к Apple подменён httpx.MockTransport через apple_signin._http
 прямо в тесте, не настоящий.
 """
 
+import asyncio
 from urllib.parse import parse_qs
 
 import httpx
@@ -128,6 +129,7 @@ async def _sign_in(client_factory, **extra):
     client = client_factory()
     resp = await client.post("/auth/apple", json={"identity_token": "t", **extra})
     assert resp.status_code == 200, resp.text
+    await apple_signin.wait_background_exchanges()
     return resp.json()["user_id"]
 
 
@@ -191,6 +193,26 @@ async def test_failed_exchange_does_not_break_sign_in(fresh_db, client_factory, 
     user_id = await _sign_in(client_factory, authorization_code="code")
     assert user_id < 0
     assert await _stored_tokens(fresh_db) == (None, None)
+
+
+async def test_sign_in_does_not_wait_for_apple(fresh_db, client_factory, siwa_key, monkeypatch):
+    """Apple молчит — вход всё равно отвечает сразу, обмен догоняет фоном
+    (в логе прода `POST /auth/apple` шёл 13 с на ConnectTimeout)."""
+    release = asyncio.Event()
+
+    async def slow_exchange(apple_user_id, code):
+        await release.wait()
+        return False
+
+    monkeypatch.setattr(apple_signin, "exchange_authorization_code", slow_exchange)
+    client = client_factory()
+    resp = await asyncio.wait_for(
+        client.post("/auth/apple", json={"identity_token": "t", "authorization_code": "code"}),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    release.set()
+    await apple_signin.wait_background_exchanges()
 
 
 async def test_code_issued_to_another_apple_id_is_not_stored(fresh_db, client_factory, siwa_key, apple):

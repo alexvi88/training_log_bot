@@ -652,7 +652,9 @@ async def test_deleting_the_coach_removes_profile_invite_and_pairs(fresh_db, fak
 async def test_client_progress_weeks_lifts_and_records(fresh_db):
     coach, athlete, _ = await _linked(fresh_db)
     ex = await _exercise(athlete, "Жим")
-    today = dt.date.today()
+    # «Сегодня» атлета, а не раннера: в воскресенье вечером по UTC у атлета
+    # с поясом +3 уже понедельник — и неделя другая.
+    today = timeutil.user_today(await db.get_user(CLIENT))
     await _finished_workout(athlete, ex, 60, date=(today - dt.timedelta(days=40)).isoformat())
     await _finished_workout(athlete, ex, 62.5, date=(today - dt.timedelta(days=14)).isoformat())
     await _finished_workout(athlete, ex, 70)
