@@ -3461,14 +3461,14 @@ async def set_user_lang(telegram_id: int, lang: str) -> None:
 
     Канонический список языков живёт в `i18n.SUPPORTED`, но сюда не
     импортируется: db — слой хранения, и тянуть в него слой представления
-    ради кортежа из семи строк значило бы связать их навсегда. Дубль
+    ради кортежа из восьми строк значило бы связать их навсегда. Дубль
     удерживает от расхождения тест (tests/test_user_lang.py), а не надежда.
 
     Неизвестное значение молча не пишем, а приводим к 'ru': лучше тихо
     остаться на дефолте, чем положить в базу мусор, который потом всплывёт
     в рантайме.
     """
-    if lang not in ("ru", "en", "es", "pt", "de", "fr", "tr"):
+    if lang not in ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr"):
         lang = "ru"
     user = await get_user(telegram_id)
     async with _write_lock:
@@ -3511,7 +3511,7 @@ async def set_user_gender(telegram_id: int, gender: Optional[str]) -> None:
 # Все языки, на которых каталожный текст мог лечь в базу. Не i18n.SUPPORTED —
 # тот же довод, что и у set_user_lang выше (db — слой хранения), и тот же тест
 # держит дубль от расхождения.
-_CATALOG_LANGS = ("ru", "en", "es", "pt", "de", "fr", "tr")
+_CATALOG_LANGS = ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr")
 
 
 def _catalog_spellings(render, *args) -> set[str]:

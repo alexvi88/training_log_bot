@@ -19,7 +19,7 @@
 модели, новая таблица с данными атлета, другой срок чистки в config.py), —
 поправь обе языковые версии политики тем же PR.
 
-Язык: явный `?lang=ru|en|es|pt|de|fr|tr` побеждает (так зовёт приложение — язык аккаунта, а
+Язык: явный `?lang=ru|en|es|pt|pt-PT|de|fr|tr` побеждает (так зовёт приложение — язык аккаунта, а
 не телефона), иначе `Accept-Language` (браузер ревьюера), иначе английский.
 Не русский, как у остального продукта (`i18n.DEFAULT_LANG`): эти адреса стоят
 в App Store Connect, и без заголовка их открывают проверялки ссылок Apple и
@@ -51,7 +51,7 @@ SUPPORT_PAGE = "support"
 # service_documentation в метаданных OAuth (mcp_oauth.auth_settings).
 CONNECT_PAGE = "connect"
 ALL_PAGES = PAGES + (SUPPORT_PAGE, CONNECT_PAGE)
-LANGS = ("ru", "en", "es", "pt", "de", "fr", "tr")
+LANGS = ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr")
 
 # Контактный e-mail для страниц — отдельный ящик проекта (владелец). Стоит
 # строкой в разделе «Связь» обеих страниц и на странице поддержки, на обоих
@@ -97,8 +97,9 @@ def _fragment(page: str, lang: str) -> str:
 
 def page_lang(request: Request) -> str:
     explicit = (request.query_params.get("lang") or "").strip().lower()
-    if explicit in LANGS:
-        return explicit
+    for lang in LANGS:
+        if explicit == lang.lower():
+            return lang
     header = request.headers.get("accept-language")
     if not (header or "").strip():
         return "en"

@@ -30,7 +30,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_LANG = "ru"
-SUPPORTED: tuple[str, ...] = ("ru", "en", "es", "pt", "de", "fr", "tr")
+SUPPORTED: tuple[str, ...] = ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr")
 
 # Языки СНГ/постсоветского пространства — у их пользователей телеграмный
 # language_code часто не "ru", но продукт для них по-прежнему на русском.
@@ -56,13 +56,17 @@ def normalize(code: str | None) -> str:
     """Телеграмный language_code -> наш язык. Регистр и суффиксы (en-US) не важны."""
     if not code:
         return DEFAULT_LANG
-    base = code.strip().lower().replace("_", "-").split("-")[0]
+    tag = code.strip().lower().replace("_", "-")
+    base = tag.split("-")[0]
     if not base:
         return DEFAULT_LANG
     if base in _CYRILLIC_SPHERE:
         return "ru"
     # es/pt/de/fr/tr — свои каталоги (es-MX → es, pt-BR → pt, fr-CA → fr);
     # всё остальное — английский, как раньше.
+    # Португалия — свой европейский каталог; pt-BR и голое «pt» — бразильский.
+    if tag.startswith("pt-pt"):
+        return "pt-PT"
     if base in _OWN_LATIN:
         return base
     return "en"
@@ -162,7 +166,13 @@ def _resolve(lang: str, key: str) -> tuple[str, str | None]:
     catalog = _load_catalog(lang)
     if key in catalog:
         return catalog[key], lang
-    if lang in _OWN_LATIN:
+    # Европейский португальский переведён с бразильского — недостающее
+    # ближе всего там, а не в английском.
+    if lang == "pt-PT":
+        pt_catalog = _load_catalog("pt")
+        if key in pt_catalog:
+            return pt_catalog[key], "pt"
+    if lang in _OWN_LATIN or lang == "pt-PT":
         en_catalog = _load_catalog("en")
         if key in en_catalog:
             return en_catalog[key], "en"

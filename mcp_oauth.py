@@ -833,8 +833,9 @@ def page_lang(request: Request) -> str:
     """`?lang=ru|en`, иначе Accept-Language, иначе английский — ревьюеры
     каталогов открывают страницу без заголовка языка."""
     explicit = (request.query_params.get("lang") or "").strip().lower()
-    if explicit in i18n.SUPPORTED:
-        return explicit
+    for lang in i18n.SUPPORTED:
+        if explicit == lang.lower():
+            return lang
     header = request.headers.get("accept-language", "")
     return _lang_from_accept_language(header) if header.strip() else "en"
 
