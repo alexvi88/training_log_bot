@@ -49,6 +49,8 @@ NAME_EN = i18n.t_in("en", "bot.name")
 
 # Остальные языки — свои варианты карточки рядом с "en", тем же текстом из
 # каталога (bot.*).
+# Европейского португальского здесь нет: Telegram принимает только
+# двухбуквенный language_code, и «pt» — один вариант на обе страны (бразильский).
 OTHER_LANGS = ("es", "pt", "de", "fr", "tr")
 PROFILES = {
     lang: (i18n.t_in(lang, "bot.name"), i18n.t_in(lang, "bot.description"), i18n.t_in(lang, "bot.short_description"))

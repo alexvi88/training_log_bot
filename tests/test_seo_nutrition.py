@@ -30,6 +30,12 @@ NEW_TOOLS = ("protein", "calories")
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
 
+def _cyr(text):
+    """Кириллица на странице, кроме автонима «Русский» в переключателе языка
+    (автонимы не переводятся — как в кнопке языка у бота)."""
+    return _CYRILLIC.search(text.replace("Русский", ""))
+
+
 @pytest.fixture(autouse=True)
 def public_url(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "MCP_PUBLIC_URL", HOST)
@@ -108,26 +114,28 @@ console.log(JSON.stringify({{
 
 
 async def test_nutrition_pages_answer_on_both_languages_and_hubs_group_them():
-    responses = await _get_many(_paths() + ["/ru/tools", "/en/tools", "/ru/guides", "/en/guides", "/sitemap.xml", "/llms.txt"])
+    hubs = [seo_pages.url_for(seo_pages.Page(kind), lang) for kind in ("tools", "guides") for lang in seo_pages.LANGS]
+    responses = await _get_many(_paths() + hubs + ["/sitemap.xml", "/llms.txt"])
     for path, resp in responses.items():
         assert resp.status_code == 200, path
-        if path.startswith("/en/"):
-            assert not _CYRILLIC.search(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
+        if seo_pages.lang_of_path(path) not in (None, "ru"):
+            assert not _cyr(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
     for lang in seo_pages.LANGS:
-        tools = responses[f"/{lang}/tools"].text
+        seg = seo_pages.lang_segment(lang)
+        tools = responses[f"/{seg}/tools"].text
         head = i18n_t(lang, "seo.tools.nutrition.h")
         assert f"<h2 class=group-title>{head}</h2>" in tools
-        nutrition = tools.split(head, 1)[1]
+        nutrition = tools.split(f"<h2 class=group-title>{head}</h2>", 1)[1]
         for tool in NEW_TOOLS:
-            assert f'href="/{lang}/tools/{tool}"' in nutrition
-            assert "WebApplication" in responses[f"/{lang}/tools/{tool}"].text
-        guides = responses[f"/{lang}/guides"].text
+            assert f'href="/{seg}/tools/{tool}"' in nutrition
+            assert "WebApplication" in responses[f"/{seg}/tools/{tool}"].text
+        guides = responses[f"/{seg}/guides"].text
         head = i18n_t(lang, "seo.guides.nutrition.h")
         assert f"<h2 class=group-title>{head}</h2>" in guides
-        before, after = guides.split(head, 1)
+        before, after = guides.split(f"<h2 class=group-title>{head}</h2>", 1)
         for slug in seo_library.NUTRITION_GUIDES:
-            assert f'href="/{lang}/guides/{slug}"' in after and f'href="/{lang}/guides/{slug}"' not in before
-        assert f'href="/{lang}/guides/progressive-overload"' in before
+            assert f'href="/{seg}/guides/{slug}"' in after and f'href="/{seg}/guides/{slug}"' not in before
+        assert f'href="/{seg}/guides/progressive-overload"' in before
     for path in _paths():
         assert f"<loc>{HOST}{path}</loc>" in responses["/sitemap.xml"].text
     for tool in NEW_TOOLS:
@@ -142,10 +150,11 @@ def test_every_nutrition_guide_cites_research_and_leads_to_a_calculator():
         assert sources and all(url.startswith("https://pubmed.ncbi.nlm.nih.gov/") for _l, url in sources), slug
         assert 2 <= len(seo_library.GUIDE_LINKS[slug]) <= 4
         for lang in seo_pages.LANGS:
+            seg = seo_pages.lang_segment(lang)
             html = seo_pages.render(seo_pages.Page("guide", slug), lang)
-            assert any(f'href="{c.format(lang=lang)}"' in html for c in calcs), (slug, lang)
+            assert any(f'href="{c.format(lang=seg)}"' in html for c in calcs), (slug, lang)
             # Ссылки на старые страницы сайта: другие гайды, калькуляторы, приложение.
-            assert len(set(re.findall(rf'href="(/{lang}/(?:guides|tools|programs|workout-log-app)[^"]*)"', html))) >= 4
+            assert len(set(re.findall(rf'href="(/{seg}/(?:guides|tools|programs|workout-log-app)[^"]*)"', html))) >= 4
 
 
 async def test_site_never_promises_a_food_diary():

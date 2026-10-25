@@ -63,6 +63,17 @@ a:hover { color: #ffd0a0; }
 .head-end { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
 .lang { display: inline-grid; place-items: center; min-width: 44px; min-height: 44px; color: var(--muted); text-decoration: none; font: 11px/1 var(--pixel); padding: 0 10px; border: 1px solid var(--line2); border-radius: 10px; }
 .lang:hover { color: var(--fg); border-color: var(--accent); }
+/* language switcher: a <details> dropdown, works without script; the summary is the .lang chip */
+.langs { position: relative; }
+.langs > summary { list-style: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.langs > summary::-webkit-details-marker { display: none; }
+.langs[open] > summary { color: var(--fg); background: var(--glass2); border-color: var(--accent); }
+.langs-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 2; min-width: 220px; padding: 6px; background: #120b09; border: 1px solid var(--line2); border-radius: var(--r-s);
+  box-shadow: 0 30px 50px -24px rgba(0,0,0,.9); }
+.langs-panel ul { list-style: none; margin: 0; padding: 0; }
+.langs-panel a { display: flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 10px; color: var(--fg); text-decoration: none; font-size: 15px; white-space: nowrap; }
+.langs-panel a:hover { background: var(--glass2); }
+.langs-panel a[aria-current] { color: var(--accent2); background: rgba(255,138,61,.1); }
 .site-head .btn.head-cta { white-space: nowrap; }
 @media (max-width: 959px) { .site-head .btn.head-cta { min-height: 44px; padding: 0 14px; font-size: 15px; } }
 .vh { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -447,6 +458,10 @@ li.alt.us { border-color: rgba(255,138,61,.55); background: linear-gradient(160d
 .foot-about .btn { min-height: 44px; font-size: 15px; width: 100%; }
 .foot-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s3); margin-top: var(--s6); padding-top: var(--s5); border-top: 1px solid var(--line); color: var(--dim); font-size: 14px; }
 .foot-bottom a { color: var(--muted); }
+.foot-langs { flex-basis: 100%; }
+.foot-langs ul { display: flex; flex-wrap: wrap; gap: 0 var(--s4); list-style: none; margin: 0; padding: 0; }
+.foot-langs a { display: inline-block; padding: 10px 0; text-decoration: none; }
+.foot-langs a:hover, .foot-langs a[aria-current] { color: var(--fg); }
 
 /* scroll reveal */
 @media (prefers-reduced-motion: no-preference) {

@@ -98,7 +98,7 @@ def _base(selector: str) -> str:
 
 
 async def test_every_page_kind_has_mobile_viewport_and_one_row_header():
-    urls = _one_page_per_kind() + ["/en/nope-xyz", "/ru/nope-xyz"]
+    urls = _one_page_per_kind() + ["/en/nope-xyz", "/ru/nope-xyz", "/pt-pt/nope-xyz"]
     pages = await _get_many(urls)
     for url, resp in pages.items():
         html = resp.text
@@ -110,12 +110,14 @@ async def test_every_page_kind_has_mobile_viewport_and_one_row_header():
         assert "sub-nav" not in html, url
         menu = re.search(r"<details class=menu><summary class=menu-btn>(.*?)</summary>(.*?)</details>", head, re.S)
         assert menu, url
-        lang = "ru" if "/ru" in url else "en"
+        lang = seo_pages.lang_of_path(url)
+        seg = seo_pages.lang_segment(lang)
         assert f'<span class=vh>{i18n.t_in(lang, "seo.nav.menu")}</span>' in menu.group(1), url
-        links = re.findall(r'href="(/(?:ru|en)[^"]*)"', menu.group(2))
-        assert links == [f"/{lang}/{s}" for s in ("guides", "exercises", "muscles", "programs", "compare", "tools")], url
-        # Язык и главная кнопка — в той же строке, что логотип.
-        assert "class=lang" in head and "head-cta" in head, url
+        links = re.findall(r'href="(/[a-z-]+/[^"]*)"', menu.group(2))
+        assert links == [f"/{seg}/{s}" for s in ("guides", "exercises", "muscles", "programs", "compare", "tools")], url
+        # Язык и главная кнопка — в той же строке, что логотип; список языков —
+        # <details> поверх страницы, как меню, без скрипта.
+        assert "<details class=langs><summary class=lang>" in head and "head-cta" in head, url
 
 
 async def test_header_cta_is_marked_when_it_is_the_long_bot_button():
@@ -150,6 +152,8 @@ def test_menu_is_reachable_and_closes_without_script():
     assert any("min-height: 44px" in body for media, sel, body in _rules(CSS)
                if media == "@media (max-width: 959px)" and sel == ".site-head .btn.head-cta")
     assert "position: absolute" in _base(".menu-panel")  # поверх страницы, без сдвига вёрстки
+    assert "position: absolute" in _base(".langs-panel")
+    assert "min-height: 44px" in _base(".langs-panel a")
     assert "min-height: 52px" in _base(".menu-panel a")
     assert ".menu[open] > .menu-btn::before" in CSS  # тап по затемнению — тап по summary
     assert "Escape" in seo_pages._PAGE_JS

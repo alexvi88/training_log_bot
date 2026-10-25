@@ -66,6 +66,14 @@ SCREENS = {
     "en": (("workout", 540, 1173), ("progress", 540, 1173), ("coach", 540, 1173), ("history", 540, 1173)),
 }
 
+
+
+def screens_lang(lang: str) -> str:
+    """Чьи снимки и сцену подвала показывать: свои есть у ru и en, остальные
+    языки берут английский прогон (тексты главной у них — перевод английских)."""
+    return lang if lang in SCREENS else "en"
+
+
 THEME_COLOR = "#120b09"
 
 # Пиксельный подвал с вкладки «Меню» приложения (iOS-репозиторий,
@@ -131,15 +139,16 @@ def root_file(rel: str):
     return route
 
 
-def webmanifest(lang: str, name: str, short_name: str, description: str) -> str:
+def webmanifest(lang: str, name: str, short_name: str, description: str, start_url: str = "") -> str:
     import json
 
+    start_url = start_url or f"/{lang.lower()}"
     return json.dumps({
         "name": name,
         "short_name": short_name,
         "description": description,
         "lang": lang,
-        "start_url": f"/{lang}",
+        "start_url": start_url,
         "display": "browser",
         "background_color": THEME_COLOR,
         "theme_color": THEME_COLOR,

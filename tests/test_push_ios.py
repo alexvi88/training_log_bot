@@ -58,6 +58,7 @@ _WORST_PARAMS = {
 _COUNT_WORDS = {
     "es": ("52 semanas", "3 entrenamientos", "7 entrenamientos"),
     "pt": ("52 semanas", "3 treinos", "7 treinos"),
+    "pt-PT": ("52 semanas", "3 treinos", "7 treinos"),
     "de": ("52 Wochen", "3 Trainings", "7 Trainings"),
     "fr": ("52 semaines", "3 séances", "7 séances"),
     "tr": ("52 hafta", "3 antrenman", "7 antrenman"),

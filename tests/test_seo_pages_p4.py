@@ -34,6 +34,12 @@ import seo_tools
 
 HOST = "https://training-log.example.com"
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def _cyr(text):
+    """Кириллица на странице, кроме автонима «Русский» в переключателе языка
+    (автонимы не переводятся — как в кнопке языка у бота)."""
+    return _CYRILLIC.search(text.replace("Русский", ""))
 NEW_KINDS = ("exercise_alt", "split", "splits", "workout", "muscle_equip", "apps")
 
 
@@ -90,14 +96,14 @@ def test_wave_four_page_counts():
     assert {"fitbod", "jefit"} <= {p.arg for p in _pages("alternatives")}
 
 
-async def test_new_pages_answer_200_on_both_languages():
+async def test_new_pages_answer_200_on_every_language():
     pages = _pages(*NEW_KINDS) + [p for p in _pages("tool") if p.arg in ("531", "weekly-volume")]
     paths = [seo_pages.url_for(p, lang) for p in pages for lang in seo_pages.LANGS]
     responses = await _get_many(paths)
     for path, resp in responses.items():
         assert resp.status_code == 200, path
-        if path.startswith("/en/"):
-            assert not _CYRILLIC.search(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
+        if seo_pages.lang_of_path(path) != "ru":
+            assert not _cyr(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
 
 
 def test_titles_h1_and_descriptions_are_unique_site_wide():
@@ -136,7 +142,7 @@ def test_every_internal_link_points_to_a_real_page():
     import seo_template
 
     known = {seo_pages.url_for(p, lang) for p in seo_pages.pages() for lang in seo_pages.LANGS}
-    known |= {f"/{lang}/templates/{name}" for lang in seo_pages.LANGS for name in seo_template.FILES}
+    known |= {seo_pages.template_file_url(name, lang) for lang in seo_pages.LANGS for name in seo_template.FILES}
     broken = []
     for page in seo_pages.pages():
         for lang in seo_pages.LANGS:
@@ -341,6 +347,8 @@ async def test_sitemap_llms_and_hubs_list_wave_four():
     for page in _pages(*NEW_KINDS):
         for lang in seo_pages.LANGS:
             assert f"<loc>{HOST}{seo_pages.url_for(page, lang)}</loc>" in responses["/sitemap.xml"].text
+        # llms*.txt — только английский и русский: справка для AI-поиска, не зеркало сайта.
+        for lang in ("en", "ru"):
             assert f"({HOST}{seo_pages.url_for(page, lang)})" in responses["/llms-full.txt"].text
     assert f"{HOST}/en/splits" in responses["/llms.txt"].text
     assert 'href="/ru/splits"' in responses["/ru/programs"].text and 'href="/ru/splits/3-day"' in responses["/ru/programs"].text

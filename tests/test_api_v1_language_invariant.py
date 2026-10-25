@@ -343,7 +343,7 @@ MODEL_TEXT = {
 # Остальные языки (es, pt, de, fr, tr) проверяются по правилу английского —
 # в ответе нет кириллицы; свой текст атлета и ответы модели — английские
 # заглушки (латиница, проверке они не мешают).
-NEW_LANGS = ("es", "pt", "de", "fr", "tr")
+NEW_LANGS = ("es", "pt", "pt-PT", "de", "fr", "tr")
 for _lang in NEW_LANGS:
     USER_TEXT[_lang] = USER_TEXT["en"]
     MODEL_TEXT[_lang] = MODEL_TEXT["en"]

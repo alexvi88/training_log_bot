@@ -2,6 +2,7 @@
 
 import re
 
+import i18n
 import seo_pages
 import seo_strength_bw as sbw
 import seo_tools
@@ -38,7 +39,16 @@ def test_english_names_pounds_and_russian_does_not():
     assert "How much should a 176 lb (80 kg) man bench?" in en
     assert "Сколько должен жать мужчина весом 80 кг" in ru
     assert " lb" not in re.search(r"<main.*</main>", ru, re.S).group(0)
-    assert not re.search(r"[А-Яа-яЁё]", en)
+    assert not re.search(r"[А-Яа-яЁё]", en.replace("Русский", ""))
+    # Фунты — только у английского (в США ищут в фунтах); остальные языки — кг, как русский.
+    for lang in ("es", "pt", "pt-PT", "de", "fr", "tr"):
+        html = seo_pages.render(_page(), lang)
+        # Переключатель единиц в калькуляторе «lb» есть у всех; текст и таблица — в кг.
+        lead = re.search(r"<h1>.*?<p class=lead>(.*?)</p>", html, re.S).group(0)
+        table = re.search(r"<table>.*?</table>", html, re.S).group(0)
+        assert "lb" not in lead and "kg" in lead, lang
+        assert i18n.t_in(lang, "seo.sbw.col_lb") not in table, lang
+        assert not re.search(r"[А-Яа-яЁё]", html.replace("Русский", "")), lang
 
 
 def test_competitor_median_comes_from_the_percentile_file():
