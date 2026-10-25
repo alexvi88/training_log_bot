@@ -3843,7 +3843,14 @@ def get_description(exercise_name: str, lang: str | None = None) -> str | None:
     lang = lang or i18n.get_lang()
     if lang == i18n.DEFAULT_LANG:
         return EXERCISE_DESCRIPTIONS.get(exercise_name)
-    own = _other_language_descriptions(lang).get(exercise_name) if lang != "en" else None
+    # Только языки продукта: `lang` приходит и из `?lang=` запроса
+    # (api_v1_media), а из него собирается путь к файлу — «../ru» читал бы
+    # чужой JSON и навсегда оседал в кэше, нулевой байт ронял запрос в 500.
+    own = (
+        _other_language_descriptions(lang).get(exercise_name)
+        if lang in i18n.SUPPORTED and lang not in ("ru", "en")
+        else None
+    )
     return own or EXERCISE_DESCRIPTIONS_EN.get(exercise_name) or EXERCISE_DESCRIPTIONS.get(exercise_name)
 
 

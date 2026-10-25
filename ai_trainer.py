@@ -884,7 +884,8 @@ async def transcribe_voice(
         response = await client.audio.transcriptions.create(
             model=config.OPENAI_TRANSCRIBE_MODEL,
             file=file_obj,
-            language=i18n.get_lang(),
+            # ISO-639-1: «pt-PT» провайдер не принимает, португальский один.
+            language=i18n.get_lang().split("-")[0],
         )
     except Exception:
         await activity_log.record_voice_transcript(user_id, None)

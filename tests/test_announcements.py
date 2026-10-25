@@ -255,6 +255,24 @@ async def test_announcement_with_a_language_skips_everyone_else(fresh_db, monkey
     assert [chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID] == [2]
 
 
+async def test_english_announcement_reaches_every_non_russian_language(fresh_db, monkeypatch):
+    """Своего текста у рассылки на es/pt/de/fr/tr нет — английский уходит им,
+    как и раньше, когда их хранили как «en»; русскоязычным — нет."""
+    await _users(fresh_db, ADMIN_ID, 1, 2, 3, 4)
+    await fresh_db.update_user(2, lang="en")
+    await fresh_db.update_user(3, lang="de")
+    await fresh_db.update_user(4, lang="pt-PT")
+    ann = announcements.Announcement(
+        key="test_release_en_all", text="HEY ATHLETE! A new thing.", buttons=[], image=None, lang="en",
+    )
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    assert await announcements.count_pending(ann) == 3
+    bot = FakeBot()
+    await announcements.send_announcement(bot, ann)
+
+    assert sorted(chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID) == [2, 3, 4]
+
+
 async def test_restart_mid_broadcast_finishes_the_rest(fresh_db, monkeypatch):
     """Одобренная рассылка после перезапуска идёт дальше, а не с начала."""
     await _users(fresh_db, ADMIN_ID, 1, 2)

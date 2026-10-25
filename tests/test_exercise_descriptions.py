@@ -83,3 +83,16 @@ def test_effective_description_falls_back_to_english_template_default():
     assert exercise_descriptions.effective_description(ex, lang="en") == (
         exercise_descriptions.EXERCISE_DESCRIPTIONS_EN["Присед со штангой"]
     )
+
+
+def test_unknown_lang_never_reaches_the_file_system():
+    """`?lang=` описания приходит от клиента как есть: путь вроде «../ru»
+    не должен читать чужой JSON и копиться в кэше, нулевой байт — ронять 500.
+    Незнакомый язык — английская техника, как раньше."""
+    name = next(iter(exercise_descriptions.EXERCISE_DESCRIPTIONS_EN))
+    english = exercise_descriptions.EXERCISE_DESCRIPTIONS_EN[name]
+    exercise_descriptions._other_language_descriptions.cache_clear()
+    for lang in ("../ru", "../../locales/ru", "/etc/passwd", "a\x00b", "xx"):
+        assert exercise_descriptions.get_description(name, lang) == english
+    assert exercise_descriptions._other_language_descriptions.cache_info().currsize == 0
+    assert exercise_descriptions.get_description(name, "de")

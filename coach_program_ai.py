@@ -269,8 +269,16 @@ def is_seed(text: str) -> bool:
     for lang in i18n.SUPPORTED:
         if stripped == i18n.t_in(lang, "ai.screen.build_program_seed").strip():
             return True
-        marker = i18n.t_in(lang, "coach.ai_chat.seed", name="\0").split("\0")[0]
-        if marker and stripped.startswith(marker):
+        # Весь seed с любым именем внутри: начало И хвост. Одного начала мало —
+        # у турецкого оно «Sporcum » («мой атлет»), и обычная реплика тренера
+        # «Sporcum dizinden sakatlandı…» подменялась бы просьбой о программе.
+        head, _, tail = i18n.t_in(lang, "coach.ai_chat.seed", name="\0").partition("\0")
+        if (
+            head
+            and len(stripped) > len(head) + len(tail.strip())
+            and stripped.startswith(head)
+            and stripped.endswith(tail.strip())
+        ):
             return True
     return False
 

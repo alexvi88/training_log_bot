@@ -117,7 +117,7 @@ class Announcement:
     он не подключён, нельзя.
 
     `lang` — кому уйдёт: `None` значит всем, иначе только тем, у кого интерфейс
-    на этом языке. Текст здесь один на рассылку, поэтому двуязычный анонс — это
+    на этом языке; «en» — всем нерусским (см. `_recipients`). Текст здесь один на рассылку, поэтому двуязычный анонс — это
     две записи с разными `key` и своим `lang` у каждой, а не одна с двумя
     текстами: ключ и так уже единица дедупликации доставки.
     """
@@ -411,10 +411,25 @@ async def _not_for(ann: Announcement, telegram_id: int, user) -> bool:
     )
 
 
+async def _recipients(ann: Announcement) -> list[int]:
+    """Кому ещё не уходило. Английский анонс — всем нерусским: испанцу или
+    немцу английский текст понятнее русского, а своего у рассылки нет (то же
+    правило, что у /broadcast, handlers/admin._broadcast_audience). Раньше их
+    хранили как «en», теперь у каждого свой язык, и фильтр `lang = 'en'`
+    молча оставлял их без релизов."""
+    if ann.lang != "en":
+        return await db.list_announcement_recipients(ann.key, ann.lang)
+    ids: list[int] = []
+    for lang in i18n.SUPPORTED:
+        if lang != "ru":
+            ids += await db.list_announcement_recipients(ann.key, lang)
+    return ids
+
+
 async def count_pending(ann: Announcement) -> int:
     """Сколько человек реально получат релиз: ещё не получали и он им нужен."""
     count = 0
-    for telegram_id in await db.list_announcement_recipients(ann.key, ann.lang):
+    for telegram_id in await _recipients(ann):
         if not await _not_for(ann, telegram_id, await db.get_user(telegram_id)):
             count += 1
     return count
@@ -480,7 +495,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     исключение наружу означало бы, что все, кто стоял в очереди после
     удалённого чата, не получат релиз вообще — до следующего деплоя.
     """
-    recipients = await db.list_announcement_recipients(ann.key, ann.lang)
+    recipients = await _recipients(ann)
     if not recipients:
         return 0, 0, 0
     logger.info("Announcement %s: %s recipients pending", ann.key, len(recipients))

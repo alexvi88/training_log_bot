@@ -468,3 +468,14 @@ async def test_athlete_account_deletion_takes_the_coach_chat_about_them(api):
     await db.wipe_user_account(ATHLETE)
     assert await db.get_ai_conversation_history(COACH) == []
     assert await db.get_coach_client_chat(COACH) is None
+
+
+def test_is_seed_needs_the_whole_seed_not_just_its_opening():
+    """Seed режима узнаётся целиком, с любым именем внутри. У турецкого начало
+    seed — «Sporcum » («мой атлет»), и обычная реплика тренера с этого слова
+    не должна подменяться просьбой собрать программу."""
+    for lang in i18n.SUPPORTED:
+        assert coach_program_ai.is_seed(i18n.t_in(lang, "coach.ai_chat.seed", name="Ayşe"))
+        assert coach_program_ai.is_seed(i18n.t_in(lang, "ai.screen.build_program_seed"))
+    assert not coach_program_ai.is_seed("Sporcum dizinden sakatlandı, squat yerine leg press koy")
+    assert not coach_program_ai.is_seed("Build a training program for my athlete Bob, but keep squats")

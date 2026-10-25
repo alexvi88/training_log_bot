@@ -84,6 +84,21 @@ def test_plural_en(n, expected):
     assert i18n.t_in("en", "test.sets", n=n) == expected
 
 
+@pytest.mark.parametrize(
+    "lang,n,expected",
+    [
+        ("fr", 0, "one"), ("fr", 1, "one"), ("fr", 2, "other"),
+        ("pt", 0, "one"), ("pt", 1, "one"), ("pt", 2, "other"),
+        ("pt-PT", 0, "other"), ("pt-PT", 1, "one"),
+        ("es", 0, "other"), ("de", 0, "other"), ("tr", 0, "other"), ("en", 0, "other"),
+    ],
+)
+def test_plural_categories_follow_cldr(lang, n, expected):
+    """Те же категории, что у Foundation в приложении и Intl.PluralRules на
+    сайте: французский и бразильский португальский ставят «one» и у нуля."""
+    assert i18n._plural_category(n, lang) == expected
+
+
 def test_hash_is_the_number():
     assert i18n.t_in("ru", "test.sets", n=3) == "3 подхода"
 

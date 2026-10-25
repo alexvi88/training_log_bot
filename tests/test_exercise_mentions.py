@@ -264,3 +264,20 @@ def test_a_multiword_name_containing_the_ambiguous_word_still_links():
     plank_variant = _ex(41, "Планка на локтях")
     found = exercise_mentions.find_mentions("Замени на планка на локтях", [plank_variant])
     assert _names(found) == ["Планка на локтях"]
+
+
+def test_names_with_accents_and_turkish_letters_are_found():
+    """Диакритика и турецкие буквы не режут название на обрывки: «Şınav»
+    раньше превращался в «nav» и не находился никогда."""
+    pushup = _ex(50, "Şınav")
+    raises = _ex(51, "Elevación de piernas tumbado")
+    assert _names(exercise_mentions.find_mentions("Bugün şınav çek", [pushup])) == ["Şınav"]
+    assert _names(exercise_mentions.find_mentions("Haz elevaciones de piernas tumbado", [raises])) == [
+        "Elevación de piernas tumbado"
+    ]
+
+
+def test_everyday_words_on_the_athletes_language_do_not_link_the_plank():
+    """«plan» и «gain» — обычные слова ответа, а не «Plancha» и «Gainage»."""
+    assert exercise_mentions.find_mentions("Sigue el plan una semana más", [_ex(52, "Plancha")]) == []
+    assert exercise_mentions.find_mentions("Ton gain de force est réel", [_ex(53, "Gainage")]) == []
