@@ -783,6 +783,11 @@ def _render_pair(lang: str, page: Page, request) -> str:
         items = "".join(f'<li><a href="{sp.url_for(Page("pair", pair_slug(x, y)), lang)}">'
                         f"{sp._e(t('seo.pair.h1', a=_ex_name(x, lang), b=_second(_ex_name(y, lang), lang)))}</a></li>" for x, y in others)
         others_html = f"<section class='reveal sub'><h2>{sp._e(t('seo.pair.more.h'))}</h2><ul class=links>{items}</ul></section>"
+    # Вопрос «что выбрать» с ответом-лидом — и на странице, и в разметке:
+    # AI-поиск берёт готовую пару «вопрос — ответ», а лид пары и так отвечает
+    # по существу.
+    faq_items = [(t("seo.pair.faq.q", a=na, b=_second(nb, lang)), sp._e(t(f"{key}.lead")))]
+    faq = sp._faq_ld(faq_items)
     title = t("seo.pair.title", a=na, b=_second(nb, lang))
     description = t(f"{key}.description")
     body = (
@@ -794,6 +799,7 @@ def _render_pair(lang: str, page: Page, request) -> str:
         + f"<div class=prose><section class='reveal sub'><h2>{sp._e(t('seo.pair.diff.h'))}</h2>{t(f'{key}.diff_html', **params)}</section>"
         + f"<section class='reveal sub'><h2>{sp._e(t('seo.pair.both.h'))}</h2>{t(f'{key}.both_html', **params)}</section></div>"
         + progs_html
+        + sp._faq_html(lang, faq_items)
         + sp._cta(lang, page.block, sp._e(t("seo.pair.cta")), request)
         + others_html
         + f'<p style="margin-top:32px"><a href="{sp.url_for(Page("compare"), lang)}">{sp._e(t("seo.pair.all"))}</a></p>'
@@ -807,7 +813,7 @@ def _render_pair(lang: str, page: Page, request) -> str:
         "publisher": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "about": [{"@type": "Thing", "name": na}, {"@type": "Thing", "name": nb}],
     }
-    return sp._layout(lang, page, request, title=title, description=description, body=body, wide=True, ld=[article])
+    return sp._layout(lang, page, request, title=title, description=description, body=body, wide=True, ld=[article, faq])
 
 
 def _render_compare(lang: str, page: Page, request) -> str:

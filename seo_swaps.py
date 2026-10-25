@@ -167,6 +167,34 @@ def _equipment_block(name: str, alts: list[str], lang: str) -> str:
             f"<ul class=reasons>{rows}</ul></section>")
 
 
+def _names(alts: list[str], lang: str) -> str:
+    """«A, B и C» — перечень замен для короткого ответа и вопросов."""
+    # Посреди фразы — со строчной («подойдут становая тяга…»), как в
+    # «Когда что брать» (`_lc` не трогает аббревиатуры).
+    names = [_lc(seed_data.localized_exercise_name(a, lang), lang) for a in alts]
+    if len(names) == 1:
+        return names[0]
+    return sp._t(lang)("seo.swap.eq.join", head=", ".join(names[:-1]), last=names[-1])
+
+
+def _answer(name: str, alts: list[str], lang: str) -> str:
+    """Короткий ответ первой строкой: AI-поиск (ChatGPT, Perplexity) и
+    сниппеты цитируют первое прямое предложение страницы, а вводный абзац
+    замен не называл. Первые три — те же, что бот даёт по «Альтернативам»."""
+    return sp._t(lang)("seo.swap.answer", name=name, list=_names(alts[:3], lang))
+
+
+def _faq(name: str, alts: list[str], lang: str) -> list[tuple[str, str]]:
+    """Вопросы с ответами из тех же данных: «чем заменить», и по снаряду —
+    так спрашивают в поиске («… alternative machine», «… дома»)."""
+    t = sp._t(lang)
+    items = [(t("seo.swap.faq.main.q", name=name), sp._e(t("seo.swap.faq.main.a", list=_names(alts, lang))))]
+    for eq, group in _by_equipment(alts):
+        items.append((t(f"seo.swap.faq.{eq}.q", name=name),
+                      sp._e(t("seo.swap.faq.eq.a", list=_names([a for _n, a in group], lang)))))
+    return items
+
+
 def _equipment_phrase(alts: list[str], lang: str) -> str:
     """«machine, dumbbell & bodyweight» — для заголовка в выдаче."""
     t = sp._t(lang)
@@ -199,17 +227,19 @@ def _render(lang: str, page: Page, request) -> str:
         if (m, eq) in seo_plans.equip_pages():
             related.append((sp.url_for(Page("muscle_equip", m, eq), lang), t(f"seo.me.{eq}.h1", muscle=seo_plans.muscle_word(m, lang))))
     phrase = _equipment_phrase(alts, lang)
+    faq = _faq(name, alts, lang)
     title = (t("seo.swap.title_equip", name=name, n=len(alts), equip=phrase) if phrase
              else t("seo.swap.title", name=name, n=len(alts)))
     description = t("seo.swap.description", name=name, n=len(alts), list=", ".join(names[:3]))
     body = (
         f"<span class=eyebrow>{sp._e(sp._group_for(source, lang))}</span>"
         f"<h1>{sp._e(page_h1(page, lang))}</h1>"
-        f"<p class=lead>{sp._e(t('seo.swap.lead', name=_lc(name, lang), n=len(alts)))}</p>"
+        f"<p class=lead><b>{sp._e(_answer(name, alts, lang))}</b> {sp._e(t('seo.swap.lead', name=_lc(name, lang), n=len(alts)))}</p>"
         + _equipment_block(name, alts, lang)
         + f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.why.h'))}</h2>{_reasons(source, alts, lang)}</section>"
         + f"<ol class=swaps>{''.join(_alt_item(source, a, i + 1, lang) for i, a in enumerate(alts))}</ol>"
         + f"<p class=muted>{sp._e(t('seo.swap.data_note'))}</p>"
+        + sp._faq_html(lang, faq)
         + f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.diary.h'))}</h2><p>{t('seo.swap.diary_html', **params)}</p></section>"
         + sp._cta(lang, page.block, sp._e(t("seo.swap.cta")), request)
         + f"<section class='reveal sub'><h2>{sp._e(t('seo.lib.related'))}</h2><ul class=links>"
@@ -220,7 +250,8 @@ def _render(lang: str, page: Page, request) -> str:
         "about": {"@type": "Thing", "name": name},
         "mainEntity": {"@type": "ItemList", "itemListElement": [
             {"@type": "ListItem", "position": i + 1, "name": n} for i, n in enumerate(names)]}})
-    return sp._layout(lang, page, request, title=title, description=description, body=body, wide=True, ld=[ld])
+    return sp._layout(lang, page, request, title=title, description=description, body=body, wide=True,
+                      ld=[ld, sp._faq_ld(faq)])
 
 
 def aside_link(url: str, lang: str) -> list[tuple[str, str]]:
