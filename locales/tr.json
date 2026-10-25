@@ -1634,7 +1634,7 @@
   "tonnage.total": "{tons} {n, plural, one{ton} other{ton}}",
   "unit.kg": "kg",
   "unit.ton_short": "t",
-  "volume.title": "HACİM {window} · {total} {n, plural, one{SET} other{SET}}",
+  "volume.title": "{window} HACİM · {total} {n, plural, one{SET} other{SET}}",
   "workout.add_set_logged": "Zaten kaydettim: {sets}",
   "workout.add_set_prompt": "“{name}” için yeni set — ağırlık ve tekrar (\"100 8\") ya da sadece tekrar (\"8\") gönder — ağırlığı son setten alırım:",
   "workout.backfill_logged_prefix": "✅ Geçmiş antrenman olarak kaydettim\n\n",
