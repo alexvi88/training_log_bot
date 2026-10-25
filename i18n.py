@@ -379,8 +379,12 @@ def _plural_category(n: int, lang: str) -> str:
         if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
             return "few"
         return "many"
-    # en, es, pt, de, fr, tr — одно правило: «один» только у 1 (у ветки plural в их
-    # каталогах ровно one/other).
+    # Правила CLDR — те же, что у Foundation в приложении (stringsdict) и у
+    # Intl.PluralRules в калькуляторах сайта: у французского и бразильского
+    # португальского «one» — и 0, и 1 («0 séance»); у en, es, pt-PT, de, tr —
+    # только 1. У ветки plural в их каталогах ровно one/other.
+    if lang in ("fr", "pt"):
+        return "one" if n in (0, 1) else "other"
     return "one" if n == 1 else "other"
 
 
