@@ -865,6 +865,8 @@ console.log(JSON.stringify(out));
     ("Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)", ("bot", "PerplexityBot")),
     ("Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)", ("bot", "ClaudeBot")),
     ("Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)", ("bot", "YandexBot")),
+    ("Mozilla/5.0 (compatible; MistralAI-User/1.0; +https://docs.mistral.ai/robots)", ("bot", "MistralAI-User")),
+    ("DuckAssistBot/1.2; (+http://duckduckgo.com/duckassistbot.html)", ("bot", "DuckAssistBot")),
     ("curl/8.4.0", ("bot", "other")),
     ("", ("bot", "unknown")),
 ])
@@ -878,6 +880,10 @@ def test_user_agent_classification(ua, expected):
     ("https://yandex.ru/search/?text=x", "yandex"),
     ("https://chatgpt.com/c/abc", "chatgpt"),
     ("https://www.perplexity.ai/search?q=x", "perplexity"),
+    ("https://gemini.google.com/app/abc", "gemini"),
+    ("https://copilot.microsoft.com/chats/x", "copilot"),
+    ("https://grok.com/c/x", "grok"),
+    ("https://chat.deepseek.com/a/chat/s/x", "deepseek"),
     ("https://t.me/somechannel/12", "telegram"),
     ("https://athletediary.app/ru/tools", "internal"),
     ("https://news.ycombinator.com/item?id=1", "news.ycombinator.com"),
@@ -930,6 +936,24 @@ async def test_visits_and_clicks_are_counted_without_ip_or_full_referrer(fresh_d
     assert len(feed) == 1
     line = site_stats.format_feed_line(feed[0])
     assert re.fullmatch(r"🌐 \d\d\.\d\d \d\d:\d0 · /ru/tools/1rm · google · iOS", line)
+
+
+async def test_growth_counts_visits_from_ai_assistants(fresh_db):
+    """GEO: переход человека из ответа ассистента — по источнику или по
+    utm_source, который ассистент сам дописал (ChatGPT — chatgpt.com); и
+    отдельно — роботы, открывшие страницу по вопросу человека."""
+    await fresh_db.record_site_event("view", "/en", "en", "chatgpt", "ios")
+    await fresh_db.record_site_event("view", "/en", "en", "direct", "ios", None, "chatgpt.com")
+    await fresh_db.record_site_event("view", "/ru", "ru", "gemini", "desktop")
+    await fresh_db.record_site_event("view", "/ru", "ru", "google", "desktop", None, "habr")
+    await fresh_db.record_site_event("view", "/en", "en", "direct", "bot", "ChatGPT-User")
+    await fresh_db.record_site_event("view", "/en", "en", "direct", "bot", "GPTBot")
+    stats = await fresh_db.site_stats(7)
+    assert stats["ai_sources"] == [("chatgpt", 2), ("gemini", 1)]
+    block = site_stats.format_growth_block(stats, "7 дн.", [])
+    assert "Из AI-ассистентов: 3 (chatgpt 2, gemini 1)" in block
+    assert "AI открыл страницу по вопросу человека: ChatGPT-User 1" in block
+    assert site_stats.ai_source("google", "habr") is None
 
 
 async def test_feed_folds_repeated_views_into_one_line(fresh_db):
