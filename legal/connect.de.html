@@ -1,0 +1,72 @@
+<h1>Athleten-Tagebuch mit Claude und ChatGPT verbinden</h1>
+<p class="muted">Athleten-Tagebuch ist eine iPhone-App und ein Telegram-Bot zum Protokollieren von Trainings. Mit dem Connector kann eine KI-App, die du nutzt, dein eigenes Tagebuch lesen und Fragen zu deinem Training beantworten.</p>
+
+<p>Einmal verbinden — und direkt dort zu deinem Training fragen: „Hat sich mein Bankdrücken in den letzten 3 Monaten verbessert?“, „Welche Muskeln trainiere ich zu wenig?“, „Bau mir ein 4-Tage-Programm auf Basis dessen, was ich schon mache“.</p>
+
+<h2>Was du brauchst</h2>
+<ul>
+  <li>Ein Athleten-Tagebuch-Konto — die iPhone-App (Mit Apple anmelden) oder den Telegram-Bot <a href="https://t.me/lightweight_log_bot">@lightweight_log_bot</a>. Beides ist kostenlos.</li>
+  <li>Claude (claude.ai, die Desktop- oder Mobil-App, Claude Code) oder ChatGPT.</li>
+</ul>
+
+<h2>Connector-Adresse</h2>
+<p><code>https://athletediary.app/mcp</code></p>
+<p>Die Anmeldung läuft über OAuth: Es gibt kein Passwort. Auf der Bestätigungsseite gibst du einen einmaligen 6-stelligen Code ein, den nur du bekommen kannst:</p>
+<ul>
+  <li>in der App: Profil → „Mit Claude und ChatGPT verbinden“ → „Code anfordern“;</li>
+  <li>im Bot: sende <code>/mcp</code> und wähle deine App — der Code steht in derselben Nachricht.</li>
+</ul>
+<p>Der Code gilt 10 Minuten und funktioniert einmal. Ein neuer Code macht den vorherigen ungültig.</p>
+
+<h2>Claude</h2>
+<ol>
+  <li>Einstellungen → Connectors → Benutzerdefinierten Connector hinzufügen (oder Athleten-Tagebuch im Connector-Verzeichnis suchen).</li>
+  <li><code>https://athletediary.app/mcp</code> einfügen und auf Verbinden tippen.</li>
+  <li>Auf der Bestätigungsseite von Athleten-Tagebuch den Code eingeben und auf „Erlauben“ tippen.</li>
+  <li>Prüfen: in einem neuen Chat „zeig meine letzten Trainings“ fragen.</li>
+</ol>
+<p>Claude Code: <code>claude mcp add --transport http athlete-diary https://athletediary.app/mcp</code>, dann <code>/mcp</code> → Authenticate.</p>
+
+<h2>ChatGPT</h2>
+<ol>
+  <li>Athleten-Tagebuch im App-Verzeichnis von ChatGPT suchen und auf Verbinden tippen. Solange der Eintrag noch nicht online ist: Einstellungen → Apps &amp; Connectors → Erweitert → Entwicklermodus einschalten, dann Erstellen, <code>https://athletediary.app/mcp</code> einfügen, Authentifizierung — OAuth.</li>
+  <li>Auf der Bestätigungsseite von Athleten-Tagebuch den Code eingeben und auf „Erlauben“ tippen.</li>
+  <li>Prüfen: den Connector in einem Chat einschalten und „zeig meine letzten Trainings“ fragen.</li>
+</ol>
+
+<h2>Was der Connector kann</h2>
+<p>Lesen — er ändert nie etwas:</p>
+<ul>
+  <li><code>get_training_overview</code> — Einheiten, Statistiken, Trainingsprofil und die Liste deiner Übungen.</li>
+  <li><code>get_active_workout</code> — das laufende Training, falls es eines gibt.</li>
+  <li><code>list_recent_workouts</code> — die letzten 1–10 Trainings mit jedem Satz.</li>
+  <li><code>get_full_workout_history</code> — bis zu den letzten 200 Trainings, für langfristige Fragen.</li>
+  <li><code>get_exercise_progress</code> — eine Übung: Sätze nach Datum, Arbeitsgewichte, e1RM, Rekorde.</li>
+  <li><code>compare_periods</code> — die letzten N Tage im Vergleich zu den N davor, über alle Übungen.</li>
+  <li><code>get_weekly_volume_by_group</code> — Arbeitssätze pro Muskelgruppe, diese und letzte Woche.</li>
+  <li><code>get_muscle_recovery</code> — wie erholt jede Muskelgruppe ist.</li>
+  <li><code>get_bodyweight_history</code> — Wiegungen.</li>
+  <li><code>get_saved_programs</code> — deine Programme, als Liste oder eines vollständig.</li>
+  <li><code>get_program_adherence</code> — wie deine Trainings zum gespeicherten Programm passen.</li>
+  <li><code>list_exercise_catalog</code> — der eingebaute Übungskatalog nach Muskelgruppe.</li>
+</ul>
+<p>Schreiben — nur, wenn du die KI-App darum bittest:</p>
+<ul>
+  <li><code>log_bodyweight</code> — das heutige Körpergewicht eintragen.</li>
+  <li><code>delete_bodyweight_log</code> — eine Wiegung löschen (die KI-App bittet dich um Bestätigung).</li>
+  <li><code>create_exercise</code> — eine eigene Übung hinzufügen.</li>
+  <li><code>copy_program</code> — ein gespeichertes Programm duplizieren.</li>
+</ul>
+<p>Der Connector kann deinen Chat mit dem KI-Coach nicht lesen, Trainings, Übungen oder Programme weder umbenennen noch löschen und weder deine E-Mail noch deine Apple-ID noch dein Telegram-Konto sehen. Bis zu 60 Anfragen pro Minute.</p>
+
+<h2>Datenschutz und Trennen</h2>
+<p>Deine Daten gehen nur dann an die KI-App, wenn sie den Connector auf deine Anfrage hin aufruft, und nur an das Konto, das du mit dem Code bestätigt hast. Ab dort gilt die Datenschutzerklärung dieses Unternehmens. Zum Trennen: in der App unter Profil → „Mit Claude und ChatGPT verbinden“ → „Verbundene Apps“; im Bot unter <code>/mcp</code> → „Verbundene Apps“ — oder entferne den Connector in der KI-App. Details — in der <a href="/privacy?lang=de">Datenschutzerklärung</a>.</p>
+
+<h2>Hilfe</h2>
+<ul>
+  <li>In der App: Profil → „Support &amp; Feedback“.</li>
+  <li>Im Bot: der Befehl /feedback.</li>
+  <!-- contact-email -->
+</ul>
+
+<p class="muted"><a href="/privacy?lang=de">Datenschutzerklärung</a> · <a href="/terms?lang=de">Nutzungsbedingungen</a> · <a href="/support?lang=de">Support</a> · <a href="/connect?lang=ru">Русский</a></p>

@@ -441,10 +441,11 @@ async def _setup_commands(bot: Bot) -> None:
     системному языку клиента, а не по нашей колонке users.lang, и заливается
     это один раз при старте, отдельно на каждый language_code. Вызов БЕЗ
     language_code — дефолт (русский, видят все языки без своего варианта), а
-    с language_code="en" — отдельный вариант для англоязычных.
+    с language_code="en"/"es"/"pt"/"de"/"fr"/"tr" — свои варианты.
     """
     await bot.set_my_commands(_public_commands("ru"), scope=BotCommandScopeDefault())
-    await bot.set_my_commands(_public_commands("en"), scope=BotCommandScopeDefault(), language_code="en")
+    for lang in ("en", "es", "pt", "de", "fr", "tr"):
+        await bot.set_my_commands(_public_commands(lang), scope=BotCommandScopeDefault(), language_code=lang)
     if config.ADMIN_ID is not None:
         # Админский список — навсегда по-русски (аудитория: один человек,
         # разработчик), поэтому language_code тут не нужен.

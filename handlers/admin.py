@@ -1464,7 +1464,7 @@ BROADCAST_SEND_DELAY = 0.05  # seconds between sends — stays under Telegram's 
 def _broadcast_lang_keyboard():
     b = InlineKeyboardBuilder()
     b.button(text="🇷🇺 Только русским", callback_data="admin:bc:lang:ru")
-    b.button(text="🇬🇧 Только англоязычным", callback_data="admin:bc:lang:en")
+    b.button(text="🇬🇧 Только нерусским (по-английски)", callback_data="admin:bc:lang:en")
     b.button(text="🌍 Обоим, два текста", callback_data="admin:bc:lang:both")
     b.button(text="Отмена", callback_data="admin:bc:no")
     b.adjust(1)
@@ -1479,8 +1479,18 @@ async def _broadcast_audience(mode: str) -> dict[str, list[int]]:
     всех. В режиме «both» это два непересекающихся списка и два разных
     сообщения — по одному на язык.
     """
-    langs = i18n.SUPPORTED if mode == "both" else (mode,)
-    return {lang: await db.list_telegram_ids_by_lang(lang) for lang in langs}
+    langs = ("ru", "en") if mode == "both" else (mode,)
+    audience = {}
+    for lang in langs:
+        ids = await db.list_telegram_ids_by_lang(lang)
+        # Английский текст уходит всем, кроме русскоязычных: испанцу или немцу
+        # он понятнее русского, а своего текста на их языке у рассылки нет.
+        if lang == "en":
+            for other in i18n.SUPPORTED:
+                if other not in ("ru", "en"):
+                    ids = ids + await db.list_telegram_ids_by_lang(other)
+        audience[lang] = ids
+    return audience
 
 
 async def _broadcast_confirm(message: Message, state: FSMContext, mode: str) -> None:
@@ -1516,7 +1526,7 @@ async def broadcast_choose_lang(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     mode = callback.data.split(":")[3]
-    if mode not in (*i18n.SUPPORTED, "both"):
+    if mode not in ("ru", "en", "both"):
         await callback.answer("Не понял язык, начни заново через /broadcast", show_alert=True)
         return
     await state.update_data(broadcast_mode=mode)

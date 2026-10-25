@@ -30,6 +30,10 @@ lang parameter here would be one more thing to thread through call sites that
 don't otherwise need to know the current language.
 """
 
+import functools
+import json
+from pathlib import Path
+
 import exercise_media
 import i18n
 
@@ -3836,9 +3840,27 @@ def get_description(exercise_name: str, lang: str | None = None) -> str | None:
     tests/test_exercise_descriptions.py checks parity between the two dicts —
     but a user's own hand-typed exercise has no catalog entry in either
     language, which is exactly what `None` already covers)."""
-    if (lang or i18n.get_lang()) == i18n.DEFAULT_LANG:
+    lang = lang or i18n.get_lang()
+    if lang == i18n.DEFAULT_LANG:
         return EXERCISE_DESCRIPTIONS.get(exercise_name)
-    return EXERCISE_DESCRIPTIONS_EN.get(exercise_name) or EXERCISE_DESCRIPTIONS.get(exercise_name)
+    own = _other_language_descriptions(lang).get(exercise_name) if lang != "en" else None
+    return own or EXERCISE_DESCRIPTIONS_EN.get(exercise_name) or EXERCISE_DESCRIPTIONS.get(exercise_name)
+
+
+_DESCRIPTIONS_DIR = Path(__file__).resolve().parent / "locales" / "descriptions"
+
+
+@functools.lru_cache(maxsize=None)
+def _other_language_descriptions(lang: str) -> dict[str, str]:
+    """Техника на остальных языках (es, pt, de, fr, tr) — JSON
+    `locales/descriptions/<язык>.json` с теми же ключами, что
+    EXERCISE_DESCRIPTIONS_EN. Не словарём здесь: пять языков по 300 описаний
+    раздули бы модуль впятеро. Нет файла или описания — английский текст."""
+    try:
+        with (_DESCRIPTIONS_DIR / f"{lang}.json").open(encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 
 def catalog_description(ex, lang: str | None = None) -> str | None:

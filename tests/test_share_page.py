@@ -182,7 +182,7 @@ async def test_og_image_is_png_1200x630(fresh_db, monkeypatch, tmp_path):
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/png"
     assert Image.open(io.BytesIO(resp.content)).size == (1200, 630)
-    assert (await _get(f"/og/share/de/{token}.png")).status_code == 404
+    assert (await _get(f"/og/share/it/{token}.png")).status_code == 404
 
 
 def test_og_cache_key_keeps_token_case():

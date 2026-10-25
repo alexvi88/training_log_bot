@@ -1,0 +1,72 @@
+<h1>Conecta Diario del Atleta con Claude y ChatGPT</h1>
+<p class="muted">Diario del Atleta es una app para iPhone y un bot de Telegram para registrar entrenamientos. El conector permite que una app de IA que uses lea tu propio diario y responda preguntas sobre tu entrenamiento.</p>
+
+<p>Conéctalo una vez — y pregunta por tu entrenamiento ahí mismo: “¿Progresé en press de banca en los últimos 3 meses?”, “¿Qué músculos estoy entrenando poco?”, “Hazme un programa de 4 días a partir de lo que ya hago”.</p>
+
+<h2>Qué necesitas</h2>
+<ul>
+  <li>Una cuenta de Diario del Atleta — la app para iPhone (Iniciar sesión con Apple) o el bot de Telegram <a href="https://t.me/lightweight_log_bot">@lightweight_log_bot</a>. Ambos son gratuitos.</li>
+  <li>Claude (claude.ai, la app de escritorio o móvil, Claude Code) o ChatGPT.</li>
+</ul>
+
+<h2>Dirección del conector</h2>
+<p><code>https://athletediary.app/mcp</code></p>
+<p>El inicio de sesión es por OAuth: no hay contraseña. En la página de confirmación introduces un código de un solo uso de 6 dígitos que solo tú puedes obtener:</p>
+<ul>
+  <li>en la app: Perfil → “Conectar con Claude y ChatGPT” → “Obtener código”;</li>
+  <li>en el bot: envía <code>/mcp</code> y elige tu app — el código viene en el mismo mensaje.</li>
+</ul>
+<p>El código dura 10 minutos y funciona una sola vez. Un código nuevo anula el anterior.</p>
+
+<h2>Claude</h2>
+<ol>
+  <li>Settings → Connectors → Add custom connector (o busca Diario del Atleta en el directorio de conectores).</li>
+  <li>Pega <code>https://athletediary.app/mcp</code> y toca Connect.</li>
+  <li>En la página de confirmación de Diario del Atleta introduce el código y toca “Permitir”.</li>
+  <li>Comprueba: en un chat nuevo pregunta “muéstrame mis entrenamientos recientes”.</li>
+</ol>
+<p>Claude Code: <code>claude mcp add --transport http athlete-diary https://athletediary.app/mcp</code>, luego <code>/mcp</code> → Authenticate.</p>
+
+<h2>ChatGPT</h2>
+<ol>
+  <li>Busca Diario del Atleta en el directorio de apps de ChatGPT y toca Connect. Mientras la ficha no esté publicada: Settings → Apps &amp; Connectors → Advanced → activa Developer mode, luego Create, pega <code>https://athletediary.app/mcp</code>, Authentication — OAuth.</li>
+  <li>En la página de confirmación de Diario del Atleta introduce el código y toca “Permitir”.</li>
+  <li>Comprueba: activa el conector en un chat y pregunta “muéstrame mis entrenamientos recientes”.</li>
+</ol>
+
+<h2>Qué puede hacer el conector</h2>
+<p>Lectura — nunca cambia nada:</p>
+<ul>
+  <li><code>get_training_overview</code> — unidades, estadísticas, perfil de entrenamiento y la lista de tus ejercicios.</li>
+  <li><code>get_active_workout</code> — el entrenamiento en curso, si hay uno.</li>
+  <li><code>list_recent_workouts</code> — los últimos 1–10 entrenamientos con cada serie.</li>
+  <li><code>get_full_workout_history</code> — hasta los últimos 200 entrenamientos, para preguntas a largo plazo.</li>
+  <li><code>get_exercise_progress</code> — un ejercicio: series por fecha, pesos de trabajo, e1RM, récords.</li>
+  <li><code>compare_periods</code> — los últimos N días frente a los N anteriores, en todos los ejercicios.</li>
+  <li><code>get_weekly_volume_by_group</code> — series de trabajo por grupo muscular, esta semana y la anterior.</li>
+  <li><code>get_muscle_recovery</code> — cuánto se ha recuperado cada grupo muscular.</li>
+  <li><code>get_bodyweight_history</code> — registros de peso.</li>
+  <li><code>get_saved_programs</code> — tus programas, la lista o uno completo.</li>
+  <li><code>get_program_adherence</code> — cómo se ajustan tus entrenamientos al programa guardado.</li>
+  <li><code>list_exercise_catalog</code> — el catálogo de ejercicios integrado, por grupo muscular.</li>
+</ul>
+<p>Escritura — solo cuando se lo pides a la app de IA:</p>
+<ul>
+  <li><code>log_bodyweight</code> — registrar el peso corporal de hoy.</li>
+  <li><code>delete_bodyweight_log</code> — eliminar un registro de peso (la app de IA te pide confirmación).</li>
+  <li><code>create_exercise</code> — añadir un ejercicio personalizado.</li>
+  <li><code>copy_program</code> — duplicar un programa guardado.</li>
+</ul>
+<p>El conector no puede leer tu chat con el entrenador IA, renombrar ni eliminar entrenamientos, ejercicios ni programas, ni ver tu correo electrónico, tu Apple ID ni tu cuenta de Telegram. Hasta 60 solicitudes por minuto.</p>
+
+<h2>Privacidad y desconexión</h2>
+<p>Tus datos llegan a la app de IA solo cuando esta llama al conector a petición tuya, y solo a la cuenta que confirmaste con el código. A partir de ahí se aplica la política de privacidad de esa empresa. Para desconectar: en la app, Perfil → “Conectar con Claude y ChatGPT” → “Apps conectadas”; en el bot, <code>/mcp</code> → “Apps conectadas” — o elimina el conector en la app de IA. Detalles — en la <a href="/privacy?lang=es">Política de privacidad</a>.</p>
+
+<h2>Ayuda</h2>
+<ul>
+  <li>En la app: Perfil → “Soporte y comentarios”.</li>
+  <li>En el bot: el comando /feedback.</li>
+  <!-- contact-email -->
+</ul>
+
+<p class="muted"><a href="/privacy?lang=es">Política de privacidad</a> · <a href="/terms?lang=es">Términos de uso</a> · <a href="/support?lang=es">Soporte</a> · <a href="/connect?lang=ru">Русский</a></p>

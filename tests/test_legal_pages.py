@@ -77,10 +77,10 @@ async def test_explicit_lang_beats_accept_language():
 
 
 async def test_unknown_lang_falls_back_to_header_then_english():
-    resp = await _get("/privacy?lang=de")
+    resp = await _get("/privacy?lang=it")
     assert '<html lang=en>' in resp.text
 
-    resp = await _get("/privacy?lang=de", headers={"Accept-Language": "ru"})
+    resp = await _get("/privacy?lang=it", headers={"Accept-Language": "ru"})
     assert '<html lang=ru>' in resp.text
 
 

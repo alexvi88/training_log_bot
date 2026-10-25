@@ -35,6 +35,7 @@ from __future__ import annotations
 import difflib
 import functools
 import re
+import unicodedata
 
 # Ниже этой длины основу не режем: «тяг» ещё осмысленно, «т» уже совпадёт с
 # доброй половиной каталога. Общая граница для обоих языков.
@@ -68,8 +69,26 @@ _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 def fold(text: str) -> str:
-    """Регистр и ё→е — «лежа» и «лёжа» должны быть одним словом."""
-    return text.lower().replace("ё", "е")
+    """Регистр и ё→е — «лежа» и «лёжа» должны быть одним словом. У латиницы
+    снимаются диакритики («jalón» = «jalon», «Rücken» = «rucken», турецкая
+    «ı» = «i», «ß» = «ss»): на телефоне их часто не набирают."""
+    lowered = text.lower().replace("ё", "е")
+    if lowered.isascii():
+        return lowered
+    return "".join(_fold_latin(ch) for ch in lowered)
+
+
+@functools.lru_cache(maxsize=4096)
+def _fold_latin(ch: str) -> str:
+    if ch == "ß":
+        return "ss"
+    if ch == "ı":
+        return "i"
+    # Кириллицу не трогаем: «й» без бреве стала бы «и».
+    decomposed = unicodedata.normalize("NFD", ch)
+    if decomposed[0].isascii() and len(decomposed) > 1:
+        return decomposed[0]
+    return ch
 
 
 def _stem_ru(folded: str) -> str:

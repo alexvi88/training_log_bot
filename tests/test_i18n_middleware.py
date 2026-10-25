@@ -89,7 +89,9 @@ async def test_middleware_survives_db_failure(fresh_db, user_id, monkeypatch):
 @pytest.mark.parametrize(
     "language_code, expected",
     [
-        ("de", "en"),  # неподдерживаемый язык клиента -> английский
+        ("it", "en"),  # неподдерживаемый язык клиента -> английский
+        ("de", "de"),  # свой каталог
+
         ("uk", "ru"),  # язык СНГ-пространства -> русский
     ],
 )

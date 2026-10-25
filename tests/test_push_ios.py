@@ -53,6 +53,28 @@ _WORST_PARAMS = {
 }
 
 
+# Остальные языки: слова-числительные — руками, звание и «дни до конца
+# недели» — самые длинные из каталога этого языка (как у ru/en выше).
+_COUNT_WORDS = {
+    "es": ("52 semanas", "3 entrenamientos", "7 entrenamientos"),
+    "pt": ("52 semanas", "3 treinos", "7 treinos"),
+    "de": ("52 Wochen", "3 Trainings", "7 Trainings"),
+    "fr": ("52 semaines", "3 séances", "7 séances"),
+    "tr": ("52 hafta", "3 antrenman", "7 antrenman"),
+}
+for _lang, (_weeks, _missing, _week_count) in _COUNT_WORDS.items():
+    _catalog = i18n._load_catalog(_lang)
+    _WORST_PARAMS[_lang] = {
+        "weeks": _weeks,
+        "days_left": max((v for k, v in _catalog.items() if k.startswith("push.days_left.")), key=len),
+        "missing": _missing,
+        "rank": "🦾 " + max((v for k, v in _catalog.items() if k.startswith("rank.") and k.endswith(".name")), key=len),
+        "exercise": _WORST_PARAMS["en"]["exercise"],
+        "tonnage": "1234.5t",
+        "week_count": _week_count,
+    }
+
+
 def _params_for(template: str, lang: str) -> dict:
     """Same substitution ios_alert would actually perform: exercise/rank go
     through push_ios._clip_param first (ios_alert always clips them — see
@@ -134,7 +156,7 @@ async def test_ios_alert_clips_an_overlong_exercise_name(fresh_db, user_id):
 
 
 async def test_ios_alert_unknown_language_falls_back_to_default(fresh_db, user_id):
-    title, body = await push_ios.ios_alert(user_id, push_texts.WIN_BACK, "fr")
+    title, body = await push_ios.ios_alert(user_id, push_texts.WIN_BACK, "it")
     assert title == push_ios.TITLES_BY_LANG[i18n.DEFAULT_LANG][push_texts.WIN_BACK]
     assert body in push_ios.BODY_POOLS_BY_LANG[i18n.DEFAULT_LANG][push_texts.WIN_BACK]
 

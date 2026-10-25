@@ -36,10 +36,14 @@ async def test_sync_skips_api_calls_when_already_up_to_date():
     bot = AsyncMock()
 
     async def get_description(*, language_code=None):
+        if language_code in bot_profile.PROFILES:
+            return BotDescription(description=bot_profile.PROFILES[language_code][1])
         text = bot_profile.DESCRIPTION_EN if language_code == "en" else bot_profile.DESCRIPTION
         return BotDescription(description=text)
 
     async def get_short_description(*, language_code=None):
+        if language_code in bot_profile.PROFILES:
+            return BotShortDescription(short_description=bot_profile.PROFILES[language_code][2])
         text = bot_profile.SHORT_DESCRIPTION_EN if language_code == "en" else bot_profile.SHORT_DESCRIPTION
         return BotShortDescription(short_description=text)
 
@@ -63,5 +67,5 @@ async def test_sync_sets_both_languages_when_stale():
     bot.set_my_description.assert_any_await(bot_profile.DESCRIPTION_EN, language_code="en")
     bot.set_my_short_description.assert_any_await(bot_profile.SHORT_DESCRIPTION, language_code=None)
     bot.set_my_short_description.assert_any_await(bot_profile.SHORT_DESCRIPTION_EN, language_code="en")
-    assert bot.set_my_description.await_count == 2
-    assert bot.set_my_short_description.await_count == 2
+    assert bot.set_my_description.await_count == 2 + len(bot_profile.OTHER_LANGS)
+    assert bot.set_my_short_description.await_count == 2 + len(bot_profile.OTHER_LANGS)

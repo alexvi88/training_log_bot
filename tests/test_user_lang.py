@@ -18,7 +18,7 @@ async def test_set_user_lang_en_reads_back(user_id, fresh_db):
 
 async def test_garbage_value_is_coerced_to_ru(user_id, fresh_db):
     await fresh_db.set_user_lang(user_id, "en")  # чтобы убедиться, что мусор не просто «не менял» значение
-    await fresh_db.set_user_lang(user_id, "de")
+    await fresh_db.set_user_lang(user_id, "it")
     row = await fresh_db.get_user(user_id)
     assert row["lang"] == "ru"
 
@@ -89,7 +89,7 @@ async def test_new_user_language_is_guessed_from_the_client(fresh_db):
     row = await fresh_db.get_or_create_user(910002, "ru_user", "ru")
     assert row["lang"] == "ru"
     # Незнакомый язык клиента — английский, как решает i18n.normalize.
-    row = await fresh_db.get_or_create_user(910003, "de_user", "de")
+    row = await fresh_db.get_or_create_user(910003, "it_user", "it")
     assert row["lang"] == "en"
     # Клиент языка не прислал — остаёмся на дефолте, а не гадаем.
     row = await fresh_db.get_or_create_user(910004, "silent", None)
