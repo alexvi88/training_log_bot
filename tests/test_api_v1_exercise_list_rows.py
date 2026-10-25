@@ -19,7 +19,7 @@ pytestmark = pytest.mark.asyncio
 
 USER = 111
 CATALOG = "Жим штанги лёжа"  # в exercise_media.EXERCISE_IMAGE_SLUGS, оба кадра на диске
-CATALOG_THUMB = "/media/exercises/thumbs/barbell_bench_press_medium_grip_r3_1.jpg"
+CATALOG_THUMB = "/media/exercises/thumbs/barbell_bench_press_medium_grip_r4_1.jpg"
 
 
 def _client() -> httpx.AsyncClient:
@@ -53,7 +53,7 @@ async def test_field_shapes_catalog_and_custom(fresh_db):
     media = (await client.get(f"/exercises/{catalog_id}/media")).json()
     # Превью — уменьшенная копия того же кадра; полный кадр карточки — в `images`.
     assert catalog["thumb"] == CATALOG_THUMB
-    assert media["images"][0] == "/media/exercises/barbell_bench_press_medium_grip_r3_1.jpg"
+    assert media["images"][0] == "/media/exercises/barbell_bench_press_medium_grip_r4_1.jpg"
     assert catalog["has_photo"] is False
 
     # Своё упражнение: каталожных кадров нет — null.
