@@ -12257,7 +12257,30 @@ async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10
         "clicks": {r[0]: r[1] for r in await rows(
             f"SELECT target, COUNT(*) n FROM site_events WHERE kind = 'click' AND device <> 'bot' AND {window} GROUP BY target")},
         "embeds": (await rows(f"SELECT COUNT(*) FROM site_events WHERE kind = 'embed' AND device <> 'bot' AND {window}"))[0][0],
+        "ai_sources": _fold_ai_sources(await rows(
+            f"SELECT referrer, utm, COUNT(*) n FROM site_events WHERE {human} "
+            "AND (referrer IN ({}) OR utm IS NOT NULL) GROUP BY referrer, utm".format(
+                ",".join("'" + r + "'" for r in sorted(_site_stats_module().AI_REFERRERS))
+            ))),
     }
+
+
+def _site_stats_module():
+    # Имя `site_stats` в этом модуле занято функцией выше — модуль берём так.
+    import site_stats
+
+    return site_stats
+
+
+def _fold_ai_sources(found: list[aiosqlite.Row]) -> list[tuple[str, int]]:
+    """Переходы людей из AI-ассистентов по имени ассистента: по источнику
+    или по utm_source, который ассистент дописал к ссылке."""
+    totals: dict[str, int] = {}
+    for referrer, utm, n in found:
+        name = _site_stats_module().ai_source(referrer, utm)
+        if name:
+            totals[name] = totals.get(name, 0) + n
+    return sorted(totals.items(), key=lambda item: (-item[1], item[0]))
 
 
 async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:

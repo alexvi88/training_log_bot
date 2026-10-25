@@ -50,6 +50,10 @@ CRAWLERS: tuple[tuple[str, str], ...] = (
     ("claudebot", "ClaudeBot"),
     ("claude-user", "Claude-User"),
     ("claude-searchbot", "Claude-SearchBot"),
+    ("mistralai-user", "MistralAI-User"),
+    ("duckassistbot", "DuckAssistBot"),
+    ("meta-externalfetcher", "Meta-ExternalFetcher"),
+    ("meta-externalagent", "Meta-ExternalAgent"),
     ("applebot", "Applebot"),
     ("duckduckbot", "DuckDuckBot"),
     ("telegrambot", "TelegramBot"),
@@ -69,7 +73,19 @@ CRAWLERS: tuple[tuple[str, str], ...] = (
 _GENERIC_BOT = re.compile(r"bot\b|crawler|spider|crawl|headless|python-requests|curl/|wget|httpx|go-http-client|lighthouse")
 
 # Домен → короткое имя источника. Остальные домены пишутся как есть (без www).
+# AI-ассистенты — раньше поисковиков: gemini.google.com иначе ушёл бы в «google»,
+# copilot.microsoft.com — мимо «bing».
 _REFERRER_NAMES: tuple[tuple[str, str], ...] = (
+    ("gemini.google.com", "gemini"),
+    ("bard.google.com", "gemini"),
+    ("copilot.microsoft.com", "copilot"),
+    ("copilot.cloud.microsoft", "copilot"),
+    ("grok.com", "grok"),
+    ("chat.deepseek.com", "deepseek"),
+    ("you.com", "you"),
+    ("chat.mistral.ai", "mistral"),
+    ("meta.ai", "meta-ai"),
+    ("phind.com", "phind"),
     ("google.", "google"),
     ("yandex.", "yandex"),
     ("ya.ru", "yandex"),
@@ -86,6 +102,41 @@ _REFERRER_NAMES: tuple[tuple[str, str], ...] = (
     ("reddit.com", "reddit"),
     ("habr.com", "habr"),
 )
+# Источники-ассистенты: переход человека из ответа AI. Для GEO это главная
+# цифра — нас процитировали, и человек пошёл по ссылке.
+AI_REFERRERS = frozenset({
+    "chatgpt", "perplexity", "claude", "gemini", "copilot", "grok", "deepseek", "you", "mistral", "meta-ai", "phind",
+})
+# utm_source, которые ассистенты сами дописывают к ссылкам (ChatGPT —
+# `utm_source=chatgpt.com`): переход без Referer всё равно засчитывается.
+_AI_UTM = (
+    ("chatgpt", "chatgpt"),
+    ("openai", "chatgpt"),
+    ("perplexity", "perplexity"),
+    ("claude", "claude"),
+    ("gemini", "gemini"),
+    ("copilot", "copilot"),
+    ("grok", "grok"),
+    ("deepseek", "deepseek"),
+)
+# Роботы, которые приходят за страницей по вопросу человека прямо сейчас
+# (а не обходом для индекса или обучения): ассистент процитирует ответ.
+AI_ON_DEMAND = frozenset({
+    "ChatGPT-User", "Perplexity-User", "Claude-User", "MistralAI-User", "DuckAssistBot", "Meta-ExternalFetcher",
+})
+
+
+def ai_source(referrer: Optional[str], utm: Optional[str]) -> Optional[str]:
+    """Имя ассистента, из которого пришёл человек, — по источнику или по
+    utm_source; `None` — не из AI."""
+    if referrer in AI_REFERRERS:
+        return referrer
+    for needle, name in _AI_UTM:
+        if utm and needle in utm:
+            return name
+    return None
+
+
 _HOST_RE = re.compile(r"^[a-z0-9.-]{1,80}$")
 _UTM_RE = re.compile(r"[^a-z0-9_.-]+")
 
@@ -197,6 +248,12 @@ def format_growth_block(stats: dict[str, Any], period: str, seo_signups: list[An
         lines.append("Страницы: " + ", ".join(f"{escape(p)} {n}" for p, n in stats["pages"]))
     if stats["referrers"]:
         lines.append("Откуда: " + ", ".join(f"{escape(r)} {n}" for r, n in stats["referrers"]))
+    ai = stats.get("ai_sources") or []
+    ai_total = sum(n for _, n in ai)
+    lines.append(
+        f"Из AI-ассистентов: {ai_total}"
+        + (" (" + ", ".join(f"{escape(r)} {n}" for r, n in ai) + ")" if ai else "")
+    )
     if stats["devices"]:
         lines.append("Устройства: " + ", ".join(f"{device_label(d)} {n}" for d, n in stats["devices"]))
     lines.append(
@@ -206,6 +263,11 @@ def format_growth_block(stats: dict[str, Any], period: str, seo_signups: list[An
         lines.append(f"Показы калькулятора на чужих сайтах: {stats['embeds']}")
     if stats["crawlers"]:
         lines.append("Роботы: " + ", ".join(f"{escape(str(c))} {n}" for c, n in stats["crawlers"]))
+        on_demand = [(c, n) for c, n in stats["crawlers"] if c in AI_ON_DEMAND]
+        if on_demand:
+            lines.append(
+                "AI открыл страницу по вопросу человека: " + ", ".join(f"{escape(str(c))} {n}" for c, n in on_demand)
+            )
     if seo_signups:
         users = sum(r["users"] for r in seo_signups)
         activated = sum(r["activated"] for r in seo_signups)
