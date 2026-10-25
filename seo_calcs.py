@@ -46,13 +46,15 @@ import seo_tools
 # ---------- тоннаж ----------
 
 _PLURAL_SAMPLES = {"ru": {"one": 1, "few": 2, "many": 5, "other": 1.5}, "en": {"one": 1, "other": 2}}
+# Остальные языки сайта в каталоге — формы как у английского (one/other).
+_PLURAL_DEFAULT = {"one": 1, "other": 2}
 
 
 def _tonnage_objects(lang: str) -> list[dict]:
     """Предметы бота с формами слова по категориям множественного числа."""
     out = []
     for emoji, kg, obj_id in formatting._TONNAGE_OBJECTS:
-        forms = {cat: i18n.t_in(lang, f"tonnage.object.{obj_id}", n=n) for cat, n in _PLURAL_SAMPLES[lang].items()}
+        forms = {cat: i18n.t_in(lang, f"tonnage.object.{obj_id}", n=n) for cat, n in _PLURAL_SAMPLES.get(lang, _PLURAL_DEFAULT).items()}
         out.append({"e": emoji, "kg": kg, "f": forms})
     return out
 
@@ -613,9 +615,10 @@ def pct_card_text(lang: str, p: int, cls: str, sex: str, lift: str) -> str:
 
 
 async def card_route(request: Request) -> Response:
-    lang = request.path_params.get("lang", "")
+    # Адрес собирает скрипт страницы из `<html lang>` (pt-BR, pt-PT) — код тоже годится.
+    lang = sp.lang_from_code(request.path_params.get("lang", ""))
     kind = request.path_params.get("kind", "")
-    if lang not in sp.LANGS or kind not in CARD_KINDS:
+    if lang is None or kind not in CARD_KINDS:
         return PlainTextResponse("Not found", status_code=404)
     t = sp._t(lang)
     if kind in ("rm1", "dots", "tonnage", "level"):
@@ -697,7 +700,7 @@ def _host() -> str:
 
 
 def card_url(lang: str, kind: str, **params) -> str:
-    return f"/og/card/{lang}/{kind}.png?{urlencode(params)}"
+    return f"/og/card/{sp.lang_segment(lang)}/{kind}.png?{urlencode(params)}"
 
 
 def register_routes(server) -> None:

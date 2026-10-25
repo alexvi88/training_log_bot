@@ -807,7 +807,7 @@ def _render_pair(lang: str, page: Page, request) -> str:
     base = sp.base_url(request)
     article = {
         "@context": "https://schema.org", "@type": "Article", "headline": title[:110], "description": description,
-        "inLanguage": lang, "mainEntityOfPage": base + sp.url_for(page, lang),
+        "inLanguage": sp.hreflang(lang), "mainEntityOfPage": base + sp.url_for(page, lang),
         "image": [base + sp._media_url(exercise_media.frame_name(sp._EXERCISE_BY_URL[u], 1)) for u in (a, b)],
         "author": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "publisher": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
@@ -848,7 +848,7 @@ def _term_ld(lang: str, request, term: str) -> dict:
     return {
         "@context": "https://schema.org", "@type": "DefinedTerm", "name": t(f"seo.term.{term}.name"),
         "description": t(f"seo.term.{term}.short"), "url": base + sp.url_for(Page("term", term), lang),
-        "inDefinedTermSet": base + sp.url_for(Page("glossary"), lang), "inLanguage": lang,
+        "inDefinedTermSet": base + sp.url_for(Page("glossary"), lang), "inLanguage": sp.hreflang(lang),
     }
 
 
@@ -860,7 +860,7 @@ def _render_glossary(lang: str, page: Page, request) -> str:
     title, description = t("seo.glossary.title"), t("seo.glossary.description")
     base = sp.base_url(request)
     ld = {"@context": "https://schema.org", "@type": "DefinedTermSet", "name": t("seo.glossary.h1"),
-          "url": base + sp.url_for(page, lang), "inLanguage": lang,
+          "url": base + sp.url_for(page, lang), "inLanguage": sp.hreflang(lang),
           "hasDefinedTerm": [_term_ld(lang, request, term) for term in GLOSSARY]}
     for term in ld["hasDefinedTerm"]:
         term.pop("@context")
@@ -954,11 +954,11 @@ def _render_guide(lang: str, page: Page, request) -> str:
     base = sp.base_url(request)
     article = {
         "@context": "https://schema.org", "@type": "Article", "headline": t(f"seo.guide.{slug}.h1")[:110],
-        "description": description, "inLanguage": lang, "mainEntityOfPage": base + sp.url_for(page, lang),
+        "description": description, "inLanguage": sp.hreflang(lang), "mainEntityOfPage": base + sp.url_for(page, lang),
         "datePublished": sp.page_updated(page), "wordCount": len(guide_text(slug, lang).split()),
         "author": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "publisher": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
-        "image": base + f"/og/{lang}/{page.key}.png",
+        "image": base + sp.og_url(page, lang),
     }
     if sources:
         article["citation"] = [{"@type": "CreativeWork", "name": label, "url": u} for label, u in sources]
@@ -1069,7 +1069,7 @@ def _render_template(lang: str, page: Page, request) -> str:
     ex_rows = "".join("<tr>" + "".join(f"<td>{sp._e(v)}</td>" for v in row) + "</tr>" for row in example)
     labels = {"workout-log.xlsx": "xlsx", "workout-log.csv": "csv", "workout-log-example.csv": "example"}
     downloads = "".join(
-        f'<a class="btn{" primary" if i == 0 else ""}" href="/{lang}/templates/{name}" download>'
+        f'<a class="btn{" primary" if i == 0 else ""}" href="{sp.template_file_url(name, lang)}" download>'
         f'{seo_design.icon("import")}{sp._e(t("seo.template.dl." + labels[name]))}</a>'
         for i, name in enumerate(seo_template.FILES))
     upload = (f'<div class="cta reveal upload"><p class=cta-text>{sp._e(t(f"{key}.upload_cta"))}</p>'
@@ -1096,7 +1096,7 @@ def _render_template(lang: str, page: Page, request) -> str:
     ld = sp._webpage_ld(lang, page, request, title, description, extra={
         "mainEntity": {"@type": "DigitalDocument", "name": t(f"{key}.h1"), "encodingFormat": [
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv"],
-            "url": sp.base_url(request) + f"/{lang}/templates/workout-log.xlsx"},
+            "url": sp.base_url(request) + sp.template_file_url("workout-log.xlsx", lang)},
     })
     return sp._layout(lang, page, request, title=title, description=description, body=body, ld=[ld, sp._faq_ld(faq)])
 

@@ -160,6 +160,17 @@ SYNONYMS = {
     "workout_note": {"description", "workout notes", "workout_note"},
     "superset": {"superset_id"},
 }
+# Заголовки шаблона дневника с сайта (seo_template.py) на всех языках продукта:
+# испанец скачал шаблон с «Fecha · Ejercicio · Peso (kg)» — файл читается без
+# ручного маппинга. Объединение по всем языкам, а не язык текущего запроса.
+_TEMPLATE_FIELDS = {
+    "date": "date", "workout": "title", "exercise": "exercise", "set": "round",
+    "weight": "weight", "reps": "reps", "rpe": "rpe", "note": "exercise_note",
+}
+for _column, _field in _TEMPLATE_FIELDS.items():
+    for _lang in i18n.SUPPORTED:
+        _header = i18n.t_in(_lang, f"seo.template.col.{_column}")
+        SYNONYMS[_field].add(re.sub(r"\s*\([^()]*\)\s*$", "", _header.strip().lower()).strip())
 # Единицы в скобках у заголовка — «Weight (kg)», «Weight (lbs)», «Distance (m)»:
 # Strong подписывает ими колонки по настройкам аккаунта, и без этой срезки один
 # и тот же экспорт автоопределялся у одного человека и не автоопределялся у
@@ -386,6 +397,21 @@ _MONTH_STEMS_RU = (
     "январ", "феврал", "март", "апрел", "ма", "июн",
     "июл", "август", "сентябр", "октябр", "ноябр", "декабр",
 )
+# Остальные языки продукта — полные названия; сравнение идёт по fold (без
+# диакритик и регистра), поэтому «März», «février», «şubat» пишутся здесь как
+# «marz», «fevrier», «subat».
+_MONTH_STEMS_OTHER = (
+    ("enero", "febrero", "marzo", "abril", "mayo", "junio",
+     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"),
+    ("janeiro", "fevereiro", "marco", "abril", "maio", "junho",
+     "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"),
+    ("januar", "februar", "marz", "april", "mai", "juni",
+     "juli", "august", "september", "oktober", "november", "dezember"),
+    ("janvier", "fevrier", "mars", "avril", "mai", "juin",
+     "juillet", "aout", "septembre", "octobre", "novembre", "decembre"),
+    ("ocak", "subat", "mart", "nisan", "mayis", "haziran",
+     "temmuz", "agustos", "eylul", "ekim", "kasim", "aralik"),
+)
 
 
 def _month_number(word: str) -> Optional[int]:
@@ -393,16 +419,16 @@ def _month_number(word: str) -> Optional[int]:
     начало полного названия («sept» → september, «нояб» → ноябрь), или
     основа — начало слова с окончанием падежа («сентября», «мая», «июня»).
     Короче трёх букв — не месяц."""
-    word = word.strip().lower().rstrip(".")
+    word = search_terms.fold(word.strip()).rstrip(".")
     if len(word) < 3:
         return None
-    for stems in (_MONTH_STEMS_EN, _MONTH_STEMS_RU):
+    for stems in (_MONTH_STEMS_EN, _MONTH_STEMS_RU, *_MONTH_STEMS_OTHER):
         starts = [i for i, stem in enumerate(stems) if len(stem) >= 3 and stem.startswith(word)]
         if len(starts) == 1:
             return starts[0] + 1
     best: Optional[int] = None
     best_len = 0
-    for stems in (_MONTH_STEMS_EN, _MONTH_STEMS_RU):
+    for stems in (_MONTH_STEMS_EN, _MONTH_STEMS_RU, *_MONTH_STEMS_OTHER):
         for i, stem in enumerate(stems):
             if word.startswith(stem) and len(word) - len(stem) <= 3 and len(stem) > best_len:
                 best, best_len = i + 1, len(stem)

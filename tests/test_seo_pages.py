@@ -39,6 +39,12 @@ import site_stats
 HOST = "https://training-log.example.com"
 STORE = "https://apps.apple.com/app/apple-store/id6815211995?pt=129483617&mt=8"
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def _cyr(text):
+    """Кириллица на странице, кроме автонима «Русский» в переключателе языка
+    (автонимы не переводятся — как в кнопке языка у бота)."""
+    return _CYRILLIC.search(text.replace("Русский", ""))
 UA_IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
 UA_ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
 UA_DESKTOP = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"
@@ -84,7 +90,7 @@ def _ld_types(html):
 # ---------- страницы, языки, sitemap ----------
 
 
-async def test_every_page_is_200_in_both_languages_and_english_has_no_cyrillic():
+async def test_every_page_is_200_in_every_language_and_only_russian_has_cyrillic():
     responses = await _get_many(_all_urls())
     for page in seo_pages.pages():
         for lang in seo_pages.LANGS:
@@ -92,14 +98,14 @@ async def test_every_page_is_200_in_both_languages_and_english_has_no_cyrillic()
             resp = responses[url]
             assert resp.status_code == 200, url
             assert resp.headers["content-type"].startswith("text/html")
-            assert resp.headers["content-language"] == lang
-            assert f"<html lang={lang}>" in resp.text
+            assert resp.headers["content-language"] == seo_pages.hreflang(lang)
+            assert f"<html lang={seo_pages.hreflang(lang)}>" in resp.text
             # Ключ каталога вместо текста — значит, строки нет ни в одном языке.
             assert not re.search(r"\bseo\.[a-z]", resp.text.replace("og:", "")), url
-            if lang == "en":
-                assert not _CYRILLIC.search(resp.text), (url, _CYRILLIC.findall(resp.text)[:10])
+            if lang != "ru":
+                assert not _cyr(resp.text), (url, _CYRILLIC.findall(resp.text.replace("Русский", ""))[:10])
             else:
-                assert _CYRILLIC.search(resp.text), url
+                assert _cyr(resp.text), url
 
 
 async def test_hreflang_canonical_og_and_icons_on_every_page():
@@ -109,14 +115,18 @@ async def test_hreflang_canonical_og_and_icons_on_every_page():
             html = responses[seo_pages.url_for(page, lang)].text
             assert f'<link rel=canonical href="{HOST}{seo_pages.url_for(page, lang)}">' in html
             for code in seo_pages.LANGS:
-                assert f'<link rel=alternate hreflang={code} href="{HOST}{seo_pages.url_for(page, code)}">' in html
+                assert (f'<link rel=alternate hreflang={seo_pages.hreflang(code)} '
+                        f'href="{HOST}{seo_pages.url_for(page, code)}">') in html
             assert f'hreflang=x-default href="{HOST}{seo_pages.url_for(page, "en")}"' in html
+            # Ровно восемь языков и x-default — без лишних и без повторов.
+            assert len(re.findall(r"<link rel=alternate hreflang=", html)) == len(seo_pages.LANGS) + 1
             assert '<meta name=description content="' in html
-            assert f'<meta property="og:image" content="{HOST}/og/{lang}/{page.key}.png">' in html
+            assert f'<meta property="og:image" content="{HOST}/og/{seo_pages.lang_segment(lang)}/{page.key}.png">' in html
+            assert f'<meta property="og:locale" content="{seo_pages.OG_LOCALES[lang]}">' in html
             assert '<link rel=icon href="/favicon.ico"' in html and "apple-touch-icon" in html and "site.webmanifest" in html
 
 
-async def test_sitemap_lists_every_page_in_both_languages_and_no_embeds():
+async def test_sitemap_lists_every_page_in_every_language_and_no_embeds():
     resp = await _get("/sitemap.xml")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/xml")
@@ -127,7 +137,7 @@ async def test_sitemap_lists_every_page_in_both_languages_and_no_embeds():
     assert not [loc for loc in locs if "/embed/" in loc]
     for url in root.findall("s:url", ns):
         langs = {link.get("hreflang") for link in url.findall("x:link", ns)}
-        assert langs == {"ru", "en", "x-default"}
+        assert langs == {"ru", "en", "es", "pt-BR", "pt-PT", "de", "fr", "tr", "x-default"}
 
 
 async def test_robots_allows_search_and_ai_crawlers_and_points_to_sitemap():
@@ -171,15 +181,17 @@ async def test_root_redirects_by_browser_language():
 
 
 async def test_unknown_page_is_a_real_404_with_the_coach():
-    responses = await _get_many(["/ru/nope", "/en/tools/nope", "/en"])
-    for path in ("/ru/nope", "/en/tools/nope"):
+    responses = await _get_many(["/ru/nope", "/en/tools/nope", "/en", "/pt-pt/nope", "/de/tools/nope"])
+    for path in ("/ru/nope", "/en/tools/nope", "/pt-pt/nope", "/de/tools/nope"):
         resp = responses[path]
         assert resp.status_code == 404
         assert "<meta name=robots content=noindex>" in resp.text
         assert "rel=canonical" not in resp.text
         assert "coach_idle.png" in resp.text
-    assert _CYRILLIC.search(responses["/ru/nope"].text)
-    assert not _CYRILLIC.search(responses["/en/tools/nope"].text)
+    assert _cyr(responses["/ru/nope"].text)
+    assert not _cyr(responses["/en/tools/nope"].text)
+    assert not _cyr(responses["/de/tools/nope"].text)
+    assert '<html lang=pt-PT>' in responses["/pt-pt/nope"].text
     assert responses["/en"].status_code == 200
 
 
@@ -362,7 +374,7 @@ async def test_only_embeds_may_be_framed():
         assert "<meta name=robots content=noindex>" in resp.text
         assert "/go/bot" not in resp.text
     assert f'href="{HOST}/en/tools/1rm" target=_blank' in responses["/embed/en/1rm"].text
-    assert not _CYRILLIC.search(responses["/embed/en/1rm"].text)
+    assert not _cyr(responses["/embed/en/1rm"].text)
     # На странице калькулятора — готовый код iframe.
     assert f"&lt;iframe src=&quot;{HOST}/embed/en/1rm&quot;" in responses["/en/tools/1rm"].text
 
@@ -384,7 +396,7 @@ async def test_json_ld_is_valid_and_matches_the_page():
             if page.kind != "home":
                 crumbs = next(b for b in blocks if b["@type"] == "BreadcrumbList")
                 items = crumbs["itemListElement"]
-                assert items[0]["item"] == f"{HOST}/{lang}"
+                assert items[0]["item"] == f"{HOST}/{seo_pages.lang_segment(lang)}"
                 assert items[-1]["item"] == f"{HOST}{seo_pages.url_for(page, lang)}"
                 assert [i["position"] for i in items] == list(range(1, len(items) + 1))
             if page.kind == "program":
@@ -562,19 +574,23 @@ async def test_og_image_is_a_1200x630_png_with_raw_text():
     from PIL import Image
 
     with _capture_drawn_text() as drawn:
-        responses = await _get_many(["/og/en/vs-hevy.png", "/og/ru/tools-1rm.png", "/og/en/nope.png", "/og/de/home.png"])
+        responses = await _get_many(["/og/en/vs-hevy.png", "/og/ru/tools-1rm.png", "/og/en/nope.png", "/og/it/home.png",
+                                     "/og/pt-pt/home.png", "/og/pt-PT/home.png"])
     resp = responses["/og/en/vs-hevy.png"]
     assert resp.status_code == 200 and resp.headers["content-type"] == "image/png"
     with Image.open(io.BytesIO(resp.content)) as im:
         assert im.size == (1200, 630)
     assert responses["/og/en/nope.png"].status_code == 404
-    assert responses["/og/de/home.png"].status_code == 404
+    # Язык — сегментом пути, как у страниц: /og/pt-pt/, не /og/pt-PT/; чужого языка нет.
+    assert responses["/og/it/home.png"].status_code == 404
+    assert responses["/og/pt-pt/home.png"].status_code == 200
+    assert responses["/og/pt-PT/home.png"].status_code == 404
     # Текст в пикселях — сырой: ни HTML-сущностей, ни чужого языка.
     entity = re.compile(r"&#\d+;|&#x[0-9a-fA-F]+;|&amp;|&lt;|&gt;|&quot;")
     assert drawn and not [s for s in drawn if entity.search(s)]
     english = [s for s in drawn if "Hevy" in s]
-    assert english and not [s for s in english if _CYRILLIC.search(s)]
-    assert any(_CYRILLIC.search(s) for s in drawn)
+    assert english and not [s for s in english if _cyr(s)]
+    assert any(_cyr(s) for s in drawn)
 
 
 def test_og_image_text_with_apostrophe_is_drawn_raw(monkeypatch):

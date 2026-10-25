@@ -444,7 +444,7 @@ def _render_compare(lang: str, page: Page, request) -> str:
     base = sp.base_url(request)
     article = {
         "@context": "https://schema.org", "@type": "Article", "headline": title[:110], "description": description,
-        "inLanguage": lang, "mainEntityOfPage": base + sp.url_for(page, lang),
+        "inLanguage": sp.hreflang(lang), "mainEntityOfPage": base + sp.url_for(page, lang),
         "author": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "publisher": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},
         "about": [{"@type": "ExercisePlan", "name": source_name(s, lang)} for s, _w in COMPARE],

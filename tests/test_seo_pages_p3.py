@@ -40,6 +40,12 @@ UA_ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
 
+def _cyr(text):
+    """Кириллица на странице, кроме автонима «Русский» в переключателе языка
+    (автонимы не переводятся — как в кнопке языка у бота)."""
+    return _CYRILLIC.search(text.replace("Русский", ""))
+
+
 @pytest.fixture(autouse=True)
 def public_url(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "MCP_PUBLIC_URL", HOST)
@@ -620,7 +626,7 @@ async def test_english_pages_of_phase_three_have_no_cyrillic():
     paths += [f"/en/tools/{t}" for t in ("tonnage", "rest-timer", "goal", "strength-percentile")]
     responses = await _get_many(paths)
     for path, resp in responses.items():
-        assert not _CYRILLIC.search(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
+        assert not _cyr(resp.text), (path, _CYRILLIC.findall(resp.text)[:5])
 
 
 def test_og_wrap_keeps_number_and_unit_together():

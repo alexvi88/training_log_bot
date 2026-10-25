@@ -9,9 +9,12 @@ Hevy» или «калькулятор 1ПМ», — поиск (и поиск в
 редиректом на `t.me/<бот>?start=src_seo_<блок>` (acquisition.py) или в App
 Store — так `/growth` видит и клики, и тех, кто дошёл до первой тренировки.
 
-Язык — в пути: `/ru/...` и `/en/...`. У каждой страницы ровно один адрес на
-язык, его и называет `canonical`, а пары связаны `hreflang` (x-default —
-английская). Голый `/` — выбор языка тем же `legal_pages.page_lang` и
+Язык — в пути, сегментом из строчных букв: `/ru/...`, `/en/...`, `/es/`,
+`/pt/` (бразильский), `/pt-pt/`, `/de/`, `/fr/`, `/tr/` — `lang_segment` и
+`lang_from_segment`, других способов собрать адрес нет. У каждой страницы
+ровно один адрес на язык, его и называет `canonical`, а все языки связаны
+`hreflang` (`pt-BR`/`pt-PT` у португальского, x-default — английская).
+Ключей `seo.*` нет в каталоге языка — `i18n` берёт английский. Голый `/` — выбор языка тем же `legal_pages.page_lang` и
 редирект.
 
 Кнопка «скачать» зависит от устройства (по User-Agent, на сервере, поэтому
@@ -63,6 +66,7 @@ import config
 import exercise_descriptions
 import exercise_media
 import i18n
+import keyboards
 import legal_pages
 import qr_code
 import seed_data
@@ -71,8 +75,51 @@ import seo_static
 import seo_tools
 import site_stats
 
-LANGS = ("ru", "en")
+LANGS = ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr")
 X_DEFAULT_LANG = "en"
+# Язык → код для hreflang и `<html lang>`: у португальского два варианта, и
+# поиску надо сказать, какой из них бразильский; остальные — как есть.
+_HREFLANG = {"pt": "pt-BR", "pt-PT": "pt-PT"}
+OG_LOCALES = {"ru": "ru_RU", "en": "en_US", "es": "es_ES", "pt": "pt_BR", "pt-PT": "pt_PT",
+              "de": "de_DE", "fr": "fr_FR", "tr": "tr_TR"}
+# Переключатель языка подписан автонимами — теми же, что кнопки языка у бота
+# (keyboards.LANG_NAMES): их не переводят, человек ищет свой язык написанным
+# по-своему.
+AUTONYMS = keyboards.LANG_NAMES
+
+
+def lang_segment(lang: str) -> str:
+    """Язык → сегмент пути: `/ru/`, `/pt-pt/` — в адресе только строчные."""
+    return lang.lower()
+
+
+_LANG_BY_SEGMENT = {lang_segment(code): code for code in LANGS}
+
+
+def lang_from_segment(segment: str) -> Optional[str]:
+    """Сегмент пути → язык сайта или None (`pt-pt` → `pt-PT`)."""
+    return _LANG_BY_SEGMENT.get(segment)
+
+
+def lang_of_path(path: str) -> Optional[str]:
+    """Язык по первому сегменту пути: `/pt-pt/tools` → `pt-PT`, чужой путь — None."""
+    return lang_from_segment(path.lstrip("/").split("/", 1)[0])
+
+
+def hreflang(lang: str) -> str:
+    """Код языка для hreflang, `<html lang>` и Content-Language."""
+    return _HREFLANG.get(lang, lang)
+
+
+def lang_from_code(code: str) -> Optional[str]:
+    """Язык по сегменту пути или коду `<html lang>` без учёта регистра: `pt-BR`,
+    `pt-pt`, `ru`. Для адресов, которые собирает скрипт страницы (карточка
+    результата) из `document.documentElement.lang`, и `?lang=` манифеста."""
+    code = (code or "").lower()
+    for lang in LANGS:
+        if code in (lang_segment(lang), hreflang(lang).lower()):
+            return lang
+    return None
 BOT_TAG_PREFIX = "src_seo_"
 
 # Упражнения с отдельной страницей техники: адрес → слаг картинок
@@ -460,7 +507,20 @@ def pages() -> list[Page]:
 
 
 def url_for(page: Page, lang: str) -> str:
-    return f"/{lang}{page.path}"
+    return f"/{lang_segment(lang)}{page.path}"
+
+
+def og_url(page: Page, lang: str) -> str:
+    """Картинка превью страницы (og:image): `/og/<сегмент языка>/<ключ>.png`."""
+    return f"/og/{lang_segment(lang)}/{page.key}.png"
+
+
+def embed_url(tool: str, lang: str) -> str:
+    return f"/embed/{lang_segment(lang)}/{tool}"
+
+
+def template_file_url(name: str, lang: str) -> str:
+    return f"/{lang_segment(lang)}/templates/{name}"
 
 
 # ---------- ссылки наружу ----------
@@ -662,6 +722,26 @@ def _nav_links(lang: str, current: Page) -> str:
     return "".join(links)
 
 
+def _lang_links(lang: str, page: Page) -> str:
+    """Та же страница на каждом языке сайта — пункты переключателя языка.
+    Подписи — автонимы, у ссылки hreflang и lang своего языка; текущий язык
+    отмечен aria-current."""
+    items = []
+    for code in LANGS:
+        here = " aria-current=true" if code == lang else ""
+        items.append(f'<li><a href="{url_for(page, code)}" hreflang={hreflang(code)} lang={hreflang(code)}{here}>'
+                     f"{_e(AUTONYMS[code])}</a></li>")
+    return "<ul>" + "".join(items) + "</ul>"
+
+
+def _lang_switcher(lang: str, page: Page) -> str:
+    """Переключатель в шапке: `<details>` без скрипта, на кнопке — код языка."""
+    label = _e(i18n.t_in(lang, "screen.language.button"))
+    return (f'<details class=langs><summary class=lang><span class=vh>{label}: {_e(AUTONYMS[lang])}</span>'
+            f'<span aria-hidden=true>{_e(hreflang(lang).upper())}</span></summary>'
+            f'<nav class=langs-panel aria-label="{label}">{_lang_links(lang, page)}</nav></details>')
+
+
 def _parents(page: Page) -> list[Page]:
     k = page.kind
     if k in ("tool", "strength", "template"):
@@ -747,7 +827,6 @@ def human_date(iso: str, lang: str) -> str:
 
 def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
     t = _t(lang)
-    other = "en" if lang == "ru" else "ru"
 
     def links(items: list[tuple[Page, str]]) -> str:
         return "<ul>" + "".join(f'<li><a href="{url_for(p, lang)}">{_e(label)}</a></li>' for p, label in items) + "</ul>"
@@ -773,8 +852,8 @@ def _footer(lang: str, page: Page, request: Optional[Request]) -> str:
         f"<div><h2 class=foot-h>{_e(t('seo.footer.compare'))}</h2>{links(compare)}</div>"
         f"<div><h2 class=foot-h>{_e(t('seo.footer.moving'))}</h2>{links(moving)}</div>"
         "</div><div class=foot-bottom>"
-        f'<span>{_e(t("seo.brand"))} · <a href="{url_for(page, other)}" hreflang={other} lang={other}>{_e(t("seo.footer.other_lang"))}</a>'
-        f' · <time datetime="{page_updated(page)}">{_e(t("seo.updated", date=human_date(page_updated(page), lang)))}</time></span>'
+        f'<nav class=foot-langs aria-label="{_e(t("screen.language.button"))}">{_lang_links(lang, page)}</nav>'
+        f'<span>{_e(t("seo.brand"))} · <time datetime="{page_updated(page)}">{_e(t("seo.updated", date=human_date(page_updated(page), lang)))}</time></span>'
         f'<span><a href="/privacy?lang={lang}">{_e(t("seo.footer.privacy"))}</a> · '
         f'<a href="/terms?lang={lang}">{_e(t("seo.footer.terms"))}</a> · '
         f'<a href="/support?lang={lang}">{_e(t("seo.footer.support"))}</a></span>'
@@ -792,26 +871,25 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
     t = _t(lang)
     base = base_url(request)
     canonical = base + url_for(page, lang)
-    other = "en" if lang == "ru" else "ru"
     device = device_of(request)
     head = [
-        f"<!doctype html><html lang={lang}><head><meta charset=utf-8>",
+        f"<!doctype html><html lang={hreflang(lang)}><head><meta charset=utf-8>",
         '<meta name=viewport content="width=device-width, initial-scale=1, viewport-fit=cover">',
         f"<title>{_e(title)}</title>",
         f'<meta name=description content="{_e(description)}">',
         f'<link rel=canonical href="{_e(canonical)}">',
     ]
     for code in LANGS:
-        head.append(f'<link rel=alternate hreflang={code} href="{_e(base + url_for(page, code))}">')
+        head.append(f'<link rel=alternate hreflang={hreflang(code)} href="{_e(base + url_for(page, code))}">')
     head.append(f'<link rel=alternate hreflang=x-default href="{_e(base + url_for(page, X_DEFAULT_LANG))}">')
-    image = f"{base}/og/{lang}/{page.key}.png"
+    image = f"{base}{og_url(page, lang)}"
     head += [
         '<meta property="og:type" content="website">',
         f'<meta property="og:site_name" content="{_e(t("seo.brand"))}">',
         f'<meta property="og:title" content="{_e(title)}">',
         f'<meta property="og:description" content="{_e(description)}">',
         f'<meta property="og:url" content="{_e(canonical)}">',
-        f'<meta property="og:locale" content="{"ru_RU" if lang == "ru" else "en_US"}">',
+        f'<meta property="og:locale" content="{OG_LOCALES[lang]}">',
         f'<meta property="og:image" content="{_e(image)}">',
         '<meta property="og:image:width" content="1200">',
         '<meta property="og:image:height" content="630">',
@@ -820,7 +898,7 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         '<link rel=icon href="/favicon.ico" sizes="48x48">',
         f'<link rel=icon type="image/png" sizes="32x32" href="{seo_static.asset_url("icons/favicon-32.png")}">',
         '<link rel=apple-touch-icon href="/apple-touch-icon.png">',
-        f'<link rel=manifest href="/site.webmanifest?lang={lang}">',
+        f'<link rel=manifest href="/site.webmanifest?lang={lang_segment(lang)}">',
         f'<link rel=preload href="{seo_static.asset_url("fonts/pixel.woff2")}" as=font type="font/woff2" crossorigin>',
     ]
     app_id = app_store_id()
@@ -846,7 +924,7 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         f'<a class=brand href="{url_for(Page("home"), lang)}"><img src="{seo_static.asset_url("icons/favicon-32.png")}" alt="" width=30 height=30>'
         f"<span>{_e(t('bot.name'))}</span></a>"
         f"<nav class=head-nav aria-label=\"{_e(t('seo.nav.label'))}\">{_nav_links(lang, page)}</nav>"
-        f'<div class=head-end><a class=lang href="{url_for(page, other)}" hreflang={other} lang={other}>{other.upper()}</a>'
+        f"<div class=head-end>{_lang_switcher(lang, page)}"
         f"{_head_cta(lang, page.block, device)}"
         # На телефоне разделы — за кнопкой меню, а не второй строкой шапки:
         # панель ложится поверх страницы (без сдвига вёрстки), тап мимо неё
@@ -867,13 +945,18 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
             f"{_footer(lang, page, request)}<script>{_PAGE_JS}</script></body></html>")
 
 
-# Мелочи всей страницы: меню разделов на телефоне закрывается по Esc и по
-# тапу на ссылку; запятая в числовых полях — точка (на русской клавиатуре
-# запятая).
+# Мелочи всей страницы: меню разделов на телефоне и список языков
+# закрываются по Esc, меню — по тапу на ссылку, языки — по тапу мимо списка
+# (без скрипта оба работают как обычный <details>); запятая в числовых полях —
+# точка (на русской клавиатуре запятая).
 _PAGE_JS = (
-    "(function(){var m=document.querySelector('details.menu');if(m){"
-    "document.addEventListener('keydown',function(e){if(e.key==='Escape'&&m.open){m.open=false;m.querySelector('summary').focus();}});"
-    "m.querySelectorAll('.menu-panel a').forEach(function(a){a.addEventListener('click',function(){m.open=false;});});}"
+    "(function(){var ds=document.querySelectorAll('details.menu,details.langs');"
+    "document.addEventListener('keydown',function(e){if(e.key!=='Escape')return;"
+    "ds.forEach(function(d){if(d.open){d.open=false;d.querySelector('summary').focus();}});});"
+    "document.addEventListener('click',function(e){ds.forEach(function(d){"
+    "if(d.open&&d.classList.contains('langs')&&!d.contains(e.target))d.open=false;});});"
+    "document.querySelectorAll('details.menu .menu-panel a').forEach(function(a){"
+    "a.addEventListener('click',function(){a.closest('details').open=false;});});"
     "document.querySelectorAll('input[inputmode=decimal],input[inputmode=numeric]').forEach(function(el){"
     "el.addEventListener('input',function(){if(el.value.indexOf(',')>=0)el.value=el.value.replace(/,/g,'.');},true);});})();"
 )
@@ -979,7 +1062,7 @@ def _webpage_ld(lang: str, page: Page, request, title: str, description: str, ki
     base = base_url(request)
     data = {
         "@context": "https://schema.org", "@type": kind, "name": title, "description": description,
-        "url": base + url_for(page, lang), "inLanguage": lang,
+        "url": base + url_for(page, lang), "inLanguage": hreflang(lang),
         "isPartOf": {"@type": "WebSite", "name": i18n.t_in(lang, "seo.brand"), "url": base + url_for(Page("home"), lang)},
     }
     data.update(extra or {})
@@ -1030,7 +1113,8 @@ def page_h1(page: Page, lang: str) -> str:
 
 def screen_picture(lang: str, name: str, alt: str, *, eager: bool = False) -> str:
     """Снимок приложения: AVIF/WebP 720px, если есть (scripts/gen_site_screens.py),
-    иначе JPEG 540px."""
+    иначе JPEG 540px. Своих снимков у языка нет — английские."""
+    lang = seo_static.screens_lang(lang)
     w, h = next((sw, sh) for screen, sw, sh in seo_static.SCREENS[lang] if screen == name)
     jpg = seo_static.asset_url(f"screens/{lang}-{name}.jpg")
     attrs = "fetchpriority=high" if eager else "loading=lazy"
@@ -1172,7 +1256,7 @@ def _story(lang: str) -> str:
     движения» — первый экран и шаги текстом; на телефоне у каждого шага свой
     снимок под текстом."""
     t = _t(lang)
-    screens = seo_static.SCREENS[lang]
+    screens = seo_static.SCREENS[seo_static.screens_lang(lang)]
     steps, shots = [], []
     for i, (name, _w, _h) in enumerate(screens):
         alt = t(f"seo.home.shot.{name}.alt")
@@ -1238,7 +1322,8 @@ def _gym(lang: str) -> str:
     t = _t(lang)
     w, h = seo_static.SCENE_SIZE
     alt = _e(t("seo.home.gym.alt"))
-    poster = seo_static.asset_url(f"gym/scene-{lang}.png")
+    scene = seo_static.screens_lang(lang)
+    poster = seo_static.asset_url(f"gym/scene-{scene}.png")
     script = (
         "(function(){var m=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)');"
         "var v=document.querySelectorAll('.scene-video');function apply(){v.forEach(function(e){"
@@ -1254,8 +1339,8 @@ def _gym(lang: str) -> str:
         f"<p class=muted>{_e(t('seo.home.gym.note'))}</p></div>"
         f'<figure class=scene><video class=scene-video autoplay muted loop playsinline preload=metadata '
         f'disablepictureinpicture poster="{poster}" width={w} height={h} role=img aria-label="{alt}">'
-        f'<source src="{seo_static.asset_url(f"gym/scene-{lang}.webm")}" type=video/webm>'
-        f'<source src="{seo_static.asset_url(f"gym/scene-{lang}.mp4")}" type=video/mp4></video>'
+        f'<source src="{seo_static.asset_url(f"gym/scene-{scene}.webm")}" type=video/webm>'
+        f'<source src="{seo_static.asset_url(f"gym/scene-{scene}.mp4")}" type=video/mp4></video>'
         f'<img class=scene-still src="{poster}" alt="{alt}" width={w} height={h} loading=lazy decoding=async>'
         f"</figure><script>{script}</script>"
         "</div></section>"
@@ -1302,17 +1387,17 @@ def _render_home(lang: str, page: Page, request) -> str:
         "description": t("seo.home.description"),
         "applicationCategory": "HealthApplication",
         "operatingSystem": "iOS, Telegram",
-        "inLanguage": ["ru", "en"],
+        "inLanguage": [hreflang(code) for code in LANGS],
         "url": base + url_for(page, lang),
         "image": base + seo_static.asset_url("icons/icon-512.png"),
-        "screenshot": [base + seo_static.asset_url(f"screens/{lang}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[lang]],
+        "screenshot": [base + src for src in page_images(page, lang)],
         "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
         "sameAs": same_as(),
         "author": {"@type": "Person", "name": DEVELOPER},
         "publisher": {"@id": base + ORG_ID},
     }
     site = {"@context": "https://schema.org", "@type": "WebSite", "name": t("seo.brand"),
-            "url": base + url_for(page, lang), "inLanguage": lang}
+            "url": base + url_for(page, lang), "inLanguage": hreflang(lang)}
     return _layout(lang, page, request, title=t("seo.home.title"), description=t("seo.home.description"),
                    body=body, ld=[app, site, organization_ld(lang, request), _faq_ld(faq)])
 
@@ -1706,7 +1791,7 @@ def _calc_script(lang: str, script: str) -> str:
 
 def _embed_snippet(lang: str, tool: str, request) -> str:
     t = _t(lang)
-    src = f"{base_url(request)}/embed/{lang}/{tool}"
+    src = f"{base_url(request)}{embed_url(tool, lang)}"
     code = (f'<iframe src="{src}" title="{t(f"seo.tool.{tool}.h1")}" width="100%" height="640" '
             'style="border:0;border-radius:16px;max-width:560px" loading="lazy"></iframe>')
     return (
@@ -2000,7 +2085,7 @@ def _render_program(lang: str, page: Page, request) -> str:
     title = t(f"seo.program.{key}.title")
     plan = {
         "@context": "https://schema.org", "@type": "ExercisePlan", "name": name, "description": description,
-        "url": base_url(request) + url_for(page, lang), "inLanguage": lang,
+        "url": base_url(request) + url_for(page, lang), "inLanguage": hreflang(lang),
         "exerciseType": list(dict.fromkeys(names)),
         "isPartOf": {"@type": "WebSite", "name": t("seo.brand"), "url": base_url(request) + url_for(Page("home"), lang)},
     }
@@ -2189,7 +2274,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     home = base + url_for(Page("home"), lang)
     article = {
         "@context": "https://schema.org", "@type": "Article",
-        "headline": t("seo.exercise.title", name=name)[:110], "description": lead, "inLanguage": lang,
+        "headline": t("seo.exercise.title", name=name)[:110], "description": lead, "inLanguage": hreflang(lang),
         "image": [base + _media_url(exercise_media.frame_name(slug, 1)), base + _media_url(exercise_media.frame_name(slug, 2))],
         "mainEntityOfPage": base + url_for(page, lang),
         "author": {"@type": "Organization", "name": t("seo.brand"), "url": home},
@@ -2311,7 +2396,7 @@ def render_not_found(lang: str, request: Optional[Request] = None) -> str:
 def _not_found_route(lang: str):
     async def route(request: Request) -> HTMLResponse:
         return HTMLResponse(render_not_found(lang, request), status_code=404,
-                            headers={"Cache-Control": "no-store", "Content-Language": lang, **_SECURITY, **_NO_FRAME})
+                            headers={"Cache-Control": "no-store", "Content-Language": hreflang(lang), **_SECURITY, **_NO_FRAME})
 
     return route
 
@@ -2324,7 +2409,7 @@ def render_embed(tool: str, lang: str, request: Optional[Request] = None) -> str
     form, result, script = tool_parts(tool, lang, embed=True)
     site = base_url(request) + url_for(Page("tool", tool), lang)
     return (
-        f"<!doctype html><html lang={lang}><head><meta charset=utf-8>"
+        f"<!doctype html><html lang={hreflang(lang)}><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width, initial-scale=1">'
         f"<title>{_e(t(f'seo.tool.{tool}.h1'))}</title><meta name=robots content=noindex>"
         f'<link rel=canonical href="{_e(site)}"><style>{_css()}</style></head>'
@@ -2340,7 +2425,8 @@ def render_embed(tool: str, lang: str, request: Optional[Request] = None) -> str
 def page_images(page: Page, lang: str) -> list[str]:
     """Картинки страницы для image-sitemap: кадры упражнений и снимки приложения."""
     if page.kind == "home":
-        return [seo_static.asset_url(f"screens/{lang}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[lang]]
+        shots = seo_static.screens_lang(lang)
+        return [seo_static.asset_url(f"screens/{shots}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[shots]]
     if page.kind == "exercise":
         slug = _EXERCISE_BY_URL[page.arg]
         return [_media_url(exercise_media.frame_name(slug, 1)), _media_url(exercise_media.frame_name(slug, 2))]
@@ -2364,7 +2450,7 @@ def sitemap_xml(request: Optional[Request] = None) -> str:
            'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">']
     for page in pages():
         alternates = "".join(
-            f'<xhtml:link rel="alternate" hreflang="{code}" href="{escape(base + url_for(page, code))}"/>'
+            f'<xhtml:link rel="alternate" hreflang="{hreflang(code)}" href="{escape(base + url_for(page, code))}"/>'
             for code in LANGS
         ) + f'<xhtml:link rel="alternate" hreflang="x-default" href="{escape(base + url_for(page, X_DEFAULT_LANG))}"/>'
         for lang in LANGS:
@@ -2454,7 +2540,7 @@ _NO_FRAME = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancest
 
 def _html(content: str, lang: str) -> HTMLResponse:
     return HTMLResponse(content, headers={
-        "Cache-Control": "public, max-age=3600", "Content-Language": lang, "Vary": "User-Agent",
+        "Cache-Control": "public, max-age=3600", "Content-Language": hreflang(lang), "Vary": "User-Agent",
         **_SECURITY, **_NO_FRAME,
     })
 
@@ -2482,9 +2568,9 @@ def _page_route(page: Page, lang: str):
 def _embed_route(tool: str, lang: str):
     async def route(request: Request) -> HTMLResponse:
         html = render_embed(tool, lang, request)
-        await _count("embed", f"/embed/{lang}/{tool}", lang, request)
+        await _count("embed", embed_url(tool, lang), lang, request)
         return HTMLResponse(html, headers={
-            "Cache-Control": "public, max-age=3600", "Content-Language": lang, **_SECURITY,
+            "Cache-Control": "public, max-age=3600", "Content-Language": hreflang(lang), **_SECURITY,
             "Content-Security-Policy": "frame-ancestors *",
         })
 
@@ -2519,7 +2605,7 @@ async def go_diary_route(request: Request) -> Response:
     """«Запиши в дневник» под калькулятором: куда — решает устройство (как
     главная кнопка страницы), язык — по странице, с которой пришли."""
     referer_path = urlsplit(request.headers.get("referer") or "").path
-    lang = "en" if referer_path.startswith("/en") else "ru"
+    lang = lang_of_path(referer_path) or "ru"
     target = diary_target(lang, device_of(request))
     if target == "appstore":
         return await go_appstore_route(request)
@@ -2598,19 +2684,19 @@ def og_png(page: Page, lang: str) -> bytes:
 
 
 async def og_page_route(request: Request) -> Response:
-    lang = request.path_params.get("lang", "")
+    lang = lang_from_segment(request.path_params.get("lang", ""))
     page = page_by_key(request.path_params.get("key", ""))
-    if lang not in LANGS or page is None:
+    if lang is None or page is None:
         return PlainTextResponse("Not found", status_code=404)
     data = await asyncio.to_thread(og_png, page, lang)
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 async def manifest_route(request: Request) -> Response:
-    lang = request.query_params.get("lang", X_DEFAULT_LANG)
-    lang = lang if lang in LANGS else X_DEFAULT_LANG
+    lang = lang_from_code(request.query_params.get("lang", "")) or X_DEFAULT_LANG
     t = _t(lang)
-    body = seo_static.webmanifest(lang, t("seo.brand"), t("seo.brand"), t("seo.home.description"))
+    body = seo_static.webmanifest(hreflang(lang), t("seo.brand"), t("seo.brand"), t("seo.home.description"),
+                                  start_url=url_for(Page("home"), lang))
     return Response(body, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=86400"})
 
 
@@ -2634,12 +2720,12 @@ def register_routes(server: Any) -> None:
             server.custom_route(url_for(page, lang), methods=["GET"])(_page_route(page, lang))
     for tool in EMBEDS:
         for lang in LANGS:
-            server.custom_route(f"/embed/{lang}/{tool}", methods=["GET"])(_embed_route(tool, lang))
+            server.custom_route(embed_url(tool, lang), methods=["GET"])(_embed_route(tool, lang))
     for lang in LANGS:
         for tool, target in REMOVED_TOOLS.items():
-            server.custom_route(f"/{lang}/tools/{tool}", methods=["GET"])(_moved(f"/{lang}{target}"))
+            server.custom_route(f"/{lang_segment(lang)}/tools/{tool}", methods=["GET"])(_moved(f"/{lang_segment(lang)}{target}"))
         for tool, target in REMOVED_EMBEDS.items():
-            server.custom_route(f"/embed/{lang}/{tool}", methods=["GET"])(_moved(f"/embed/{lang}/{target}"))
+            server.custom_route(embed_url(tool, lang), methods=["GET"])(_moved(embed_url(target, lang)))
     server.custom_route("/", methods=["GET"])(root_route)
     server.custom_route("/go/bot", methods=["GET"])(go_bot_route)
     server.custom_route("/go/appstore", methods=["GET"])(go_appstore_route)
@@ -2652,7 +2738,7 @@ def register_routes(server: Any) -> None:
 
     for lang in LANGS:
         for name in seo_template.FILES:
-            server.custom_route(f"/{lang}/templates/{name}", methods=["GET"])(_template_file_route(lang, name))
+            server.custom_route(template_file_url(name, lang), methods=["GET"])(_template_file_route(lang, name))
     import seo_library
 
     seo_library.register_routes(server)
@@ -2676,6 +2762,6 @@ def register_routes(server: Any) -> None:
             return PlainTextResponse(key, headers={"Cache-Control": "public, max-age=86400"})
 
         server.custom_route(f"/{key}.txt", methods=["GET"])(indexnow_route)
-    # Последними: любой другой адрес под /ru/ и /en/ — своя страница 404.
+    # Последними: любой другой адрес под языком сайта (/ru/, /pt-pt/…) — своя страница 404.
     for lang in LANGS:
-        server.custom_route(f"/{lang}/{{rest:path}}", methods=["GET"])(_not_found_route(lang))
+        server.custom_route(f"/{lang_segment(lang)}/{{rest:path}}", methods=["GET"])(_not_found_route(lang))

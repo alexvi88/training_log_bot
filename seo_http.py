@@ -9,8 +9,9 @@
    страниц на другом «нашем» хосте — `www.<домен>` и адрес сервера
    (MCP_PUBLIC_URL / PUBLIC_BASE_URL, сейчас training-log-bot.fly.dev) —
    отвечают 301 на тот же путь на своём домене: поисковик склеивает дубли.
-   Только GET/HEAD и только пути из белого списка: `/`, `/ru`, `/en`,
-   `/ru/*`, `/en/*`, sitemap.xml, robots.txt, llms.txt, llms-full.txt.
+   Только GET/HEAD и только пути из белого списка: `/`, `/<язык>` и
+   `/<язык>/*` для каждого языка сайта (`seo_pages.lang_segment`: `/ru`,
+   `/pt-pt`…), sitemap.xml, robots.txt, llms.txt, llms-full.txt.
    Любой другой путь на любом хосте не перенаправляется никогда — это держит
    тест на длинном списке служебных адресов.
 2. **gzip** для HTML, CSS, JS, SVG, JSON, XML и текста сайта (starlette
@@ -39,9 +40,12 @@ _STATIC_FILES = ("/favicon.ico", "/apple-touch-icon.png", "/site.webmanifest")
 
 def is_site_path(path: str) -> bool:
     """Страница сайта или его служебный файл — то, что можно перенести на свой домен."""
-    if path in ("/", "/ru", "/en") or path in SITE_FILES:
+    import seo_pages
+
+    if path == "/" or path in SITE_FILES:
         return True
-    return path.startswith("/ru/") or path.startswith("/en/")
+    # `/ru`, `/pt-pt/tools/1rm` — первый сегмент обязан быть языком сайта.
+    return seo_pages.lang_of_path(path) is not None
 
 
 def is_site_asset(path: str) -> bool:

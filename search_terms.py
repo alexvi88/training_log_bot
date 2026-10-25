@@ -217,12 +217,46 @@ _SYNONYMS_EN: dict[str, tuple[str, ...]] = {
 }
 
 
+# Остальные языки продукта (es, pt, de, fr, tr): мышца вместо движения — тот
+# же принцип, что у _SYNONYMS_EN. Ключи — основы после fold и _stem_en
+# («abdominales» → «abdominal»), значения — то, что стоит в названиях каталога
+# этих языков (locales/<язык>.json, exercise.*.name).
+_SYNONYMS_OTHER: dict[str, tuple[str, ...]] = {
+    # es
+    "abdominal": ("plancha", "crunch", "abdominal", "elevacion de piernas", "prancha", "elevacao de pernas"),
+    "trapecio": ("encogimiento",),
+    "isquiotibial": ("rumano", "femoral"),
+    "pantorrilla": ("gemelo",),
+    "gluteo": ("gluteo", "hip thrust", "puente"),
+    "antebrazo": ("muneca",),
+    # pt
+    "abdominai": ("prancha", "abdominal", "elevacao de pernas"),
+    "abdomen": ("prancha", "abdominal", "elevacao de pernas"),
+    "trapezio": ("encolhimento",),
+    "posterior": ("romeno", "flexora"),
+    "antebraco": ("punho",),
+    # de
+    "bauch": ("plank", "crunch", "beinheben"),
+    "trapez": ("shrug",),
+    "beinbeuger": ("rumanisch", "beinbeuger"),
+    "unterarm": ("handgelenk",),
+    # fr
+    "abdo": ("gainage", "crunch", "releve de jambes"),
+    "trapeze": ("shrug",),
+    "ischio": ("roumain", "leg curl"),
+    "fessier": ("fessier", "hip thrust"),
+    # tr
+    "karin": ("plank", "mekik", "bacak kaldirma"),
+    "kalca": ("glute", "hip thrust"),
+}
+
+
 def expand(stem_value: str) -> tuple[str, ...]:
     """Во что может превратиться основа запроса. Сама основа всегда в списке —
     синонимы ДОБАВЛЯЮТ варианты, а не подменяют исходное слово. Обе таблицы
     (ru/en) проверяются разом — основы не пересекаются между алфавитами, так
     что нет риска подставить не тот язык."""
-    alts = _SYNONYMS.get(stem_value) or _SYNONYMS_EN.get(stem_value)
+    alts = _SYNONYMS.get(stem_value) or _SYNONYMS_EN.get(stem_value) or _SYNONYMS_OTHER.get(stem_value)
     if not alts:
         return (stem_value,)
     return tuple(dict.fromkeys((stem_value, *alts)))
