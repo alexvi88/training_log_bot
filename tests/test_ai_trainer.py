@@ -1067,7 +1067,10 @@ async def test_transcribe_voice_passes_the_users_language_to_the_model(monkeypat
     данных. Парсеру такая расшифровка уже не по зубам, и голосовой ввод у
     англоязычного молча не работает — ошибки нет, просто ничего не происходит.
     """
-    for lang in ("ru", "en"):
+    # Провайдер ждёт ISO-639-1: европейский португальский уходит голым «pt»,
+    # «pt-PT» он отвергает 400 «Invalid language», и голос у такого атлета не
+    # работал бы вовсе.
+    for lang, wire in (("ru", "ru"), ("en", "en"), ("de", "de"), ("pt", "pt"), ("pt-PT", "pt")):
         response = SimpleNamespace(text="two twenty five for five")
         client = SimpleNamespace(
             audio=SimpleNamespace(transcriptions=SimpleNamespace(create=AsyncMock(return_value=response)))
@@ -1077,7 +1080,7 @@ async def test_transcribe_voice_passes_the_users_language_to_the_model(monkeypat
         with i18n.use_lang(lang):
             await ai_trainer.transcribe_voice(SimpleNamespace(name="voice.ogg"))
 
-        assert client.audio.transcriptions.create.await_args.kwargs["language"] == lang
+        assert client.audio.transcriptions.create.await_args.kwargs["language"] == wire
 
 
 async def test_transcribe_voice_returns_empty_string_when_blank(monkeypatch):
