@@ -105,7 +105,7 @@ def _alt_item(source: str, alt: str, n: int, lang: str) -> str:
         if has_page(url):
             links.append((sp.url_for(Page("exercise_alt", url), lang), t("seo.swap.link.its_swaps")))
     link_html = "".join(f'<a href="{h}">{sp._e(label)} →</a>' for h, label in links)
-    return (f'<li class="swap reveal"><div class=swap-pic>{pic}</div><div class=swap-body>'
+    return (f'<li class="swap reveal" id="alt-{n}"><div class=swap-pic>{pic}</div><div class=swap-body>'
             f"<div class=alt-head><span class=alt-n>{n}</span><h2>{title}</h2></div>"
             f"<ul class=swap-diff>{bullets}</ul>"
             + (f"<p class=swap-links>{link_html}</p>" if link_html else "") + "</div></li>")
@@ -134,6 +134,50 @@ def _reasons(source: str, alts: list[str], lang: str) -> str:
     return f"<ul class=reasons>{''.join(items)}</ul>"
 
 
+# Порядок групп «по снаряду»: в поиске чаще всего спрашивают замену «на
+# тренажёре» (machine alternative) и «дома» (at home) — они первыми.
+_EQUIP_ORDER = ("machine", "dumbbell", "barbell", "bodyweight")
+
+
+def _by_equipment(alts: list[str]) -> list[tuple[str, list[tuple[int, str]]]]:
+    """(снаряд, [(номер в списке, замена)]) — только снаряды из каталога."""
+    groups: dict[str, list[tuple[int, str]]] = {}
+    for i, alt in enumerate(alts):
+        eq = seo_catalog.equipment_of(alt)
+        if eq in _EQUIP_ORDER:
+            groups.setdefault(eq, []).append((i + 1, alt))
+    return [(eq, groups[eq]) for eq in _EQUIP_ORDER if eq in groups]
+
+
+def _equipment_block(name: str, alts: list[str], lang: str) -> str:
+    """Замены по снаряду, ссылками на пункты списка ниже. Запросы вида
+    «machine chest press alternative», «… alternative machine», «чем
+    заменить тягу верхнего блока дома» — человек ищет замену под снаряд,
+    который у него есть, и находит её здесь одной строкой."""
+    t = sp._t(lang)
+    rows = "".join(
+        f"<li><b>{sp._e(t(f'seo.swap.eq.{eq}'))}</b> "
+        + ", ".join(f'<a href="#alt-{n}">{sp._e(seed_data.localized_exercise_name(a, lang))}</a>' for n, a in items)
+        + "</li>"
+        for eq, items in _by_equipment(alts)
+    )
+    if not rows:
+        return ""
+    return (f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.eq.h', name=name))}</h2>"
+            f"<ul class=reasons>{rows}</ul></section>")
+
+
+def _equipment_phrase(alts: list[str], lang: str) -> str:
+    """«machine, dumbbell & bodyweight» — для заголовка в выдаче."""
+    t = sp._t(lang)
+    words = [t(f"seo.swap.eq.word.{eq}") for eq, _items in _by_equipment(alts)]
+    if not words:
+        return ""
+    if len(words) == 1:
+        return words[0]
+    return t("seo.swap.eq.join", head=", ".join(words[:-1]), last=words[-1])
+
+
 def _render(lang: str, page: Page, request) -> str:
     import seo_library
     import seo_plans
@@ -154,12 +198,15 @@ def _render(lang: str, page: Page, request) -> str:
     for m in muscle_pages:
         if (m, eq) in seo_plans.equip_pages():
             related.append((sp.url_for(Page("muscle_equip", m, eq), lang), t(f"seo.me.{eq}.h1", muscle=seo_plans.muscle_word(m, lang))))
-    title = t("seo.swap.title", name=name, n=len(alts))
+    phrase = _equipment_phrase(alts, lang)
+    title = (t("seo.swap.title_equip", name=name, n=len(alts), equip=phrase) if phrase
+             else t("seo.swap.title", name=name, n=len(alts)))
     description = t("seo.swap.description", name=name, n=len(alts), list=", ".join(names[:3]))
     body = (
         f"<span class=eyebrow>{sp._e(sp._group_for(source, lang))}</span>"
         f"<h1>{sp._e(page_h1(page, lang))}</h1>"
         f"<p class=lead>{sp._e(t('seo.swap.lead', name=_lc(name, lang), n=len(alts)))}</p>"
+        + _equipment_block(name, alts, lang)
         + f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.why.h'))}</h2>{_reasons(source, alts, lang)}</section>"
         + f"<ol class=swaps>{''.join(_alt_item(source, a, i + 1, lang) for i, a in enumerate(alts))}</ol>"
         + f"<p class=muted>{sp._e(t('seo.swap.data_note'))}</p>"

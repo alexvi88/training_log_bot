@@ -175,9 +175,30 @@ def test_alternatives_pages_are_not_thin_and_say_what_changes():
             for lang in seo_pages.LANGS:
                 assert len(seo_swaps.differences(source, alt, lang)) >= 2, (source, alt)
         for lang in seo_pages.LANGS:
-            assert _html(page, lang).count('<li class="swap reveal">') == len(swaps)
+            html = _html(page, lang)
+            assert html.count('<li class="swap reveal" id="alt-') == len(swaps)
+            # Замены по снаряду — ссылками на пункты списка, каждая один раз
+            # (запросы «… alternative machine», «чем заменить … дома»).
+            anchors = [f'href="#alt-{i + 1}"' for i, a in enumerate(swaps)
+                       if seo_catalog.equipment_of(a) in seo_swaps._EQUIP_ORDER]
+            assert all(html.count(x) == 1 for x in anchors), (page.arg, lang)
     thin = [url for url, _s in seo_pages.EXERCISES if not seo_swaps.has_page(url)]
     assert all(len(seo_catalog.swaps(seo_swaps.identity_of(u))) < seo_catalog.MIN_SWAPS for u in thin)
+
+
+def test_alternatives_title_names_the_equipment_on_offer():
+    page = next(p for p in _pages("exercise_alt") if p.arg == "machine-chest-press")
+    alts = seo_catalog.swaps(seo_swaps.identity_of(page.arg))
+    kinds = {seo_catalog.equipment_of(a) for a in alts}
+    en = _html(page, "en")
+    title = en.split("<title>", 1)[1].split("</title>", 1)[0]
+    if "dumbbell" in kinds:
+        assert "dumbbell" in title, title
+    assert "Alternatives by equipment" in en
+    ru = _html(page, "ru")
+    assert "Замены по снаряду" in ru
+    if "dumbbell" in kinds:
+        assert "гантели" in ru.split("<title>", 1)[1].split("</title>", 1)[0]
 
 
 def test_muscle_equipment_pages_have_enough_exercises_of_that_equipment():
