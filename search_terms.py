@@ -84,6 +84,11 @@ def _fold_latin(ch: str) -> str:
         return "ss"
     if ch == "ı":
         return "i"
+    # Отдельная комбинируемая метка: турецкое «İ».lower() — это «i» плюс
+    # U+0307, и набранное в NFD «jalón» везёт ударение отдельным знаком. Без
+    # срезки «İtiş» не совпадал с «itiş», а метка рвала слово на два.
+    if unicodedata.combining(ch):
+        return ""
     # Кириллицу не трогаем: «й» без бреве стала бы «и».
     decomposed = unicodedata.normalize("NFD", ch)
     if decomposed[0].isascii() and len(decomposed) > 1:
