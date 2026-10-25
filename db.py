@@ -6181,6 +6181,17 @@ async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> Non
         await conn().commit()
 
 
+async def clear_workout_ai_comments(text: str) -> int:
+    """Снять сохранённый комментарий тренера, равный `text`, у всех тренировок
+    (разовая правка data_fixes). Возвращает, сколько снято."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE workouts SET ai_comment = NULL WHERE ai_comment = ?", (text,)
+        )
+        await conn().commit()
+        return cur.rowcount
+
+
 async def _delete_set_write_attempts(db: aiosqlite.Connection, where_sql: str, params: tuple) -> None:
     """Снести строки `set_write_attempts`, ссылающиеся на подходы, которые
     сейчас будут удалены — ОБЯЗАТЕЛЬНО до `DELETE FROM sets`, в той же

@@ -1839,6 +1839,7 @@
   "ai.screen.not_configured_short": "Der KI-Coach ist nicht eingerichtet.",
   "ai.screen.busy": "Moment, ich arbeite noch an deiner letzten Anfrage. Versuch’s in einer Minute nochmal",
   "ai.screen.comment_failed": "⚠️ Konnte keinen Kommentar holen — versuch’s nochmal.",
+  "ai.screen.empty_answer": "Hab keine Antwort zusammengekriegt — frag mich nochmal.",
   "ai.screen.answer_failed": "⚠️ Konnte keine Antwort holen — versuch’s nochmal.",
   "ai.screen.retry_prefix": "Sorry für die Verzögerung — das lag an mir. Hier meine Antwort:",
   "ai.screen.quota_left": "Fragen übrig heute: {left}",
