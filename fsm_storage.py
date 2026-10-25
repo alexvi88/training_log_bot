@@ -179,15 +179,24 @@ class JSONFileStorage(BaseStorage):
         смена единиц из приложения — fsm_unit_rescale): у них нет ни
         FSMContext, ни bot_id, а собрать ключ руками значит угадать чат.
         """
-        keys: list[StorageKey] = []
+        return [StorageKey(**json.loads(key_str)) for key_str in self._key_strs_of(user_id)]
+
+    def _key_strs_of(self, user_id: int) -> list[str]:
+        """Ключи атлета как они лежат в файле. Чужую строку, которая не
+        разбирается в StorageKey (файл правили руками, сменился формат), просто
+        пропускаем: снос аккаунта (drop_user) не должен падать на ней уже после
+        того, как база стёрта."""
+        found = []
         for key_str in self._data:
             try:
                 fields = json.loads(key_str)
-            except ValueError:
+            except (TypeError, ValueError):
+                # TypeError — цифровой ключ, который _restore_int_keys
+                # превратил в int при чтении файла.
                 continue
-            if fields.get("user_id") == user_id:
-                keys.append(StorageKey(**fields))
-        return keys
+            if isinstance(fields, dict) and fields.get("user_id") == user_id:
+                found.append(key_str)
+        return found
 
     async def drop_user(self, user_id: int) -> int:
         """Забыть про атлета всё, что помнит диалог, — сколько записей снесли.
@@ -202,10 +211,7 @@ class JSONFileStorage(BaseStorage):
         Ключ — JSON от StorageKey, у него всегда есть user_id; чат и бот в ключе
         тоже есть, но нам нужен именно человек во всех его чатах.
         """
-        doomed = [
-            key_str for key_str in self._data
-            if json.loads(key_str).get("user_id") == user_id
-        ]
+        doomed = self._key_strs_of(user_id)
         for key_str in doomed:
             del self._data[key_str]
         if doomed:
