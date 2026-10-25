@@ -206,7 +206,7 @@ async def test_plateau_ignores_reps_only_sets_carried_by_bodyweight(fresh_db, us
     pull = await db.create_exercise(user_id, "Подтягивания на кольцах", gid)
     await db.set_exercise_bodyweight(pull, True)
     await db.add_bodyweight_log(user_id, 81.5)
-    for k, day in enumerate(("2026-07-10", "2026-07-12", "2026-07-14")):
+    for day in ("2026-07-10", "2026-07-12", "2026-07-14"):
         wid = await db.create_finished_workout(
             user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
         )
