@@ -1839,6 +1839,7 @@
   "ai.screen.not_configured_short": "O treinador IA não está configurado.",
   "ai.screen.busy": "Um segundo, ainda estou no teu último pedido. Tenta outra vez daqui a um minuto",
   "ai.screen.comment_failed": "⚠️ Não consegui um comentário — tenta outra vez.",
+  "ai.screen.empty_answer": "Não consegui montar uma resposta — pergunta-me outra vez.",
   "ai.screen.answer_failed": "⚠️ Não consegui uma resposta — tenta outra vez.",
   "ai.screen.retry_prefix": "Desculpa a demora — a culpa foi minha. Aqui vai a minha resposta:",
   "ai.screen.quota_left": "Perguntas restantes hoje: {left}",

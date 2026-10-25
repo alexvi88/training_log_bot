@@ -211,3 +211,24 @@ def test_own_domain_redirect_covers_every_language(monkeypatch):
             f"https://athletediary.app/{seg}/tools"
     for path in ("/pt-PT/tools", "/it/tools", "/trx", "/v1/health", "/embed/de/1rm", "/de-x/tools"):
         assert not seo_http.is_site_path(path), path
+
+
+def test_og_eyebrow_falls_back_from_the_pixel_font_on_missing_letters(monkeypatch):
+    """Надпись над заголовком og-картинки — имя бота: у pt/fr/tr в нём буквы,
+    которых нет в пиксельном шрифте («DIÁRIO», «ATHLÈTE», «GÜNLÜĞÜ»), и Pillow
+    рисовал их пустыми клетками. Такая надпись идёт обычным шрифтом."""
+    import i18n
+    import seo_static
+
+    asked: list[tuple[int, bool]] = []
+    real_font = seo_static._font
+
+    def spy(size, *, pixel=False):
+        asked.append((size, pixel))
+        return real_font(size, pixel=pixel)
+
+    monkeypatch.setattr(seo_static, "_font", spy)
+    for lang, pixel in (("ru", True), ("en", True), ("de", True), ("pt", False), ("fr", False), ("tr", False)):
+        asked.clear()
+        seo_static.render_og("Title", i18n.t_in(lang, "bot.name"), "footer")
+        assert (22, pixel) in asked, lang

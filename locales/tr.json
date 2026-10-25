@@ -1839,6 +1839,7 @@
   "ai.screen.not_configured_short": "Yapay zekâ koçu kurulu değil.",
   "ai.screen.busy": "Bir saniye, hâlâ son isteğin üzerindeyim. Bir dakika sonra tekrar dene",
   "ai.screen.comment_failed": "⚠️ Yorum alamadım — tekrar dene.",
+  "ai.screen.empty_answer": "Bir cevap toparlayamadım — bana tekrar sor.",
   "ai.screen.answer_failed": "⚠️ Cevap alamadım — tekrar dene.",
   "ai.screen.retry_prefix": "Gecikme için kusura bakma — o benim hatamdı. İşte cevabım:",
   "ai.screen.quota_left": "Bugün kalan soru: {left}",

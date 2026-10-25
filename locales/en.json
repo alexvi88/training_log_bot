@@ -1839,6 +1839,7 @@
   "ai.screen.not_configured_short": "The AI coach isn't set up.",
   "ai.screen.busy": "One sec, still working on your last request. Try again in a minute",
   "ai.screen.comment_failed": "⚠️ Couldn't get a comment — try again.",
+  "ai.screen.empty_answer": "Couldn't put an answer together — ask me again.",
   "ai.screen.answer_failed": "⚠️ Couldn't get an answer — try again.",
   "ai.screen.retry_prefix": "Sorry for the delay — that one was on me. Here's my answer:",
   "ai.screen.quota_left": "Questions left today: {left}",

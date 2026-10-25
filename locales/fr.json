@@ -1839,6 +1839,7 @@
   "ai.screen.not_configured_short": "Le coach IA n’est pas en place.",
   "ai.screen.busy": "Une seconde, je bosse encore sur ta dernière demande. Réessaie dans une minute",
   "ai.screen.comment_failed": "⚠️ Je n’ai pas pu sortir de commentaire — réessaie.",
+  "ai.screen.empty_answer": "Je n’ai pas réussi à formuler de réponse — redemande-moi.",
   "ai.screen.answer_failed": "⚠️ Je n’ai pas pu sortir de réponse — réessaie.",
   "ai.screen.retry_prefix": "Désolé pour l’attente — c’était ma faute. Voici ma réponse :",
   "ai.screen.quota_left": "Questions restantes aujourd’hui : {left}",

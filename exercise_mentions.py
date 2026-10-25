@@ -37,6 +37,7 @@ from typing import Any, Optional, Sequence
 
 import db
 import i18n
+import search_terms
 import seed_data
 
 # Столько кнопок максимум вешаем под ответ: тренер может упомянуть пять
@@ -48,7 +49,11 @@ MAX_MENTIONS = 3
 # callback_data кнопок-стрелок, а у Telegram там жёсткий лимит в 64 байта.
 MAX_MENTIONS_TOTAL = 6
 
-_WORD_RE = re.compile(r"[а-яa-z0-9]+")
+# Любые буквы и цифры, а не только [а-яa-z]: после search_terms.fold
+# латиница без диакритик («Elevación» → «elevacion», турецкое «Şınav» →
+# «sinav»), а без этого «ó» и «ş» резали название на обрывки, и турецкие
+# отжимания не находились вовсе.
+_WORD_RE = re.compile(r"[^\W_]+")
 
 # Короткие слова сравниваем только целиком: у «жим»/«жир» общий префикс уже
 # в две буквы, и на стеммере они бы склеились.
@@ -64,11 +69,14 @@ _MIN_STEM_WORD = 4
 # «plank» — английская сторона того же: каталожные шаблоны сверяются теперь и
 # по английскому имени, а «plan» — едва ли не самое частое слово в ответе
 # тренера («here's the plan»), и на стеммере «plan»/«plank» сходятся.
-_AMBIGUOUS_SINGLE_WORDS = {"планка", "plank"}
+#
+# «plancha» (es) и «gainage» (fr) — то же на языке атлета: «Sigue el plan»,
+# «ton gain de force» иначе давали кнопку на планку.
+_AMBIGUOUS_SINGLE_WORDS = {"планка", "plank", "plancha", "gainage"}
 
 
 def _tokens(text: str) -> list[str]:
-    return _WORD_RE.findall(text.lower().replace("ё", "е"))
+    return _WORD_RE.findall(search_terms.fold(text))
 
 
 def _same_word(a: str, b: str) -> bool:

@@ -370,6 +370,19 @@ def test_note_flags_match_both_languages_and_skip_bolshe():
     assert not f("сделал больше повторов") and not f("good session")
 
 
+def test_note_flags_of_other_languages_skip_plain_english_gym_notes():
+    """Корни es/pt/de/fr/tr сверяются с заметкой на любом языке: омонимы
+    английских заметок («close grip», «plates», «blessed») — не боль и не
+    болезнь, иначе тренер объяснял бы застой болезнью, которой не было."""
+    f = coach_facts.note_is_flagged
+    for note in ("close grip", "grip failed", "used 20kg plates", "alternates arms", "feeling blessed",
+                 "new templates"):
+        assert not f(note), note
+    for note in ("me duele la rodilla", "dor no ombro", "Schulter verletzt", "je me suis blessé", "blessure au genou",
+                 "dizimde ağrı var", "grip oldum", "gribim", "ateşim var", "ates var", "kötü uyudum"):
+        assert f(note), note
+
+
 async def test_short_diary_is_not_averaged_over_the_full_window(fresh_db, user_id):
     chest = await _group_id(fresh_db, user_id, "Грудь")
     ex = await fresh_db.create_exercise(user_id, "Жим штанги лёжа", chest)

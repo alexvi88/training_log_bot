@@ -607,6 +607,11 @@ async def _bill_if_aborted(user_id: Optional[int], model: str, **estimate: Any):
         raise
 
 
+class EmptyComment(Exception):
+    """Модель вернула пустой комментарий к тренировке. Сохранять нечего —
+    вызывающая сторона показывает свою ошибку или молчит, как при любом сбое."""
+
+
 class LimitBlocked(Exception):
     """Настоящий (не preview) отказ ai_limits.check внутри paid_call.
 
@@ -879,7 +884,8 @@ async def transcribe_voice(
         response = await client.audio.transcriptions.create(
             model=config.OPENAI_TRANSCRIBE_MODEL,
             file=file_obj,
-            language=i18n.get_lang(),
+            # ISO-639-1: «pt-PT» провайдер не принимает, португальский один.
+            language=i18n.get_lang().split("-")[0],
         )
     except Exception:
         await activity_log.record_voice_transcript(user_id, None)
@@ -1920,7 +1926,12 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
             model=backend.model,
         )
     text = (response.choices[0].message.content or "").strip()
-    return text or "Не получилось сформулировать комментарий, попробуй ещё раз позже."
+    if not text:
+        # Не заглушкой в ответ: вызывающие кладут результат в workouts.ai_comment,
+        # и сохранённая заглушка навсегда вставала вместо комментария (повторно
+        # его уже никто не генерировал) — да ещё по-русски у атлета на любом языке.
+        raise EmptyComment(f"empty workout comment for workout {workout_id}")
+    return text
 
 
 async def _is_first_workout(user_id: int, workout_id: int) -> bool:
@@ -1954,7 +1965,11 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
         return None
     if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
         return None
-    comment = await comment_on_workout(user["telegram_id"], workout_id)
+    try:
+        comment = await comment_on_workout(user["telegram_id"], workout_id)
+    except EmptyComment:
+        logger.warning("AI trainer returned an empty comment for workout %s", workout_id)
+        return None
     await db.set_workout_ai_comment(workout_id, comment)
     return comment
 
@@ -7200,7 +7215,7 @@ async def _ask_plain(
         # сохраняем ровно то, что уехало, — следующий ход допишет к нему.
         await on_wire(wire)
 
-    return text or "Не получилось сформулировать ответ, попробуй переспросить."
+    return text or i18n.t("ai.screen.empty_answer")
 
 
 # Меньше стольких букв и цифр после вычета промежуточных реплик — объяснения

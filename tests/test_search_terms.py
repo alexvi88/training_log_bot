@@ -140,3 +140,15 @@ def test_both_alphabets_are_recognised_in_the_same_catalog():
     mixed = CATALOG + EN_CATALOG
     assert _find(mixed, "приседания") == ["Присед со штангой"]
     assert _find(mixed, "squats") == ["Barbell Squat"]
+
+
+def test_fold_drops_stray_combining_marks():
+    """Турецкая заглавная «İ» в нижнем регистре — «i» плюс U+0307, а текст в
+    NFD везёт ударение отдельным знаком: без срезки запрос «İtiş» (заглавную
+    подставляет клавиатура) не находил «itiş», а метка рвала слово надвое."""
+    import unicodedata
+
+    assert search_terms.fold("İtiş") == search_terms.fold("itiş") == "itis"
+    assert search_terms.fold(unicodedata.normalize("NFD", "Jalón")) == "jalon"
+    assert search_terms.query_stems("İncline") == search_terms.query_stems("incline")
+    assert search_terms.fold("Жим лёжа") == "жим лежа"

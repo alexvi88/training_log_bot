@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import functools
 import io
 import os
 import re
@@ -186,6 +187,21 @@ def _font(size: int, *, pixel: bool = False):
     return ImageFont.truetype(path, size)
 
 
+@functools.lru_cache(maxsize=1)
+def _pixel_codepoints() -> frozenset[int]:
+    from fontTools.ttLib import TTFont
+
+    return frozenset(TTFont(os.path.join(SITE_DIR, "fonts", "pixel.woff")).getBestCmap())
+
+
+def pixel_covers(text: str) -> bool:
+    """Есть ли в пиксельном шрифте все буквы текста. В нём латиница без
+    диакритик и кириллица: «DIÁRIO», «ATHLÈTE», «GÜNLÜĞÜ» и «’» Pillow
+    нарисовал бы пустыми клетками — браузер подставит другой шрифт, картинка нет."""
+    covered = _pixel_codepoints()
+    return all(ord(ch) in covered or ch.isspace() for ch in text)
+
+
 def _wrap(draw, text: str, font, width: int) -> list[str]:
     # Только обычные пробелы: str.split() режет и по неразрывному, и «1.9 т»
     # переносилось бы с единицей на отдельной строке.
@@ -228,7 +244,7 @@ def render_og(title: str, eyebrow: str, footer: str) -> bytes:
     draw = ImageDraw.Draw(img)
     pad = 64
     text_w = w - h - pad + 120
-    draw.text((pad, 70), eyebrow, font=_font(22, pixel=True), fill=(255, 179, 92))
+    draw.text((pad, 70), eyebrow, font=_font(22, pixel=pixel_covers(eyebrow)), fill=(255, 179, 92))
     size = 66
     while True:
         font = _font(size)
