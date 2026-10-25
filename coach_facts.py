@@ -77,12 +77,15 @@ _NOTE_FLAGS_EN = (
     r"|sleep|slept|insomnia"
 )
 # Остальные языки продукта — те же три темы (боль/травма, болезнь, сон).
+# Регулярка общая на все языки, поэтому чужие корни — только с границей слова
+# и без омонимов английских заметок: «grip» (тур. грипп) — это «close grip»,
+# «ateş» без начала слова — «plates», «blessé» без хвоста — «blessed».
 _NOTE_FLAGS_OTHER = (
     r"dolor|duele|lesi[oó]n|lesionad|enferm|gripe|fiebre|resfriad|insomnio|dorm[ií]\s+mal|sue[ñn]o"  # es
     r"|\bdor\b|doendo|d[oó]i\b|les[aã]o|machuc|doente|febre|constipad|ins[oô]nia|dormi\s+mal|\bsono\b"  # pt
     r"|schmerz|\bweh\b|verletz|zerrung|krank|grippe|fieber|erk[äa]lt|schlecht\s+geschlafen|schlaflos|\bschlaf"  # de
-    r"|douleur|\bmal\s+(?:au|à|aux)\b|bless[eé]|malade|fi[èe]vre|rhume|insomnie|mal\s+dormi|sommeil"  # fr
-    r"|a[gğ]r[iı]|sakatl|incin|hasta(?:y|l)|\bgrip\b|ate[sş]|so[gğ]uk\s+alg|uykusuz|k[oö]t[uü]\s+uyu|\buyku"  # tr
+    r"|douleur|\bmal\s+(?:au|à|aux)\b|\bbless(?:[ée]\b|[ée]e|ure)|malade|fi[èe]vre|rhume|insomnie|mal\s+dormi|sommeil"  # fr
+    r"|\ba[gğ]r[iı]|sakatl|\bincin|hasta(?:y|l)|\bgrip\s+ol|\bgrib|\bate[sş]|so[gğ]uk\s+alg|uykusuz|k[oö]t[uü]\s+uyu|\buyku"  # tr
 )
 _NOTE_FLAGS = re.compile(f"{_NOTE_FLAGS_RU}|{_NOTE_FLAGS_EN}|{_NOTE_FLAGS_OTHER}", re.IGNORECASE)
 
