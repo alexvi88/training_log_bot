@@ -404,8 +404,16 @@ async def _find_plateau_exercise(telegram_id: int) -> Optional[tuple[int, str]]:
         rows = await db.list_sets_for_exercise(ex["id"])
         if len(rows) < PLATEAU_SESSIONS:
             continue
+        # Тренировка, где вес не записан ни в одном подходе (подтягивания
+        # «×14»), — с записанным весом 0, а не нагрузкой с весом тела: иначе
+        # 81.5 «засиживался» и подтягиваниям приходил пуш «вес засиделся,
+        # пора добавить» (как progress_data.load_sessions).
+        weighted = {r["workout_id"] for r in rows if r["weight"]}
         set_rows = [
-            analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+            analytics.SetRow(
+                db.load_of(r) if r["workout_id"] in weighted else r["weight"],
+                r["reps"], r["workout_id"], r["started_at"], r["rpe"],
+            )
             for r in rows
         ]
         sessions = analytics.group_sets_by_session(set_rows)

@@ -195,3 +195,32 @@ async def test_no_skip_push_while_a_workout_is_running(fresh_db, user_id, monkey
     monkeypatch.setattr(engagement, "_utc_now", lambda: now + dt.timedelta(days=7))
     decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 9))
     assert decision is not None and decision.category == push_texts.SKIP_3
+
+
+async def test_plateau_ignores_reps_only_sets_carried_by_bodyweight(fresh_db, user_id):
+    """Подтягивания «×13» три тренировки подряд при записанном весе тела:
+    нагрузка у подходов 81.5, но вес атлет не вводил — «вес засиделся, пора
+    добавить» им не приходит. Штанга на том же весе — приходит."""
+    db = fresh_db
+    gid = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    pull = await db.create_exercise(user_id, "Подтягивания на кольцах", gid)
+    await db.set_exercise_bodyweight(pull, True)
+    await db.add_bodyweight_log(user_id, 81.5)
+    for day in ("2026-07-10", "2026-07-12", "2026-07-14"):
+        wid = await db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+        )
+        block = await db.create_block(wid, "single")
+        await db.add_block_exercise(block, pull, 0)
+        await db.add_set(block, pull, 1, 0, 0.0, 13)
+    assert await engagement._find_plateau_exercise(user_id) is None
+
+    bench = await db.create_exercise(user_id, "Жим", gid)
+    for day in ("2026-07-11", "2026-07-13", "2026-07-15"):
+        wid = await db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+        )
+        block = await db.create_block(wid, "single")
+        await db.add_block_exercise(block, bench, 0)
+        await db.add_set(block, bench, 1, 0, 60.0, 13)
+    assert await engagement._find_plateau_exercise(user_id) == (bench, "Жим")
