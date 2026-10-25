@@ -5,6 +5,8 @@ Apple, а не нами. Подпись проверяется против пу
 
 `PyJWKClient` сам кэширует набор ключей в памяти процесса — Apple ротирует их
 редко, дёргать https://appleid.apple.com/auth/keys на каждый вход незачем.
+Клиент синхронный: `/auth/apple` зовёт проверку через `asyncio.to_thread`,
+иначе медленный ответ Apple стопорил весь процесс (в логе — `/health` по 3 с).
 
 Вторая половина модуля — токены Apple и их отзыв (TN3194, «Revoke tokens»):
 приложение с Sign in with Apple и удалением аккаунта обязано при удалении
@@ -22,6 +24,7 @@ Apple, а не нами. Подпись проверяется против пу
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -42,15 +45,21 @@ APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 APPLE_TOKEN_URL = "https://appleid.apple.com/auth/token"
 APPLE_REVOKE_URL = "https://appleid.apple.com/auth/revoke"
 
-# Обмен идёт прямо внутри запроса входа — человек ждёт ответа, поэтому
-# таймаут короткий: не успел Apple — вход всё равно проходит, без токена.
-# Отзыв — внутри удаления аккаунта, там можно подождать чуть дольше.
-_EXCHANGE_TIMEOUT_SECONDS = 5.0
+# Обмен идёт фоном после ответа на вход (exchange_in_background): человек его
+# не ждёт, а код живёт 5 минут — можно подождать Apple подольше. Отзыв —
+# внутри удаления аккаунта.
+_EXCHANGE_TIMEOUT_SECONDS = 15.0
 _REVOKE_TIMEOUT_SECONDS = 10.0
 
 # Apple разрешает client_secret жить до 6 месяцев; подписываем свежий на
 # каждый вызов (вызовы редкие — вход и удаление), так что хватает минут.
 _CLIENT_SECRET_TTL_SECONDS = 5 * 60
+
+# Набор ключей держим 12 часов (по умолчанию 5 минут — и почти каждый вход
+# ходил к Apple): незнакомый `kid` PyJWKClient всё равно перезапрашивает сам,
+# так что ротация ключа не ломает вход. Таймаут — вместо умолчания в 30 с.
+_JWKS_LIFESPAN_SECONDS = 12 * 60 * 60
+_JWKS_TIMEOUT_SECONDS = 5.0
 
 _jwks_client: Optional[PyJWKClient] = None
 
@@ -58,7 +67,9 @@ _jwks_client: Optional[PyJWKClient] = None
 def _client() -> PyJWKClient:
     global _jwks_client
     if _jwks_client is None:
-        _jwks_client = PyJWKClient(APPLE_JWKS_URL)
+        _jwks_client = PyJWKClient(
+            APPLE_JWKS_URL, lifespan=_JWKS_LIFESPAN_SECONDS, timeout=_JWKS_TIMEOUT_SECONDS
+        )
     return _jwks_client
 
 
@@ -212,6 +223,25 @@ async def exchange_authorization_code(apple_user_id: str, authorization_code: st
             return False
     await db.set_auth_identity_tokens("apple", apple_user_id, refresh_token, access_token)
     return True
+
+
+# Ссылки на фоновые обмены: без них сборщик мусора может снять задачу на лету.
+_background_exchanges: set[asyncio.Task] = set()
+
+
+def exchange_in_background(apple_user_id: str, authorization_code: str) -> asyncio.Task:
+    """Обмен кода фоном: вход отвечает сразу, а не ждёт Apple (в логе бота
+    `POST /auth/apple` шёл 13 с, когда appleid.apple.com не отвечал)."""
+    task = asyncio.create_task(exchange_authorization_code(apple_user_id, authorization_code))
+    _background_exchanges.add(task)
+    task.add_done_callback(_background_exchanges.discard)
+    return task
+
+
+async def wait_background_exchanges() -> None:
+    """Дождаться фоновых обменов — для тестов."""
+    while _background_exchanges:
+        await asyncio.gather(*list(_background_exchanges))
 
 
 async def _revoke(creds: _SiwaCredentials, token: str, token_type_hint: str) -> bool:
