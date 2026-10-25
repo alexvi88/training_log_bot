@@ -14239,10 +14239,16 @@ async def delete_exercise_if_unused(exercise_id: int, user_id: int) -> bool:
     exercise = await get_exercise(exercise_id)
     if exercise is None or exercise["user_id"] != user_id or exercise["is_template"]:
         return False
-    if await list_sets_for_exercise(exercise_id):
-        return False
+    # Любая ссылка без каскада держит строку внешним ключом — в том числе
+    # подход или открытый блок ИДУЩЕЙ тренировки (list_sets_for_exercise видит
+    # только законченные): без неё DELETE валился IntegrityError вместо отказа,
+    # а снятие импорта отвечало 500, успев снести часть пачки.
     cur = await conn().execute(
-        "SELECT 1 FROM routine_exercises WHERE exercise_id = ? LIMIT 1", (exercise_id,)
+        "SELECT 1 FROM sets WHERE exercise_id = ? UNION ALL "
+        "SELECT 1 FROM block_exercises WHERE exercise_id = ? UNION ALL "
+        "SELECT 1 FROM exercise_notes WHERE exercise_id = ? UNION ALL "
+        "SELECT 1 FROM routine_exercises WHERE exercise_id = ? LIMIT 1",
+        (exercise_id,) * 4,
     )
     if await cur.fetchone():
         return False

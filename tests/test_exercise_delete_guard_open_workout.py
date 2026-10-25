@@ -11,9 +11,7 @@
 импорта, но не пометив пачку отменённой и не убрав её значки.
 
 Поведение, которое здесь закреплено, — то, что обещает докстринг функции:
-«по нему уже что-то записали — отказываемся». Тесты помечены xfail(strict):
-`db.py` в этом заходе правят параллельно, починка — одной правкой проверки в
-`delete_exercise_if_unused` (см. отчёт), после неё пометку надо снять.
+«по нему уже что-то записали — отказываемся».
 """
 
 import httpx
@@ -25,10 +23,6 @@ import api_v1
 
 pytestmark = pytest.mark.asyncio
 
-BUG = (
-    "delete_exercise_if_unused не видит подходы и блоки открытой тренировки — "
-    "IntegrityError вместо отказа"
-)
 
 
 async def _open_workout_with(db, user_id, exercise_id, with_set: bool):
@@ -40,7 +34,6 @@ async def _open_workout_with(db, user_id, exercise_id, with_set: bool):
     return workout, block
 
 
-@pytest.mark.xfail(strict=True, reason=BUG)
 @pytest.mark.parametrize("with_set", [True, False], ids=["with-set", "open-block"])
 async def test_ai_new_exercise_undo_refuses_when_it_is_in_the_open_workout(fresh_db, user_id, with_set):
     db = fresh_db
@@ -53,7 +46,6 @@ async def test_ai_new_exercise_undo_refuses_when_it_is_in_the_open_workout(fresh
     assert len(await db.list_sets_for_block(block)) == (1 if with_set else 0)
 
 
-@pytest.mark.xfail(strict=True, reason=BUG)
 async def test_import_undo_keeps_exercise_used_in_the_open_workout(fresh_db, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: False)
     db = fresh_db
