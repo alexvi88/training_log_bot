@@ -2347,7 +2347,7 @@ def format_rank_gap(gap, unit: str = "kg") -> str:  # analytics.RankGap
 
 
 def format_rank_line(rank, gap=None, unit: str = "kg") -> str:  # gap: analytics.RankGap | None
-    """«⚙️ Станок» плюс, если есть куда расти, чего не хватает до следующего."""
+    """«⚙️ Машина» плюс, если есть куда расти, чего не хватает до следующего."""
     line = i18n.t("rank.line", emoji=rank.emoji, name=escape(rank.name))
     return i18n.t("rank.line_with_gap", line=line, gap=format_rank_gap(gap, unit)) if gap else line
 

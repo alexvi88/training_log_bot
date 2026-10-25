@@ -30,7 +30,7 @@ async def test_rank_is_capped_by_the_weaker_axis():
     heavy_but_rare = analytics.rank_for(60, 80_000, 1.5)
     frequent_but_light = analytics.rank_for(8, 6_000, 3.0)
 
-    assert heavy_but_rare.name == "Станок"
+    assert heavy_but_rare.name == "Машина"
     assert frequent_but_light.name == "Втянулся"  # частота высокая, но объёма нет
 
 
@@ -78,7 +78,7 @@ async def test_gap_names_the_single_worst_axis():
 async def test_gap_picks_the_axis_that_lags_most_in_share_not_in_units():
     """40 тренировок из 100 — половина пути; 5 тонн из 200 — почти ничего.
     Отстающей считается доля от порога, иначе большие числа всегда выигрывают."""
-    rank = analytics.rank_for(60, 80_000, 2.0)  # Станок, дальше 100 трен. · 200 т
+    rank = analytics.rank_for(60, 80_000, 2.0)  # Машина, дальше 100 трен. · 200 т
     gap = analytics.rank_gap(rank, 60, 5_000, 2.0)
 
     assert gap is not None and gap.axis == "tonnage"
@@ -113,7 +113,7 @@ async def test_top_rank_has_no_gap():
 async def test_rank_lines_render():
     rank = analytics.rank_for(60, 80_000, 2.0)
     line = formatting.format_rank_line(rank, analytics.RankGap("tonnage", 120_000))
-    assert "Станок" in line and "до следующего" in line and "ещё 120т" in line
+    assert "Машина" in line and "до следующего" in line and "ещё 120т" in line
     assert "до следующего" not in formatting.format_rank_line(rank)
     assert "Новое звание" in formatting.format_rank_promotion(rank)
 
