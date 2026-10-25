@@ -652,6 +652,22 @@ FRAME_REVISION: dict[str, int] = {
     "trap_bar_deadlift": 2,
     "stiff_legged_dumbbell_deadlift": 2,
     "hyperextensions_with_no_hyperextension_bench": 2,
+    "smith_machine_stiff_legged_deadlift": 2,
+    "glute_ham_raise": 2,
+    "single_leg_glute_bridge": 2,
+    "standing_barbell_calf_raise": 2,
+    "smith_machine_calf_raise": 2,
+    "barbell_seated_calf_raise": 2,
+    "single_leg_leg_extension": 2,
+    "narrow_stance_hack_squats": 2,
+    "cable_deadlifts": 2,
+    "elevated_back_lunge": 2,
+    "bodyweight_walking_lunge": 2,
+    "donkey_calf_raises": 2,
+    "natural_glute_ham_raise": 2,
+    "kettlebell_one_legged_deadlift": 2,
+    "cable_hip_adduction": 2,
+    "lying_machine_squat": 2,
 }
 
 
