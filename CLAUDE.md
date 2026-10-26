@@ -253,6 +253,12 @@ Swift поле есть и не `null`, тип совпадает. Так лов
 `NOT_EXERCISED` с причиной); новая структура — прийти в ответе хотя бы раз.
 Сломанный разбор Swift просит дописать `MANUAL_TYPES` в скрипте.
 
+Принудительное обновление: `GET /v1/app/config` (без входа) отдаёт
+`ios.min_version` из `IOS_MIN_VERSION` и `ios.store_url` из `APP_STORE_URL`;
+приложение версии ниже показывает блокирующий экран «обнови». По умолчанию
+выключено (пусто или не версия из цифр через точку → `null`); включить —
+`fly secrets set IOS_MIN_VERSION=1.0.7 -a training-log-bot`.
+
 ## Импорт истории (Hevy, Strong, CSV, заметки)
 
 Один путь у бота (`handlers/csv_import.py`) и у `/v1/import/*`

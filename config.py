@@ -1,6 +1,8 @@
 import datetime as dt
 import json
+import logging
 import os
+import re
 
 BOT_TOKEN = os.getenv("TG_TOKEN", "")
 
@@ -1202,6 +1204,29 @@ APP_STORE_URL = os.getenv("APP_STORE_URL", "").strip()
 def app_store_url() -> str | None:
     """Ссылка на App Store или None, если она не задана или не https."""
     return APP_STORE_URL if APP_STORE_URL.startswith("https://") else None
+
+
+# Минимальная версия iOS-приложения (`GET /v1/app/config`, поле
+# `ios.min_version`): приложение версии ниже показывает блокирующий экран
+# «обнови» со ссылкой на App Store. Пусто — выключено. Задаётся секретом:
+# `fly secrets set IOS_MIN_VERSION=1.0.7 -a training-log-bot`.
+IOS_MIN_VERSION = os.getenv("IOS_MIN_VERSION", "").strip()
+_IOS_VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}$")
+
+
+def ios_min_version() -> str | None:
+    """IOS_MIN_VERSION, если это версия из цифр через точку, иначе None.
+    Кривое значение не блокирует никого: лучше пропустить старую сборку,
+    чем запереть всех из-за опечатки в секрете."""
+    value = (IOS_MIN_VERSION or "").strip()
+    if not value:
+        return None
+    if not _IOS_VERSION_RE.match(value):
+        logging.getLogger(__name__).warning(
+            "IOS_MIN_VERSION=%r is not a dotted version, ignoring", value
+        )
+        return None
+    return value
 
 
 # Реферальная ссылка из приложения (`/i/ref_<id>`, referral_page.py): код

@@ -93,6 +93,8 @@ MACHINE_KEYS = {
     "achieved_at", "unlocked_at", "since", "until", "period", "window", "metric",
     "trend", "state", "verdict_code", "category", "family", "goal_key", "level_key",
     "reason", "topic", "app_store_url",
+    # /app/config: минимальная версия iOS и ссылка на App Store — машинные.
+    "min_version", "store_url",
     # Ник в Telegram — идентификатор, который человек выбрал сам, а не текст продукта.
     "username",
     # Идентификаторы пачки импорта и объединения (hex) — для undo-ручек.
@@ -488,6 +490,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     headers = {"Accept-Language": _accept_language(lang)}
     anon_walker = _Walker(anon, lang)
     await anon_walker.call("GET", "/health", expect=200)
+    await anon_walker.call("GET", "/app/config", expect=200)
     await anon_walker.call("POST", "/auth/link", json={"code": "nope"}, headers=headers, expect=400)
     # Воронка до входа (api_v1_funnel): без токена, ответ — машинный флаг,
     # а отказ по шагу вне белого списка — текст на языке тела.
