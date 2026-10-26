@@ -50,6 +50,10 @@ _BOOL_FIELDS = (
     "pushes_enabled",
     "ai_comments_enabled",
     "progression_hint_enabled",
+    # «Тренировки клиентов» — живому тренеру «клиент закончил тренировку»
+    # (coach_notify.deliver_client_workout). Отдаётся всем: у атлета без
+    # клиентов ни на что не влияет, приложение показывает строку тренеру.
+    "client_workout_pushes_enabled",
 )
 
 # `show_extra_stats` и `e1rm_formula` из этого списка ушли: тумблеров больше

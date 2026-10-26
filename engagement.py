@@ -114,6 +114,13 @@ NEWBIE_STOP_DAY = 30
 # everywhere else, and it's worth keeping. See db.has_push_today.
 ADMIN_REPORT_CATEGORIES: tuple[str, ...] = ()
 
+# Что занимает дневной слот has_push_today: всё, кроме служебных отчётов выше и
+# событий сервиса для тренеров про ЧУЖУЮ тренировку. «Клиент закончил
+# тренировку» (coach_notify.deliver_client_workout) — не пуш тренеру про него
+# самого: тренер с десятком клиентов иначе не получал бы своих напоминаний
+# вовсе.
+DAILY_SLOT_EXCLUDED_CATEGORIES: tuple[str, ...] = ADMIN_REPORT_CATEGORIES + (push_ios.COACH_CLIENT_WORKOUT,)
+
 
 @dataclass
 class PushDecision:
@@ -430,7 +437,7 @@ async def build_daily_push(
     и получит его только во «Уведомлениях» — платить за текст, который
     человек сам попросил ему не присылать, незачем."""
     if await db.has_push_today(
-        telegram_id, today.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES
+        telegram_id, today.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES
     ):
         return None
 
@@ -586,7 +593,7 @@ async def build_newbie_push(
     telegram_id: int, created_at: str, today: dt.date, tz_offset: Optional[int] = 0
 ) -> Optional[PushDecision]:
     if await db.has_push_today(
-        telegram_id, today.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES
+        telegram_id, today.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES
     ):
         return None
     signup_date = local_signup_date(created_at, tz_offset)
@@ -1120,7 +1127,7 @@ async def _send_feedback_push(telegram_id: int, local_date: dt.date, *, first: b
     ничего не пишем: в следующий тик окна попробуем снова, а не будем считать
     человека спрошенным. Строка во «Уведомлениях» есть — человек вопрос
     увидит, и второй раз его туда не кладём."""
-    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES):
+    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES):
         return False
     if not await db.get_push_tokens(telegram_id, "ios"):
         return False
@@ -1274,7 +1281,7 @@ async def _send_you_video_push(
     """Отправить и записать. True — Apple принял хотя бы на одно устройство
     или банер лёг во «Уведомления». Ни того, ни другого — веху не отмечаем:
     в следующий тик окна попробуем снова."""
-    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES):
+    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES):
         return False
     if not await db.get_push_tokens(telegram_id, "ios"):
         return False

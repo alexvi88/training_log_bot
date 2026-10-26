@@ -5848,5 +5848,15 @@
   "workout.bw_prompt.saved": "Записал вес: {weight}{u}. Нагрузку подходов со своим весом пересчитал.",
   "workout.bw_prompt.later": "Хорошо, спрошу на следующей тренировке",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{упражнение} few{упражнения} many{упражнений} other{упражнения}} · {sets} {s, plural, one{подход} few{подхода} many{подходов} other{подхода}}",
-  "api.error.bodyweight_not_editable": "Режим «со своим весом» у упражнения из каталога задан каталогом, его я не меняю. Нужен другой — сделай копию упражнения и поставь галку у неё."
+  "api.error.bodyweight_not_editable": "Режим «со своим весом» у упражнения из каталога задан каталогом, его я не меняю. Нужен другой — сделай копию упражнения и поставь галку у неё.",
+  "coach.push.client_workout_title": "Клиент закончил тренировку",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>КЛИЕНТ ЗАКОНЧИЛ ТРЕНИРОВКУ</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# упражнение} few{# упражнения} many{# упражнений} other{# упражнения}}",
+  "coach.client_workout.record_one": "рекорд: {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# рекорд} few{# рекорда} many{# рекордов} other{# рекорда}}",
+  "btn.client_workouts_on": "🧑‍🏫 Тренировки клиентов: присылаю",
+  "btn.client_workouts_off": "🧑‍🏫 Тренировки клиентов: молчу",
+  "settings.client_workouts.toast_on": "Включил. Клиент закончит тренировку — сразу напишу.",
+  "settings.client_workouts.toast_off": "Выключил. Тренировки клиентов смотри в «Мои клиенты»."
 }

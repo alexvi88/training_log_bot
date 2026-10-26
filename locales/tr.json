@@ -5847,5 +5847,15 @@
   "workout.bw_prompt.saved": "Kilonu kaydettim: {weight}{u}. Vücut ağırlığı setlerinin yükünü yeniden hesapladım.",
   "workout.bw_prompt.later": "Tamam, sonraki antrenmanda sorarım",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{hareket} other{hareket}} · {sets} {s, plural, one{set} other{set}}",
-  "api.error.bodyweight_not_editable": "Katalog hareketi vücut ağırlığı ayarını korur — onu değiştirmem. Farklı mı lazım? Hareketin bir kopyasını yap ve kutucuğu orada işaretle."
+  "api.error.bodyweight_not_editable": "Katalog hareketi vücut ağırlığı ayarını korur — onu değiştirmem. Farklı mı lazım? Hareketin bir kopyasını yap ve kutucuğu orada işaretle.",
+  "coach.push.client_workout_title": "Bir danışan antrenmanını bitirdi",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>BİR DANIŞAN ANTRENMANINI BİTİRDİ</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# egzersiz} other{# egzersiz}}",
+  "coach.client_workout.record_one": "rekor: {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# rekor} other{# rekor}}",
+  "btn.client_workouts_on": "🧑‍🏫 Danışan antrenmanları: gönderirim",
+  "btn.client_workouts_off": "🧑‍🏫 Danışan antrenmanları: susarım",
+  "settings.client_workouts.toast_on": "Açık. Bir danışan antrenmanını bitirince hemen haber veririm.",
+  "settings.client_workouts.toast_off": "Kapalı. Danışanlarının antrenmanları yine Danışanlarım’da."
 }

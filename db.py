@@ -93,6 +93,10 @@ CREATE TABLE IF NOT EXISTS users (
     -- у всех; кто включит снова — тому рестарт его не выключит.
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
+    -- «Тренировки клиентов» — живому тренеру сообщение, когда его клиент
+    -- закончил тренировку (coach_notify.deliver_client_workout). Включено по
+    -- умолчанию; у атлета без клиентов ни на что не влияет.
+    client_workout_pushes_enabled INTEGER NOT NULL DEFAULT 1,
     -- «🖼 Картинки упражнений» в настройках бота: 'drawing' — рисунок с нашим
     -- тренером, 'photo' — стоковое фото (exercise_media.IMAGE_STYLES).
     exercise_images TEXT NOT NULL DEFAULT 'drawing',
@@ -273,7 +277,12 @@ CREATE TABLE IF NOT EXISTS workouts (
     title TEXT,
     -- Каким импортом заведена (import_batches.id): по нему «Отменить импорт»
     -- снимает ровно этот файл и ничего больше. NULL — не из импорта.
-    import_batch_id TEXT
+    import_batch_id TEXT,
+    -- Когда живым тренерам атлета ушло «клиент закончил тренировку»
+    -- (coach_notify.deliver_client_workout). Метка ставится один раз
+    -- (claim_coach_workout_notice): повтор финиша, офлайн-повтор, повторное
+    -- завершение той же тренировки второго сообщения не дают. NULL — не слали.
+    coach_notified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -1751,6 +1760,8 @@ async def _migrate_schema() -> None:
     # в этой тренировке, 'later' — атлет нажал «Позже». Раз за тренировку.
     if "bodyweight_prompt" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN bodyweight_prompt TEXT")
+    if "coach_notified_at" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN coach_notified_at TEXT")
     await _conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_workouts_import_batch "
         "ON workouts (import_batch_id) WHERE import_batch_id IS NOT NULL"
@@ -1839,6 +1850,10 @@ async def _migrate_schema() -> None:
     if "progression_hint_enabled" not in user_cols:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
+        )
+    if "client_workout_pushes_enabled" not in user_cols:
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN client_workout_pushes_enabled INTEGER NOT NULL DEFAULT 1"
         )
     if "exercise_images" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN exercise_images TEXT NOT NULL DEFAULT 'drawing'")
@@ -15496,6 +15511,27 @@ async def coach_client_name_candidates(user_id: int) -> list[Optional[str]]:
         profile["display_name"] if profile is not None else None,
         user["first_name"] if user is not None else None,
     ]
+
+
+async def client_has_coach(client_id: int) -> bool:
+    """Есть ли у атлета хоть одна живая связка с тренером — дешёвая проверка
+    на пути финиша тренировки, до фоновой задачи (coach_notify)."""
+    cur = await conn().execute("SELECT 1 FROM coach_links WHERE client_id = ? LIMIT 1", (client_id,))
+    return await cur.fetchone() is not None
+
+
+async def claim_coach_workout_notice(workout_id: int) -> bool:
+    """Отметить, что тренерам ушло «клиент закончил тренировку» про эту
+    тренировку. True — отметка поставлена сейчас (слать можно), False — уже
+    стояла (второй финиш, повтор из офлайн-очереди) или тренировки нет. Один
+    UPDATE с условием — двух победителей у гонки не бывает."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE workouts SET coach_notified_at = ? WHERE id = ? AND coach_notified_at IS NULL",
+            (now_iso(), workout_id),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def list_client_coaches(client_id: int) -> list[aiosqlite.Row]:

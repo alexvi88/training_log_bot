@@ -5847,5 +5847,15 @@
   "workout.bw_prompt.saved": "Anotei seu peso: {weight}{u}. Recalculei a carga das suas séries com peso corporal.",
   "workout.bw_prompt.later": "Beleza, pergunto no próximo treino",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{exercício} other{exercícios}} · {sets} {s, plural, one{série} other{séries}}",
-  "api.error.bodyweight_not_editable": "Um exercício do catálogo mantém a configuração de peso corporal — eu não mudo isso. Precisa diferente? Faça uma cópia do exercício e marque a opção lá."
+  "api.error.bodyweight_not_editable": "Um exercício do catálogo mantém a configuração de peso corporal — eu não mudo isso. Precisa diferente? Faça uma cópia do exercício e marque a opção lá.",
+  "coach.push.client_workout_title": "Um aluno terminou o treino",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>UM ALUNO TERMINOU O TREINO</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# exercício} other{# exercícios}}",
+  "coach.client_workout.record_one": "recorde: {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# recorde} other{# recordes}}",
+  "btn.client_workouts_on": "🧑‍🏫 Treinos dos alunos: eu mando",
+  "btn.client_workouts_off": "🧑‍🏫 Treinos dos alunos: fico quieto",
+  "settings.client_workouts.toast_on": "Ligado. Um aluno termina o treino e eu te aviso na hora.",
+  "settings.client_workouts.toast_off": "Desligado. Os treinos dos alunos continuam em Meus alunos."
 }

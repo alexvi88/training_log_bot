@@ -12,6 +12,12 @@
   доступ — тренеру «Клиент закрыл доступ» (в «Мои клиенты»), тренер убрал
   клиента — атлету «Тренер больше не ведёт тебя» (в его программу от тренера,
   если она есть).
+- клиент закончил тренировку (`notify_client_workout_finished` →
+  `deliver_client_workout`) → каждому его тренеру: «Клиент закончил
+  тренировку», факты только из этой тренировки; банер ведёт в эту тренировку
+  поверх карточки клиента, кнопка в боте — в неё же (`coach:w:<id>:<id>`).
+  Один раз на тренировку, не ночью банером, по тумблеру тренера — подробно у
+  `deliver_client_workout`.
 
 Ниже — подробно про комментарий; остальные устроены так же.
 
@@ -38,8 +44,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
+from dataclasses import dataclass, field
 from html import escape
 from typing import Any, Awaitable, Callable, Optional
 
@@ -435,3 +443,282 @@ async def deliver_unlinked(
         "coach left",
     )
     return pushed, telegram
+
+
+# ---------- клиент закончил тренировку → тренеру ----------
+#
+# Владелец: «а мне не должен приходить пуш, если клиент закончил треню? жена
+# потренила — ничего не пришло». Тренер узнавал о тренировке клиента, только
+# открыв «Мои клиенты».
+#
+# Правила:
+#
+# - Откуда. Все пути завершения (бот: «Завершить», «Завершить задним числом»
+#   на зависшей, «Завершить и начать» у программ; `/v1/.../finish` приложения)
+#   зовут `notify_client_workout_finished` сразу после удачного
+#   `db.finish_workout`. Он делает одну дешёвую проверку (есть ли у атлета
+#   тренер) и уводит доставку в фоновую задачу: финиш не ждёт ни Telegram, ни
+#   Apple и не падает от них.
+# - Сколько. Ровно одно сообщение на тренировку: метка `workouts.
+#   coach_notified_at` ставится одним UPDATE (`db.claim_coach_workout_notice`)
+#   до отправки — повтор финиша из офлайн-очереди, двойной тап и повторное
+#   завершение той же тренировки второго не дают. Тренировка меньше чем из
+#   CLIENT_WORKOUT_MIN_SETS подходов — не повод писать тренеру (открыл и
+#   закрыл), метка не ставится.
+# - Что. Только факты из этой тренировки: сколько упражнений, тоннаж (если
+#   больше нуля), рекорды (один — с названием упражнения, несколько — числом).
+#   Названия упражнений — данные атлета, на ЕГО языке
+#   (coach_service.client_exercise_name); подписи — на языке тренера. Имя —
+#   то, под которым атлет назвался этому тренеру (coach_links.client_name).
+# - Когда. Тихие часы — по поясу тренера, те же 22:00–09:00, что у ежедневных
+#   пушей (engagement.is_quiet_hour). Ночью банера нет: строка ложится в
+#   «Уведомления» без баннера, а сообщение в Telegram уходит как всегда —
+#   беззвучно (весь бот стоит на disable_notification, здесь это сказано
+#   явно), то есть никого не будит и ждёт утра в чате. Откладывать на утро
+#   нечего: оба тихих канала и так дождутся тренера, а отдельная очередь
+#   «доставить в 9:00» ради одного банера — лишняя движущаяся часть. Пояс 0
+#   (не выбран, см. engagement.tz_is_known) читаем как config.DEFAULT_TZ_OFFSET.
+# - Чей тумблер. «Тренировки клиентов» тренера
+#   (users.client_workout_pushes_enabled, по умолчанию включён): выключен —
+#   ни банера, ни Telegram, ни строки в «Уведомлениях».
+# - Аналитика. Банер считает apns.send_alert (`push_sent` с категорией),
+#   Telegram — db.record_push с tg_message_id (тап по кнопке — push_open).
+#   Категория в has_push_today не засчитывается (engagement.
+#   DAILY_SLOT_EXCLUDED_CATEGORIES): тренер с десятком клиентов иначе
+#   лишился бы своего собственного ежедневного пуша.
+
+# Меньше двух подходов — не тренировка, о которой стоит писать тренеру.
+CLIENT_WORKOUT_MIN_SETS = 2
+# Название упражнения с рекордом в банере.
+PUSH_EXERCISE_CLIP = 40
+# Имя клиента в банере — как у «новый клиент».
+PUSH_CLIENT_NAME_CLIP = 24
+
+# Фоновые доставки: цикл событий держит задачи слабыми ссылками, без своей
+# сильной задача могла бы пропасть посреди отправки (как
+# handlers.workout._background_tasks).
+_background_tasks: set[asyncio.Task] = set()
+
+
+@dataclass
+class ClientWorkoutFacts:
+    """Что тренеру сказать про тренировку — только из неё самой."""
+
+    exercises: int
+    sets: int
+    tonnage: float
+    unit: str
+    # Упражнения с рекордом этой тренировки — уже на языке атлета.
+    records: list[str] = field(default_factory=list)
+
+
+async def client_workout_facts(client: Any, workout_id: int) -> ClientWorkoutFacts:
+    """Упражнения, подходы, тоннаж по нагрузке (как итоги финиша,
+    BlockView.load_tonnage) и рекорды e1RM или повторов, поставленные именно
+    в этой тренировке (view_builder mark_records — та же 🔥, что в карточке)."""
+    import coach_service
+    import view_builder
+
+    blocks = await view_builder.build_block_views(workout_id, client["e1rm_formula"], mark_records=True)
+    records = [
+        coach_service.client_exercise_name(client, block.exercise_name)
+        for block in blocks
+        if block.record_e1rm_delta is not None or block.record_reps is not None
+    ]
+    return ClientWorkoutFacts(
+        exercises=len(blocks),
+        sets=sum(len(block.sets) for block in blocks),
+        tonnage=sum(block.load_tonnage for block in blocks),
+        unit=client["unit"],
+        records=records,
+    )
+
+
+def client_workout_summary(lang: str, facts: ClientWorkoutFacts, *, clip: bool = False) -> str:
+    """«5 упражнений · 3.2 тонны · рекорд: Жим штанги лёжа» на языке `lang`
+    (тренера). Части без данных выпадают: тоннажа нет — его не пишем, рекордов
+    нет — тоже. `clip` — для банера: длинное название упражнения подрезается."""
+    with i18n.use_lang(lang):
+        parts = [i18n.t("coach.client_workout.exercises", n=facts.exercises)]
+        if facts.tonnage > 0:
+            parts.append(formatting.format_tonnage(facts.tonnage, facts.unit))
+        if len(facts.records) == 1:
+            name = facts.records[0]
+            if clip:
+                name = push_ios._clip_param(name, PUSH_EXERCISE_CLIP)
+            parts.append(i18n.t("coach.client_workout.record_one", exercise=name))
+        elif facts.records:
+            parts.append(i18n.t("coach.client_workout.records", n=len(facts.records)))
+    return " · ".join(parts)
+
+
+def _utc_now() -> dt.datetime:
+    """Naive UTC — отдельно, чтобы тесты могли поставить часы."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
+def coach_local_now(coach: Any) -> dt.datetime:
+    """Часы тренера. Пояс 0 — «не выбран» (engagement.tz_is_known), а не UTC:
+    тогда — пояс по умолчанию новых аккаунтов."""
+    offset = coach["tz_offset"] or config.DEFAULT_TZ_OFFSET
+    return _utc_now() + dt.timedelta(hours=offset)
+
+
+def is_coach_quiet_time(coach: Any) -> bool:
+    import engagement
+
+    return engagement.is_quiet_hour(coach_local_now(coach).hour)
+
+
+async def telegram_client_workout_message(
+    coach: Any, client_name: str, client_id: int, workout_id: int, facts: ClientWorkoutFacts
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Текст на языке тренера и кнопка «Открыть тренировку» — экран
+    тренировки клиента в боте (`coach:w:<клиент>:<тренировка>`)."""
+    lang = _lang_of(coach)
+    with i18n.use_lang(lang):
+        body = i18n.t(
+            "coach.tg.client_workout",
+            name=escape(client_name),
+            summary=escape(client_workout_summary(lang, facts)),
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=i18n.t("coach.btn.open_workout"),
+                callback_data=f"coach:w:{int(client_id)}:{int(workout_id)}",
+            )
+        ]])
+    return body, kb
+
+
+async def _send_telegram_client_workout(
+    bot, coach: Any, body: str, kb: InlineKeyboardMarkup
+) -> Optional[int]:
+    """Сообщение тренеру — беззвучно, как весь бот. id ушедшего сообщения
+    (для record_push) или None — писать некуда или не дошло. Не бросает."""
+    if not has_telegram(coach):
+        return None
+    chat_id = coach["telegram_id"]
+
+    async def send(b) -> Optional[int]:
+        sent = await b.send_message(
+            chat_id, body, parse_mode="HTML", reply_markup=kb, disable_notification=True
+        )
+        message_id = getattr(sent, "message_id", None)
+        if isinstance(message_id, int):
+            chat_bottom.note_message(chat_id, message_id)
+            return message_id
+        return None
+
+    try:
+        if bot is not None:
+            return await send(bot)
+        if not config.BOT_TOKEN:
+            return None
+        from aiogram import Bot
+
+        own = Bot(token=config.BOT_TOKEN)
+        try:
+            return await send(own)
+        finally:
+            await own.session.close()
+    except Exception:
+        logger.exception("coach: telegram client workout failed for coach %s", chat_id)
+        return None
+
+
+async def _deliver_to_coach(
+    coach: Any, client_name: str, client_id: int, workout_id: int, facts: ClientWorkoutFacts, bot
+) -> tuple[int, bool]:
+    """Один тренер: банер (днём) + строка в «Уведомлениях» + Telegram.
+    (сколько устройств приняли банер, ушло ли в Telegram)."""
+    coach_id = coach["telegram_id"]
+    lang = _lang_of(coach)
+    quiet = is_coach_quiet_time(coach)
+    pushed = 0
+    try:
+        title = i18n.t_in(lang, "coach.push.client_workout_title")
+        body = i18n.t_in(
+            lang, "coach.push.client_workout_body",
+            name=push_ios._clip_param(client_name, PUSH_CLIENT_NAME_CLIP),
+            summary=client_workout_summary(lang, facts, clip=True),
+        )
+        delivery = await inbox.deliver(
+            coach_id, push_ios.COACH_CLIENT_WORKOUT, title, body, lang=lang,
+            route=push_ios.coach_client_workout_route(client_id, workout_id),
+            push=not quiet,
+        )
+        pushed = delivery.accepted
+    except Exception:
+        logger.exception("coach: client workout push failed for coach %s", coach_id)
+    message_id: Optional[int] = None
+    try:
+        text, kb = await telegram_client_workout_message(coach, client_name, client_id, workout_id, facts)
+        message_id = await _send_telegram_client_workout(bot, coach, text, kb)
+        if message_id is not None:
+            await db.record_push(
+                coach_id, push_ios.COACH_CLIENT_WORKOUT, text,
+                coach_local_now(coach).date().isoformat(), tg_message_id=message_id,
+            )
+    except Exception:
+        logger.exception("coach: client workout telegram failed for coach %s", coach_id)
+    return pushed, message_id is not None
+
+
+async def deliver_client_workout(client_id: int, workout_id: int, *, bot: Optional[Any] = None) -> int:
+    """Тренировка атлета `client_id` уже закончена — сказать каждому его
+    тренеру (правила — в комментарии над разделом). Возвращает, скольким
+    тренерам ушло. Не бросает: финиш к этому моменту давно записан."""
+    try:
+        workout = await db.get_workout(workout_id)
+        if workout is None or workout["user_id"] != client_id or workout["status"] != "finished":
+            return 0
+        if workout["coach_notified_at"] is not None:
+            return 0
+        links = await db.list_client_coaches(client_id)
+        if not links:
+            return 0
+        client = await db.get_user(client_id)
+        if client is None:
+            return 0
+        facts = await client_workout_facts(client, workout_id)
+        if facts.sets < CLIENT_WORKOUT_MIN_SETS:
+            return 0
+        if not await db.claim_coach_workout_notice(workout_id):
+            return 0
+    except Exception:
+        logger.exception("coach: client workout notify — can't prepare workout %s", workout_id)
+        return 0
+    notified = 0
+    for link in links:
+        try:
+            coach = await db.get_user(link["coach_id"])
+            if coach is None or not coach["client_workout_pushes_enabled"]:
+                continue
+            await _deliver_to_coach(coach, link["client_name"], client_id, workout_id, facts, bot)
+            notified += 1
+        except Exception:
+            logger.exception("coach: client workout notify failed for coach %s", link["coach_id"])
+    return notified
+
+
+async def notify_client_workout_finished(client_id: int, workout_id: int, *, bot: Optional[Any] = None) -> None:
+    """Звать сразу после удачного db.finish_workout на любом пути
+    завершения. Атлет без тренера — одна выборка по индексу и всё; с тренером
+    — доставка уходит в фон. Не бросает и не ждёт отправки."""
+    try:
+        if not await db.client_has_coach(client_id):
+            return
+        task = asyncio.create_task(deliver_client_workout(client_id, workout_id, bot=bot))
+    except Exception:
+        logger.exception("coach: can't schedule client workout notify for workout %s", workout_id)
+        return
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def wait_background() -> None:
+    """Дождаться фоновых доставок — для тестов."""
+    while _background_tasks:
+        await asyncio.gather(*list(_background_tasks), return_exceptions=True)
+

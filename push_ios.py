@@ -370,6 +370,20 @@ def coach_clients_route(client_id: Optional[int] = None) -> dict:
 COACH_CLIENT_LEFT = "coach_client_left"
 COACH_UNLINKED = "coach_unlinked"
 
+# Тренеру: его клиент закончил тренировку (coach_notify.deliver_client_workout).
+COACH_CLIENT_WORKOUT = "coach_client_workout"
+
+
+def coach_client_workout_route(client_id: int, workout_id: int) -> dict:
+    """Маршрут банера «клиент закончил тренировку»: `{"screen":
+    "coach_clients", "client_id": <id>, "workout_id": <id>}`. Экран — тот же,
+    что у «новый клиент»: сборки, которые `workout_id` не знают, открывают
+    карточку клиента (там эта тренировка первой в списке); новые — саму
+    тренировку поверх карточки."""
+    route = coach_clients_route(client_id)
+    route["workout_id"] = int(workout_id)
+    return route
+
 
 # Веха «смотри, как ты вырос» (engagement._send_you_video_pushes): неделя,
 # месяц, 3 месяца, полгода и год с первой законченной тренировки. Не категория

@@ -57,6 +57,11 @@ async def show_settings(
         rep_range=analytics.user_rep_range(user),
         gender=user["gender"],
         exercise_images=user["exercise_images"],
+        client_workouts=(
+            bool(user["client_workout_pushes_enabled"])
+            if await db.get_coach_profile(callback.from_user.id) is not None
+            else None
+        ),
     )
     # Заголовки блоков говорят самим текстом экрана — жирной строкой перед
     # каждой группой кнопок, в том же порядке, в каком идут кнопки ниже (см.
@@ -482,6 +487,17 @@ async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
     enabled = not user["ai_comments_enabled"]
     await db.update_user(callback.from_user.id, ai_comments_enabled=1 if enabled else 0)
     toast = i18n.t("settings.ai_comments.toast_on" if enabled else "settings.ai_comments.toast_off")
+    await show_settings(callback, state, alert=toast, show_alert=False)
+
+
+@router.callback_query(F.data == "settings:client_workouts")
+async def settings_client_workouts(callback: CallbackQuery, state: FSMContext):
+    """Тумблер тренера «Тренировки клиентов»: присылать ли «клиент закончил
+    тренировку» (coach_notify.deliver_client_workout)."""
+    user = await db.get_user(callback.from_user.id)
+    enabled = not user["client_workout_pushes_enabled"]
+    await db.update_user(callback.from_user.id, client_workout_pushes_enabled=1 if enabled else 0)
+    toast = i18n.t("settings.client_workouts.toast_on" if enabled else "settings.client_workouts.toast_off")
     await show_settings(callback, state, alert=toast, show_alert=False)
 
 

@@ -5847,5 +5847,15 @@
   "workout.bw_prompt.saved": "J’ai noté ton poids : {weight}{u}. J’ai recalculé la charge de tes séries au poids du corps.",
   "workout.bw_prompt.later": "Compris, je te redemande à la prochaine séance",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{exercice} other{exercices}} · {sets} {s, plural, one{série} other{séries}}",
-  "api.error.bodyweight_not_editable": "Un exercice du catalogue garde son réglage poids du corps — je ne le change pas. Tu le veux autrement ? Fais une copie de l’exercice et coche la case là-bas."
+  "api.error.bodyweight_not_editable": "Un exercice du catalogue garde son réglage poids du corps — je ne le change pas. Tu le veux autrement ? Fais une copie de l’exercice et coche la case là-bas.",
+  "coach.push.client_workout_title": "Un client a fini sa séance",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>UN CLIENT A FINI SA SÉANCE</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# exercice} other{# exercices}}",
+  "coach.client_workout.record_one": "record : {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# record} other{# records}}",
+  "btn.client_workouts_on": "🧑‍🏫 Séances des clients : je les envoie",
+  "btn.client_workouts_off": "🧑‍🏫 Séances des clients : je me tais",
+  "settings.client_workouts.toast_on": "Activé. Un client finit sa séance et je te préviens tout de suite.",
+  "settings.client_workouts.toast_off": "Désactivé. Les séances de tes clients restent dans Mes clients."
 }

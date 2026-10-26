@@ -68,6 +68,7 @@ import api_v1_templates
 import api_v1_voice
 import api_v1_weekly
 import apple_signin
+import coach_notify
 import config
 import dashboard_data
 import db
@@ -1920,6 +1921,10 @@ async def finish_workout(request: Request) -> JSONResponse:
         if finished is None or finished["status"] != "finished":
             raise ApiError(404, "not_found", "workout not found")
         return await _finish_replay_response(finished, user_id)
+    # Живому тренеру атлета — «клиент закончил тренировку». Фоном: ответ
+    # finish его не ждёт. Повтор finish (выше) сюда не доходит, а повторное
+    # завершение той же тренировки гасит метка coach_notified_at.
+    await coach_notify.notify_client_workout_finished(user_id, workout_id)
     # Значки присваиваются здесь, а не при чтении экрана достижений: тем же
     # вызовом, что и в боте (handlers.workout), с теми же агрегатами. Без него
     # у человека, который пользуется только приложением, сетка достижений не

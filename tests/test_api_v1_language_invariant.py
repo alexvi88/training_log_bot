@@ -560,6 +560,8 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("PATCH", "/settings", json={"gender": "female"}, expect=200)
     await w.call("PATCH", "/settings", json={"gender": "other"}, expect=400)
     await w.call("PATCH", "/settings", json={"gender": None}, expect=200)
+    await w.call("PATCH", "/settings", json={"client_workout_pushes_enabled": False}, expect=200)
+    await w.call("PATCH", "/settings", json={"client_workout_pushes_enabled": True}, expect=200)
     await w.call("GET", "/profile", expect=200)
     await w.call("POST", "/push/register", json={"device_token": "abc"}, expect=201)
     await w.call("DELETE", "/push/register", expect=200)
