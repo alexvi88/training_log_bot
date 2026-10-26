@@ -3706,6 +3706,11 @@
      "type": "String",
      "optional": true,
      "default": true
+    },
+    "clientWorkoutPushesEnabled": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5689,5 +5694,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "14cfc139cc88d822c7d8b692579e81edbea5bc22"
+ "_ios_commit": "79d7a6c58db7446f8ff9921a729e24a2602f91c4"
 }
