@@ -721,6 +721,28 @@
     }
    }
   },
+  "AppConfig": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "ios": {
+     "type": "AppConfig.IOS",
+     "optional": true
+    }
+   }
+  },
+  "AppConfig.IOS": {
+   "file": "TrainingLog/Models/Models.swift",
+   "fields": {
+    "minVersion": {
+     "type": "String",
+     "optional": true
+    },
+    "storeUrl": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
   "AthleteProfile": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -4729,6 +4751,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.appConfig",
+   "method": "GET",
+   "path": "/app/config",
+   "root": "AppConfig",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.authApple",
    "method": "POST",
    "path": "/auth/apple",
@@ -5660,5 +5689,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "56b3a918e2a772b19871daed5ee6f4f55fae77b8"
+ "_ios_commit": "14cfc139cc88d822c7d8b692579e81edbea5bc22"
 }
