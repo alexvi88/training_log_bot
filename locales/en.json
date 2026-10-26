@@ -3191,7 +3191,7 @@
   "seo.llms.f.progress": "Progress charts for every exercise, workout summary and share card, bodyweight log, CSV export.",
   "seo.llms.f.programs": "Ready-made programs: full body 2 and 3 days, 5×5, upper/lower, push-pull-legs, splits.",
   "seo.llms.f.import": "Import history as CSV from Hevy, Strong or any spreadsheet; duplicates are skipped and an import can be undone for {days, plural, one{# day} other{# days}}.",
-  "seo.llms.f.platforms": "Works in Telegram (Android, iPhone, desktop) and as an iPhone app; Russian and English.",
+  "seo.llms.f.platforms": "Works in Telegram (Android, iPhone, desktop) and as an iPhone app; English, Spanish, Portuguese (Brazil and Portugal), German, French, Turkish and Russian.",
   "seo.llms.pricing": "Pricing",
   "seo.llms.price": "Free, no paid plans. The AI coach is capped at {questions, plural, one{# question} other{# questions}} and {videos, plural, one{# video review} other{# video reviews}} a day.",
   "seo.llms.links": "Links",
