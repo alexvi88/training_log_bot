@@ -5847,5 +5847,15 @@
   "workout.bw_prompt.saved": "Anoté tu peso: {weight}{u}. Recalculé la carga de tus series con peso corporal.",
   "workout.bw_prompt.later": "Entendido, te pregunto el próximo entrenamiento",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{ejercicio} other{ejercicios}} · {sets} {s, plural, one{serie} other{series}}",
-  "api.error.bodyweight_not_editable": "Un ejercicio del catálogo mantiene su ajuste de peso corporal — no lo cambio. ¿Lo necesitas distinto? Haz una copia del ejercicio y marca la casilla ahí."
+  "api.error.bodyweight_not_editable": "Un ejercicio del catálogo mantiene su ajuste de peso corporal — no lo cambio. ¿Lo necesitas distinto? Haz una copia del ejercicio y marca la casilla ahí.",
+  "coach.push.client_workout_title": "Un cliente terminó su entrenamiento",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>UN CLIENTE TERMINÓ SU ENTRENAMIENTO</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# ejercicio} other{# ejercicios}}",
+  "coach.client_workout.record_one": "récord: {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# récord} other{# récords}}",
+  "btn.client_workouts_on": "🧑‍🏫 Entrenos de clientes: los envío",
+  "btn.client_workouts_off": "🧑‍🏫 Entrenos de clientes: me callo",
+  "settings.client_workouts.toast_on": "Activado. Un cliente termina su entrenamiento y te aviso al momento.",
+  "settings.client_workouts.toast_off": "Desactivado. Los entrenamientos de tus clientes siguen en Mis clientes."
 }

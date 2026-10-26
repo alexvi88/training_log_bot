@@ -5847,5 +5847,15 @@
   "workout.bw_prompt.saved": "Logged your weight: {weight}{u}. I recounted the load of your bodyweight sets.",
   "workout.bw_prompt.later": "Got it, I'll ask next workout",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{exercise} other{exercises}} · {sets} {s, plural, one{set} other{sets}}",
-  "api.error.bodyweight_not_editable": "A catalog exercise keeps its bodyweight setting — I don't change it. Need it different? Make a copy of the exercise and tick the box there."
+  "api.error.bodyweight_not_editable": "A catalog exercise keeps its bodyweight setting — I don't change it. Need it different? Make a copy of the exercise and tick the box there.",
+  "coach.push.client_workout_title": "A client finished a workout",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>A CLIENT FINISHED A WORKOUT</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# exercise} other{# exercises}}",
+  "coach.client_workout.record_one": "record: {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# record} other{# records}}",
+  "btn.client_workouts_on": "🧑‍🏫 Client workouts: I send them",
+  "btn.client_workouts_off": "🧑‍🏫 Client workouts: I stay quiet",
+  "settings.client_workouts.toast_on": "On. A client finishes a workout — I'll tell you right away.",
+  "settings.client_workouts.toast_off": "Off. Client workouts are still under My clients."
 }

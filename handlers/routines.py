@@ -20,6 +20,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import coach_notify
 import config
 import db
 import formatting
@@ -1273,7 +1274,10 @@ async def rt_finish_previous_and_start(callback: CallbackQuery, state: FSMContex
     active = await db.get_active_workout(callback.from_user.id)
     if active:
         await db.delete_empty_blocks(active["id"])
-        await db.finish_workout(active["id"])
+        if await db.finish_workout(active["id"]):
+            await coach_notify.notify_client_workout_finished(
+                callback.from_user.id, active["id"], bot=callback.bot
+            )
     await _begin_routine_workout(callback, state, routine)
     await callback.answer(i18n.t("routine.start.closed_previous"))
 

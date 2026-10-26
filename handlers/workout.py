@@ -30,6 +30,7 @@ import ai_trainer
 import analytics
 import charts
 import chat_bottom
+import coach_notify
 import config
 import dashboard_data
 import db
@@ -1240,7 +1241,8 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
         await ui.safe_edit(callback, i18n.t("workout.empty_deleted"))
         await callback.answer()
         return
-    await db.finish_workout(workout_id, finished_at=db.backdated_finished_at(workout))
+    if await db.finish_workout(workout_id, finished_at=db.backdated_finished_at(workout)):
+        await coach_notify.notify_client_workout_finished(callback.from_user.id, workout_id, bot=callback.bot)
     # This path bypasses _finalize_workout, so nothing else would evaluate
     # badges for it: the workout counts toward streaks, tonnage and weight clubs
     # the moment it's finished, but the grid wouldn't catch up until some later
@@ -4069,6 +4071,8 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         if isinstance(event, CallbackQuery):
             await event.answer()
         return
+    # Живому тренеру атлета — «клиент закончил тренировку» (фоном, не ждём).
+    await coach_notify.notify_client_workout_finished(user_id, workout_id, bot=bot)
     workout = await db.get_workout(workout_id)
 
     summary_fn, session_tonnage, duration_seconds = await _finished_summary(

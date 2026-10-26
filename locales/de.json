@@ -5847,5 +5847,15 @@
   "workout.bw_prompt.saved": "Hab dein Gewicht eingetragen: {weight}{u}. Die Last deiner Körpergewichtssätze hab ich neu berechnet.",
   "workout.bw_prompt.later": "Alles klar, ich frag beim nächsten Training",
   "card.image_footer_no_tonnage": "{ex} {e, plural, one{Übung} other{Übungen}} · {sets} {s, plural, one{Satz} other{Sätze}}",
-  "api.error.bodyweight_not_editable": "Eine Katalogübung behält ihre Körpergewicht-Einstellung — die ändere ich nicht. Brauchst du sie anders? Mach eine Kopie der Übung und setz dort den Haken."
+  "api.error.bodyweight_not_editable": "Eine Katalogübung behält ihre Körpergewicht-Einstellung — die ändere ich nicht. Brauchst du sie anders? Mach eine Kopie der Übung und setz dort den Haken.",
+  "coach.push.client_workout_title": "Ein Kunde hat sein Training beendet",
+  "coach.push.client_workout_body": "{name} — {summary}",
+  "coach.tg.client_workout": "🧑‍🏫 <b>EIN KUNDE HAT SEIN TRAINING BEENDET</b>\n\n<b>{name}</b> — {summary}",
+  "coach.client_workout.exercises": "{n, plural, one{# Übung} other{# Übungen}}",
+  "coach.client_workout.record_one": "Rekord: {exercise}",
+  "coach.client_workout.records": "{n, plural, one{# Rekord} other{# Rekorde}}",
+  "btn.client_workouts_on": "🧑‍🏫 Kundentrainings: ich schicke sie",
+  "btn.client_workouts_off": "🧑‍🏫 Kundentrainings: ich schweige",
+  "settings.client_workouts.toast_on": "An. Beendet ein Kunde sein Training, sage ich dir sofort Bescheid.",
+  "settings.client_workouts.toast_off": "Aus. Die Trainings deiner Kunden findest du weiter unter Meine Kunden."
 }

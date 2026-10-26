@@ -1877,8 +1877,12 @@ def settings_keyboard(
     rep_range: Optional[tuple[int, int]] = None,
     gender: Optional[str] = None,
     exercise_images: str = "drawing",
+    client_workouts: Optional[bool] = None,
 ) -> InlineKeyboardMarkup:
-    """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
+    """`client_workouts` — тумблер «Тренировки клиентов» живого тренера
+    (users.client_workout_pushes_enabled); None — не тренер, кнопки нет.
+
+    Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
     заголовки живут в тексте экрана (settings.screen.section.*, см.
     handlers.settings.show_settings), а порядок кнопок здесь просто следует
     тому же порядку, чтобы человек не гадал, какая кнопка из какого блока.
@@ -1932,6 +1936,12 @@ def settings_keyboard(
         i18n.t("btn.ai_comments_on") if ai_comments_enabled else i18n.t("btn.ai_comments_off")
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
+    # Только тому, кто включил «Я тренер»: атлету без клиентов тумблер ни о чём.
+    if client_workouts is not None:
+        b.button(
+            text=i18n.t("btn.client_workouts_on" if client_workouts else "btn.client_workouts_off"),
+            callback_data="settings:client_workouts",
+        )
     images_label = (
         i18n.t("btn.exercise_images_photo") if exercise_images == "photo"
         else i18n.t("btn.exercise_images_drawing")

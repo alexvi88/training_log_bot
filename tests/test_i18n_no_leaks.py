@@ -252,8 +252,10 @@ async def _screen_settings_keyboard(db, user_id: int) -> str:
         show_extra_stats=True,
         show_mcp=False,
         lang="en",
+        client_workouts=True,
     )
-    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
+    off = keyboards.settings_keyboard("kg", "epley", True, True, True, lang="en", client_workouts=False)
+    return "\n".join(button.text for k in (kb, off) for row in k.inline_keyboard for button in row)
 
 
 async def _screen_language_picker(db, user_id: int) -> str:
@@ -1007,6 +1009,13 @@ async def _screen_coach_athlete_side(db, user_id: int) -> str:
     out += [body, _kb_texts(kb)]
     body, kb = await coach_notify.telegram_new_client_message(await db.get_user(user_id), "Sam", 42)
     out += [body, _kb_texts(kb)]
+    # «Клиент закончил тренировку» — тренеру; упражнение — данные атлета.
+    facts = coach_notify.ClientWorkoutFacts(exercises=3, sets=9, tonnage=2500.0, unit="kg", records=["Bench Press"])
+    body, kb = await coach_notify.telegram_client_workout_message(await db.get_user(user_id), "Sam", 42, wid, facts)
+    out += [body, _kb_texts(kb), i18n.t("coach.push.client_workout_title")]
+    facts.records.append("Squat")
+    out.append(coach_notify.client_workout_summary("en", facts))
+    out += [i18n.t("settings.client_workouts.toast_on"), i18n.t("settings.client_workouts.toast_off")]
     out += [
         coach._validated_name("")[1], coach._validated_name("x" * 99)[1],
         i18n.t("coach.code.empty"), i18n.t("coach.linked_done", name="Coach Alex"),
