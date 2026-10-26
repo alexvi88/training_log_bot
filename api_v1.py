@@ -2433,8 +2433,21 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+async def app_config(request: Request) -> JSONResponse:
+    """Что приложение должно знать до входа: минимальная поддерживаемая версия
+    iOS (ниже — блокирующий экран «обнови») и ссылка на App Store, куда он
+    ведёт. Без авторизации и без данных атлета; null — выключено/не задано.
+    `no-store`: поднятая планка должна доехать до приложения сразу, а не
+    после кэша."""
+    return JSONResponse(
+        {"ios": {"min_version": config.ios_min_version(), "store_url": config.app_store_url()}},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 routes = [
     Route("/health", health, methods=["GET"]),
+    Route("/app/config", app_config, methods=["GET"]),
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/auth/apple", auth_apple, methods=["POST"]),
     Route("/auth/password", auth_password, methods=["POST"]),
