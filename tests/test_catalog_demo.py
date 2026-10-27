@@ -69,6 +69,9 @@ def test_available_only_with_a_full_distinct_pair(monkeypatch):
     monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "walk")
     monkeypatch.setattr(config, "CATALOG_DEMO_USERNAME", "walk-new")
     assert not config.catalog_demo_available()
+    # и с логином дорожки прогона витрины (WALK + "-l2") тоже
+    monkeypatch.setattr(config, "CATALOG_DEMO_USERNAME", "walk-l2")
+    assert not config.catalog_demo_available()
 
 
 def test_credentials_are_only_the_catalog_pair():
