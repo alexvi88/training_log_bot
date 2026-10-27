@@ -114,6 +114,9 @@ def referral_link(bot_username: str, telegram_id: int) -> str:
 # db.set_user_source, что у /start: первое касание побеждает.
 REFERRAL_WEB_PATH = "/i/"
 REFERRAL_APP_LINK_PREFIX = "trainingdiary://i/"
+# Ключ страницы в счётчике сайта (site_events): одна строка на все `/i/ref_<id>`,
+# без id автора — счётчик не связывает визит с аккаунтом.
+REFERRAL_WEB_PAGE_KEY = "/i/ref"
 
 
 def referral_web_link(base_url: Optional[str], telegram_id: int) -> Optional[str]:
@@ -345,14 +348,20 @@ def build_weekly_funnel_digest(rows: Iterable[Any], days: int) -> str:
     return "\n".join(lines)
 
 
-def format_referrers(rows: Iterable[Any]) -> str:
-    """Кто приводит людей — тех, кто дошёл до первой тренировки, а не просто открыл бота."""
+def format_referrers(rows: Iterable[Any], days: Optional[int] = None, day: Optional[str] = None) -> str:
+    """Кто приводит людей за окно /growth — и сколько из них дошли до первой
+    тренировки, а не просто открыли бота. Без окна — за всё время."""
     rows = list(rows)
     head = "🤝 <b>КТО ПРИВОДИТ</b>"
+    if days or day:
+        head = f"🤝 <b>КТО ПРИВОДИТ · {period_label(days or 0, day)}</b>"
     if not rows:
-        return f"{head}\n\nПока никто. Кнопка на картинке тренировки — единственный вход сюда."
+        return (
+            f"{head}\n\nПока никто. Входы сюда — экран «Пригласить» в приложении, "
+            f"кнопка на картинке тренировки, визитка и код тренера."
+        )
     lines = [head]
     for row in rows:
         who = f"@{row['username']}" if row["username"] else f"id {row['referrer_id']}"
-        lines.append(f"• {who} — привёл {row['invited']}, из них записали первую {row['activated']}")
+        lines.append(f"• {who} — привёл {row['invited']}, из них начали тренироваться {row['activated']}")
     return "\n".join(lines)

@@ -35,7 +35,16 @@ Telegram-бот — дневник тренировок с AI-тренером (
 Атлету из приложения Telegram не нужен: его реферальная ссылка — веб
 `/i/ref_<id>` (`referral_page.py`, Universal Link, `invite_url` в `/v1/me`), а
 код приложение отдаёт в `POST /v1/me/referral` — тот же `set_user_source`.
-Воронка по источникам — админская команда `/growth`. Ссылки под каналы,
+Воронка по источникам — админская команда `/growth` (там же «кто приводит» за
+окно, `db.top_referrers`). Воронка приглашений — строки сводки `invite_*`
+(экран «Пригласить»: события `invite_open`/`invite_share`/`invite_copy`,
+`source` menu|achievements; просмотры `/i/ref_*` — счётчик сайта ключом
+`/i/ref`, без id), а главное — реальные приходы: `referral_signups[_tg|_ios]`
+(бот `?start=ref_<id>` и приложение `POST /v1/me/referral`) и
+`referral_trained` (закончил тренировку у нас в `REFERRAL_TRAINED_DAYS`).
+Считаются по `users.source`/`referrer_id`, не по `signup`: код из приложения
+приходит после заведения аккаунта, окно пересчитывается
+(`product_metrics.invite_stats`). Ссылки под каналы,
 тексты для каталогов ботов и черновик статьи — в **`GROWTH.md`**.
 
 ## Продуктовая аналитика

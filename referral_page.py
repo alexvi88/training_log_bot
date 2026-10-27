@@ -12,12 +12,13 @@
   `ct=ref_<id>` и, мелко третьей, бот (`/start ref_<id>` — та же атрибуция,
   что и раньше).
 
-Кто зовёт, страница не говорит и в базу не ходит: код — это id автора, и
+Кто зовёт, страница не говорит и автора в базе не ищет: код — это id автора, и
 отвечать на него «такой есть» или «такого нет» значило бы стать бесплатным
 оракулом по чужим аккаунтам. Поэтому и ограничителя по IP тут нет — искать
 нечего. Разбор кода — acquisition.referrer_from_code, оформление — то же, что
 у страницы приглашения тренера (coach_invite_page). Язык — из
-`Accept-Language`, строк, вычисленных на импорте, нет.
+`Accept-Language`, строк, вычисленных на импорте, нет. Просмотр пишется в
+счётчик сайта (site_stats) ключом `/i/ref` — без кода и без id автора.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ import acquisition
 import coach_invite_page
 import config
 import i18n
+import site_stats
 from handlers import sharing
 
 
@@ -77,6 +79,14 @@ async def invite_route(request: Request) -> HTMLResponse:
     referrer_id = acquisition.referrer_from_code(request.path_params.get("code", ""))
     if referrer_id is None:
         return coach_invite_page._html(render_dead_end(lang), lang, 404)
+    # Просмотр — в счётчик сайта, как у seo-страниц: одной страницей на все
+    # коды, без id автора (воронка приглашений, product_metrics.invite_stats).
+    host = (request.url.hostname or "").lower().removeprefix("www.")
+    await site_stats.record(
+        "view", acquisition.REFERRAL_WEB_PAGE_KEY, lang,
+        user_agent=request.headers.get("user-agent"), referer=request.headers.get("referer"),
+        own_hosts=(host,) if host else (), utm=request.query_params.get("utm_source"),
+    )
     return coach_invite_page._html(render_invite(lang, referrer_id, sharing._bot_username), lang)
 
 

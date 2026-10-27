@@ -3888,8 +3888,14 @@ async def onboarding_funnel(days: int = 30, *, day: Optional[str] = None) -> lis
     return await cur.fetchall()
 
 
-async def top_referrers(limit: int = 10) -> list[aiosqlite.Row]:
-    """Кто привёл больше всех — и сколько из приведённых дошли до первой тренировки."""
+async def top_referrers(
+    limit: int = 10, days: Optional[int] = None, *, day: Optional[str] = None
+) -> list[aiosqlite.Row]:
+    """Кто привёл больше всех — и сколько из приведённых дошли до первой
+    тренировки. Автор — `users.referrer_id` у приведённого (приглашение,
+    визитка, код тренера). С `days`/`day` — только заведённые в это окно
+    (_growth_window, как у остальной /growth); без них — за всё время."""
+    since, until = _growth_window(days, day) if (days or day) else (None, None)
     cur = await conn().execute(
         "SELECT u.referrer_id AS referrer_id, r.username AS username, "
         "COUNT(*) AS invited, "
@@ -3898,8 +3904,9 @@ async def top_referrers(limit: int = 10) -> list[aiosqlite.Row]:
         "LEFT JOIN users r ON r.telegram_id = u.referrer_id "
         f"LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
         "WHERE u.referrer_id IS NOT NULL "
+        "AND (? IS NULL OR u.created_at >= ?) AND (? IS NULL OR u.created_at < ?) "
         "GROUP BY u.referrer_id ORDER BY invited DESC, activated DESC LIMIT ?",
-        (limit,),
+        (since, since, until, until, limit),
     )
     return await cur.fetchall()
 
@@ -12498,6 +12505,100 @@ async def push_open_categories(day: str, exclude: set[int]) -> list[tuple[str, O
         (start, end, *skip),
     )
     return [(row[0], row[1]) for row in await cur.fetchall()]
+
+
+async def event_counts(
+    day: str, exclude: set[int], events: tuple[str, ...]
+) -> dict[str, tuple[int, int]]:
+    """Событие → (сколько раз, сколько разных людей) за сутки, без своих
+    аккаунтов (`exclude`)."""
+    start, end = _day_bounds(day)
+    skip = sorted(exclude) or [-1]
+    names = ",".join("?" * len(events))
+    marks = ",".join("?" * len(skip))
+    cur = await conn().execute(
+        "SELECT event, COUNT(*), COUNT(DISTINCT user_id) FROM analytics_events "
+        f"WHERE event IN ({names}) AND created_at >= ? AND created_at < ? "
+        f"AND user_id NOT IN ({marks}) GROUP BY event",
+        (*events, start, end, *skip),
+    )
+    return {row[0]: (int(row[1]), int(row[2])) for row in await cur.fetchall()}
+
+
+async def event_users(day: str, exclude: set[int], events: tuple[str, ...]) -> int:
+    """Сколько разных людей за сутки прислали хоть одно из `events`."""
+    start, end = _day_bounds(day)
+    skip = sorted(exclude) or [-1]
+    names = ",".join("?" * len(events))
+    marks = ",".join("?" * len(skip))
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT user_id) FROM analytics_events "
+        f"WHERE event IN ({names}) AND created_at >= ? AND created_at < ? "
+        f"AND user_id NOT IN ({marks})",
+        (*events, start, end, *skip),
+    )
+    return int((await cur.fetchone())[0] or 0)
+
+
+async def site_page_views(day: str, page: str) -> int:
+    """Просмотры страницы сайта людьми за сутки (роботы не в счёт)."""
+    start, end = _day_bounds(day)
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        "AND page = ? AND created_at >= ? AND created_at < ?",
+        (page, start, end),
+    )
+    return int((await cur.fetchone())[0] or 0)
+
+
+async def referral_signups_by_day(
+    first_day: str, last_day: str, exclude: set[int], trained_within_days: int = 7
+) -> dict[str, tuple[int, int, int]]:
+    """Новые атлеты по приглашению (source 'referral' и автор) по суткам
+    заведения в [first_day, last_day] — день → (завелись в боте, app-only
+    аккаунт — как signup_platform в /events_csv, из них закончили тренировку у
+    нас в `trained_within_days` суток после заведения; импорт не в счёт).
+
+    Считается по users.source/referrer_id, а не по свойствам события `signup`:
+    из приложения код (`POST /v1/me/referral`) приходит ПОСЛЕ заведения
+    аккаунта, и у его `signup` источника нет. Бот (`?start=ref_<id>`) и
+    приложение пишут одно и то же через set_user_source."""
+    start, _ = _day_bounds(first_day)
+    _, end = _day_bounds(last_day)
+    skip = sorted(exclude) or [-1]
+    marks = ",".join("?" * len(skip))
+    cur = await conn().execute(
+        "SELECT u.created_at, u.telegram_linked, "
+        "(SELECT MIN(w.finished_at) FROM workouts w WHERE w.user_id = u.telegram_id "
+        f"AND w.status = 'finished' AND NOT {IMPORTED_WORKOUT_SQL}) "
+        "FROM users u WHERE u.source = 'referral' AND u.referrer_id IS NOT NULL "
+        f"AND u.created_at >= ? AND u.created_at < ? AND u.telegram_id NOT IN ({marks})",
+        (start, end, *skip),
+    )
+    out: dict[str, list[int]] = {}
+    for created_at, linked, first_finished in await cur.fetchall():
+        row = out.setdefault(str(created_at)[:10], [0, 0, 0])
+        row[0 if linked else 1] += 1
+        created, finished = _naive_utc(created_at), _naive_utc(first_finished)
+        if (
+            created is not None and finished is not None
+            and finished - created <= dt.timedelta(days=trained_within_days)
+        ):
+            row[2] += 1
+    return {day: (tg, ios, trained) for day, (tg, ios, trained) in out.items()}
+
+
+def _naive_utc(value: Any) -> Optional[dt.datetime]:
+    """Метка из базы → naive UTC (с поясом — переводится), мусор — None."""
+    if not value:
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return moment
 
 
 async def workout_moments(user_ids: set[int], since: str, until: str) -> list[tuple[int, str]]:

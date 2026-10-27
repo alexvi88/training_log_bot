@@ -483,6 +483,24 @@ async def _build_push_report(day: dt.date) -> str:
     return "\n".join(lines)
 
 
+async def _build_invite_line(day: dt.date) -> str:
+    """«Пришло по приглашениям: X, из них начали тренироваться: Y» за сутки —
+    тем же расчётом, что строки сводки (product_metrics.invite_stats): Y —
+    кто из пришедших в эти сутки уже закончил тренировку у нас. Экран
+    «Пригласить» — хвостом в скобках, людьми. День, где всё по нулям, строки
+    не даёт: отчёт не шумит."""
+    stats = await product_metrics.invite_stats(day, config.limit_preview_ids())
+    if not (stats["signups"] or stats["open_users"] or stats["senders"]):
+        return ""
+    line = (
+        f"\n🤝 Пришло по приглашениям: {stats['signups']}, "
+        f"из них начали тренироваться: {stats['trained']}"
+    )
+    if stats["open_users"] or stats["senders"]:
+        line += f" (экран открыли {stats['open_users']}, поделились {stats['senders']})"
+    return line
+
+
 def _format_trained_users(rows) -> str:
     """Список тех, кто закрыл тренировку — под цифрой в суточном отчёте:
     сколько человек тренировалось само по себе не говорит, кто именно."""
@@ -504,6 +522,7 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
     cost_report = await _build_cost_report(yesterday_str)
     who_report = _format_trained_users(trained)
     push_report = await _build_push_report(yesterday)
+    invite_line = await _build_invite_line(yesterday)
     await bot.send_message(
         chat_id=config.ADMIN_ID,
         text=(
@@ -512,6 +531,7 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
             f"Завершено тренировок: {stats['workouts']}"
             f"{who_report}"
             f"{push_report}"
+            f"{invite_line}"
             f"{cost_report}"
         ),
     )

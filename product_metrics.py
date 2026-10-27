@@ -75,6 +75,23 @@ Telegram в знаменателе и пуши без кнопки-колбэк�
 тем же расчётом (`push_stats`). Свои аккаунты (`config.limit_preview_ids`) в сводку не входят:
 владелец, гоняющий бота руками, — это не рост.
 
+Приглашения (`invite_stats`): `invite_opens`/`invite_open_users` — тапы и
+люди на экране «Пригласить» приложения, `invite_shares`/`invite_share_users`
+— «Поделиться», `invite_copies`/`invite_copy_users` — «Скопировать»,
+`invite_senders` — людей с «Поделиться» или «Скопировать»;
+`invite_page_views` — просмотры веб-страницы `/i/ref_*` людьми (site_events,
+ключ страницы без id автора). Главное — реальные приходы: `referral_signups`
+(`_tg`/`_ios` — где завёлся аккаунт, как `signup_platform` в /events_csv) —
+новые атлеты суток с источником `referral` и автором, из бота
+(`?start=ref_<id>`) и из приложения (`/i/ref_<id>` или схема → `POST
+/v1/me/referral`); `referral_trained` — из них закончили тренировку у нас в
+`config.REFERRAL_TRAINED_DAYS` суток после заведения. Считается по
+`users.source`/`referrer_id`, а не по `signup`: код из приложения приходит
+после заведения аккаунта, и днями позже (`config.REFERRAL_CLAIM_DAYS`), а
+«начал» дозревает неделю — поэтому эти строки за прошлые сутки окна
+пересчитываются каждым rollup_day. Кто сколько привёл —
+`/growth`, утренний отчёт — одной строкой.
+
 `catch_up` досчитывает все пропущенные сутки с первого пользователя: у старых
 дней «активные» — только по подходам (лог действий уже вычищен), и это честная
 нижняя граница, а не ноль.
@@ -96,6 +113,7 @@ import logging
 import re
 from typing import Any, Optional
 
+import acquisition
 import config
 import db
 
@@ -112,6 +130,12 @@ PUSH_SENT_EVENT = "push_sent"
 PUSH_OPEN_EVENT = "push_open"
 # Категория, не похожая на машинный токен, — в общий ящик, а не в отдельный ряд.
 OTHER_CATEGORY = "other"
+
+# Экран «Пригласить» в приложении (см. CLIENT_EVENTS) — имена общие с iOS.
+INVITE_OPEN_EVENT = "invite_open"
+INVITE_SHARE_EVENT = "invite_share"
+INVITE_COPY_EVENT = "invite_copy"
+INVITE_SOURCES = frozenset({"menu", "achievements"})
 
 # События, которые принимает POST /v1/events, и какие свойства у каждого. Новое
 # событие приложения — сначала сюда, иначе сервер его молча пропустит.
@@ -179,6 +203,13 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # играют ли вне тренировки и какой вход работает. Результат партии — свой
     # запрос POST /v1/games/results, не событие.
     "game_open": frozenset({"game", "source"}),
+    # Экран «Пригласить» (InviteView: личная ссылка `/i/ref_<id>`): открыл →
+    # нажал «Поделиться» (ShareLink, итога листа iOS не отдаёт) или
+    # «Скопировать». source menu|achievements — «Меню → Ещё → Пригласить» или
+    # «Достижения». Ссылку и кому ушло — не пишем: только тап.
+    INVITE_OPEN_EVENT: frozenset({"source"}),
+    INVITE_SHARE_EVENT: frozenset({"source"}),
+    INVITE_COPY_EVENT: frozenset({"source"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
@@ -195,6 +226,9 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
+    (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
+    (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
+    (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,
 }
 
 # Свойства-счётчики (не токены): целое от 0 до потолка, остальное выкидывается.
@@ -457,6 +491,84 @@ async def push_to_workout(day: dt.date, own: set[int]) -> tuple[int, int]:
     return len(converted), len(pushed)
 
 
+async def invite_stats(day: dt.date, own: set[int]) -> dict[str, int]:
+    """Воронка приглашений за сутки без своих аккаунтов — и для сводки, и для
+    утреннего отчёта админу. Тапы и люди на экране «Пригласить» (события
+    приложения), просмотры веб-страницы `/i/ref_*` людьми (site_events, без
+    id в ключе страницы, роботы не в счёт) и новые атлеты суток с источником
+    `referral` и автором — из бота (`?start=ref_<id>`) и из приложения
+    (`POST /v1/me/referral`) одинаково, через `db.set_user_source`."""
+    events = await db.event_counts(
+        _day(day), own, (INVITE_OPEN_EVENT, INVITE_SHARE_EVENT, INVITE_COPY_EVENT)
+    )
+    opens, open_users = events.get(INVITE_OPEN_EVENT, (0, 0))
+    shares, share_users = events.get(INVITE_SHARE_EVENT, (0, 0))
+    copies, copy_users = events.get(INVITE_COPY_EVENT, (0, 0))
+    senders = await db.event_users(_day(day), own, (INVITE_SHARE_EVENT, INVITE_COPY_EVENT))
+    tg, ios, trained = (
+        await db.referral_signups_by_day(_day(day), _day(day), own, config.REFERRAL_TRAINED_DAYS)
+    ).get(_day(day), (0, 0, 0))
+    return {
+        "opens": opens,
+        "open_users": open_users,
+        "shares": shares,
+        "share_users": share_users,
+        "copies": copies,
+        "copy_users": copy_users,
+        "senders": senders,
+        "page_views": await db.site_page_views(_day(day), acquisition.REFERRAL_WEB_PAGE_KEY),
+        "signups": tg + ios,
+        "signups_tg": tg,
+        "signups_ios": ios,
+        "trained": trained,
+    }
+
+
+def invite_metrics(stats: dict[str, int]) -> dict[str, float]:
+    """Строки сводки из invite_stats. Пишутся и нулями: ноль приглашений за
+    сутки — тоже ответ, экран «Пригласить» есть у каждого атлета."""
+    return {
+        "invite_opens": stats["opens"],
+        "invite_open_users": stats["open_users"],
+        "invite_shares": stats["shares"],
+        "invite_share_users": stats["share_users"],
+        "invite_copies": stats["copies"],
+        "invite_copy_users": stats["copy_users"],
+        "invite_senders": stats["senders"],
+        "invite_page_views": stats["page_views"],
+        **_referral_rows(stats["signups_tg"], stats["signups_ios"], stats["trained"]),
+    }
+
+
+def _referral_rows(tg: int, ios: int, trained: int) -> dict[str, float]:
+    return {
+        "referral_signups": tg + ios,
+        "referral_signups_tg": tg,
+        "referral_signups_ios": ios,
+        "referral_trained": trained,
+    }
+
+
+async def _recount_late_referrals(day: dt.date, own: set[int]) -> None:
+    """Приход по приглашению считается в сутки заведения аккаунта, а дозревает
+    позже: приложение отдаёт код и через несколько дней после входа
+    (отложенный вход, `config.REFERRAL_CLAIM_DAYS`), а «начал тренироваться»
+    ждёт `config.REFERRAL_TRAINED_DAYS`. Поэтому прошлые сутки этого окна, уже
+    лежащие в сводке, пересчитываются заново. Новых суток не заводит."""
+    done = await db.daily_metrics_days()
+    back = max(config.REFERRAL_CLAIM_DAYS, config.REFERRAL_TRAINED_DAYS) + 1
+    start = day - dt.timedelta(days=back)
+    prev = day - dt.timedelta(days=1)
+    counts = await db.referral_signups_by_day(_day(start), _day(prev), own, config.REFERRAL_TRAINED_DAYS)
+    current = start
+    while current <= prev:
+        if _day(current) in done:
+            await db.upsert_daily_metrics(
+                _day(current), _referral_rows(*counts.get(_day(current), (0, 0, 0)))
+            )
+        current += dt.timedelta(days=1)
+
+
 async def rollup_day(
     day: dt.date, cache: Optional[dict[str, dict[int, set[str]]]] = None
 ) -> dict[str, float]:
@@ -479,8 +591,10 @@ async def rollup_day(
     metrics["mau"] = len(window)
 
     metrics.update(push_metrics(await push_stats(day, own)))
+    metrics.update(invite_metrics(await invite_stats(day, own)))
 
     await db.upsert_daily_metrics(_day(day), metrics)
+    await _recount_late_referrals(day, own)
 
     # Пуш → тренировка за 24 часа — с отставанием на сутки и в строку D−1.
     # Окно пуша суток D−1 кончается не позже конца суток D, а rollup_day(D)
