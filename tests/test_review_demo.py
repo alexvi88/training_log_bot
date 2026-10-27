@@ -400,3 +400,101 @@ async def test_newbie_is_not_mirrored_to_admin(fresh_db, walk_pair):
     review_watch.invalidate_cache()
     assert await review_watch._reviewer_user_id() == reviewer != newbie
     review_watch.reset()
+
+
+# ---------- дорожки прогона витрины: WALK_DEMO_USERNAME + "-l2"…"-l4" ----------
+
+LANE_USERNAMES = [f"{WALK_USERNAME}-l{k}" for k in range(2, config.WALK_DEMO_LANES + 1)]
+
+
+async def _lane_login(client, username, **extra):
+    return await client.post(
+        "/auth/password", json={"username": username, "password": WALK_PASSWORD, **extra}
+    )
+
+
+def test_lane_usernames_follow_walk_pair(monkeypatch):
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", WALK_USERNAME)
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", WALK_PASSWORD)
+    assert config.walk_demo_lane_usernames() == LANE_USERNAMES
+    assert len(LANE_USERNAMES) == config.WALK_DEMO_LANES - 1
+    # без полной пары WALK_DEMO_* дорожек нет, как и новичка
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", "")
+    assert config.walk_demo_lane_usernames() == []
+    monkeypatch.setattr(config, "WALK_DEMO_PASSWORD", WALK_PASSWORD)
+    monkeypatch.setattr(config, "WALK_DEMO_USERNAME", "")
+    assert config.walk_demo_lane_usernames() == []
+
+
+@pytest.mark.asyncio
+async def test_lanes_are_separate_walk_accounts_with_history(fresh_db, walk_pair):
+    """Каждая дорожка — свой аккаунт с той же демо-историей, что у прогона,
+    без квот и с теми же отсечками, что у аккаунта прогона."""
+    import ai_limits
+
+    client = _client()
+    reviewer = (await _login(client)).json()["user_id"]
+    walk = (await _lane_login(client, WALK_USERNAME)).json()["user_id"]
+    newbie = (await _newbie_login(client)).json()["user_id"]
+    lane_ids = []
+    for name in LANE_USERNAMES:
+        resp = await _lane_login(client, name, lang="de")
+        assert resp.status_code == 200, resp.text
+        lane_id = resp.json()["user_id"]
+        lane_ids.append(lane_id)
+        assert lane_id < 0  # app-only
+        assert resp.json()["lang"] == "de"
+        assert await fresh_db.count_workouts(lane_id) == review_demo.TOTAL_WORKOUTS
+        assert await fresh_db.resolve_auth_identity(review_demo.PROVIDER, name) == lane_id
+        assert await fresh_db.is_walk_demo(lane_id)
+        assert await ai_limits.quota_exempt(lane_id)
+        again = await _lane_login(client, name)
+        assert again.json()["user_id"] == lane_id
+        assert await fresh_db.count_workouts(lane_id) == review_demo.TOTAL_WORKOUTS
+    assert len({reviewer, walk, newbie, *lane_ids}) == 3 + len(LANE_USERNAMES)
+
+    # пароль ревьюера к логину дорожки не подходит, дорожки за пределом — нет
+    crossed = await client.post(
+        "/auth/password", json={"username": LANE_USERNAMES[0], "password": PASSWORD}
+    )
+    assert crossed.status_code == 401
+    beyond = await _lane_login(client, f"{WALK_USERNAME}-l{config.WALK_DEMO_LANES + 1}")
+    assert beyond.status_code == 401
+    assert not await fresh_db.is_walk_demo(reviewer)
+
+
+@pytest.mark.asyncio
+async def test_lane_reset_through_account_delete_refills_history(fresh_db, walk_pair):
+    """Сброс дорожки перед языком — тот же DELETE /v1/account?confirm=delete;
+    следующий вход заводит аккаунт заново со свежей демо-историей."""
+    client = _client()
+    name = LANE_USERNAMES[-1]
+    first = await _lane_login(client, name)
+    first_id = first.json()["user_id"]
+    await fresh_db.create_finished_workout(first_id, "2026-01-01T10:00:00", "2026-01-01T11:00:00")
+    assert await fresh_db.count_workouts(first_id) == review_demo.TOTAL_WORKOUTS + 1
+    client.headers["Authorization"] = f"Bearer {first.json()['token']}"
+    deleted = await client.delete("/account", params={"confirm": "delete"})
+    assert deleted.status_code == 200, deleted.text
+    assert await fresh_db.resolve_auth_identity(review_demo.PROVIDER, name) is None
+
+    del client.headers["Authorization"]
+    second = await _lane_login(client, name)
+    assert second.status_code == 200
+    second_id = second.json()["user_id"]
+    assert await fresh_db.count_workouts(second_id) == review_demo.TOTAL_WORKOUTS
+    assert await fresh_db.is_walk_demo(second_id)
+
+
+@pytest.mark.asyncio
+async def test_lanes_are_not_mirrored_to_admin(fresh_db, walk_pair):
+    import review_watch
+
+    review_watch.reset()
+    client = _client()
+    reviewer = (await _login(client)).json()["user_id"]
+    lanes = [(await _lane_login(client, n)).json()["user_id"] for n in LANE_USERNAMES]
+    review_watch.invalidate_cache()
+    assert await review_watch._reviewer_user_id() == reviewer
+    assert reviewer not in lanes
+    review_watch.reset()

@@ -1115,6 +1115,30 @@ def newbie_demo_username() -> str:
         return ""
     return user + NEWBIE_DEMO_SUFFIX
 
+
+# Дорожки прогона витрины (screenshots.yml, входной параметр `lanes`): языки
+# идут параллельно на одном Mac, по симулятору на дорожку, и каждой дорожке
+# нужен свой аккаунт — прогон начинает, удаляет и завершает тренировки, ставит
+# рекорд и говорит с тренером, и на общем аккаунте дорожки сносили бы друг
+# другу состояние посреди съёмки. Дорожка 1 — сам WALK_DEMO_USERNAME, дорожка
+# k (2…WALK_DEMO_LANES) — WALK_DEMO_USERNAME + WALK_DEMO_LANE_SUFFIX + k
+# («screenshots-l2»). Пароль тот же, что у WALK_DEMO_PASSWORD, своих секретов
+# нет; без пары WALK_DEMO_* дорожек нет тоже. Ведут себя как аккаунт прогона
+# целиком: та же демо-история при входе, квот нет, отсечки те же
+# (db.is_walk_demo). Сброс — тот же DELETE /v1/account.
+WALK_DEMO_LANES = 4
+WALK_DEMO_LANE_SUFFIX = "-l"
+
+
+def walk_demo_lane_usernames() -> list[str]:
+    """Логины дорожек 2…WALK_DEMO_LANES (без дорожки 1 — это сам
+    WALK_DEMO_USERNAME) или пустой список, если пара WALK_DEMO_* не задана.
+    Функция, а не константа: тесты подменяют WALK_DEMO_* на лету."""
+    user = WALK_DEMO_USERNAME.strip()
+    if not user or not WALK_DEMO_PASSWORD.strip():
+        return []
+    return [f"{user}{WALK_DEMO_LANE_SUFFIX}{k}" for k in range(2, WALK_DEMO_LANES + 1)]
+
 # Зеркало действий ревьюера админу в личку (review_watch.py): каждое действие
 # демо-аккаунта App Review приходит в Telegram ADMIN_ID. Работает, только если
 # задан ADMIN_ID и логин REVIEW_DEMO_USERNAME; выключатель — на случай, если
@@ -1150,12 +1174,13 @@ APPLE_SIWA_TEAM_ID = os.getenv("APPLE_SIWA_TEAM_ID", "").strip()
 
 def demo_accounts() -> list[tuple[str, str]]:
     """Заданные пары логин/пароль демо-аккаунтов: App Review, прогона
-    скриншотов и новичка (тот же пароль, что у прогона скриншотов). Пара с
-    пустой половиной не считается."""
+    скриншотов, новичка и дорожек прогона (тот же пароль, что у прогона
+    скриншотов). Пара с пустой половиной не считается."""
     pairs = (
         (REVIEW_DEMO_USERNAME, REVIEW_DEMO_PASSWORD),
         (WALK_DEMO_USERNAME, WALK_DEMO_PASSWORD),
         (newbie_demo_username(), WALK_DEMO_PASSWORD),
+        *((lane, WALK_DEMO_PASSWORD) for lane in walk_demo_lane_usernames()),
     )
     return [(user, pw) for user, pw in pairs if user and pw]
 
@@ -1173,7 +1198,12 @@ def catalog_demo_available() -> bool:
     user = CATALOG_DEMO_USERNAME.strip()
     if not user or not CATALOG_DEMO_PASSWORD.strip():
         return False
-    others = {REVIEW_DEMO_USERNAME.strip(), WALK_DEMO_USERNAME.strip(), newbie_demo_username()}
+    others = {
+        REVIEW_DEMO_USERNAME.strip(),
+        WALK_DEMO_USERNAME.strip(),
+        newbie_demo_username(),
+        *walk_demo_lane_usernames(),
+    }
     return user not in others
 
 

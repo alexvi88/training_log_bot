@@ -3322,11 +3322,12 @@ async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
 
 async def is_walk_demo(telegram_id: int) -> bool:
     """Аккаунт прогонов владельца, вход по паролю: прогон скриншотов
-    (WALK_DEMO_USERNAME) или новичок (config.newbie_demo_username()). Демо
-    App Review (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
+    (WALK_DEMO_USERNAME), его дорожки (config.walk_demo_lane_usernames()) или
+    новичок (config.newbie_demo_username()). Демо App Review
+    (REVIEW_DEMO_USERNAME) сюда не попадает: у него другой логин."""
     if not config.WALK_DEMO_USERNAME:
         return False
-    names = [config.WALK_DEMO_USERNAME.strip()]
+    names = [config.WALK_DEMO_USERNAME.strip(), *config.walk_demo_lane_usernames()]
     newbie = config.newbie_demo_username()
     if newbie:
         names.append(newbie)

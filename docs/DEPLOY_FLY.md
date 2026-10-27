@@ -110,6 +110,13 @@ fly secrets set -a training-log-bot WALK_DEMO_USERNAME=screenshots WALK_DEMO_PAS
 Эти же значения — в секреты iOS-репо `WALK_DEMO_USERNAME` и
 `WALK_DEMO_PASSWORD` (Settings → Secrets and variables → Actions).
 
+С этой же парой без новых секретов работают ещё два вида логинов: новичок
+`<WALK_DEMO_USERNAME>-new` (пустой аккаунт, режим `newbie`) и дорожки
+параллельного прогона витрины `<WALK_DEMO_USERNAME>-l2` … `-l4`
+(`config.WALK_DEMO_LANES`; та же демо-история, что у основного логина, —
+у каждой дорожки свой симулятор и свой аккаунт, чтобы языки не сносили
+друг другу тренировки).
+
 Ревьюеры каталогов AI-коннекторов (Claude, ChatGPT) ходят под **третьим**,
 своим аккаунтом — не под App Review: у коннектора есть пишущие инструменты, а
 витрину для Apple никто, кроме Apple, трогать не должен. Пара `CATALOG_DEMO_*`
