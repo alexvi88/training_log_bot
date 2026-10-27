@@ -1010,7 +1010,7 @@ async def cmd_growth(message: Message, state: FSMContext):
     )
     onboarding = await db.onboarding_funnel(days, day=day)
     app_funnel = await db.app_funnel(days, day=day)
-    referrers = await db.top_referrers(GROWTH_REFERRERS)
+    referrers = await db.top_referrers(GROWTH_REFERRERS, days, day=day)
     donation_stars, donation_people = await db.donation_totals(days, day=day)
     period = acquisition.period_label(days, day)
     bot_username = await sharing.get_bot_username(message.bot)
@@ -1020,7 +1020,7 @@ async def cmd_growth(message: Message, state: FSMContext):
         f"{acquisition.format_funnel(funnel, days, day)}\n\n"
         f"{acquisition.format_onboarding_funnel(onboarding, days, day)}\n\n"
         f"{acquisition.format_app_funnel(app_funnel, days, day)}\n\n"
-        f"{acquisition.format_referrers(referrers)}\n\n"
+        f"{acquisition.format_referrers(referrers, days, day)}\n\n"
         # Сайт (seo_pages.py, site_stats.py): просмотры без cookies и клики по
         # кнопкам; последняя строка закрывает воронку — сколько из этого
         # дошло до /start с меткой src_seo_*.
@@ -1240,7 +1240,41 @@ def format_metrics_table(rows: list[dict]) -> str:
     pushes = _metrics_push_line(rows)
     if pushes:
         text += "\n" + pushes
+    invites = _metrics_invite_line(rows)
+    if invites:
+        text += "\n" + invites
     return text
+
+
+METRICS_INVITE_DAYS = 7
+
+
+def _metrics_invite_line(rows: list[dict]) -> str:
+    """Приходы по приглашениям (product_metrics.invite_stats) суммой за
+    неделю — по суткам там единицы. Главное — сколько пришло и сколько из них
+    начали тренироваться (`referral_trained`, дозревает неделю); экран
+    «Пригласить» и страница `/i/ref` — второй строкой, тапы, а не люди. По
+    суткам и с людьми — в CSV (`invite_*`, `referral_*`)."""
+    week = rows[-METRICS_INVITE_DAYS:]
+
+    def total(key: str) -> int:
+        return int(sum(r.get(key) or 0 for r in week))
+
+    tg, ios, trained = total("referral_signups_tg"), total("referral_signups_ios"), total("referral_trained")
+    opens, shares, copies = total("invite_opens"), total("invite_shares"), total("invite_copies")
+    views = total("invite_page_views")
+    if not (tg or ios or opens or shares or copies or views):
+        return ""
+    line = (
+        f"🤝 Пришло по приглашениям за {len(week)} дн.: {tg + ios} (TG {tg} · iOS {ios}), "
+        f"из них начали тренироваться: {trained}"
+    )
+    if opens or shares or copies or views:
+        line += (
+            f"\n   экран «Пригласить» {opens}, «Поделиться» {shares}, "
+            f"«Скопировать» {copies}, страница /i/ref {views}"
+        )
+    return line
 
 
 def _metrics_push_line(rows: list[dict]) -> str:
