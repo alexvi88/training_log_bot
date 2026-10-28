@@ -114,12 +114,15 @@ async def test_hreflang_canonical_og_and_icons_on_every_page():
         for lang in seo_pages.LANGS:
             html = responses[seo_pages.url_for(page, lang)].text
             assert f'<link rel=canonical href="{HOST}{seo_pages.url_for(page, lang)}">' in html
-            for code in seo_pages.LANGS:
-                assert (f'<link rel=alternate hreflang={seo_pages.hreflang(code)} '
-                        f'href="{HOST}{seo_pages.url_for(page, code)}">') in html
-            assert f'hreflang=x-default href="{HOST}{seo_pages.url_for(page, "en")}"' in html
-            # Ровно восемь языков и x-default — без лишних и без повторов.
-            assert len(re.findall(r"<link rel=alternate hreflang=", html)) == len(seo_pages.LANGS) + 1
+            # hreflang — ровно ru, en и x-default; у узких страниц (noindex) — ни одного.
+            if page.kind in seo_pages.THIN_KINDS:
+                assert "<link rel=alternate hreflang=" not in html
+            else:
+                for code in seo_pages.INDEXED_LANGS:
+                    assert (f'<link rel=alternate hreflang={seo_pages.hreflang(code)} '
+                            f'href="{HOST}{seo_pages.url_for(page, code)}">') in html
+                assert f'hreflang=x-default href="{HOST}{seo_pages.url_for(page, "en")}"' in html
+                assert len(re.findall(r"<link rel=alternate hreflang=", html)) == len(seo_pages.INDEXED_LANGS) + 1
             assert '<meta name=description content="' in html
             assert f'<meta property="og:image" content="{HOST}/og/{seo_pages.lang_segment(lang)}/{page.key}.png">' in html
             assert f'<meta property="og:locale" content="{seo_pages.OG_LOCALES[lang]}">' in html
@@ -133,11 +136,13 @@ async def test_sitemap_lists_every_page_in_every_language_and_no_embeds():
     root = ET.fromstring(resp.text)
     ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9", "x": "http://www.w3.org/1999/xhtml"}
     locs = [u.find("s:loc", ns).text for u in root.findall("s:url", ns)]
-    assert sorted(locs) == sorted(HOST + u for u in _all_urls())
+    expected = [HOST + seo_pages.url_for(p, lang) for p in seo_pages.pages() for lang in seo_pages.LANGS
+                if seo_pages.indexable(p, lang)]
+    assert sorted(locs) == sorted(expected)
     assert not [loc for loc in locs if "/embed/" in loc]
     for url in root.findall("s:url", ns):
         langs = {link.get("hreflang") for link in url.findall("x:link", ns)}
-        assert langs == {"ru", "en", "es", "pt-BR", "pt-PT", "de", "fr", "tr", "x-default"}
+        assert langs == {"ru", "en", "x-default"}
 
 
 async def test_robots_allows_search_and_ai_crawlers_and_points_to_sitemap():
@@ -1012,7 +1017,7 @@ def test_indexnow_script_builds_payload_from_the_sitemap():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     urls = module.sitemap_urls(seo_pages.sitemap_xml())
-    assert len(urls) == len(_all_urls())
+    assert len(urls) == sum(seo_pages.indexable(p, lang) for p in seo_pages.pages() for lang in seo_pages.LANGS)
     body = module.payload("https://athletediary.app", "0123456789abcdef", urls)
     assert body["host"] == "athletediary.app"
     assert body["keyLocation"] == "https://athletediary.app/0123456789abcdef.txt"

@@ -74,7 +74,7 @@ def test_site_speaks_every_product_language_with_its_own_codes():
     assert seo_pages.url_for(seo_pages.Page("home"), "pt") == "/pt"
 
 
-async def test_every_page_kind_renders_in_every_language_with_full_hreflang_set():
+async def test_every_page_kind_renders_in_every_language_with_indexed_hreflang_set():
     pages = _one_page_per_kind()
     responses = await _get_many([seo_pages.url_for(p, lang) for p in pages for lang in seo_pages.LANGS])
     for page in pages:
@@ -87,9 +87,16 @@ async def test_every_page_kind_renders_in_every_language_with_full_hreflang_set(
             assert f"<html lang={seo_pages.hreflang(lang)}>" in html, url
             assert f'<link rel=canonical href="{HOST}{url}">' in html, url
             alternates = re.findall(r'<link rel=alternate hreflang=([^ ]+) href="([^"]+)">', html)
-            expected = [(seo_pages.hreflang(c), HOST + seo_pages.url_for(page, c)) for c in seo_pages.LANGS]
-            expected.append(("x-default", HOST + seo_pages.url_for(page, "en")))
+            # hreflang — только между версиями, идущими в индекс (ru/en); узкие
+            # сочетания и машинные переводы — noindex,follow.
+            if page.kind in seo_pages.THIN_KINDS:
+                expected = []
+            else:
+                expected = [(seo_pages.hreflang(c), HOST + seo_pages.url_for(page, c)) for c in seo_pages.INDEXED_LANGS]
+                expected.append(("x-default", HOST + seo_pages.url_for(page, "en")))
             assert alternates == expected, url
+            noindex = '<meta name=robots content="noindex,follow">' in html
+            assert noindex == (not seo_pages.indexable(page, lang)), url
             assert f'<meta property="og:locale" content="{seo_pages.OG_LOCALES[lang]}">' in html
             assert f'href="/site.webmanifest?lang={seo_pages.lang_segment(lang)}"' in html
             if lang != "ru":
@@ -139,20 +146,21 @@ async def test_pt_pt_routes_and_unknown_prefixes_are_404():
         assert "coach_idle.png" not in responses[path].text, path
 
 
-async def test_sitemap_lists_every_language_with_alternates():
+async def test_sitemap_lists_only_indexed_languages_with_alternates():
     resp = (await _get_many(["/sitemap.xml"]))["/sitemap.xml"]
     root = ET.fromstring(resp.text)
     ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9", "x": "http://www.w3.org/1999/xhtml"}
     urls = root.findall("s:url", ns)
-    assert len(urls) == len(seo_pages.pages()) * len(seo_pages.LANGS)
-    by_lang = {lang: 0 for lang in seo_pages.LANGS}
+    indexed = [p for p in seo_pages.pages() if p.kind not in seo_pages.THIN_KINDS]
+    assert len(urls) == len(indexed) * len(seo_pages.INDEXED_LANGS)
+    by_lang = {lang: 0 for lang in seo_pages.INDEXED_LANGS}
     for url in urls:
         loc = url.find("s:loc", ns).text
         by_lang[seo_pages.lang_of_path(loc.removeprefix(HOST))] += 1
         links = {link.get("hreflang"): link.get("href") for link in url.findall("x:link", ns)}
-        assert set(links) == {seo_pages.hreflang(c) for c in seo_pages.LANGS} | {"x-default"}
+        assert set(links) == {seo_pages.hreflang(c) for c in seo_pages.INDEXED_LANGS} | {"x-default"}
         assert loc in links.values()
-    assert set(by_lang.values()) == {len(seo_pages.pages())}
+    assert set(by_lang.values()) == {len(indexed)}
 
 
 async def test_service_addresses_work_for_new_languages():

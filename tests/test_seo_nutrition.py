@@ -137,7 +137,9 @@ async def test_nutrition_pages_answer_on_both_languages_and_hubs_group_them():
             assert f'href="/{seg}/guides/{slug}"' in after and f'href="/{seg}/guides/{slug}"' not in before
         assert f'href="/{seg}/guides/progressive-overload"' in before
     for path in _paths():
-        assert f"<loc>{HOST}{path}</loc>" in responses["/sitemap.xml"].text
+        # В sitemap — только языки, идущие в индекс.
+        if seo_pages.lang_of_path(path) in seo_pages.INDEXED_LANGS:
+            assert f"<loc>{HOST}{path}</loc>" in responses["/sitemap.xml"].text
     for tool in NEW_TOOLS:
         assert f"{HOST}/en/tools/{tool}" in responses["/llms.txt"].text
 

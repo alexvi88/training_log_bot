@@ -346,7 +346,8 @@ async def test_sitemap_llms_and_hubs_list_wave_four():
                                  "/en/muscles/chest", "/ru"])
     for page in _pages(*NEW_KINDS):
         for lang in seo_pages.LANGS:
-            assert f"<loc>{HOST}{seo_pages.url_for(page, lang)}</loc>" in responses["/sitemap.xml"].text
+            listed = f"<loc>{HOST}{seo_pages.url_for(page, lang)}</loc>" in responses["/sitemap.xml"].text
+            assert listed == seo_pages.indexable(page, lang)
         # llms*.txt — только английский и русский: справка для AI-поиска, не зеркало сайта.
         for lang in ("en", "ru"):
             assert f"({HOST}{seo_pages.url_for(page, lang)})" in responses["/llms-full.txt"].text
