@@ -1022,3 +1022,22 @@ def test_indexnow_script_builds_payload_from_the_sitemap():
     assert body["host"] == "athletediary.app"
     assert body["keyLocation"] == "https://athletediary.app/0123456789abcdef.txt"
     assert body["urlList"] == urls
+
+
+async def test_switch_landing_on_hevy_and_strong_but_not_csv():
+    """Hevy и Strong — лендинг переезда (сравнение, итог-пример, тренер),
+    CSV из таблицы — прежняя инструкция; инструкция осталась и на лендинге."""
+    responses = await _get_many(["/en/import/hevy", "/ru/import/strong", "/en/import/csv"])
+    for path in ("/en/import/hevy", "/ru/import/strong"):
+        html = responses[path].text
+        assert responses[path].status_code == 200
+        for marker in ("class=switch-chips", "class=switch-shots", "class=switch-move", "class='table-card vs", "class=chat"):
+            assert marker in html, (path, marker)
+    hevy = responses["/en/import/hevy"].text
+    assert "Free Hevy vs my diary" in hevy and "up to 4" in hevy and "Pro from $2.99 a month" in hevy
+    assert 'href="/en/vs/hevy"' in hevy and "Export & Import Data" in hevy
+    assert "Free, no paid plans" in hevy and f"Undo the import for {config.IMPORT_UNDO_DAYS} days" in hevy
+    # Крошки — короткое имя, а не заголовок-обещание.
+    assert "Import from Hevy" in hevy
+    csv = responses["/en/import/csv"].text
+    assert "class=switch-chips" not in csv and "class=csv-visual" in csv

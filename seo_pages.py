@@ -787,6 +787,9 @@ def _crumb_label(lang: str, page: Page) -> str:
     for p, key in _nav_pages():
         if p == page:
             return _t(lang)(key)
+    if page.kind == "import":
+        # Заголовок переезда — обещание целой фразой; в крошках — короткое имя.
+        return _t(lang)(f"seo.import.{page.arg}.short")
     return _strip_emoji(page_h1(page, lang))
 
 
@@ -1556,6 +1559,65 @@ def faq_key(page: Page) -> Optional[str]:
     return key if key in FAQ else None
 
 
+# Лендинг переезда: строки «бесплатный Hevy/Strong против дневника» — только
+# сверенное на страницах сравнения (/vs/*, та же дата «на октябрь 2026»).
+_SWITCH_ROWS = {"hevy": ("routines", "charts", "coach", "video", "price"),
+                "strong": ("routines", "coach", "video", "price")}
+_SWITCH_MARKS = {"hevy": {"routines": "part", "charts": "part", "coach": "part", "video": "no", "price": "part"},
+                 "strong": {"routines": "part", "coach": "no", "video": "no", "price": "part"}}
+# Начало строки заголовков выгрузки — как в самом файле, на любом языке.
+_SWITCH_COLUMNS = {"hevy": "title,start_time,exercise_title,set_index,weight_kg,reps",
+                   "strong": "Date,Workout Name,Exercise Name,Set Order,Weight,Reps"}
+
+
+def _switch_visual(lang: str) -> str:
+    """Шапка переезда: два экрана приложения и плашка итога (числа — пример)."""
+    t = _t(lang)
+    first = "history" if seo_static.screens_lang(lang) == "en" else "progress"
+    return (f"<div class=switch-shots><div class=phone>{screen_picture(lang, first, t(f'seo.home.shot.{first}.alt'), eager=True)}</div>"
+            f"<div class=phone>{screen_picture(lang, 'coach', t('seo.home.shot.coach.alt'), eager=True)}</div>"
+            f"<div class=switch-badge><span>{_e(t('seo.switch.badge'))}</span><b>{_e(t('seo.switch.move.big'))}</b></div></div>")
+
+
+def _switch_chips(lang: str) -> str:
+    t = _t(lang)
+    items = (t("seo.switch.chip.free"), t("seo.switch.chip.undo", days=config.IMPORT_UNDO_DAYS), t("seo.switch.chip.units"))
+    return "<ul class=switch-chips>" + "".join(f"<li>{seo_design.icon('check')}{_e(x)}</li>" for x in items) + "</ul>"
+
+
+def _switch_sections(lang: str, src: str) -> str:
+    t = _t(lang)
+    app = t(f"seo.vs.{src}.name")
+    move = (f"<section class=reveal><h2>{_e(t('seo.switch.move.h'))}</h2><div class=switch-move>"
+            f"<div class=switch-file><b>{_e(app)} · CSV</b><code>{_e(_SWITCH_COLUMNS[src])}</code></div>"
+            f"<span class=csv-arrow>{seo_design.icon('arrow')}</span>"
+            f"<div class=switch-result><span>{_e(t('seo.switch.move.ready'))}</span><b>{_e(t('seo.switch.move.big'))}</b>"
+            f"<span>{_e(t('seo.switch.move.sets'))}</span><span>{_e(t('seo.switch.move.skip'))}</span></div></div>"
+            f"<p class=muted>{_e(t('seo.switch.move.note'))}</p></section>")
+    rows = "".join(
+        f"<tr><th scope=row>{_e(t(f'seo.switch.row.{r}'))}</th>"
+        f"<td class=us data-label=\"{_e(t('seo.brand'))}\">{_mark(lang, 'yes')}{_e(t(f'seo.switch.us.{r}', videos=config.AI_VIDEO_DAILY_LIMIT))}</td>"
+        f"<td data-label=\"{_e(t('seo.switch.col.them', app=app))}\">{_mark(lang, _SWITCH_MARKS[src][r])}{_e(t(f'seo.switch.{src}.{r}'))}</td></tr>"
+        for r in _SWITCH_ROWS[src]
+    )
+    compare = (f"<section class=reveal><h2>{_e(t('seo.switch.cmp.h', app=app))}</h2>"
+               f"<div class='table-card vs cards-mobile'><table><thead><tr><th></th><th class=us>{_e(t('seo.brand'))}</th>"
+               f"<th>{_e(t('seo.switch.col.them', app=app))}</th></tr></thead><tbody>{rows}</tbody></table></div>"
+               f"<p class=muted>{t('seo.switch.cmp.note_html', app=_e(app), href=_e(url_for(Page('vs', src), lang)))}</p></section>")
+    return move + compare
+
+
+def _switch_coach(lang: str, src: str) -> str:
+    t = _t(lang)
+    app = t(f"seo.vs.{src}.name")
+    return (f"<section class=reveal><h2>{_e(t('seo.switch.coach.h'))}</h2>"
+            f"<div class=chat><div class='bubble me'>{_e(t('seo.switch.coach.q', app=app))}</div>"
+            f"<div class='bubble coach'><img src=\"{seo_static.asset_url('coach-face.jpg')}\" alt=\"\" width=34 height=34 loading=lazy>"
+            f"<div>{_e(t('seo.switch.coach.a'))}</div></div>"
+            f"<div class=note>{_e(t('seo.switch.coach.note', questions=config.AI_QUESTION_DAILY_LIMIT, videos=config.AI_VIDEO_DAILY_LIMIT))}</div>"
+            "</div></section>")
+
+
 def _render_import(lang: str, page: Page, request) -> str:
     t = _t(lang)
     src = page.arg
@@ -1566,14 +1628,25 @@ def _render_import(lang: str, page: Page, request) -> str:
     ]
     faq = _faq_items(lang, FAQ["import"])
     title, description = t(f"seo.import.{src}.title"), t(f"seo.import.{src}.description")
+    actions = _cta_buttons(lang, page.block, device_of(request))
+    # Hevy и Strong — лендинг переезда: зачем уходить, что получишь, потом та же
+    # инструкция. CSV из таблицы — прежняя страница-инструкция.
+    switch = src in _SWITCH_ROWS
+    if switch:
+        head = feature_head(t("seo.switch.eyebrow", app=t(f"seo.vs.{src}.name")), t(f"seo.import.{src}.h1"),
+                            t(f"seo.import.{src}.lead"), _switch_visual(lang), actions + _switch_chips(lang))
+    else:
+        head = feature_head(t("seo.eyebrow.import"), t(f"seo.import.{src}.h1"), t(f"seo.import.{src}.lead"), _csv_visual(lang),
+                            actions)
     body = (
-        feature_head(t("seo.eyebrow.import"), t(f"seo.import.{src}.h1"), t(f"seo.import.{src}.lead"), _csv_visual(lang),
-                     _cta_buttons(lang, page.block, device_of(request)))
+        head
         + "<div class=prose>"
-        f"<section class=reveal>{_icon_h2('import', t(f'seo.import.{src}.export.h'))}{t(f'seo.import.{src}.export_html')}</section>"
+        + (_switch_sections(lang, src) if switch else "")
+        + f"<section class=reveal>{_icon_h2('import', t(f'seo.import.{src}.export.h'))}{t(f'seo.import.{src}.export_html')}</section>"
         f"<section class=reveal>{_icon_h2('telegram', t('seo.import.bot.h'))}{t('seo.import.bot_html', **params)}</section>"
         f"<section class=reveal>{_icon_h2('phone', t('seo.import.app.h'))}{t('seo.import.app_html')}</section>"
         f"<section class=reveal>{_icon_h2('check', t('seo.import.what.h'))}{t('seo.import.what_html', **params)}</section>"
+        + (_switch_coach(lang, src) if switch else "")
         + _faq_html(lang, faq) + "</div>"
         + _cta(lang, page.block, _e(t("seo.import.cta")), request)
         + f"<h2>{_e(t('seo.import.more.h'))}</h2>" + _cards(others)
