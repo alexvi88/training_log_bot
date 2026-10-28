@@ -610,6 +610,25 @@ body.embed .tool { margin-top: 0; }
 .csv-arrow svg { width: 26px; height: 26px; }
 .csv-visual ul { width: 100%; list-style: none; margin: 0; padding: var(--s3) var(--s4); border-radius: 14px; background: #f7f0ea; color: #2a1d17; font: 600 14px/1.5 ui-monospace, Menlo, monospace; }
 .csv-visual li { display: flex; justify-content: space-between; gap: var(--s3); margin: 0; padding: 4px 0; border-bottom: 1px dashed rgba(42,29,23,.12); }
+/* switch landing: moving from Hevy/Strong */
+.switch-chips { list-style: none; margin: var(--s4) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.switch-chips li { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 12px; border-radius: 999px; font-size: 13.5px; background: var(--glass); border: 1px solid var(--line2); }
+.switch-chips svg { width: 15px; height: 15px; color: var(--ok); }
+.switch-shots { position: relative; width: 100%; max-width: 440px; aspect-ratio: 10 / 12; }
+.switch-shots .phone { position: absolute; width: 48%; }
+.switch-shots .phone:first-child { left: 2%; top: 7%; transform: rotate(-5deg); }
+.switch-shots .phone:nth-child(2) { right: 2%; top: 0; transform: rotate(4deg); }
+.switch-badge { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); display: grid; gap: 2px; padding: 10px 16px; border-radius: 14px; background: #f7f0ea; color: #2a1d17; font-size: 13px; box-shadow: 0 14px 40px rgba(0,0,0,.5); white-space: nowrap; }
+.switch-badge span { color: #6b5446; }
+.switch-badge b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.switch-move { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--s3); align-items: center; }
+.switch-move .csv-arrow { transform: none; }
+.switch-file { min-width: 0; display: grid; gap: 6px; padding: var(--s4); border-radius: 14px; background: rgba(0,0,0,.35); border: 1px solid var(--line2); }
+.switch-file code { font: 12px/1.5 ui-monospace, Menlo, monospace; color: #ead6c6; overflow-wrap: anywhere; }
+.switch-result { min-width: 0; display: grid; gap: 2px; padding: var(--s4); border-radius: 14px; background: #f7f0ea; color: #2a1d17; font-size: 14px; }
+.switch-result span:first-child { color: #6b5446; }
+.switch-result b { font-size: 22px; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .switch-move { grid-template-columns: minmax(0, 1fr); } .switch-move .csv-arrow { transform: rotate(90deg); justify-self: center; } }
 /* exercise page: sticky aside on wide screens */
 .ex-layout { display: grid; gap: var(--s5); }
 @media (min-width: 1000px) { .ex-layout { grid-template-columns: minmax(0, 1fr) 300px; gap: var(--s7); align-items: start; } .ex-aside { position: sticky; top: 84px; } }
