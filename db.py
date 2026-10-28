@@ -875,6 +875,11 @@ CREATE INDEX IF NOT EXISTS idx_funnel_events_created ON funnel_events (created_a
 -- страница, язык, домен источника (не полный адрес), вид устройства, имя
 -- поискового робота, utm_source и куда вёл клик. Живёт столько же, сколько
 -- продуктовые события (ANALYTICS_RETENTION_DAYS, prune_old_site_events).
+-- kind: view — сервер отдал страницу (кому угодно), seen — маячок браузера
+-- подтвердил показ (людьми считается он, SITE_HUMAN_SQL), click, embed.
+-- ua_family — семейство User-Agent (site_stats.ua_family: «SeznamBot»,
+-- «Chrome/120 Windows») у безымянных роботов и «компьютеров», не сам UA;
+-- колонка добавлена миграцией (_migrate_schema), у старых строк NULL.
 CREATE TABLE IF NOT EXISTS site_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL,
@@ -885,9 +890,11 @@ CREATE TABLE IF NOT EXISTS site_events (
     crawler TEXT,
     utm TEXT,
     target TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    ua_family TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_site_events_created ON site_events (created_at);
+CREATE INDEX IF NOT EXISTS idx_site_events_kind ON site_events (kind, created_at);
 
 -- Продуктовая аналитика (analytics.py): события с постоянным машинным именем
 -- и свойствами — то, по чему строятся графики. Не user_events: там лента для
@@ -2164,6 +2171,11 @@ async def _migrate_schema() -> None:
         # Старым сводкам отпечатка взять неоткуда — остаются NULL и при
         # следующем открытии считаются устаревшими (coach_service.saved_summary).
         await _conn.execute("ALTER TABLE coach_summaries ADD COLUMN fingerprint TEXT")
+
+    if "ua_family" not in await _column_names("site_events"):
+        # Семейство User-Agent (site_stats.ua_family) — старым строкам взять
+        # неоткуда, остаются NULL.
+        await _conn.execute("ALTER TABLE site_events ADD COLUMN ua_family TEXT")
 
     await _conn.commit()
 
@@ -12253,45 +12265,95 @@ async def analytics_event_users(since: str) -> list[aiosqlite.Row]:
 async def record_site_event(
     kind: str, page: str, lang: Optional[str], referrer: str, device: str,
     crawler: Optional[str] = None, utm: Optional[str] = None, target: Optional[str] = None,
+    ua_family: Optional[str] = None,
 ) -> None:
     """Одна строка site_events (см. схему): ни адреса, ни id, ни cookies."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO site_events (kind, page, lang, referrer, device, crawler, utm, target, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (kind, page, lang, referrer, device, crawler, utm, target, now_iso()),
+            "INSERT INTO site_events (kind, page, lang, referrer, device, crawler, utm, target, created_at, ua_family) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, page, lang, referrer, device, crawler, utm, target, now_iso(), ua_family),
         )
         await conn().commit()
 
 
+# Просмотр человеком (site_stats.py, «Человек — только подтверждённый
+# браузером»): маячок `seen`; до первого маячка в базе подтверждать было
+# нечем — людьми там считаются серверные `view`. Параметр — дата первого
+# `seen` (site_confirmed_since) или NULL, если маячков ещё не было.
+SITE_HUMAN_SQL = (
+    "device <> 'bot' AND (kind = 'seen' OR (kind = 'view' AND (? IS NULL OR created_at < ?)))"
+)
+
+
+async def site_confirmed_since() -> Optional[str]:
+    """Когда пришёл первый маячок браузера (`seen`) — с этой минуты людьми
+    считаются только подтверждённые просмотры. None — маячков ещё не было."""
+    cur = await conn().execute("SELECT MIN(created_at) FROM site_events WHERE kind = 'seen'")
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
 async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10) -> dict[str, Any]:
-    """Сводка сайта для /growth: просмотры людей по страницам, источникам и
-    устройствам, обходы роботов по именам, клики по кнопкам."""
+    """Сводка сайта для /growth: просмотры людей (подтверждённые браузером,
+    SITE_HUMAN_SQL) по страницам, источникам и устройствам, просмотры без
+    подтверждения, обходы роботов по именам и безымянные роботы по семейству
+    UA, клики по кнопкам."""
     since, until = _growth_window(days, day)
     window = "created_at >= ? AND (? IS NULL OR created_at < ?)"
     args = (since, until, until)
+    switch = await site_confirmed_since()
 
     async def rows(sql: str, extra: tuple = ()) -> list[aiosqlite.Row]:
         cur = await conn().execute(sql, args + extra)
         return await cur.fetchall()
 
-    human = f"kind = 'view' AND device <> 'bot' AND {window}"
-    views = (await rows(f"SELECT COUNT(*) FROM site_events WHERE {human}"))[0][0]
+    async def human_rows(sql: str, extra: tuple = ()) -> list[aiosqlite.Row]:
+        return await rows(sql, (switch, switch) + extra)
+
+    human = f"{window} AND {SITE_HUMAN_SQL}"
+    views = (await human_rows(f"SELECT COUNT(*) FROM site_events WHERE {human}"))[0][0]
+    # Серверные просмотры с человеческим устройством после переключения —
+    # браузер их не подтвердил (скрейпер, предзагрузка, закрыли до показа).
+    unconfirmed = "kind = 'view' AND device <> 'bot' AND created_at >= ? AND {}".format(window)
+    unconfirmed_n = 0
+    unconfirmed_families: list[tuple[str, int]] = []
+    legacy_views = 0
+    if switch is not None:
+        cur = await conn().execute(f"SELECT COUNT(*) FROM site_events WHERE {unconfirmed}", (switch, *args))
+        unconfirmed_n = (await cur.fetchone())[0]
+        cur = await conn().execute(
+            f"SELECT COALESCE(ua_family, '?'), COUNT(*) n FROM site_events WHERE {unconfirmed} AND device = 'desktop' "
+            "GROUP BY 1 ORDER BY n DESC, 1 LIMIT 5", (switch, *args))
+        unconfirmed_families = [(r[0], r[1]) for r in await cur.fetchall()]
+        cur = await conn().execute(
+            f"SELECT COUNT(*) FROM site_events WHERE kind = 'view' AND device <> 'bot' AND created_at < ? AND {window}",
+            (switch, *args))
+        legacy_views = (await cur.fetchone())[0]
+    else:
+        legacy_views = views
     return {
         "views": views,
-        "pages": [(r[0], r[1]) for r in await rows(
+        "confirmed_since": switch,
+        "legacy_views": legacy_views,
+        "unconfirmed": unconfirmed_n,
+        "unconfirmed_families": unconfirmed_families,
+        "pages": [(r[0], r[1]) for r in await human_rows(
             f"SELECT page, COUNT(*) n FROM site_events WHERE {human} GROUP BY page ORDER BY n DESC, page LIMIT ?", (top,))],
-        "referrers": [(r[0], r[1]) for r in await rows(
+        "referrers": [(r[0], r[1]) for r in await human_rows(
             f"SELECT referrer, COUNT(*) n FROM site_events WHERE {human} GROUP BY referrer ORDER BY n DESC, referrer LIMIT ?", (top,))],
-        "devices": [(r[0], r[1]) for r in await rows(
+        "devices": [(r[0], r[1]) for r in await human_rows(
             f"SELECT device, COUNT(*) n FROM site_events WHERE {human} GROUP BY device ORDER BY n DESC, device")],
         "crawlers": [(r[0], r[1]) for r in await rows(
             f"SELECT crawler, COUNT(*) n FROM site_events WHERE kind = 'view' AND device = 'bot' AND {window} "
             "GROUP BY crawler ORDER BY n DESC, crawler")],
+        "other_bots": [(r[0], r[1]) for r in await rows(
+            f"SELECT COALESCE(ua_family, '?'), COUNT(*) n FROM site_events WHERE kind = 'view' AND device = 'bot' "
+            f"AND crawler IN ('other', 'unknown') AND {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT 8")],
         "clicks": {r[0]: r[1] for r in await rows(
             f"SELECT target, COUNT(*) n FROM site_events WHERE kind = 'click' AND device <> 'bot' AND {window} GROUP BY target")},
         "embeds": (await rows(f"SELECT COUNT(*) FROM site_events WHERE kind = 'embed' AND device <> 'bot' AND {window}"))[0][0],
-        "ai_sources": _fold_ai_sources(await rows(
+        "ai_sources": _fold_ai_sources(await human_rows(
             f"SELECT referrer, utm, COUNT(*) n FROM site_events WHERE {human} "
             "AND (referrer IN ({}) OR utm IS NOT NULL) GROUP BY referrer, utm".format(
                 ",".join("'" + r + "'" for r in sorted(_site_stats_module().AI_REFERRERS))
@@ -12322,11 +12384,13 @@ async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.R
     строка на (страница, источник, устройство) с числом — чтобы лента
     /activity не тонула в обновлениях одной страницы; роботы — одна строка на
     робота в окне (crawler, сколько страниц), как в логе процесса, а не по
-    странице: обход ClaudeBot — это сотни адресов подряд."""
+    странице: обход ClaudeBot — это сотни адресов подряд. Люди — те же, что
+    в /growth (SITE_HUMAN_SQL): подтверждённые браузером."""
+    switch = await site_confirmed_since()
     cur = await conn().execute(
         "SELECT * FROM ("
         "SELECT substr(created_at, 1, 15) AS bucket, page, referrer, device, NULL AS crawler, COUNT(*) AS n "
-        "FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        f"FROM site_events WHERE {SITE_HUMAN_SQL} "
         "GROUP BY bucket, page, referrer, device "
         "UNION ALL "
         "SELECT substr(created_at, 1, 15) AS bucket, '' AS page, '' AS referrer, 'bot' AS device, "
@@ -12334,17 +12398,19 @@ async def site_visits_feed(limit: int = 30, offset: int = 0) -> list[aiosqlite.R
         "FROM site_events WHERE kind = 'view' AND device = 'bot' "
         "GROUP BY bucket, COALESCE(crawler, '?')"
         ") ORDER BY bucket DESC, crawler IS NOT NULL, n DESC, page LIMIT ? OFFSET ?",
-        (limit, offset),
+        (switch, switch, limit, offset),
     )
     return await cur.fetchall()
 
 
 async def count_site_visit_buckets() -> int:
+    switch = await site_confirmed_since()
     cur = await conn().execute(
-        "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        f"SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE {SITE_HUMAN_SQL} "
         "GROUP BY substr(created_at, 1, 15), page, referrer, device)) + "
         "(SELECT COUNT(*) FROM (SELECT 1 FROM site_events WHERE kind = 'view' AND device = 'bot' "
-        "GROUP BY substr(created_at, 1, 15), COALESCE(crawler, '?')))"
+        "GROUP BY substr(created_at, 1, 15), COALESCE(crawler, '?')))",
+        (switch, switch),
     )
     (count,) = await cur.fetchone()
     return count
@@ -12542,12 +12608,14 @@ async def event_users(day: str, exclude: set[int], events: tuple[str, ...]) -> i
 
 
 async def site_page_views(day: str, page: str) -> int:
-    """Просмотры страницы сайта людьми за сутки (роботы не в счёт)."""
+    """Просмотры страницы сайта людьми за сутки (роботы не в счёт; люди —
+    подтверждённые браузером, SITE_HUMAN_SQL)."""
     start, end = _day_bounds(day)
+    switch = await site_confirmed_since()
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM site_events WHERE kind = 'view' AND device <> 'bot' "
+        f"SELECT COUNT(*) FROM site_events WHERE {SITE_HUMAN_SQL} "
         "AND page = ? AND created_at >= ? AND created_at < ?",
-        (page, start, end),
+        (switch, switch, page, start, end),
     )
     return int((await cur.fetchone())[0] or 0)
 

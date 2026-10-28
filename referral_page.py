@@ -18,7 +18,8 @@
 нечего. Разбор кода — acquisition.referrer_from_code, оформление — то же, что
 у страницы приглашения тренера (coach_invite_page). Язык — из
 `Accept-Language`, строк, вычисленных на импорте, нет. Просмотр пишется в
-счётчик сайта (site_stats) ключом `/i/ref` — без кода и без id автора.
+счётчик сайта (site_stats) ключом `/i/ref` — без кода и без id автора; людьми
+он считается по маячку браузера (site_stats.beacon_script) тем же ключом.
 """
 
 from __future__ import annotations
@@ -85,9 +86,13 @@ async def invite_route(request: Request) -> HTMLResponse:
     await site_stats.record(
         "view", acquisition.REFERRAL_WEB_PAGE_KEY, lang,
         user_agent=request.headers.get("user-agent"), referer=request.headers.get("referer"),
-        own_hosts=(host,) if host else (), utm=request.query_params.get("utm_source"),
+        own_hosts=(host,) if host else (), utm=request.query_params.get("utm_source"), headers=request.headers,
     )
-    return coach_invite_page._html(render_invite(lang, referrer_id, sharing._bot_username), lang)
+    # Маячок «страницу видел браузер» (site_stats.beacon_script) — тем же
+    # ключом: людьми страница считается по нему, как весь сайт.
+    html = render_invite(lang, referrer_id, sharing._bot_username).replace(
+        "</body>", site_stats.beacon_script(acquisition.REFERRAL_WEB_PAGE_KEY) + "</body>", 1)
+    return coach_invite_page._html(html, lang)
 
 
 def register_routes(server: Any) -> None:

@@ -41,7 +41,11 @@ exercise_descriptions.get_description): русское имя упражнени
 
 Аналитики в браузере нет: ни счётчиков, ни cookies, ни сторонних скриптов.
 Посещение считает сервер (site_stats.py) — без адреса клиента и без связи с
-аккаунтом; политика конфиденциальности это описывает.
+аккаунтом; политика конфиденциальности это описывает. Единственный свой
+скрипт учёта — маячок `site_stats.beacon_script` в конце страницы: показанная
+на экране страница шлёт `POST /go/seen` (`seen_route`), и только такой
+просмотр /growth считает человеческим — серверный запрос страницы шлёт и
+скрейпер с браузерным User-Agent. У 404 маячка нет.
 
 Встраиваемый калькулятор (`/embed/<язык>/1rm`) — единственный адрес, которые разрешено показывать в чужом iframe
 (`frame-ancestors *`); у всех остальных `frame-ancestors 'none'`.
@@ -62,6 +66,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
+import acquisition
 import config
 import exercise_descriptions
 import exercise_media
@@ -959,7 +964,8 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         inner = f"<div class=prose>{_crumbs_html(lang, page)}{body}</div>"
     cls = "" if page.kind == "home" else " class=page"
     return ("".join(head) + f"<body{cls}>{header}<main id=main><div class=wrap>{inner}</div></main>"
-            f"{_footer(lang, page, request)}<script>{_PAGE_JS}</script></body></html>")
+            f"{_footer(lang, page, request)}<script>{_PAGE_JS}</script>"
+            f"{site_stats.beacon_script(url_for(page, lang))}</body></html>")
 
 
 # Мелочи всей страницы: меню разделов на телефоне и список языков
@@ -2405,6 +2411,9 @@ def render_not_found(lang: str, request: Optional[Request] = None) -> str:
         f"<p class=lead>{_e(t('seo.notfound.p'))}</p></div></div>" + _cards(links)
     )
     html = _layout(lang, page, request, title=t("seo.notfound.title"), description=t("seo.notfound.p"), body=body)
+    # Маячок «страницу видел браузер» — только у страниц, которые считает
+    # сервер; 404 не считается и не должен подтверждать главную.
+    html = html.replace(site_stats.beacon_script(url_for(page, lang)), "", 1)
     # Без canonical и hreflang: у несуществующей страницы их нет.
     html = re.sub(r"<link rel=(?:canonical|alternate)[^>]*>", "", html)
     return html.replace("<head><meta charset=utf-8>", "<head><meta charset=utf-8><meta name=robots content=noindex>", 1)
@@ -2568,7 +2577,26 @@ async def _count(kind: str, page_key: str, lang: Optional[str], request: Request
     await site_stats.record(
         kind, page_key, lang, user_agent=request.headers.get("user-agent"), referer=request.headers.get("referer"),
         own_hosts=_own_hosts(request), utm=request.query_params.get("utm_source"), target=target,
+        headers=request.headers,
     )
+
+
+async def seen_route(request: Request) -> Response:
+    """`POST /go/seen` — маячок страницы (site_stats.beacon_script): браузер
+    показал страницу человеку. Ключ страницы — тот же, что у серверного
+    `view`; источник — домен из `document.referrer`. Чужой сайт маячок не
+    подделает из браузера (Sec-Fetch-Site), робот не засчитывается
+    (site_stats.record_seen). Ответ всегда 204 — странице он не нужен."""
+    params = request.query_params
+    page = params.get("p", "")
+    fetch_site = request.headers.get("sec-fetch-site")
+    if site_stats.valid_page_key(page, (acquisition.REFERRAL_WEB_PAGE_KEY,)) and fetch_site in (None, "same-origin"):
+        lang = lang_of_path(page) or lang_from_code(params.get("l", ""))
+        await site_stats.record_seen(
+            page, lang, user_agent=request.headers.get("user-agent"), referer=params.get("r") or None,
+            own_hosts=_own_hosts(request), utm=params.get("utm_source"),
+        )
+    return Response(status_code=204, headers={"Cache-Control": "no-store", **_SECURITY})
 
 
 def _page_route(page: Page, lang: str):
@@ -2749,6 +2777,7 @@ def register_routes(server: Any) -> None:
     server.custom_route("/go/bot", methods=["GET"])(go_bot_route)
     server.custom_route("/go/appstore", methods=["GET"])(go_appstore_route)
     server.custom_route("/go/diary", methods=["GET"])(go_diary_route)
+    server.custom_route(site_stats.SEEN_PATH, methods=["POST"])(seen_route)
     server.custom_route("/sitemap.xml", methods=["GET"])(sitemap_route)
     server.custom_route("/robots.txt", methods=["GET"])(robots_route)
     server.custom_route("/llms.txt", methods=["GET"])(llms_route)
