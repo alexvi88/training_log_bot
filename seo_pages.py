@@ -506,6 +506,19 @@ def pages() -> list[Page]:
     return result
 
 
+# Что сайт отдаёт в индекс. Молодой сайт Google просканировал целиком 16.10 и
+# оставил страницы «просканирована, но не проиндексирована»: тысячи шаблонных
+# адресов на восьми языках тянули оценку вниз. В индекс — только ru/en и
+# страницы со своим содержанием; машинные переводы и узкие сочетания открыты
+# людям и ссылкам (noindex,follow), но не просятся в поиск и не лежат в sitemap.
+INDEXED_LANGS = ("ru", "en")
+THIN_KINDS = frozenset({"exercise_alt", "pair", "strength_bw", "muscle_equip"})
+
+
+def indexable(page: Page, lang: str) -> bool:
+    return lang in INDEXED_LANGS and page.kind not in THIN_KINDS
+
+
 def url_for(page: Page, lang: str) -> str:
     return f"/{lang_segment(lang)}{page.path}"
 
@@ -879,9 +892,13 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         f'<meta name=description content="{_e(description)}">',
         f'<link rel=canonical href="{_e(canonical)}">',
     ]
-    for code in LANGS:
-        head.append(f'<link rel=alternate hreflang={hreflang(code)} href="{_e(base + url_for(page, code))}">')
-    head.append(f'<link rel=alternate hreflang=x-default href="{_e(base + url_for(page, X_DEFAULT_LANG))}">')
+    if not indexable(page, lang):
+        head.append("<meta name=robots content=\"noindex,follow\">")
+    if page.kind not in THIN_KINDS:
+        # hreflang связывает только версии, которые идут в индекс.
+        for code in INDEXED_LANGS:
+            head.append(f'<link rel=alternate hreflang={hreflang(code)} href="{_e(base + url_for(page, code))}">')
+        head.append(f'<link rel=alternate hreflang=x-default href="{_e(base + url_for(page, X_DEFAULT_LANG))}">')
     image = f"{base}{og_url(page, lang)}"
     head += [
         '<meta property="og:type" content="website">',
@@ -2449,11 +2466,13 @@ def sitemap_xml(request: Optional[Request] = None) -> str:
            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml" '
            'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">']
     for page in pages():
+        if page.kind in THIN_KINDS:
+            continue
         alternates = "".join(
             f'<xhtml:link rel="alternate" hreflang="{hreflang(code)}" href="{escape(base + url_for(page, code))}"/>'
-            for code in LANGS
+            for code in INDEXED_LANGS
         ) + f'<xhtml:link rel="alternate" hreflang="x-default" href="{escape(base + url_for(page, X_DEFAULT_LANG))}"/>'
-        for lang in LANGS:
+        for lang in INDEXED_LANGS:
             images = "".join(f"<image:image><image:loc>{escape(base + src)}</image:loc></image:image>"
                              for src in page_images(page, lang))
             out.append(f"<url><loc>{escape(base + url_for(page, lang))}</loc><lastmod>{page_updated(page)}</lastmod>"
