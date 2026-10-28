@@ -907,7 +907,7 @@ async def test_visits_and_clicks_are_counted_without_ip_or_full_referrer(fresh_d
     cur = await fresh_db.conn().execute("SELECT * FROM site_events ORDER BY id")
     rows = [dict(r) for r in await cur.fetchall()]
     columns = set(rows[0])
-    assert columns == {"id", "kind", "page", "lang", "referrer", "device", "crawler", "utm", "target", "created_at"}
+    assert columns == {"id", "kind", "page", "lang", "referrer", "device", "crawler", "utm", "target", "created_at", "ua_family"}
     dump = json.dumps(rows, ensure_ascii=False)
     assert "203.0.113.7" not in dump and "secret" not in dump and "Mozilla" not in dump
     view, crawl, embed, click_bot, click_store = rows
