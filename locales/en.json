@@ -5909,5 +5909,8 @@
   "finish_slides.more": "{n} more",
   "finish_slides.brand": "Athlete Diary",
   "finish_slides.tagline": "AI coach for the gym",
-  "finish_slides.store": "Download on the"
+  "finish_slides.store": "Download on the",
+  "program_card.chip": "Program",
+  "program_card.more_days": "{n, plural, one{# more day} other{# more days}}",
+  "program_card.more_exercises": "{n, plural, one{# more exercise} other{# more exercises}}"
 }

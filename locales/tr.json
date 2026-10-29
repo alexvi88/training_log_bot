@@ -5909,5 +5909,8 @@
   "finish_slides.more": "{n} tane daha",
   "finish_slides.brand": "Sporcu Günlüğü",
   "finish_slides.tagline": "Salon için yapay zekâ koçu",
-  "finish_slides.store": "İndir:"
+  "finish_slides.store": "İndir:",
+  "program_card.chip": "Program",
+  "program_card.more_days": "{n, plural, one{# gün daha} other{# gün daha}}",
+  "program_card.more_exercises": "{n, plural, one{# egzersiz daha} other{# egzersiz daha}}"
 }

@@ -5909,5 +5909,8 @@
   "finish_slides.more": "{n} de plus",
   "finish_slides.brand": "Journal d’athlète",
   "finish_slides.tagline": "Coach IA pour la salle",
-  "finish_slides.store": "Télécharger dans l’"
+  "finish_slides.store": "Télécharger dans l’",
+  "program_card.chip": "Programme",
+  "program_card.more_days": "{n, plural, one{# jour de plus} other{# jours de plus}}",
+  "program_card.more_exercises": "{n, plural, one{# exercice de plus} other{# exercices de plus}}"
 }

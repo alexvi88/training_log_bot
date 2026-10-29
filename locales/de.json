@@ -5909,5 +5909,8 @@
   "finish_slides.more": "{n} weitere",
   "finish_slides.brand": "Athleten-Tagebuch",
   "finish_slides.tagline": "KI-Coach fürs Gym",
-  "finish_slides.store": "Laden im"
+  "finish_slides.store": "Laden im",
+  "program_card.chip": "Plan",
+  "program_card.more_days": "{n, plural, one{# weiterer Tag} other{# weitere Tage}}",
+  "program_card.more_exercises": "{n, plural, one{# weitere Übung} other{# weitere Übungen}}"
 }
