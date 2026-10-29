@@ -155,7 +155,12 @@ def render_metric_over_sessions(
                 linewidths=1.5, zorder=4, label=i18n.t("chart.record_label"),
             )
             # Цвет сам по себе ничего не говорит — подписываем, что это за точки.
-            ax.legend(loc="best", frameon=False, labelcolor=INK_DIM, fontsize=9)
+            # scatteryoffsets=[0.5]: у точечной серии matplotlib по умолчанию
+            # ставит маркер легенды ниже середины строки, и кружок с подписью
+            # стояли вразнобой; маркер мельче — подпись читается, а не тонет.
+            ax.legend(loc="best", frameon=False, labelcolor=INK_DIM, fontsize=9,
+                      scatterpoints=1, scatteryoffsets=[0.5], markerscale=0.75,
+                      handletextpad=0.3, borderaxespad=0.6)
 
     trend = linear_trend(points)
     if trend is not None and len(points) >= 2:
