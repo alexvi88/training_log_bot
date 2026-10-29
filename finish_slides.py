@@ -19,9 +19,18 @@
    карточки (`view_builder.build_block_views(mark_records=True)`), и так же
    молчит e1RM при выключенных доп. цифрах.
 3. «Тренировка» — всегда, когда есть хоть один подход.
+4. «Сегодня работали» — схема тела спереди и сзади (`body_map.py`, та же
+   фигура, что у приложения): основные мышцы лампой, помогающие светлым
+   кирпичом. Только когда в тренировке есть группа с зоной на схеме
+   (`FinishShareDeck.groupNames`): заголовок называет только закрашенное.
 
-Трофеев, схемы мышц, «ТЫ» и тренера здесь нет: комментарий тренера бот
-и так присылает текстом.
+Трофеев, «ТЫ» и тренера здесь нет: комментарий тренера бот и так
+присылает текстом.
+
+Без кадра упражнения — схема, а не буква, как у приложения: постер рекорда
+берёт фигуру этого упражнения (`exerciseFigures`), ряд «Тренировки» — мини-
+плитку с мышцей его группы (`GroupTilePlaceholder`). Буква — когда о мышцах
+упражнения не известно ничего.
 
 Разделение на два слоя — ради проверок. `assemble` (чистая, под
 `i18n.use_lang`) собирает все строки и цифры колоды; `render_*` рисуют только
@@ -45,9 +54,11 @@ from io import BytesIO
 from typing import Any, Optional, Sequence
 
 import analytics
+import body_map
 import config
 import db
 import exercise_media
+import exercise_muscles
 import exercise_photos
 import formatting
 import i18n
@@ -76,6 +87,16 @@ BRICK = (180, 71, 47)
 BRICK_DEEP = (125, 46, 30)
 WHITE = (255, 255, 255)
 CONCRETE = (51, 48, 46)
+# Схема тела на угле (`FinishSharePalette.body*`): тело тёмным бежем,
+# основные мышцы лампой, помогающие — кирпичом светлее обычного.
+BODY_BASE = (90, 78, 70)
+BODY_PRIMARY = LAMP
+BODY_SECONDARY = (194, 90, 60)
+# Мини-плитка группы без кадра (`Theme.thumbFace/thumbFigure/thumbMuscle`):
+# песок, фигура тоном темнее, мышцы группы кирпичом.
+THUMB_FACE = (239, 225, 198)
+THUMB_FIGURE = (216, 198, 166)
+THUMB_MUSCLE = BRICK
 
 
 def _rgba(rgb: tuple[int, int, int], alpha: float) -> tuple[int, int, int, int]:
@@ -131,6 +152,8 @@ class RecordSlide:
     # Прибавка относительно нового значения — по ней рекорды встают в очередь.
     relative_gain: float
     poster: Optional[str] = None
+    # Схема тела этого упражнения — постер без кадра; нет и её — буква.
+    figure: Optional[body_map.Figure] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -139,6 +162,8 @@ class SummaryRow:
     sets: str
     badge: Optional[str] = None
     thumb: Optional[str] = None
+    # Зона группы (`body_map.REGIONS`) — мини-плитка с мышцей, когда кадра нет.
+    region: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -152,7 +177,21 @@ class SummarySlide:
     more: Optional[str] = None
 
 
-Slide = BarbellSlide | RecordSlide | SummarySlide
+@dataclasses.dataclass(frozen=True)
+class BodySlide:
+    chip: str
+    day: str
+    # Группы по порядку упражнений, без повторов, — только с зоной на схеме.
+    groups: tuple[str, ...]
+    figure: body_map.Figure
+    facts: tuple[Fact, ...]
+
+    @property
+    def title(self) -> str:
+        return " · ".join(self.groups)
+
+
+Slide = BarbellSlide | RecordSlide | SummarySlide | BodySlide
 
 
 @dataclasses.dataclass(frozen=True)
@@ -162,6 +201,7 @@ class Deck:
     summary: Optional[SummarySlide]
     signature: Signature
     lang: str = "ru"
+    body: Optional[BodySlide] = None
 
     @property
     def record_cards(self) -> list[RecordSlide]:
@@ -169,14 +209,17 @@ class Deck:
 
     @property
     def slides(self) -> list[Slide]:
-        """Порядок колоды: штанга → рекорды → «Тренировка»; без данных — нет
-        карточки (`FinishShareDeck.cards` приложения)."""
+        """Порядок колоды: штанга → рекорды → «Тренировка» → «Сегодня
+        работали»; без данных — нет карточки (`FinishShareDeck.cards`
+        приложения: трофеи, «ТЫ» и тренер бота не касаются)."""
         result: list[Slide] = []
         if self.barbell is not None:
             result.append(self.barbell)
         result.extend(self.record_cards)
         if self.summary is not None:
             result.append(self.summary)
+        if self.body is not None and self.body.groups:
+            result.append(self.body)
         return result
 
 
@@ -309,11 +352,15 @@ def assemble(
     duration_seconds: Optional[float],
     posters: Optional[dict[int, str]] = None,
     thumbs: Optional[dict[int, str]] = None,
+    muscles: Optional[dict[int, body_map.Muscles]] = None,
 ) -> Deck:
     """Колода слайдов из блоков тренировки — на текущем языке (вызывающий
-    оборачивает в `i18n.use_lang`). Ни базы, ни файлов: только строки."""
+    оборачивает в `i18n.use_lang`). Ни базы, ни файлов: только строки.
+    `muscles` — разметка мышц каталога по id упражнения
+    (`exercise_muscles.for_exercise`); нет записи — красит зона группы."""
     posters = posters or {}
     thumbs = thumbs or {}
+    muscles = muscles or {}
     unit = _field(user, "unit", "kg")
     show_extra = bool(_field(user, "show_extra_stats", 1))
     exercises = [b for b in blocks if isinstance(b, formatting.ExerciseBlockView) and b.sets]
@@ -355,7 +402,10 @@ def assemble(
 
     chip = i18n.t("finish_slides.chip.record")
     records = tuple(
-        record for block in exercises
+        dataclasses.replace(record, figure=None if record.poster else body_map.figure(
+            [(muscles.get(block.exercise_id or 0), body_map.group_key(block.group_name))]
+        ))
+        for block in exercises
         if (record := _record(block, unit, show_extra, chip, day, posters.get(block.exercise_id or 0)))
     )
 
@@ -374,6 +424,7 @@ def assemble(
             sets=_collapsed_sets(block),
             badge=_record_badge(block, unit, show_extra),
             thumb=thumbs.get(block.exercise_id or 0),
+            region=body_map.group_key(block.group_name),
         )
         for block in exercises[:SUMMARY_MAX_EXERCISES]
     )
@@ -383,7 +434,51 @@ def assemble(
         meta=" · ".join(meta), rows=rows,
         more=i18n.t("finish_slides.more", n=hidden) if hidden > 0 else None,
     )
-    return Deck(barbell, records, summary, signature, lang)
+    body = _body_slide(exercises, muscles, day, sets_count, tonnage_text)
+    return Deck(barbell, records, summary, signature, lang, body)
+
+
+def _group_title(group_name: str) -> str:
+    """Название встроенной группы на текущем языке — «Грудь» у русского,
+    «Chest» у англоязычного, как бы группа ни звалась в базе."""
+    import seed_data
+
+    canonical = seed_data.canonical_muscle_group_name(group_name) or group_name
+    return seed_data.localized_muscle_group_name(canonical, i18n.get_lang())
+
+
+def _body_slide(
+    exercises: Sequence[formatting.ExerciseBlockView], muscles: dict[int, body_map.Muscles],
+    day: str, sets_count: int, tonnage_text: str,
+) -> Optional[BodySlide]:
+    """«Сегодня работали» — или None. Заголовок называет только группы с зоной
+    на схеме: упражнение такой группы красит фигуру всегда (своей разметкой
+    или зоной группы), так что названо только закрашенное. Упражнение с
+    разметкой, но в своей группе, красит, а в заголовок не попадает
+    (`FinishShareDeck.groupNames`)."""
+    figure = body_map.figure(
+        (muscles.get(block.exercise_id or 0), body_map.group_key(block.group_name)) for block in exercises
+    )
+    seen: set[str] = set()
+    groups: list[str] = []
+    for block in exercises:
+        key = body_map.group_key(block.group_name)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        groups.append(_group_title(block.group_name))
+    if figure is None or not groups:
+        return None
+    facts = [
+        Fact(str(len(groups)), i18n.t("finish_slides.fact.groups", n=len(groups))),
+        Fact(str(sets_count), i18n.t("finish_slides.fact.sets", n=sets_count)),
+    ]
+    if tonnage_text:
+        facts.append(Fact(tonnage_text, i18n.t("finish_slides.fact.tonnage")))
+    return BodySlide(
+        chip=i18n.t("finish_slides.chip.body"), day=day, groups=tuple(groups), figure=figure,
+        facts=tuple(facts),
+    )
 
 
 def slide_texts(slide: Slide, signature: Signature) -> list[str]:
@@ -394,6 +489,8 @@ def slide_texts(slide: Slide, signature: Signature) -> list[str]:
                   str(slide.plate_weight)]
     elif isinstance(slide, RecordSlide):
         texts += [slide.chip, slide.day, slide.exercise_name, slide.value, slide.unit, slide.prefix or ""]
+    elif isinstance(slide, BodySlide):
+        texts += [slide.chip, slide.day, slide.title]
     else:
         texts += [slide.chip, slide.day, slide.value, slide.unit, slide.meta, slide.more or ""]
         for row in slide.rows:
@@ -1027,9 +1124,15 @@ def render_record(slide: RecordSlide, signature: Signature, lang: str, icon: Opt
     text_h = name_h + 2 + number_h + 8
     hero_bottom = CONTENT_H - facts_h - text_h
     drawn = bool(slide.poster) and canvas.paste_cover(slide.poster, 0, 0, CARD_W, hero_bottom)
-    if not drawn:
+    if drawn:
+        _fade(canvas, 0, 0, CARD_W, hero_bottom)
+    elif slide.figure is not None:
+        # Своё упражнение без кадра — его мышцы на схеме, на угле
+        # (`FinishRecordCard.hero`: поля 54 сверху, 40 по бокам, 6 снизу).
+        _body_pair(canvas, slide.figure, 40, 54, CARD_W - 40, hero_bottom - 6)
+    else:
         _letter_tile(canvas, slide.exercise_name, 0, 0, CARD_W, hero_bottom, 150)
-    _fade(canvas, 0, 0, CARD_W, hero_bottom)
+        _fade(canvas, 0, 0, CARD_W, hero_bottom)
     _chips(canvas, slide.chip, slide.day, star=True)
     y = hero_bottom
     for line in name_lines:
@@ -1064,7 +1167,11 @@ def render_summary(slide: SummarySlide, signature: Signature, lang: str, icon: O
         top = y + index * row_h
         mid = top + row_h / 2
         x = 16.0
-        if not (row.thumb and canvas.paste_cover(row.thumb, x, mid - 15, x + 30, mid + 15)):
+        if row.thumb and canvas.paste_cover(row.thumb, x, mid - 15, x + 30, mid + 15):
+            pass
+        elif row.region is not None:
+            _region_tile(canvas, row.region, x, mid - 15, 30)
+        else:
             _letter_tile(canvas, row.name, x, mid - 15, x + 30, mid + 15, 15)
         _round_corners(canvas, x, mid - 15, 30, 4)
         right = CARD_W - 16
@@ -1101,6 +1208,97 @@ def _round_corners(canvas: _Canvas, x: float, y: float, size: float, radius: flo
     canvas.image.paste(Image.new("RGB", (s, s), COAL), (canvas.px(x), canvas.px(y)), mask)
 
 
+# --- схема тела («Сегодня работали», FinishBodyCard) -------------------------
+
+
+def _fill_polygons(draw, polygons, transform, fill, offset: tuple[float, float] = (0, 0)) -> None:
+    """Многоугольники поля схемы — в пиксели холста (масштаб уже с `_K`)."""
+    ox, oy = offset
+    for polygon in body_map.placed(polygons, transform):
+        draw.polygon([(x - ox, y - oy) for x, y in polygon], fill=fill)
+
+
+def _body_side(canvas: _Canvas, side: str, figure: body_map.Figure, x0: float, y0: float,
+               x1: float, y1: float) -> None:
+    """Одна сторона в два тона (`BodyMapTwoToneFigure`), вписана в рамку."""
+    frame = (canvas.px(x0), canvas.px(y0), canvas.px(x1) - canvas.px(x0), canvas.px(y1) - canvas.px(y0))
+    transform = body_map.fit(body_map.FULL_FIGURE, frame)
+    if transform is None:
+        return
+    colors = {"base": BODY_BASE, "secondary": BODY_SECONDARY, "primary": BODY_PRIMARY}
+    for layer, polygons in body_map.layers(side, figure.primary(side), figure.secondary(side)):
+        _fill_polygons(canvas.draw, polygons, transform, colors[layer])
+
+
+def _body_pair(canvas: _Canvas, figure: body_map.Figure, x0: float, y0: float, x1: float, y1: float,
+               spacing: float = 18) -> None:
+    """Спереди и сзади рядом, поровну, через `spacing` (`FinishShareBodyPair`)."""
+    if x1 - x0 <= spacing or y1 <= y0:
+        return
+    half = (x1 - x0 - spacing) / 2
+    _body_side(canvas, body_map.FRONT, figure, x0, y0, x0 + half, y1)
+    _body_side(canvas, body_map.BACK, figure, x1 - half, y0, x1, y1)
+
+
+def _region_tile(canvas: _Canvas, region: str, x: float, y: float, size: float) -> None:
+    """Мини-плитка группы (`GroupTilePlaceholder`): песок, зона группы крупно —
+    мышцы кирпичом, соседние тоном темнее песка; руки — одной рукой."""
+    from PIL import Image, ImageDraw
+
+    s = canvas.px(size)
+    tile = Image.new("RGB", (s, s), THUMB_FACE)
+    draw = ImageDraw.Draw(tile)
+    zone = body_map.REGIONS[region]
+    transform = body_map.fit(body_map.crop_rect(region, 1.0), (0, 0, s, s))
+    if transform is not None:
+        for layer, polygons in body_map.layers(zone.side, zone.slugs):
+            if layer == "secondary":
+                continue
+            _fill_polygons(draw, polygons, transform, THUMB_MUSCLE if layer == "primary" else THUMB_FIGURE)
+    canvas.image.paste(tile, (canvas.px(x), canvas.px(y)))
+
+
+def _title_lines(canvas: _Canvas, groups: Sequence[str], width: float) -> tuple[float, list[str]]:
+    """Заголовок «Сегодня работали» в две строки: 26 black, не влезает —
+    ужимается до 0.6 (`lineLimit(2)`, `minimumScaleFactor(0.6)`). Переносится
+    между группами, точка-разделитель остаётся в конце строки: строка с «·»
+    в начале читалась как оборванная."""
+    tokens = [f"{group} ·" for group in groups[:-1]] + list(groups[-1:])
+    size = 26.0
+    while True:
+        lines: list[str] = []
+        for token in tokens:
+            if lines and canvas.text_width(f"{lines[-1]} {token}", size) <= width:
+                lines[-1] = f"{lines[-1]} {token}"
+            else:
+                lines.append(token)
+        fits = len(lines) <= 2 and all(canvas.text_width(line, size) <= width for line in lines)
+        if fits or size <= 26 * 0.6:
+            if len(lines) > 2:
+                lines = lines[:1] + [" ".join(lines[1:])]
+            return size, [_ellipsize(canvas, line, size, width) for line in lines]
+        size = max(26 * 0.6, size - 0.5)
+
+
+def render_body(slide: BodySlide, signature: Signature, lang: str, icon: Optional[str] = None) -> bytes:
+    canvas = _Canvas(lang)
+    facts_h = _facts_height(canvas) if slide.facts else 0
+    size, lines = _title_lines(canvas, slide.groups, CARD_W - 32)
+    line_h = canvas.line_height(size)
+    title_bottom = CONTENT_H - facts_h - 12
+    title_top = title_bottom - line_h * len(lines)
+    _body_pair(canvas, slide.figure, 28, 54, CARD_W - 28, title_top - 8)
+    y = title_top
+    for line in lines:
+        canvas.text(16, y + canvas.metrics(size)[0], line, size, WHITE)
+        y += line_h
+    if slide.facts:
+        _facts_row(canvas, slide.facts, CONTENT_H - facts_h)
+    _chips(canvas, slide.chip, slide.day)
+    _signature(canvas, signature, icon)
+    return canvas.finish()
+
+
 # --- колода целиком ---------------------------------------------------------
 
 APP_ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "site", "icons", "icon-512.png")
@@ -1117,6 +1315,8 @@ def render_slide(slide: Slide, signature: Signature, lang: str) -> bytes:
         return render_barbell(slide, signature, lang, icon)
     if isinstance(slide, RecordSlide):
         return render_record(slide, signature, lang, icon)
+    if isinstance(slide, BodySlide):
+        return render_body(slide, signature, lang, icon)
     return render_summary(slide, signature, lang, icon)
 
 
@@ -1161,12 +1361,16 @@ async def build(workout_id: int, user) -> list[bytes]:
         style = "drawing"
     posters: dict[int, str] = {}
     thumbs: dict[int, str] = {}
+    muscles: dict[int, body_map.Muscles] = {}
     for block in exercises:
         if block.exercise_id is None:
             continue
         row = await db.get_exercise(block.exercise_id)
         if row is None:
             continue
+        markup = exercise_muscles.for_exercise(row)
+        if markup is not None:
+            muscles[block.exercise_id] = (markup["primary"], markup["secondary"])
         if block.record_reps is not None or block.record_e1rm_delta is not None:
             poster = _poster_path(row, style)
             if poster:
@@ -1177,7 +1381,7 @@ async def build(workout_id: int, user) -> list[bytes]:
     with i18n.use_lang(_field(user, "lang", i18n.DEFAULT_LANG)):
         deck = assemble(
             blocks, user, started_at=dt.datetime.fromisoformat(workout["started_at"]),
-            duration_seconds=duration, posters=posters, thumbs=thumbs,
+            duration_seconds=duration, posters=posters, thumbs=thumbs, muscles=muscles,
         )
     if not deck.slides:
         return []
