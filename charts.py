@@ -97,6 +97,52 @@ def _fig_to_png(fig, dpi: int = 150, tight: bool = True) -> bytes:
     return buf.read()
 
 
+# Пиксельное пламя — тот же рисунок 12×12, что значок рекорда в приложении
+# (training_log_bot_ios: PixelIcon.swift, `.flame`): на графике прогресса
+# рекордный день отмечен им, а не круглой точкой.
+_FLAME_ROWS = (
+    ".....#......",
+    ".....##.....",
+    "....####....",
+    "...#####....",
+    "...######.#.",
+    "..########..",
+    "..###.####..",
+    ".###...####.",
+    ".###....###.",
+    ".###....###.",
+    "..###..###..",
+    "...######...",
+)
+
+
+def _pixel_marker(rows: tuple[str, ...]):
+    """Маркер matplotlib из пиксельного рисунка: каждая клетка «#» — свой
+    квадрат одного составного контура, без сглаживания формы."""
+    from matplotlib.path import Path
+
+    n = len(rows)
+    verts, codes = [], []
+    for r, row in enumerate(rows):
+        for c, ch in enumerate(row):
+            if ch != "#":
+                continue
+            x0, y0 = c - n / 2, n / 2 - r - 1
+            verts += [(x0, y0), (x0 + 1, y0), (x0 + 1, y0 + 1), (x0, y0 + 1), (x0, y0)]
+            codes += [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]
+    return Path(verts, codes)
+
+
+_FLAME_MARKER = _pixel_marker(_FLAME_ROWS)
+# Силуэт пламени без «дырки» — подложка цвета фона под значком: линия графика
+# не просвечивает сквозь пламя, а квадратной плашки, как в приложении (там
+# график лежит на карточке и плашку не видно), на бетоне нет.
+_FLAME_FILLED = _pixel_marker(tuple(
+    row[: row.index("#")] + "#" * (row.rindex("#") - row.index("#") + 1) + row[row.rindex("#") + 1:]
+    for row in _FLAME_ROWS
+))
+
+
 def record_flags(values: list[float]) -> list[bool]:
     """Какие точки графика — рекордные дни: значение строго выше всех точек ДО
     неё (бегущий максимум). Порт `ProgressRecords` iOS-приложения, чтобы
@@ -132,7 +178,7 @@ def render_metric_over_sessions(
     plotted points (used by the exercise progress chart, where a rate reads
     as noise next to "how much did it actually grow").
 
-    `mark_records` — рекордные дни (`record_flags`) крупной точкой цвета лампы:
+    `mark_records` — рекордные дни (`record_flags`) пиксельным пламенем:
     для графика упражнения, где «выше» значит «лучше». Дневнику веса тела это
     не нужно — там рост бывает и целью, и проблемой."""
     fig = _new_figure(figsize=(6, 3.5))
@@ -141,26 +187,24 @@ def render_metric_over_sessions(
     ax.set_facecolor(PAPER)
     dates = [p[0] for p in points]
     values = [p[1] for p in points]
-    ax.plot(dates, values, marker="o", color=BRICK, linewidth=2, markersize=5, zorder=3)
+    # Как график упражнения в приложении (ExerciseProgressView.chart): линия и
+    # точки — лампой, рекордный день — пиксельным пламенем кирпичом.
+    ax.plot(dates, values, marker="o", color=LAMP, linewidth=2.2, markersize=5, zorder=3)
     if mark_records:
         flags = record_flags(values)
         rec_dates = [d for d, f in zip(dates, flags, strict=True) if f]
         rec_values = [v for v, f in zip(values, flags, strict=True) if f]
         if rec_dates:
-            # Эмодзи 🔥 matplotlib без цветного шрифта не нарисует — огонёк
-            # передаёт цвет лампы (LAMP — «рекорды, огонёк» в палитре выше),
-            # поверх линии и крупнее обычной точки.
-            ax.scatter(
-                rec_dates, rec_values, s=110, color=LAMP, edgecolors=BRICK_DEEP,
-                linewidths=1.5, zorder=4, label=i18n.t("chart.record_label"),
-            )
-            # Цвет сам по себе ничего не говорит — подписываем, что это за точки.
-            # scatteryoffsets=[0.5]: у точечной серии matplotlib по умолчанию
-            # ставит маркер легенды ниже середины строки, и кружок с подписью
-            # стояли вразнобой; маркер мельче — подпись читается, а не тонет.
-            ax.legend(loc="best", frameon=False, labelcolor=INK_DIM, fontsize=9,
-                      scatterpoints=1, scatteryoffsets=[0.5], markerscale=0.75,
-                      handletextpad=0.3, borderaxespad=0.6)
+            ax.scatter(rec_dates, rec_values, s=190, marker=_FLAME_FILLED, color=PAPER,
+                       edgecolors=PAPER, linewidths=2.5, zorder=4)
+            ax.scatter(rec_dates, rec_values, s=190, marker=_FLAME_MARKER, color=BRICK, linewidths=0, zorder=5)
+            # Подпись — что это за значок; маркер легенды тот же, на середине строки.
+            from matplotlib.lines import Line2D
+
+            handle = Line2D([], [], linestyle="none", marker=_FLAME_MARKER, markersize=12,
+                            markerfacecolor=BRICK, markeredgewidth=0)
+            ax.legend([handle], [i18n.t("chart.record_label")], loc="best", frameon=False,
+                      labelcolor=INK_DIM, fontsize=9, handletextpad=0.3, borderaxespad=0.6)
 
     trend = linear_trend(points)
     if trend is not None and len(points) >= 2:
@@ -168,7 +212,7 @@ def render_metric_over_sessions(
         xs_days = [(d.date() - t0).days for d in dates]
         slope_per_day = trend.slope_per_week / 7
         trend_y = [trend.intercept + slope_per_day * x for x in xs_days]
-        ax.plot(dates, trend_y, linestyle="--", color=INK_DIM, linewidth=1.2, zorder=2)
+        ax.plot(dates, trend_y, linestyle=(0, (4, 4)), color=BRICK_DEEP, alpha=0.4, linewidth=1.5, zorder=2)
         ax.set_title(_trend_title(title, trend, values, show_weekly_rate),
                      color=INK, fontweight="bold")
     else:
