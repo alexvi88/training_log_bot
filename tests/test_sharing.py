@@ -25,6 +25,7 @@ def _make_callback(user_id: int, data: str):
     message = MagicMock()
     message.chat = SimpleNamespace(id=user_id)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=700))
+    message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=702))
     message.edit_reply_markup = AsyncMock()
     bot = MagicMock()
     bot.get_me = AsyncMock(return_value=SimpleNamespace(username="TrainLogBot"))
@@ -104,6 +105,14 @@ async def _program(db, user_id: int, name: str, days=("Ноги", "Верх"), e
     return program_id
 
 
+def _program_card_text(callback) -> str:
+    """Текст визитки программы: подпись к фото, а если подпись не влезла или
+    картинки нет — отдельное сообщение следом."""
+    if callback.message.answer.await_count:
+        return callback.message.answer.await_args.args[0]
+    return callback.message.answer_photo.await_args.kwargs["caption"]
+
+
 def _share_button(kb) -> str:
     """callback_data кнопки «Поделиться» — из самой клавиатуры, а не собранная
     в тесте по образцу обработчика."""
@@ -158,7 +167,7 @@ async def test_share_cards_carry_the_app_store_link_only_when_configured(fresh_d
     program_id = await _program_with_two_days(db, user_id)
     callback = _make_callback(user_id, f"share:prg:{program_id}")
     await sharing.share_program(callback, await _state(user_id))
-    assert "https://apps.apple.com/app/id123" in callback.message.answer.await_args.args[0]
+    assert "https://apps.apple.com/app/id123" in _program_card_text(callback)
 
     gid = await db.create_muscle_group(user_id, "Спина")
     ex_id = await db.create_exercise(user_id, "Тяга", gid)
@@ -720,7 +729,7 @@ async def test_share_button_shares_the_program_it_was_built_for(fresh_db, user_i
     assert payload["name"] == "Программа Б"
     assert [d["name"] for d in payload["days"]] == ["Толкай", "Тяни"]
     # Программа уехала целиком — пугать потерей нечем.
-    assert "⚠️" not in callback.message.answer.await_args.args[0]
+    assert "⚠️" not in _program_card_text(callback)
 
 
 async def test_old_share_buttons_addressed_by_day_reach_the_same_program(fresh_db, user_id):
@@ -751,6 +760,7 @@ async def test_a_standalone_routine_id_never_turns_into_someone_elses_program(fr
     for data in (f"share:prg:{routine_id}", f"share:pgm:{routine_id}"):
         callback = await _tap(user_id, data)
         callback.message.answer.assert_not_awaited()
+        callback.message.answer_photo.assert_not_awaited()
         assert "Не нашёл эту программу" in callback.answer.await_args.args[0], data
 
 
@@ -773,7 +783,7 @@ async def test_days_over_the_card_limit_are_reported_to_both_sides(fresh_db, use
     assert payload["total_days"] == 8
 
     # Отправитель: и в самой визитке, и в ответе на нажатие.
-    text = callback.message.answer.await_args.args[0]
+    text = _program_card_text(callback)
     assert "6 дней из 8" in text
     assert "6 дней из 8" in callback.answer.await_args.args[0]
     # Число в тексте — про то, что реально в визитке.
@@ -810,7 +820,7 @@ async def test_empty_days_do_not_eat_the_limit_but_are_counted_as_missing(fresh_
     payload = await _last_payload(db)
     assert [d["name"] for d in payload["days"]] == [f"День {i}" for i in range(2, 8)]
     assert payload["total_days"] == 7
-    assert "6 дней из 7" in callback.message.answer.await_args.args[0]
+    assert "6 дней из 7" in _program_card_text(callback)
 
 
 async def test_a_program_with_one_empty_day_says_which_rule_dropped_it(fresh_db, user_id):
@@ -825,7 +835,7 @@ async def test_a_program_with_one_empty_day_says_which_rule_dropped_it(fresh_db,
 
     payload = await _last_payload(db)
     assert [d["name"] for d in payload["days"]] == ["Толкай", "Ноги"]
-    text = callback.message.answer.await_args.args[0]
+    text = _program_card_text(callback)
     assert "2 дня из 3" in text
     assert "пустые дни не передаются" in text
     assert "2 дня из 3" in callback.answer.await_args.args[0]
@@ -849,7 +859,7 @@ async def test_six_working_days_and_two_empty_do_not_claim_a_loss_that_did_not_h
 
     callback = await _tap(user_id, f"share:prg:{program_id}")
 
-    text = callback.message.answer.await_args.args[0]
+    text = _program_card_text(callback)
     assert "не влезает" not in text
     assert "пустые дни не передаются" in text
 
@@ -864,7 +874,7 @@ async def test_both_causes_at_once_are_named_both(fresh_db, user_id):
 
     callback = await _tap(user_id, f"share:prg:{program_id}")
 
-    text = callback.message.answer.await_args.args[0]
+    text = _program_card_text(callback)
     assert "пустые дни не передаются, а остальное не влезло" in text
 
 
@@ -924,3 +934,95 @@ async def test_two_concurrent_imports_do_not_blow_past_the_routine_cap(fresh_db,
     )
 
     assert await db.count_routines(recipient) <= config.MAX_ROUTINES_PER_USER
+
+
+# ---------- визитка программы картинкой (program_card.py) ----------
+
+
+def _photo_png(call) -> bytes:
+    photo = call.args[0] if call.args else call.kwargs["photo"]
+    return photo.data
+
+
+async def test_program_card_goes_as_photo_with_caption_and_claim_button(fresh_db, user_id):
+    """Как у приложения (`ProgramShareCard`): программа уезжает картинкой, текст
+    визитки — подписью, кнопка «Забрать» — под фото, одним сообщением."""
+    import io
+
+    from PIL import Image
+
+    db = fresh_db
+    program_id = await _program_with_two_days(db, user_id)
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_awaited_once()
+    call = callback.message.answer_photo.await_args
+    assert Image.open(io.BytesIO(_photo_png(call))).width == 1080
+    caption = call.kwargs["caption"]
+    assert "Сплит" in caption and "Присед" in caption
+    assert call.kwargs["parse_mode"] == "HTML"
+    kb = call.kwargs["reply_markup"]
+    token = await _last_share_token(db)
+    assert any(b.url and token in b.url for row in kb.inline_keyboard for b in row)
+    assert any(b.callback_data == f"share:revoke:{token}" for row in kb.inline_keyboard for b in row)
+    import i18n
+
+    with i18n.use_lang("ru"):
+        assert callback.answer.await_args.args[0] == i18n.t("share.card_ready")
+
+
+async def test_program_card_render_failure_falls_back_to_text(fresh_db, user_id, monkeypatch):
+    import program_card
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("render exploded")
+
+    monkeypatch.setattr(program_card, "render", boom)
+    db = fresh_db
+    program_id = await _program_with_two_days(db, user_id)
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    callback.message.answer_photo.assert_not_awaited()
+    callback.message.answer.assert_awaited_once()
+    assert "Присед" in callback.message.answer.await_args.args[0]
+    assert callback.message.answer.await_args.kwargs["reply_markup"] is not None
+    callback.answer.assert_awaited()
+
+
+async def test_program_card_photo_send_failure_falls_back_to_text(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _program_with_two_days(db, user_id)
+    callback = _make_callback(user_id, f"share:prg:{program_id}")
+    callback.message.answer_photo = AsyncMock(side_effect=RuntimeError("telegram said no"))
+
+    await sharing.share_program(callback, await _state(user_id))
+
+    callback.message.answer.assert_awaited_once()
+    assert "Присед" in callback.message.answer.await_args.args[0]
+
+
+async def test_long_program_card_sends_photo_then_the_same_text_card(fresh_db, user_id):
+    """Текст не влезает в подпись (1024): сначала фото без подписи, следом —
+    прежняя текстовая визитка с кнопкой, без изменений."""
+    from formatting import CAPTION_LIMIT, telegram_length
+
+    db = fresh_db
+    program_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
+    callback = _make_callback(user_id, f"share:prg:{program_id}")
+    order: list[str] = []
+    callback.message.answer_photo.side_effect = lambda *a, **k: order.append("photo")
+    callback.message.answer.side_effect = lambda *a, **k: order.append("text")
+
+    await sharing.share_program(callback, await _state(user_id))
+
+    assert order == ["photo", "text"]
+    photo_call = callback.message.answer_photo.await_args
+    assert "caption" not in photo_call.kwargs and "reply_markup" not in photo_call.kwargs
+    text = callback.message.answer.await_args.args[0]
+    assert telegram_length(text) > CAPTION_LIMIT
+    assert callback.message.answer.await_args.kwargs["reply_markup"] is not None
+    # Тот же текст визитки, что и без картинки: программа и дни на месте.
+    assert "Большая сборная" in text and "День 1" in text

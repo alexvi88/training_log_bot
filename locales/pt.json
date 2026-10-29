@@ -5909,5 +5909,8 @@
   "finish_slides.more": "mais {n}",
   "finish_slides.brand": "Diário do Atleta",
   "finish_slides.tagline": "Treinador IA para a academia",
-  "finish_slides.store": "Baixar na"
+  "finish_slides.store": "Baixar na",
+  "program_card.chip": "Programa",
+  "program_card.more_days": "{n, plural, one{mais # dia} other{mais # dias}}",
+  "program_card.more_exercises": "{n, plural, one{mais # exercício} other{mais # exercícios}}"
 }

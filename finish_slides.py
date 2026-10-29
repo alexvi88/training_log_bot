@@ -180,6 +180,16 @@ class Deck:
         return result
 
 
+def current_signature() -> Signature:
+    """Подпись приложения на текущем языке — общая у слайдов итогов и визитки
+    программы (`program_card.py`)."""
+    return Signature(
+        brand=i18n.t("finish_slides.brand"),
+        tagline=i18n.t("finish_slides.tagline"),
+        store_small=i18n.t("finish_slides.store"),
+    )
+
+
 def ranked_records(records: Sequence[RecordSlide]) -> list[RecordSlide]:
     """По убыванию относительной прибавки; при равной — по порядку
     упражнений (`FinishShareDeck.rankedRecords`)."""
@@ -307,11 +317,7 @@ def assemble(
     unit = _field(user, "unit", "kg")
     show_extra = bool(_field(user, "show_extra_stats", 1))
     exercises = [b for b in blocks if isinstance(b, formatting.ExerciseBlockView) and b.sets]
-    signature = Signature(
-        brand=i18n.t("finish_slides.brand"),
-        tagline=i18n.t("finish_slides.tagline"),
-        store_small=i18n.t("finish_slides.store"),
-    )
+    signature = current_signature()
     lang = i18n.get_lang()
     if not exercises:
         return Deck(None, (), None, signature, lang)
@@ -444,11 +450,14 @@ def _upper(text: str, lang: str) -> str:
 class _Canvas:
     """Холст в точках карточки: все координаты — pt, как в SwiftUI-макете."""
 
-    def __init__(self, lang: str):
+    def __init__(self, lang: str, height: float = CARD_H):
         from PIL import Image, ImageDraw
 
         self.lang = lang
-        self.image = Image.new("RGB", (CARD_W * _K, CARD_H * _K), COAL)
+        # Высота в точках: у слайдов — кадр 640, у визитки программы
+        # (`program_card.py`) — по содержимому (`FinishShareFrame(height: nil)`).
+        self.height = height
+        self.image = Image.new("RGB", (CARD_W * _K, self.px(height)), COAL)
         self.draw = ImageDraw.Draw(self.image, "RGBA")
 
     @staticmethod
@@ -550,7 +559,7 @@ class _Canvas:
     def finish(self) -> bytes:
         from PIL import Image
 
-        out = self.image.resize((WIDTH, HEIGHT), Image.LANCZOS)
+        out = self.image.resize((WIDTH, round(self.height * SCALE)), Image.LANCZOS)
         buffer = BytesIO()
         out.save(buffer, format="PNG")
         return buffer.getvalue()
@@ -617,8 +626,9 @@ def _apple_logo(canvas: _Canvas, cx: float, cy: float, size: float) -> None:
 
 
 def _signature(canvas: _Canvas, signature: Signature, icon: Optional[str]) -> None:
-    top = CONTENT_H
-    canvas.vgradient(0, top, CARD_W, CARD_H, [(0, (59, 56, 54, 255)), (1, (41, 38, 38, 255))])
+    """Подпись приложения по низу холста — у кадра 640 и у визитки любой высоты."""
+    top = canvas.height - SIGNATURE_H
+    canvas.vgradient(0, top, CARD_W, canvas.height, [(0, (59, 56, 54, 255)), (1, (41, 38, 38, 255))])
     canvas.rect(0, top, CARD_W, top + 2, _rgba(WHITE, 0.1))
     mid = top + SIGNATURE_H / 2
     x = 14.0
@@ -1096,8 +1106,13 @@ def _round_corners(canvas: _Canvas, x: float, y: float, size: float, radius: flo
 APP_ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "site", "icons", "icon-512.png")
 
 
+def app_icon() -> Optional[str]:
+    """Иконка приложения для подписи, если файл на месте."""
+    return APP_ICON if os.path.isfile(APP_ICON) else None
+
+
 def render_slide(slide: Slide, signature: Signature, lang: str) -> bytes:
-    icon = APP_ICON if os.path.isfile(APP_ICON) else None
+    icon = app_icon()
     if isinstance(slide, BarbellSlide):
         return render_barbell(slide, signature, lang, icon)
     if isinstance(slide, RecordSlide):

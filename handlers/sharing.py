@@ -16,6 +16,7 @@
 «создать все» в CSV-импорте: группу можно поправить потом).
 """
 
+import asyncio
 import json
 import logging
 from html import escape
@@ -24,14 +25,15 @@ from typing import Any, Optional
 from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import acquisition
 import config
 import db
 import i18n
+import program_card
 import seed_data
-from formatting import MESSAGE_LIMIT, telegram_length
+from formatting import CAPTION_LIMIT, MESSAGE_LIMIT, telegram_length
 from state_scaffold import clear_state_keep_ai
 
 logger = logging.getLogger(__name__)
@@ -415,6 +417,40 @@ async def build_program_payload(program_id: int, program_name: str) -> Optional[
     }
 
 
+async def _program_card_png(payload: dict[str, Any]) -> Optional[bytes]:
+    """Визитка программы картинкой (`program_card.py`) — или None, если рендер
+    упал: тогда уходит прежняя текстовая визитка, шаринг не ломается никогда.
+    Строки собираются здесь, на языке владельца; рисование — в потоке."""
+    try:
+        card = program_card.assemble(payload)
+        return await asyncio.to_thread(program_card.render, card)
+    except Exception:
+        logger.exception("program card render failed, sending text card only")
+        return None
+
+
+async def _answer_program_card(
+    callback: CallbackQuery, payload: dict[str, Any], text: str, markup: InlineKeyboardMarkup
+) -> None:
+    """Картинка, как у приложения (`ProgramShareCard`), и текст визитки.
+
+    Влезает текст в подпись к фото — одно сообщение: фото, подпись и кнопка
+    «Забрать», пересылается целиком. Не влезает — сначала фото, следом та же
+    текстовая визитка с кнопкой. Картинка не нарисовалась или не ушла — только
+    текст, как раньше."""
+    png = await _program_card_png(payload)
+    if png is not None:
+        photo = BufferedInputFile(png, filename="program.png")
+        try:
+            if telegram_length(text) <= CAPTION_LIMIT:
+                await callback.message.answer_photo(photo, caption=text, parse_mode="HTML", reply_markup=markup)
+                return
+            await callback.message.answer_photo(photo)
+        except Exception:
+            logger.exception("program card photo failed, sending text card only")
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
 async def _send_program_card(callback: CallbackQuery, program_id: int, program_name: str) -> None:
     """Собрать снапшот программы и отдать владельцу визитку — общее тело обеих
     ручек ниже (адресованной id программы и старой, адресованной днём)."""
@@ -434,9 +470,9 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
             token,
         )
     )
-    await callback.message.answer(
-        text, parse_mode="HTML",
-        reply_markup=_share_card_keyboard(url, i18n.t("share.claim_program_button"), token),
+    await _answer_program_card(
+        callback, payload, text,
+        _share_card_keyboard(url, i18n.t("share.claim_program_button"), token),
     )
     if note is None:
         await callback.answer(i18n.t("share.card_ready"))
