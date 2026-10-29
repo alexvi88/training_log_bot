@@ -47,6 +47,7 @@ Accept-Language или Sec-Fetch-Mode — их шлёт любой живой б
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 from typing import Any, Optional
@@ -283,6 +284,28 @@ def clean_utm(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+# Роботы заходят тысячами в сутки, и строка на каждый заход топила живой лог.
+# В базу пишется всё, а в лог INFO: люди и «компьютеры», похожие на автомат,
+# как раньше; названный робот (Googlebot, Amazonbot…) — только DEBUG, его и
+# так видно в /growth; безымянный — одна строка с сырым UA на семейство в сутки,
+# чтобы его можно было опознать и занести в CRAWLERS.
+_unnamed_seen: set[tuple[str, str]] = set()
+
+
+def _log_level(crawler: Optional[str], family: Optional[str]):
+    if not crawler:
+        return logger.info
+    if crawler not in ("other", "unknown"):
+        return logger.debug
+    key = (dt.date.today().isoformat(), family or "-")
+    if key in _unnamed_seen:
+        return logger.debug
+    if len(_unnamed_seen) > 5000:
+        _unnamed_seen.clear()
+    _unnamed_seen.add(key)
+    return logger.info
+
+
 async def record(kind: str, page: str, lang: Optional[str], *, user_agent: Optional[str],
                  referer: Optional[str], own_hosts: tuple[str, ...] = (), utm: Optional[str] = None,
                  target: Optional[str] = None, headers: Any = None) -> tuple[str, Optional[str], str]:
@@ -298,7 +321,7 @@ async def record(kind: str, page: str, lang: Optional[str], *, user_agent: Optio
     raw = ""
     if crawler in ("other", "unknown") or suspect:
         raw = f' ua="{_raw_ua(user_agent)}"'
-    logger.info(
+    _log_level(crawler, family)(
         "site %s %s lang=%s ref=%s device=%s%s%s%s%s%s", kind, page, lang or "-", source, device,
         f" crawler={crawler}" if crawler else "", f" utm={utm_clean}" if utm_clean else "",
         f" to={target}" if target else "", f" suspect={suspect}" if suspect else "", raw,
@@ -353,7 +376,7 @@ async def record_seen(page: str, lang: Optional[str], *, user_agent: Optional[st
     который исполняет JS) не пишется вовсе. True — засчитано."""
     device, crawler = classify_ua(user_agent)
     if device == "bot":
-        logger.info("site seen-dropped %s device=bot crawler=%s", page, crawler)
+        logger.debug("site seen-dropped %s device=bot crawler=%s", page, crawler)
         return False
     await record("seen", page, lang, user_agent=user_agent, referer=referer, own_hosts=own_hosts, utm=utm)
     return True
