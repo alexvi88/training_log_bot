@@ -79,14 +79,18 @@ def test_automation_hints_from_headers():
 
 async def test_raw_ua_goes_to_log_only_for_unnamed_bots_and_automated_desktops(fresh_db, caplog):
     caplog.set_level("INFO", logger="site_stats")
+    site_stats._unnamed_seen.clear()
     long_tail = "x" * 400
     async with _client() as client:
         await client.get("/tr", headers={"User-Agent": UA_SEZNAM + long_tail})
         await client.get("/fr", headers={"User-Agent": UA_DESKTOP})  # без Accept-Language/Sec-Fetch — скрейпер
         await client.get("/de", headers={"User-Agent": UA_DESKTOP, **BROWSER_HEADERS})
         await client.get("/es", headers={"User-Agent": UA_GOOGLEBOT})
-    lines = [r.getMessage() for r in caplog.records if r.name == "site_stats" and r.getMessage().startswith("site view")]
-    bot, scraper, human, google = lines
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "site_stats" and r.levelname == "INFO" and r.getMessage().startswith("site view")]
+    # Названный робот (Googlebot) в лог INFO не пишется — только в базу.
+    bot, scraper, human = lines
+    google = ""
     assert "crawler=other" in bot and 'ua="Mozilla/5.0 (compatible; SeznamBot/4.0;' in bot
     raw = bot.split('ua="', 1)[1].rstrip('"')
     assert len(raw) == site_stats.RAW_UA_LOG_CHARS
@@ -231,3 +235,18 @@ async def test_old_database_gets_the_ua_family_column(tmp_path):
         assert (await db.site_stats(3650))["other_bots"] == [("curl", 1)]
     finally:
         await db.close_db()
+
+
+async def test_bots_dont_flood_the_log(fresh_db, caplog):
+    """Названный робот — не в INFO вовсе; безымянный — одна строка на
+    семейство в сутки. В базу пишется каждый заход."""
+    caplog.set_level("INFO", logger="site_stats")
+    site_stats._unnamed_seen.clear()
+    async with _client() as client:
+        for path in ("/tr", "/fr", "/de"):
+            await client.get(path, headers={"User-Agent": UA_SEZNAM})
+            await client.get(path, headers={"User-Agent": UA_GOOGLEBOT})
+    info = [r.getMessage() for r in caplog.records
+            if r.name == "site_stats" and r.levelname == "INFO" and r.getMessage().startswith("site view")]
+    assert len(info) == 1 and "crawler=other" in info[0]
+    assert len(await _rows(fresh_db)) == 6
