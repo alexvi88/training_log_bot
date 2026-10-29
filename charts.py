@@ -25,22 +25,28 @@ from formatting import format_weight  # noqa: E402
 # экраны приложения, а не как отдельный тёмный «терминал». Цвета заданы здесь
 # один раз: рендеры ниже берут их по смыслу (фон, текст, акцент), а не по hex.
 #
+# Палитра «Бетон» (редизайн приложения «Подвал 2.0», 27.10): фон — тёплый
+# бетон, карточки — штукатурка на тон светлее, текст — графит вместо
+# почти-чёрного (владелец: «чёрный надо не чёрный, а светлее, тёмно-серый»).
+# Рамка карточки — кромка на тон темнее штукатурки, а не чёрная линия.
+#
 # Контраст текста проверен на фоне, где он лежит (WCAG AA ≥ 4.5:1):
-# INK 17.4, INK_DIM 4.9, BRICK 5.1, LAMP_TEXT 4.9 — на PAPER; на белой
-# карточке (SURFACE) каждый ещё немного выше. FAINT и LAMP — только для
-# декора (дорожки, полосы), не для текста.
-PAPER = "#faf7f4"        # фон страницы
-SURFACE = "#ffffff"      # приподнятая карточка/плитка
-SURFACE_SUNK = "#f1ece6" # утопленная поверхность: пустая дорожка полосы
-HAIRLINE = (22 / 255, 18 / 255, 16 / 255, 0.08)   # rgba(22,18,16,.08) — рамки, линейки
-INK = "#161210"          # основной текст
-INK_DIM = "#6f6c6b"      # вторичный текст, подписи
-FAINT = "#a6a5a4"        # только декор
-BRICK = "#b4472f"        # бренд: главная линия, выбранное, акцент
-BRICK_DEEP = "#963a26"
+# INK 9.8, INK_DIM 5.2, LAMP_TEXT 5.2 — на PAPER; на карточке (SURFACE) каждый
+# выше. BRICK на бетоне — 4.2: им пишется только крупный жирный текст
+# (заголовок, итог), для него порог 3:1. FAINT и LAMP — только декор.
+PAPER = "#e7e1d8"        # фон страницы — бетон (Theme.paper)
+SURFACE = "#f4efe8"      # карточка/плитка — штукатурка (Theme.plaster)
+SURFACE_SUNK = "#ddd4c8" # утопленная поверхность: пустая дорожка полосы (Theme.segmentTrack)
+HAIRLINE = "#e2d9cc"     # кромка карточки, линейки сетки (Theme.cardBorder)
+CARD_EDGE = "#d6cbbc"    # уступ под карточкой (Theme.cardEdge)
+INK = "#38312c"          # основной текст — графит (Theme.ink)
+INK_DIM = "#625a54"      # вторичный текст, подписи
+FAINT = "#9d9790"        # только декор (Theme.inkFaint на бетоне)
+BRICK = "#b4472f"        # бренд: главная линия, выбранное, акцент (Theme.brick)
+BRICK_DEEP = "#7d2e1e"   # Theme.brickDeep
 LAMP = "#e9a83d"         # подсветка: рекорды, огонёк (заливки, не текст)
-LAMP_TEXT = "#8f6414"    # та же лампа, но читаемая как текст на светлом
-GREEN = "#2e7d4f"        # «в норме» у коридора объёма
+LAMP_TEXT = "#7a5410"    # та же лампа, но читаемая как текст на бетоне
+GREEN = "#3e8e5a"        # «в норме» у коридора объёма (Theme.done)
 
 
 def _arrow(delta: float) -> str:
@@ -307,9 +313,9 @@ DASH_LEFT, DASH_RIGHT = 0.04, 0.96
 DASH_GAP = 0.34               # распорка между виджетами, с линейкой
 DASH_PAD = 0.08               # распорка внутри группы, без линейки
 DASH_CARD = SURFACE
-# Линейка — та же волосяная HAIRLINE, но уже смешанная с PAPER в непрозрачный
-# цвет: тест ищет её по точному пикселю, а полупрозрачная дала бы смесь.
-DASH_RULE = "#e8e5e2"
+# Линейка между блоками — уступ карточки приложения (Theme.cardEdge), темнее
+# бетона, непрозрачная: тест ищет её по точному пикселю.
+DASH_RULE = "#d6cbbc"
 
 # Типографика сводки: шесть роле́й вместо одиннадцати случайных размеров. До этого
 # в одной картинке жили 6, 6.5, 7, 7.5, 8, 8.5, 9, 10, 13.5, 15 и 23 pt, причём
@@ -367,6 +373,12 @@ def _dash_card(ax, x, y, w, h, colour=DASH_CARD, edge=HAIRLINE) -> None:
     """Плоская карточка со скруглением и волосяной рамкой — как в приложении:
     белая плитка на тёплом фоне почти не отличается по светлоте, рамка её и
     отделяет (тени и градиенты приложение не использует)."""
+    # Уступ снизу — жёсткая тень без размытия, как у карточек «Подвала 2.0»
+    # (Theme.cardEdge): толщина блока, а не подсветка.
+    ax.add_patch(
+        FancyBboxPatch((x, y + 0.035), w, h, boxstyle="round,pad=0,rounding_size=0.02",
+                       linewidth=0, facecolor=CARD_EDGE, zorder=0)
+    )
     ax.add_patch(
         FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=0.02",
                        linewidth=0.8 if edge else 0, edgecolor=edge or "none",
@@ -608,7 +620,7 @@ def _quote_marks() -> tuple[str, str]:
 #  завести здесь вторую запись, а не трогать рендер.
 #  RECORD — строка рекорда (★): рекорды в приложении подсвечиваются лампой.
 _APP_CARD_PALETTE = {
-    "BG": PAPER, "FG": INK, "ACCENT": BRICK, "MUTED": INK_DIM,
+    "BG": PAPER, "CARD": SURFACE, "FG": INK, "ACCENT": BRICK, "MUTED": INK_DIM,
     "NOTE": LAMP_TEXT, "RECORD": LAMP_TEXT,
 }
 _CARD_THEMES = {"bot": _APP_CARD_PALETTE, "app": _APP_CARD_PALETTE}
@@ -661,7 +673,7 @@ def render_workout_card(
         # edge of the shared image.
         for chunk in _wrap_card_line(line):
             rows.append((chunk, style))
-    rows.append(("─" * 28, "muted"))
+    rows.append(("", "rule"))
     rows.append((footer, "accent"))
 
     line_h = 0.30
@@ -676,6 +688,15 @@ def render_workout_card(
     ax.axis("off")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, fig_h)
+    # Текст лежит на карточке-штукатурке с кромкой и уступом, как строка
+    # тренировки в истории приложения, а не прямо на фоне «терминалом».
+    card_bottom, card_top = bottom_pad * 0.45, fig_h - top_pad * 0.45
+    ax.add_patch(FancyBboxPatch((0.025, card_bottom - 0.05), 0.95, card_top - card_bottom,
+                                boxstyle="round,pad=0,rounding_size=0.03", mutation_aspect=fig_w,
+                                linewidth=0, facecolor=CARD_EDGE, zorder=0))
+    ax.add_patch(FancyBboxPatch((0.025, card_bottom), 0.95, card_top - card_bottom,
+                                boxstyle="round,pad=0,rounding_size=0.03", mutation_aspect=fig_w,
+                                linewidth=1.0, edgecolor=HAIRLINE, facecolor=colors["CARD"], zorder=0))
 
     styles = {
         "header": dict(color=ACCENT, fontsize=17, fontweight="bold"),
@@ -689,6 +710,9 @@ def render_workout_card(
 
     y = fig_h - top_pad
     for text, style in rows:
-        ax.text(0.05, y, text, family="monospace", va="top", **styles[style])
+        if style == "rule":
+            ax.plot([0.065, 0.935], [y - line_h * 0.4] * 2, color=HAIRLINE, linewidth=1.2)
+        else:
+            ax.text(0.065, y, text, va="top", **styles[style])
         y -= line_h
     return _fig_to_png(fig)
