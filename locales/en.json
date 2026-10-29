@@ -5894,5 +5894,20 @@
   "seo.switch.coach.h": "Then ask me about it",
   "seo.switch.coach.q": "How has my bench moved since I started in {app}?",
   "seo.switch.coach.a": "Your top set went from 70 × 5 in March to 87.5 × 5 last week, e1RM up 20 kg. It stalled in July when you dropped to one press day. Want a 4-week block to get past 90?",
-  "seo.switch.coach.note": "Sample answer. The coach has a daily cap: {questions} questions and {videos} video reviews."
+  "seo.switch.coach.note": "Sample answer. The coach has a daily cap: {questions} questions and {videos} video reviews.",
+  "finish_slides.title": "My workout",
+  "finish_slides.lifted": "Lifted in total",
+  "finish_slides.lifted_female": "Lifted in total",
+  "finish_slides.chip.record": "New record",
+  "finish_slides.chip.workout": "Workout",
+  "finish_slides.fact.exercises": "{n, plural, one{exercise} other{exercises}}",
+  "finish_slides.fact.sets": "{n, plural, one{set} other{sets}}",
+  "finish_slides.fact.time": "in the gym",
+  "finish_slides.fact.gain": "over last best",
+  "finish_slides.fact.set": "set",
+  "finish_slides.reps": "{n, plural, one{rep} other{reps}}",
+  "finish_slides.more": "{n} more",
+  "finish_slides.brand": "Athlete Diary",
+  "finish_slides.tagline": "AI coach for the gym",
+  "finish_slides.store": "Download on the"
 }

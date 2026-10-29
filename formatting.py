@@ -460,6 +460,9 @@ class ExerciseBlockView:
     # (или это первая сессия упражнения, бить нечего). См. view_builder.
     record_e1rm_delta: float | None = None
     record_reps: int | None = None
+    # Прошлый лучший результат в повторах — к рекорду повторов: «+2» на
+    # слайде рекорда в альбоме итогов (finish_slides). None — рекорда нет.
+    record_reps_prev: int | None = None
     # Язык тега группы, если он не язык карточки: тренер смотрит тренировку
     # атлета с подписями на своём языке, а группу — данные атлета — на языке
     # атлета (handlers.workout._finished_summary, data_lang). None — текущий.

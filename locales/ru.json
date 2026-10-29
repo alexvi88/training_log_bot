@@ -5895,5 +5895,20 @@
   "seo.switch.coach.h": "А потом спроси меня о ней",
   "seo.switch.coach.q": "Как вырос мой жим с первых тренировок в {app}?",
   "seo.switch.coach.a": "Рабочий подход вырос с 70 × 5 в марте до 87,5 × 5 на прошлой неделе, e1RM плюс 20 кг. В июле встал — когда остался один жимовой день. Собрать блок на 4 недели, чтобы пройти 90?",
-  "seo.switch.coach.note": "Пример ответа. У тренера суточный лимит: {questions} вопросов и {videos} разборов видео."
+  "seo.switch.coach.note": "Пример ответа. У тренера суточный лимит: {questions} вопросов и {videos} разборов видео.",
+  "finish_slides.title": "Моя тренировка",
+  "finish_slides.lifted": "Поднял в сумме",
+  "finish_slides.lifted_female": "Подняла в сумме",
+  "finish_slides.chip.record": "Новый рекорд",
+  "finish_slides.chip.workout": "Тренировка",
+  "finish_slides.fact.exercises": "{n, plural, one{упражнение} few{упражнения} many{упражнений} other{упражнения}}",
+  "finish_slides.fact.sets": "{n, plural, one{подход} few{подхода} many{подходов} other{подхода}}",
+  "finish_slides.fact.time": "в зале",
+  "finish_slides.fact.gain": "к рекорду",
+  "finish_slides.fact.set": "подход",
+  "finish_slides.reps": "{n, plural, one{повтор} few{повтора} many{повторов} other{повтора}}",
+  "finish_slides.more": "ещё {n}",
+  "finish_slides.brand": "Дневник атлета",
+  "finish_slides.tagline": "AI-тренер для зала",
+  "finish_slides.store": "Скачай в"
 }
