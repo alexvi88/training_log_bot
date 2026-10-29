@@ -5894,5 +5894,20 @@
   "seo.switch.coach.h": "Dann frag mich danach",
   "seo.switch.coach.q": "Wie hat sich mein Bankdrücken entwickelt, seit ich mit {app} angefangen habe?",
   "seo.switch.coach.a": "Dein Top-Satz ging von 70 × 5 im März auf 87,5 × 5 letzte Woche, e1RM plus 20 kg. Im Juli bist du stehen geblieben, als du auf einen Drücktag runter bist. Soll ich einen 4-Wochen-Block bauen, damit du über 90 kommst?",
-  "seo.switch.coach.note": "Beispielantwort. Der Coach hat ein Tageslimit: {questions} Fragen und {videos} Video-Checks."
+  "seo.switch.coach.note": "Beispielantwort. Der Coach hat ein Tageslimit: {questions} Fragen und {videos} Video-Checks.",
+  "finish_slides.title": "Mein Training",
+  "finish_slides.lifted": "Insgesamt gehoben",
+  "finish_slides.lifted_female": "Insgesamt gehoben",
+  "finish_slides.chip.record": "Neuer Rekord",
+  "finish_slides.chip.workout": "Training",
+  "finish_slides.fact.exercises": "{n, plural, one{Übung} other{Übungen}}",
+  "finish_slides.fact.sets": "{n, plural, one{Satz} other{Sätze}}",
+  "finish_slides.fact.time": "im Gym",
+  "finish_slides.fact.gain": "über Rekord",
+  "finish_slides.fact.set": "Satz",
+  "finish_slides.reps": "{n, plural, one{Wdh.} other{Wdh.}}",
+  "finish_slides.more": "{n} weitere",
+  "finish_slides.brand": "Athleten-Tagebuch",
+  "finish_slides.tagline": "KI-Coach fürs Gym",
+  "finish_slides.store": "Laden im"
 }

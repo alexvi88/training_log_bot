@@ -38,6 +38,7 @@ import exercise_alternatives
 import exercise_descriptions
 import exercise_media
 import exercise_photos
+import finish_slides
 import formatting
 import i18n
 import keyboards
@@ -4039,6 +4040,29 @@ async def workout_card_note_entered(message: Message, state: FSMContext):
     await message.reply(i18n.t("workout.note_saved"))
 
 
+async def _send_finish_slides(bot, chat_id: int, workout_id: int, user) -> None:
+    """Альбом слайдов итогов (finish_slides) — то же, что карусель приложения
+    на листе итогов. Один слайд — обычным фото (альбом из одного Telegram не
+    принимает), нет ни одного (пустая тренировка) — ничего. Занесённая задним
+    числом тренировка тоже получает слайды: дата в чипе — её день."""
+    try:
+        pngs = await finish_slides.build(workout_id, user)
+        if not pngs:
+            return
+        files = [
+            BufferedInputFile(png, filename=f"workout_{workout_id}_{index + 1}.png")
+            for index, png in enumerate(pngs)
+        ]
+        if len(files) == 1:
+            await bot.send_photo(chat_id=chat_id, photo=files[0])
+        else:
+            await bot.send_media_group(
+                chat_id=chat_id, media=[InputMediaPhoto(media=file) for file in files]
+            )
+    except Exception:
+        logger.exception("finish slides: workout %s", workout_id)
+
+
 async def _finalize_workout(event, state: FSMContext, note: str | None):
     data = await state.get_data()
     workout_id = data["workout_id"]
@@ -4151,6 +4175,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         _spawn(
             _attach_ai_comment(bot, data["live_chat_id"], message_id, user_id, workout_id, full_text)
         )
+
+    # Слайды итогов — альбомом под карточкой, в фоне: рендер занимает секунды,
+    # и завершение их не ждёт. Ошибка рендера или отправки только в лог.
+    if config.FINISH_SLIDES_ENABLED:
+        _spawn(_send_finish_slides(bot, data["live_chat_id"], workout_id, user))
 
     await _clear_sticky_photo(bot, state)
     # Тренировка закрыта — каркас больше не нужен, но переписка с AI-тренером и

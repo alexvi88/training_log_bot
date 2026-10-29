@@ -167,6 +167,7 @@ async def build_block_views(
         prev_started_at = None
         record_e1rm_delta = None
         record_reps = None
+        record_reps_prev = None
         if before is not None:
             prior = prior_by_exercise.get(ex_id, [])
             if prior and previous_before is not None:
@@ -195,6 +196,8 @@ async def build_block_views(
                         formula=formula,
                     ),
                 )
+                if record_reps is not None:
+                    record_reps_prev = _prior_best_reps(prior)
         views.append(
             ExerciseBlockView(
                 group_name=gname,
@@ -211,6 +214,7 @@ async def build_block_views(
                 set_loads=entry["loads"],
                 record_e1rm_delta=record_e1rm_delta,
                 record_reps=record_reps,
+                record_reps_prev=record_reps_prev,
             )
         )
 
@@ -446,13 +450,19 @@ def _session_record(
     """
     if not prior or not new_session.sets:
         return None, None
-    prior_pr = analytics.compute_personal_records(prior)
     if new_session.is_bodyweight_mode:
         best = new_session.max_reps_in_set
-        prev_best = max(prior_pr.max_reps_at_weight.values(), default=0)
-        return None, (best if best > prev_best else None)
+        return None, (best if best > _prior_best_reps(prior) else None)
+    prior_pr = analytics.compute_personal_records(prior)
     delta = new_session.top_e1rm - prior_pr.max_e1rm
     return (delta if delta > 0 else None), None
+
+
+def _prior_best_reps(prior: list[analytics.SessionStats]) -> int:
+    """Лучшие повторы в подходе до этой сессии — планка рекорда повторов
+    (`_session_record`) и «+N» на слайде рекорда (`finish_slides`)."""
+    prior_pr = analytics.compute_personal_records(prior)
+    return max(prior_pr.max_reps_at_weight.values(), default=0)
 
 
 async def sets_beat_record(

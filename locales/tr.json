@@ -5894,5 +5894,20 @@
   "seo.switch.coach.h": "Sonra bana sor",
   "seo.switch.coach.q": "{app} ile başladığımdan beri bench press’im ne kadar gelişti?",
   "seo.switch.coach.a": "Ana setin martta 70 × 5’ten geçen hafta 87,5 × 5’e çıktı, e1RM 20 kg arttı. Temmuzda tek bench gününe düşünce takıldın. 90’ı geçmen için 4 haftalık bir blok kurayım mı?",
-  "seo.switch.coach.note": "Örnek cevap. Koçun günlük sınırı var: {questions} soru ve {videos} video analizi."
+  "seo.switch.coach.note": "Örnek cevap. Koçun günlük sınırı var: {questions} soru ve {videos} video analizi.",
+  "finish_slides.title": "Antrenmanım",
+  "finish_slides.lifted": "Toplam kaldırdığın",
+  "finish_slides.lifted_female": "Toplam kaldırdığın",
+  "finish_slides.chip.record": "Yeni rekor",
+  "finish_slides.chip.workout": "Antrenman",
+  "finish_slides.fact.exercises": "{n, plural, one{egzersiz} other{egzersiz}}",
+  "finish_slides.fact.sets": "{n, plural, one{set} other{set}}",
+  "finish_slides.fact.time": "salonda",
+  "finish_slides.fact.gain": "rekorun üstünde",
+  "finish_slides.fact.set": "set",
+  "finish_slides.reps": "{n, plural, one{tekrar} other{tekrar}}",
+  "finish_slides.more": "{n} tane daha",
+  "finish_slides.brand": "Sporcu Günlüğü",
+  "finish_slides.tagline": "Salon için yapay zekâ koçu",
+  "finish_slides.store": "İndir:"
 }

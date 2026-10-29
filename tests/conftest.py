@@ -19,6 +19,14 @@ def _support_media_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_finish_slides(monkeypatch):
+    """Альбом слайдов после «Завершить» рендерится секундами в фоне — тестам
+    завершения он не нужен и сыпал бы задачами в чужие моки бота. Свои тесты
+    (tests/test_finish_slides.py) включают его явно."""
+    monkeypatch.setattr(config, "FINISH_SLIDES_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_bot_username(monkeypatch):
     """handlers.sharing кэширует username бота на весь процесс — в проде он
     один, а в тестах у каждого свой подставной бот («testbot», «TrainLogBot»…).
