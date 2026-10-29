@@ -5894,5 +5894,20 @@
   "seo.switch.coach.h": "Ensuite, pose-moi la question",
   "seo.switch.coach.q": "Comment mon développé couché a progressé depuis mes débuts sur {app} ?",
   "seo.switch.coach.a": "Ta série principale est passée de 70 × 5 en mars à 87,5 × 5 la semaine dernière : e1RM +20 kg. Tu as calé en juillet, quand tu es passé à un seul jour de développé. Je te prépare un bloc de 4 semaines pour passer les 90 ?",
-  "seo.switch.coach.note": "Exemple de réponse. Le coach a une limite par jour : {questions} questions et {videos} analyses vidéo."
+  "seo.switch.coach.note": "Exemple de réponse. Le coach a une limite par jour : {questions} questions et {videos} analyses vidéo.",
+  "finish_slides.title": "Ma séance",
+  "finish_slides.lifted": "Soulevé au total",
+  "finish_slides.lifted_female": "Soulevé au total",
+  "finish_slides.chip.record": "Nouveau record",
+  "finish_slides.chip.workout": "Séance",
+  "finish_slides.fact.exercises": "{n, plural, one{exercice} other{exercices}}",
+  "finish_slides.fact.sets": "{n, plural, one{série} other{séries}}",
+  "finish_slides.fact.time": "à la salle",
+  "finish_slides.fact.gain": "au-dessus du record",
+  "finish_slides.fact.set": "série",
+  "finish_slides.reps": "{n, plural, one{rep} other{reps}}",
+  "finish_slides.more": "{n} de plus",
+  "finish_slides.brand": "Journal d’athlète",
+  "finish_slides.tagline": "Coach IA pour la salle",
+  "finish_slides.store": "Télécharger dans l’"
 }

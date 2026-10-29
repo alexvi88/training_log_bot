@@ -5894,5 +5894,20 @@
   "seo.switch.coach.h": "Depois, pergunta-me",
   "seo.switch.coach.q": "Quanto subiu o meu supino desde que comecei no {app}?",
   "seo.switch.coach.a": "A tua série principal passou de 70 × 5 em março para 87,5 × 5 na semana passada: e1RM +20 kg. Estagnou em julho, quando ficaste só com um dia de supino. Monto um bloco de 4 semanas para passares os 90?",
-  "seo.switch.coach.note": "Resposta de exemplo. O treinador tem um limite diário: {questions} perguntas e {videos} análises de vídeo."
+  "seo.switch.coach.note": "Resposta de exemplo. O treinador tem um limite diário: {questions} perguntas e {videos} análises de vídeo.",
+  "finish_slides.title": "O meu treino",
+  "finish_slides.lifted": "Levantaste no total",
+  "finish_slides.lifted_female": "Levantaste no total",
+  "finish_slides.chip.record": "Novo recorde",
+  "finish_slides.chip.workout": "Treino",
+  "finish_slides.fact.exercises": "{n, plural, one{exercício} other{exercícios}}",
+  "finish_slides.fact.sets": "{n, plural, one{série} other{séries}}",
+  "finish_slides.fact.time": "no ginásio",
+  "finish_slides.fact.gain": "acima do recorde",
+  "finish_slides.fact.set": "série",
+  "finish_slides.reps": "{n, plural, one{rep} other{reps}}",
+  "finish_slides.more": "mais {n}",
+  "finish_slides.brand": "Diário do Atleta",
+  "finish_slides.tagline": "Treinador IA para o ginásio",
+  "finish_slides.store": "Descarregar na"
 }

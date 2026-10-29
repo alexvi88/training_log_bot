@@ -979,6 +979,11 @@ INBOX_RETENTION_DAYS = int(os.getenv("INBOX_RETENTION_DAYS", "90"))
 # (db.import_batches) — это один срок: дольше держать пачку незачем, отменить
 # её уже нельзя. Метки на тренировках снимаются вместе с ней.
 IMPORT_UNDO_DAYS = int(os.getenv("IMPORT_UNDO_DAYS", "30"))
+
+# Альбом слайдов итогов (finish_slides.py) после «Завершить» в боте — сторис
+# 9:16 как в приложении. Выключатель на случай, если рендер начнёт мешать:
+# FINISH_SLIDES=0. В тестах выключен (tests/conftest.py), включают свои.
+FINISH_SLIDES_ENABLED = os.getenv("FINISH_SLIDES", "1") != "0"
 IMPORT_BATCH_RETENTION_DAYS = IMPORT_UNDO_DAYS
 
 # Вес тела, по которому считается нагрузка подходов своим весом
