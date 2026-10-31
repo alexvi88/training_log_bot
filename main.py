@@ -37,6 +37,7 @@ import db
 import engagement
 import exercise_photos
 import i18n
+import indexnow
 import keyboards
 import lifecycle_events
 import ops_alerts
@@ -560,6 +561,9 @@ async def main() -> None:
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))
+    # IndexNow: сменился набор страниц сайта — Bing и Яндекс узнают сразу
+    # (indexnow.py; без ключа и своего домена ничего не делает).
+    background.append(asyncio.create_task(indexnow.run_on_startup()))
     # Разовый перенос уже приложенных фото упражнений из Telegram к нам на
     # диск (см. exercise_photos.backfill_from_telegram — там же, почему это
     # фоновая задача старта, а не скрипт руками). Идемпотентно: на втором

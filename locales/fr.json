@@ -5915,5 +5915,9 @@
   "finish_slides.store": "Télécharger dans l’",
   "program_card.chip": "Programme",
   "program_card.more_days": "{n, plural, one{# jour de plus} other{# jours de plus}}",
-  "program_card.more_exercises": "{n, plural, one{# exercice de plus} other{# exercices de plus}}"
+  "program_card.more_exercises": "{n, plural, one{# exercice de plus} other{# exercices de plus}}",
+  "seo.home.swaps.eyebrow": "Alternatives",
+  "seo.home.swaps.h": "Quoi faire à la place",
+  "seo.home.swaps.p": "Machine prise ou pas le bon matériel ? Voilà quoi faire à la place, et ce qui change.",
+  "seo.home.swaps.meta": "Alternatives à la barre, aux haltères et à la machine"
 }

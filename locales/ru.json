@@ -5916,5 +5916,9 @@
   "finish_slides.store": "Скачай в",
   "program_card.chip": "Программа",
   "program_card.more_days": "{n, plural, one{ещё # день} few{ещё # дня} many{ещё # дней} other{ещё # дня}}",
-  "program_card.more_exercises": "{n, plural, one{ещё # упражнение} few{ещё # упражнения} many{ещё # упражнений} other{ещё # упражнения}}"
+  "program_card.more_exercises": "{n, plural, one{ещё # упражнение} few{ещё # упражнения} many{ещё # упражнений} other{ещё # упражнения}}",
+  "seo.home.swaps.eyebrow": "Замены",
+  "seo.home.swaps.h": "Чем заменить упражнение",
+  "seo.home.swaps.p": "Тренажёр занят или нет нужного снаряда — вот что делать вместо, и что при этом меняется.",
+  "seo.home.swaps.meta": "Замены со штангой, гантелями и в тренажёре"
 }

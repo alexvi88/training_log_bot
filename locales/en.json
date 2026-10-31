@@ -5915,5 +5915,9 @@
   "finish_slides.store": "Download on the",
   "program_card.chip": "Program",
   "program_card.more_days": "{n, plural, one{# more day} other{# more days}}",
-  "program_card.more_exercises": "{n, plural, one{# more exercise} other{# more exercises}}"
+  "program_card.more_exercises": "{n, plural, one{# more exercise} other{# more exercises}}",
+  "seo.home.swaps.eyebrow": "Swaps",
+  "seo.home.swaps.h": "What to do instead",
+  "seo.home.swaps.p": "Machine taken or the gear isn't there — here's what to do instead, and what changes when you swap.",
+  "seo.home.swaps.meta": "Barbell, dumbbell and machine swaps"
 }

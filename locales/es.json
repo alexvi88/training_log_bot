@@ -5915,5 +5915,9 @@
   "finish_slides.store": "Descárgalo en el",
   "program_card.chip": "Programa",
   "program_card.more_days": "{n, plural, one{# día más} other{# días más}}",
-  "program_card.more_exercises": "{n, plural, one{# ejercicio más} other{# ejercicios más}}"
+  "program_card.more_exercises": "{n, plural, one{# ejercicio más} other{# ejercicios más}}",
+  "seo.home.swaps.eyebrow": "Sustitutos",
+  "seo.home.swaps.h": "Qué hacer en su lugar",
+  "seo.home.swaps.p": "¿La máquina está ocupada o no tienes el equipo? Esto es lo que puedes hacer en su lugar y qué cambia.",
+  "seo.home.swaps.meta": "Sustitutos con barra, mancuernas y máquina"
 }

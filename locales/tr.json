@@ -5915,5 +5915,9 @@
   "finish_slides.store": "İndir:",
   "program_card.chip": "Program",
   "program_card.more_days": "{n, plural, one{# gün daha} other{# gün daha}}",
-  "program_card.more_exercises": "{n, plural, one{# egzersiz daha} other{# egzersiz daha}}"
+  "program_card.more_exercises": "{n, plural, one{# egzersiz daha} other{# egzersiz daha}}",
+  "seo.home.swaps.eyebrow": "Alternatifler",
+  "seo.home.swaps.h": "Yerine ne yapmalı",
+  "seo.home.swaps.p": "Alet dolu ya da ekipman yok mu? Yerine ne yapacağın ve neyin değiştiği burada.",
+  "seo.home.swaps.meta": "Halter, dambıl ve makine alternatifleri"
 }
