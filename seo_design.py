@@ -640,6 +640,9 @@ body.embed .tool { margin-top: 0; }
 .aside-cta p { margin: 0 0 var(--s3); font-weight: 700; }
 .aside-cta .btn-row { flex-direction: column; align-items: stretch; }
 .aside-cta .btn { min-height: 46px; font-size: 15px; }
+/* "Prefer Telegram?" under the button: the paragraph rule above zeroed its
+   top margin and made it bold, so the line stuck to the button. */
+.aside-cta .alt-link { margin: var(--s3) 0 0; font-weight: 400; }
 .aside-h { font-size: 18px !important; margin: 0 !important; }
 .ex-aside ul.links a { padding: 10px 12px; font-size: 14px; }
 .cap-short { display: none; }

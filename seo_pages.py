@@ -834,7 +834,7 @@ def _breadcrumb_ld(lang: str, page: Page, base: str) -> Optional[dict]:
 
 # Дата последней заметной правки страницы — константой, а не временем файла:
 # одна и та же страница отдаёт одну и ту же дату (тесты, ETag, sitemap).
-SITE_UPDATED = "2026-10-16"
+SITE_UPDATED = "2026-10-30"
 
 
 def page_updated(page: Page) -> str:
@@ -1376,6 +1376,22 @@ def _gym(lang: str) -> str:
     )
 
 
+# «Чем заменить» с главной: самые показываемые в поиске страницы этого вида
+# (выгрузка GSC за 16–24.10). Ссылка с главной — сигнал роботу, что это
+# главные страницы сайта, и короткий путь к ним при переобходе.
+HOME_SWAPS = ("romanian-deadlift", "machine-chest-press", "one-arm-dumbbell-row", "t-bar-row",
+              "bodyweight-glute-bridge", "pec-deck", "step-up", "front-raise", "rear-delt-fly",
+              "lat-pulldown", "machine-row", "close-grip-lat-pulldown")
+
+
+def _home_swaps(lang: str) -> list[tuple[str, str, str]]:
+    import seo_swaps
+
+    t = _t(lang)
+    return [(url_for(Page("exercise_alt", s), lang), seo_swaps.page_h1(Page("exercise_alt", s), lang), t("seo.home.swaps.meta"))
+            for s in HOME_SWAPS if s in _EXERCISE_BY_URL and seo_swaps.has_page(s)]
+
+
 def _render_home(lang: str, page: Page, request) -> str:
     t = _t(lang)
     imports = [(url_for(Page("import", s), lang), "import", t(f"seo.import.{s}.short"), t(f"seo.import.{s}.card"))
@@ -1406,6 +1422,7 @@ def _render_home(lang: str, page: Page, request) -> str:
         + f"<section>{head('import')}{_icon_cards(imports)}</section>"
         + f"<section>{head('tools')}{_icon_cards(tools)}</section>"
         + f"<section>{head('library')}{_icon_cards(library)}</section>"
+        + f"<section>{head('swaps')}{_cards(_home_swaps(lang))}</section>"
         + _faq_html(lang, faq)
         + _cta(lang, page.block, _e(t("seo.home.cta")), request)
     )

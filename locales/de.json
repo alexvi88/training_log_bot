@@ -5915,5 +5915,9 @@
   "finish_slides.store": "Laden im",
   "program_card.chip": "Plan",
   "program_card.more_days": "{n, plural, one{# weiterer Tag} other{# weitere Tage}}",
-  "program_card.more_exercises": "{n, plural, one{# weitere Übung} other{# weitere Übungen}}"
+  "program_card.more_exercises": "{n, plural, one{# weitere Übung} other{# weitere Übungen}}",
+  "seo.home.swaps.eyebrow": "Alternativen",
+  "seo.home.swaps.h": "Was du stattdessen machst",
+  "seo.home.swaps.p": "Gerät besetzt oder das Equipment fehlt? Hier ist, was du stattdessen machst und was sich dabei ändert.",
+  "seo.home.swaps.meta": "Alternativen mit Langhantel, Kurzhanteln und Maschine"
 }
