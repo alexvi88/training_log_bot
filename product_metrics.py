@@ -211,13 +211,17 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     INVITE_SHARE_EVENT: frozenset({"source"}),
     INVITE_COPY_EVENT: frozenset({"source"}),
     # «Гайды» внизу «Меню» (GET /v1/guides, сторис статей сайта): открыл
-    # сторис (source menu) → долистал (slides_seen — сколько слайдов увидел)
+    # сторис (source menu, link — по ссылке друга `/g/<slug>`) → долистал (slides_seen — сколько слайдов увидел)
     # → нажал кнопку последнего слайда (action — её kind: progress,
     # coach_question…). slug — машинный адрес статьи (seo_library.GUIDES).
     # Текста нет: готовый вопрос тренеру сам по себе — серверный ai_question.
     "guide_open": frozenset({"slug", "source"}),
     "guide_finish": frozenset({"slug", "slides_seen"}),
     "guide_action": frozenset({"slug", "action"}),
+    # «Поделиться» гайдом (ссылка `share_url` из /v1/guides, `/g/<slug>`):
+    # только тап, кому ушло — не пишем. source — откуда: story (из сторис),
+    # shelf (с обложки на полке экрана «Гайды»), menu (из ряда «Меню»).
+    "guide_share": frozenset({"slug", "source"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
@@ -237,7 +241,9 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
     (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
     (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,
-    ("guide_open", "source"): frozenset({"menu"}),
+    # link — гайд открыт по ссылке друга `/g/<slug>` (Universal Link).
+    ("guide_open", "source"): frozenset({"menu", "link"}),
+    ("guide_share", "source"): frozenset({"story", "shelf", "menu"}),
     ("guide_action", "action"): frozenset({
         "progress", "exercise_progress", "programs", "import", "video", "coach_question", "rest_timer",
     }),

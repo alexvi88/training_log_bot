@@ -139,11 +139,20 @@ def referrer_from_code(code: Optional[str]) -> Optional[int]:
     return int(rest) if _REFERRER_ID.fullmatch(rest) else None
 
 
-def with_campaign(store_url: str, telegram_id: int) -> str:
-    """Ссылка App Store с кампанией `ct=ref_<id>` (App Store Connect →
+# Потолок длины кампании `ct` у App Store: длиннее Apple молча обрезает.
+APP_STORE_CAMPAIGN_MAX_LEN = 40
+
+
+def with_campaign_token(store_url: str, token: str) -> str:
+    """Ссылка App Store с кампанией `ct=<token>` (App Store Connect →
     Analytics → Campaigns считает её вместе с `pt`, см. config.APP_STORE_URL)."""
     joiner = "&" if "?" in store_url else "?"
-    return f"{store_url}{joiner}ct={referral_payload(telegram_id)}"
+    return f"{store_url}{joiner}ct={token[:APP_STORE_CAMPAIGN_MAX_LEN]}"
+
+
+def with_campaign(store_url: str, telegram_id: int) -> str:
+    """Ссылка App Store с кампанией `ct=ref_<id>`."""
+    return with_campaign_token(store_url, referral_payload(telegram_id))
 
 
 def channel_link(bot_username: str, slug: str) -> str:

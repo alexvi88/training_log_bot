@@ -2451,6 +2451,11 @@
     "slides": {
      "type": "[GuideSlide]",
      "optional": false
+    },
+    "shareUrl": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5869,5 +5874,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "1d7f734528e9b2b8c1bd79098ae2162eb6b39f2f"
+ "_ios_commit": "1a1031da07d9bbfe71840c34b5586efe7f8bb0cc"
 }

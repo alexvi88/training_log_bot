@@ -22,7 +22,8 @@ async def get_guides(request: Request) -> JSONResponse:
     """`{"guides": [...], "menu": [slug…], "shelves": [{key, title, slugs}]}`.
 
     У каждого гайда: slug, title, card, cover, featured (у одного или ни у
-    кого — он первый), reason (строка или null), url, slides. Слайд — kind
+    кого — он первый), reason (строка или null), url, share_url
+    (`<сайт>/g/<slug>` — ссылка «поделиться», строка всегда), slides. Слайд — kind
     cover|section|takeaways, title, text, image, chip (строка или null),
     items (строки), action (null или kind, label, exercise_id, question —
     все четыре всегда, ненужные — null). Пути картинок относительные

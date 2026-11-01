@@ -24,7 +24,7 @@ import seo_library
 LANGS = ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr")
 CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 SLIDE_KEYS = {"kind", "title", "text", "image", "chip", "items", "action"}
-GUIDE_KEYS = {"slug", "title", "card", "cover", "featured", "reason", "url", "slides"}
+GUIDE_KEYS = {"slug", "title", "card", "cover", "featured", "reason", "url", "share_url", "slides"}
 ACTION_KEYS = {"kind", "label", "exercise_id", "question"}
 
 
@@ -121,7 +121,11 @@ def test_every_frame_is_an_existing_coach_drawing():
                 assert os.path.isfile(os.path.join(exercise_media.MEDIA_DIR, exercise_media.frame_name(s, n)))
         g = G.static_guide(slug, "en")
         assert g["cover"] == g["slides"][0]["image"]
-        assert all(s["image"].startswith("/media/exercises/") for s in g["slides"])
+        # Обложка — своя картинка гайда (media/guides), если она нарисована;
+        # остальные кадры — рисунки тренера из упражнений.
+        cover_ok = ("/media/exercises/", "/media/guides/")
+        assert g["slides"][0]["image"].startswith(cover_ok)
+        assert all(s["image"].startswith("/media/exercises/") for s in g["slides"][1:])
         assert len({s["image"] for s in g["slides"]}) >= 2
 
 
@@ -313,6 +317,8 @@ async def test_guides_route_returns_the_full_contract(fresh_db, client_factory, 
     for g in body["guides"]:
         assert set(g) == GUIDE_KEYS
         assert g["url"].endswith(f"/{lang}/guides/{g['slug']}")
+        # Ссылка «поделиться» — без языка: уходит другу, язык решит его браузер.
+        assert g["share_url"].startswith("https://") and g["share_url"].endswith(f"/g/{g['slug']}")
         for s in g["slides"]:
             assert set(s) == SLIDE_KEYS
             assert isinstance(s["text"], str) and isinstance(s["items"], list)

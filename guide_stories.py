@@ -299,6 +299,18 @@ def guide_url(slug: str, lang: str) -> str:
     return base + seo_pages.url_for(seo_pages.Page("guide", slug), site_lang(lang))
 
 
+# Ссылка «поделиться гайдом» — `<сайт>/g/<slug>` (guide_share_page.py): у
+# друга с приложением на iPhone открывает гайд в приложении (Universal Link,
+# путь `/g/*` в AASA), на iPhone без приложения — App Store, иначе — статью
+# сайта на языке его браузера. Язык в адрес не зашит: ссылка уходит чужому.
+SHARE_PATH = "/g/"
+
+
+def share_url(slug: str) -> str:
+    base = config.site_base_url() or DEFAULT_SITE
+    return f"{base}{SHARE_PATH}{slug}"
+
+
 def _slide(kind: str, title: str, text: str, image: str, items: Optional[list[str]] = None) -> dict[str, Any]:
     return {"kind": kind, "title": title, "text": text, "image": image, "chip": None,
             "items": items or [], "action": None}
@@ -344,6 +356,7 @@ def _static_guide(slug: str, lang: str) -> dict[str, Any]:
         "featured": False,
         "reason": None,
         "url": guide_url(slug, lang),
+        "share_url": share_url(slug),
         "slides": slides,
     }
 
