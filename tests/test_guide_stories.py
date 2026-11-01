@@ -121,7 +121,11 @@ def test_every_frame_is_an_existing_coach_drawing():
                 assert os.path.isfile(os.path.join(exercise_media.MEDIA_DIR, exercise_media.frame_name(s, n)))
         g = G.static_guide(slug, "en")
         assert g["cover"] == g["slides"][0]["image"]
-        assert all(s["image"].startswith("/media/exercises/") for s in g["slides"])
+        # Обложка — своя картинка гайда (media/guides), если она нарисована;
+        # остальные кадры — рисунки тренера из упражнений.
+        cover_ok = ("/media/exercises/", "/media/guides/")
+        assert g["slides"][0]["image"].startswith(cover_ok)
+        assert all(s["image"].startswith("/media/exercises/") for s in g["slides"][1:])
         assert len({s["image"] for s in g["slides"]}) >= 2
 
 
