@@ -48,6 +48,7 @@ import api_v1_feedback
 import coach_service
 import config
 import i18n
+import seo_library as guides_catalog
 import text_import
 
 pytestmark = pytest.mark.asyncio
@@ -122,6 +123,9 @@ MACHINE_KEYS = {
     # Схема мышц упражнения (`media.muscles`, exercise_muscles): слаги зон
     # схемы тела приложения, подпись мышцы рисует приложение своим каталогом.
     "primary", "secondary",
+    # «Гайды» (/guides): ряд «Меню» и статьи полки — списки адресов статей
+    # (slug), подписи к ним — в самих гайдах и в title полки.
+    "menu", "slugs",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -186,6 +190,19 @@ MIXED_PATHS: dict[str, frozenset[str]] = {
 }
 
 
+# Текст статей сайта в русском ответе, где латиница законна: авторы
+# исследований («Schoenfeld и соавторы»), ISSN, BCAA, названия Hevy и Strong и
+# пунктов их меню («Settings → Export Data») — это опубликованный текст
+# `seo.guide.*`, а не хром продукта. Кириллицу в нерусских ответах эти поля
+# проверяют как обычно; личные строки гайдов (чип, кнопка, вопрос) — тоже.
+RU_LATIN_TEXT_PATHS: dict[str, frozenset[str]] = {
+    "GET /guides": frozenset({
+        ".guides[].title", ".guides[].card", ".guides[].slides[].title", ".guides[].slides[].text",
+        ".guides[].slides[].items[]",
+    }),
+}
+
+
 def _shape(path: str) -> str:
     return re.sub(r"\[\d+\]", "[]", path)
 
@@ -203,7 +220,7 @@ def _string_leaves(value: Any, key: str | None = None, path: str = ""):
 
 def language_violations(
     payload: Any, lang: str, data_paths: frozenset[str] = frozenset(), data_lang: str | None = None,
-    mixed_paths: frozenset[str] = frozenset(),
+    mixed_paths: frozenset[str] = frozenset(), ru_latin_paths: frozenset[str] = frozenset(),
 ) -> list[str]:
     """`data_paths` — поля, которые принадлежат другому человеку и проверяются
     его языком `data_lang` (см. CLIENT_DATA_PATHS); `mixed_paths` — при
@@ -225,6 +242,8 @@ def language_violations(
         else:
             # URL и data:-строки — не текст.
             if text.startswith(("http://", "https://", "data:", "/media/")):
+                continue
+            if shape in ru_latin_paths:
                 continue
             for phrase in RU_ALLOWED_LATIN_PHRASES:
                 text = text.replace(phrase, "")
@@ -248,6 +267,7 @@ def _route_for(method: str, path: str) -> str | None:
 # Маршруты, которые сценарий не зовёт, — каждый с причиной.
 SKIPPED: dict[str, str] = {
     "GET /media/exercises/{name:path}": "раздаёт файл картинки (не JSON, текста нет)",
+    "GET /media/guides/{name:path}": "раздаёт обложку гайда (не JSON, текста нет)",
     "GET /exercises/{exercise_id:int}/photo": "раздаёт байты фото (не JSON, текста нет)",
     "GET /ai/history/{turn_id:int}/image": "раздаёт байты картинки чата (не JSON)",
     "GET /support/photos/{message_id:int}": "раздаёт байты фото из поддержки (не JSON)",
@@ -293,6 +313,7 @@ class _Walker:
         mixed = MIXED_PATHS.get(route, frozenset()) if self.data_lang is not None else frozenset()
         for v in language_violations(
             body, self.lang, self.data_paths.get(route, frozenset()), self.data_lang, mixed,
+            RU_LATIN_TEXT_PATHS.get(route, frozenset()),
         ):
             self.violations.append(f"{method} {path} [{resp.status_code}]: {v}")
         return resp
@@ -775,6 +796,12 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert week["comic"] and len(week["comic"]["panels"]) == 4
     await w.call("GET", "/weekly-summary?week=2999-01-05", expect=400)
     await w.call("GET", "/weekly-summary?week=soon", expect=400)
+    # «Гайды»: статьи сайта сторис на языке атлета, полки, кнопки и чип объёма
+    # (тренировка этой недели выше — чип не пустой).
+    guides = (await w.call("GET", "/guides", expect=200)).json()
+    assert len(guides["guides"]) == len(guides_catalog.GUIDES) and guides["shelves"]
+    volume = next(g for g in guides["guides"] if g["slug"] == "sets-per-muscle-per-week")
+    assert volume["slides"][1]["chip"]
     await w.call("GET", "/achievements", expect=200)
     await w.call("GET", "/achievements/nearest", expect=200)
     await w.call("GET", "/achievements/stats", expect=200)
