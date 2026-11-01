@@ -55,6 +55,7 @@ import body_limit
 import coach_invite_page
 import config
 import db
+import guide_share_page
 import i18n
 import legal_pages
 import mcp_oauth
@@ -371,6 +372,9 @@ def build_server() -> MCPServer:
     coach_invite_page.register_routes(mcp)
     # /i/ref_<id> — реферальная ссылка атлета без Telegram (см. referral_page.py).
     referral_page.register_routes(mcp)
+    # /g/<slug> — ссылка «поделиться гайдом»: App Store на iPhone без
+    # приложения, иначе статья сайта (см. guide_share_page.py).
+    guide_share_page.register_routes(mcp)
     # /p/<токен> — публичная страница визитки программы или упражнения и её
     # картинка для превью (см. share_page.py).
     share_page.register_routes(mcp)
