@@ -59,6 +59,9 @@ def summary_json(s: weekly_summary.WeeklySummary) -> dict[str, Any]:
         "hint": s.hint,
         "next_day": s.next_day,
         "coach_text": s.coach_text,
+        # «Неделя комиксом»: {"panels": [4 × {day, label, scene, caption, record}]}
+        # или null, если за неделю нечего рассказать (weekly_comic).
+        "comic": s.comic,
     }
 
 

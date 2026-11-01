@@ -46,6 +46,7 @@ import formatting
 import i18n
 import seed_data
 import timeutil
+import weekly_comic
 
 # Порядок правил вердикта — он же порядок проверки.
 KINDS = ("first", "comeback", "empty", "record", "record_fewer", "short", "strong", "steady")
@@ -169,6 +170,8 @@ class WeeklySummary:
     hint: Optional[str] = None
     next_day: Optional[dict[str, Any]] = None
     coach_text: Optional[dict[str, Any]] = None
+    # «Неделя комиксом» (weekly_comic): четыре кадра или None.
+    comic: Optional[dict[str, Any]] = None
 
 
 # ---------- тексты ----------
@@ -521,4 +524,8 @@ async def collect(user_id: int, week_start: dt.date, user: Any = None) -> Option
         hint=_hint(volume_rows) if this_dates else None,
         next_day=await _next_day(user_id),
         coach_text=await _coach_text(user_id, user, week_start, week_end, tz),
+        comic=await weekly_comic.collect(
+            user_id, week_start, facts=facts, records=records, this_dates=this_dates,
+            today=today, unit=unit, formula=formula, tz=tz,
+        ),
     )
