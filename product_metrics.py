@@ -210,6 +210,14 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     INVITE_OPEN_EVENT: frozenset({"source"}),
     INVITE_SHARE_EVENT: frozenset({"source"}),
     INVITE_COPY_EVENT: frozenset({"source"}),
+    # «Гайды» внизу «Меню» (GET /v1/guides, сторис статей сайта): открыл
+    # сторис (source menu) → долистал (slides_seen — сколько слайдов увидел)
+    # → нажал кнопку последнего слайда (action — её kind: progress,
+    # coach_question…). slug — машинный адрес статьи (seo_library.GUIDES).
+    # Текста нет: готовый вопрос тренеру сам по себе — серверный ai_question.
+    "guide_open": frozenset({"slug", "source"}),
+    "guide_finish": frozenset({"slug", "slides_seen"}),
+    "guide_action": frozenset({"slug", "action"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
@@ -229,10 +237,14 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
     (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
     (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,
+    ("guide_open", "source"): frozenset({"menu"}),
+    ("guide_action", "action"): frozenset({
+        "progress", "exercise_progress", "programs", "import", "video", "coach_question", "rest_timer",
+    }),
 }
 
 # Свойства-счётчики (не токены): целое от 0 до потолка, остальное выкидывается.
-_COUNT_PROPS = frozenset({"workouts", "nth"})
+_COUNT_PROPS = frozenset({"workouts", "nth", "slides_seen"})
 _MAX_COUNT = 100_000
 
 # Тип действия системного листа iOS — reverse-DNS id (точки, регистр), а не
@@ -241,6 +253,9 @@ _ACTIVITY = re.compile(r"[A-Za-z0-9._-]+")
 _MAX_ACTIVITY_LEN = 100
 
 _TOKEN = re.compile(r"[a-z0-9_]{1,40}")
+# Адрес статьи сайта (`break-a-plateau`): строчные, цифры и дефис — машинное
+# значение, которое задаём мы, а не текст человека.
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,59}")
 _MAX_VERSION_LEN = 32
 # Сессия длиннее суток — сломанные часы, а не тренировка.
 _MAX_SESSION_SECONDS = 24 * 3600
@@ -281,6 +296,9 @@ def clean_props(event: str, props: Any) -> Optional[dict]:
                 out[key] = int(value)
         elif key in _COUNT_PROPS:
             if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MAX_COUNT:
+                out[key] = value
+        elif key == "slug":
+            if isinstance(value, str) and _SLUG.fullmatch(value):
                 out[key] = value
         elif key == "activity":
             activity = clean_activity(value)

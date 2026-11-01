@@ -2417,6 +2417,131 @@
     }
    }
   },
+  "Guide": {
+   "file": "TrainingLog/Models/GuideModels.swift",
+   "fields": {
+    "slug": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "card": {
+     "type": "String",
+     "optional": false
+    },
+    "cover": {
+     "type": "String",
+     "optional": false
+    },
+    "featured": {
+     "type": "Bool",
+     "optional": false
+    },
+    "reason": {
+     "type": "String",
+     "optional": true
+    },
+    "url": {
+     "type": "String",
+     "optional": false
+    },
+    "slides": {
+     "type": "[GuideSlide]",
+     "optional": false
+    }
+   }
+  },
+  "GuideAction": {
+   "file": "TrainingLog/Models/GuideModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "label": {
+     "type": "String",
+     "optional": false
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "question": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "GuideShelf": {
+   "file": "TrainingLog/Models/GuideModels.swift",
+   "fields": {
+    "key": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "slugs": {
+     "type": "[String]",
+     "optional": false
+    }
+   }
+  },
+  "GuideSlide": {
+   "file": "TrainingLog/Models/GuideModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "text": {
+     "type": "String",
+     "optional": false
+    },
+    "image": {
+     "type": "String",
+     "optional": false
+    },
+    "chip": {
+     "type": "String",
+     "optional": true
+    },
+    "items": {
+     "type": "[String]",
+     "optional": false
+    },
+    "action": {
+     "type": "GuideAction",
+     "optional": true
+    }
+   }
+  },
+  "GuidesResponse": {
+   "file": "TrainingLog/Models/GuideModels.swift",
+   "fields": {
+    "guides": {
+     "type": "[Guide]",
+     "optional": false
+    },
+    "menu": {
+     "type": "[String]",
+     "optional": true
+    },
+    "shelves": {
+     "type": "[GuideShelf]",
+     "optional": true
+    }
+   }
+  },
   "HallOfFame": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -5184,6 +5309,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.guides",
+   "method": "GET",
+   "path": "/guides",
+   "root": "GuidesResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.hallOfFame",
    "method": "GET",
    "path": "/hall-of-fame",
@@ -5737,5 +5869,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "54716514dfabe3eec6947d935a23d479aa6c1f63"
+ "_ios_commit": "1d7f734528e9b2b8c1bd79098ae2162eb6b39f2f"
 }
