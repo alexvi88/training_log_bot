@@ -3022,6 +3022,11 @@
     "programId": {
      "type": "Int",
      "optional": true
+    },
+    "clientId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -5694,5 +5699,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "79d7a6c58db7446f8ff9921a729e24a2602f91c4"
+ "_ios_commit": "01cd8127dcb8af34a913808c279e91436e31c7d6"
 }

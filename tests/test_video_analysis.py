@@ -671,3 +671,14 @@ async def test_no_contradiction_on_different_frames_keeps_the_deviation():
     out = video_analysis._sanitize(_analysis(checklist=checklist, observations=observations))
     assert {i["point"]: i for i in out["checklist"]}["спина"]["verdict"] == "отклонение"
     assert len(out["observations"]) == 1
+
+
+def test_prompt_pins_bench_path_direction():
+    """Живой провал: в жиме лёжа гриф на опускании шёл от лица к низу груди,
+    а разбор написал «уходит к лицу» и выдал норму за ошибку. Промпт держит
+    калибровку: дуга к ногам на опускании — норма, направление — двумя
+    точками по телу."""
+    prompt = video_analysis.SYSTEM_PROMPT
+    assert "НАПРАВЛЕНИЕ ДВИЖЕНИЯ" in prompt
+    assert "ДВЕ" in prompt and "точки по телу" in prompt
+    assert "ЗАКОННО уходит в сторону ног" in prompt
