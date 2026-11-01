@@ -2512,6 +2512,8 @@
   "referral_page.manual": "Aus dem App Store installiert? Komm zurück auf diese Seite und tippe auf „In der App öffnen“ — so weiß ich, wer dich eingeladen hat.",
   "referral_page.not_found.title": "Diesen Link kann ich nicht lesen",
   "referral_page.not_found.body": "Im Link ist ein Tippfehler. Lass ihn dir nochmal schicken — oder hol dir die App und leg allein los.",
+  "guide_share_page.lead": "Jemand hat dir eine Anleitung geschickt. Öffne sie in der App — da hab ich sie in kurze Slides zerlegt.",
+  "guide_share_page.btn.site": "Auf der Website lesen",
   "api.error.invalid_referral": "Diesen Einladungscode kann ich nicht lesen. Öffne den Einladungslink nochmal.",
   "coach.renew.confirm": "Neuen Code erstellen? Der alte Code geht dann nicht mehr. Kunden, die dir ihr Tagebuch schon geöffnet haben, bleiben.",
   "coach.invite_renewed": "Neuer Code ist da — der alte geht nicht mehr.",

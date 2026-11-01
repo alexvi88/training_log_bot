@@ -117,6 +117,10 @@ REFERRAL_APP_LINK_PREFIX = "trainingdiary://i/"
 # Ключ страницы в счётчике сайта (site_events): одна строка на все `/i/ref_<id>`,
 # без id автора — счётчик не связывает визит с аккаунтом.
 REFERRAL_WEB_PAGE_KEY = "/i/ref"
+# То же для ссылки «поделиться гайдом» `/g/<slug>` (guide_share_page.py): одна
+# строка на все гайды. Здесь, а не там, — его же пропускает маячок
+# (seo_pages.seen_route), а seo_pages не может импортировать страницу гайда.
+GUIDE_SHARE_PAGE_KEY = "/g"
 
 
 def referral_web_link(base_url: Optional[str], telegram_id: int) -> Optional[str]:

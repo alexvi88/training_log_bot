@@ -2512,6 +2512,8 @@
   "referral_page.manual": "¿La instalaste desde el App Store? Vuelve a esta página y toca “Abrir en la app” — así sabré quién te invitó.",
   "referral_page.not_found.title": "No puedo leer este enlace",
   "referral_page.not_found.body": "El enlace tiene una errata. Pídelo otra vez — o descarga la app y empieza por tu cuenta.",
+  "guide_share_page.lead": "Alguien te mandó una guía. Ábrela en la app — ahí la partí en diapositivas cortas.",
+  "guide_share_page.btn.site": "Leer en la web",
   "api.error.invalid_referral": "No puedo leer ese código de invitación. Abre otra vez el enlace de invitación.",
   "coach.renew.confirm": "¿Generar un código nuevo? El viejo deja de funcionar. Los clientes que ya te abrieron su diario se quedan.",
   "coach.invite_renewed": "Código nuevo listo — el viejo ya no funciona.",
