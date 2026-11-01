@@ -682,3 +682,63 @@ def test_prompt_pins_bench_path_direction():
     assert "НАПРАВЛЕНИЕ ДВИЖЕНИЯ" in prompt
     assert "ДВЕ" in prompt and "точки по телу" in prompt
     assert "ЗАКОННО уходит в сторону ног" in prompt
+
+
+def _bench(bar_path, observations=None, trajectory="отклонение"):
+    checklist = _checklist()
+    for item in checklist:
+        if item["point"] == "траектория снаряда":
+            item["verdict"] = trajectory
+            item["what_i_see"] = "гриф уходит к лицу на подъёме вместо плеч"
+    return _analysis(
+        exercise="жим лёжа", checklist=checklist, bar_path=bar_path,
+        observations=observations if observations is not None else [{
+            "what": "гриф уходит к лицу на подъёме", "phase": "подъём", "when": "0:03",
+            "evidence": "на 0:03 гриф над лицом", "severity": "стоит поправить", "confidence": "высокая",
+        }],
+    )
+
+
+async def test_bench_arc_over_shoulders_to_lower_chest_is_normal_whatever_the_model_said():
+    """Живой провал: обычную дугу жима (верх над плечами, касание на низе груди)
+    модель назвала «уходит к лицу», и тренер выдал норму за ошибку."""
+    out = video_analysis._sanitize(_bench({"top": "над плечами", "touch": "низ груди"}))
+    trajectory = next(i for i in out["checklist"] if i["point"] == "траектория снаряда")
+    assert trajectory["verdict"] == "норма"
+    assert "к лицу" not in trajectory["what_i_see"]
+    assert out["observations"] == []
+
+
+async def test_bench_arc_over_the_face_stays_a_fault():
+    out = video_analysis._sanitize(_bench({"top": "над лицом или шеей", "touch": "низ груди"}))
+    trajectory = next(i for i in out["checklist"] if i["point"] == "траектория снаряда")
+    assert trajectory["verdict"] == "отклонение"
+    assert len(out["observations"]) == 1
+
+
+async def test_bench_arc_rule_leaves_other_bar_faults_alone():
+    obs = [{
+        "what": "гриф перекашивается вправо", "phase": "подъём", "when": "0:02",
+        "evidence": "на 0:02 правый край грифа ниже левого", "severity": "стоит поправить",
+        "confidence": "высокая",
+    }]
+    out = video_analysis._sanitize(_bench({"top": "над плечами", "touch": "середина груди"}, observations=obs))
+    assert [o["what"] for o in out["observations"]] == ["гриф перекашивается вправо"]
+
+
+async def test_bar_path_is_ignored_outside_lying_presses():
+    checklist = _checklist()
+    for item in checklist:
+        if item["point"] == "траектория снаряда":
+            item["verdict"] = "отклонение"
+            item["what_i_see"] = "гриф уходит от голени на 0:02"
+    out = video_analysis._sanitize(
+        _analysis(checklist=checklist, bar_path={"top": "над плечами", "touch": "низ груди"})
+    )
+    trajectory = next(i for i in out["checklist"] if i["point"] == "траектория снаряда")
+    assert trajectory["verdict"] == "отклонение"
+
+
+async def test_prompt_asks_for_bar_path_by_body_landmarks():
+    assert '"bar_path"' in video_analysis.SYSTEM_PROMPT
+    assert "по телу атлета, а не по кадру" in video_analysis.SYSTEM_PROMPT

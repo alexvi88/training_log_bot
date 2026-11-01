@@ -151,6 +151,13 @@ SYSTEM_PROMPT = """\
   меняется от повтора к повтору.
 - Не уверен в направлении — verdict «не видно» с причиной в what_i_see, а не
   догадка.
+- В жимах лёжа отдельно заполни bar_path — где снаряд в верхней точке и
+  где он касается груди, по телу атлета, а не по кадру. Камера может стоять
+  со стороны головы или со стороны ног: «к голове» на экране бывает и
+  влево, и вправо, поэтому смотри, у какой части тела снаряд, а не куда
+  он сдвинулся по экрану. Код сверяет эти две точки сам: верх над плечами
+  и касание на низе или середине груди — значит дуга в норме, что бы ни
+  было написано в «траектории».
 
 По каждому пункту: verdict — «норма», «отклонение» или «не видно», и поле
 what_i_see, которое ОБЯЗАТЕЛЬНО заполнено во всех трёх случаях.
@@ -261,9 +268,16 @@ not_visible получается длинным — значит ракурс п
       "confidence": "высокая | средняя | низкая"
     }
   ],
+  "bar_path": {
+    "top": "над плечами | над лицом или шеей | над грудью | не видно",
+    "touch": "низ груди | середина груди | верх груди или шея | не видно"
+  },
   "not_visible": [{"what": "...", "why": "что именно в этой съёмке мешает"}],
   "camera_advice": "как переснять, если ракурс плохой, иначе \\"\\""
 }
+
+bar_path заполняй только в жимах лёжа (штанга, гантели, тренажёр); в остальных
+упражнениях оба поля — «не видно».
 
 В checklist ровно семь записей, поле point строго из этого списка и в этом
 порядке: "спина", "траектория снаряда", "порядок движения", "амплитуда",
@@ -492,6 +506,62 @@ def _drop_contradictions(
     return checklist, kept
 
 
+# Жим лёжа: модель упорно путает направление дуги. Живой провал (свободная
+# штанга, камера сбоку со стороны головы): гриф вверху над плечами, касание
+# на низе груди, на подъёме уходит обратно к голове — учебная дуга, а разбор
+# написал «гриф уходит к лицу вместо плеч», и тренер выдал норму за ошибку.
+# Правило в промпте про это уже было, и модель всё равно перепутала —
+# словами не лечится. Поэтому модель отдельно называет две точки по телу
+# (`bar_path`), а решение о дуге принимает код: верх над плечами и касание
+# на низе или середине груди — траектория в норме, а утверждения о
+# направлении снаряда снимаются.
+_LYING_PRESS_MARKERS = (("жим", "лёж"), ("жим", "леж"), ("bench",))
+_BAR_TOP_OK = ("над плечами",)
+_BAR_TOUCH_OK = ("низ груди", "середина груди")
+_BAR_WORDS = ("гриф", "штанг", "снаряд", "гантел", "рукоят", "траектор")
+# Только слова о направлении дуги: перекос грифа или неровный темп — другие
+# ошибки, и их код не трогает.
+_DIRECTION_WORDS = (
+    "к лицу", "к голове", "к шее", "к плечам", "к ногам", "к животу", "к поясу", "дуг",
+)
+
+
+def _is_lying_press(exercise: str) -> bool:
+    low = exercise.lower()
+    return any(all(m in low for m in group) for group in _LYING_PRESS_MARKERS)
+
+
+def _apply_bar_path(
+    exercise: str, bar_path: Any, checklist: list[dict[str, Any]], observations: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Дуга жима лёжа по двум точкам модели — решает код, а не её вердикт."""
+    if not _is_lying_press(exercise) or not isinstance(bar_path, dict):
+        return checklist, observations
+    top = str(bar_path.get("top") or "").strip().lower()
+    touch = str(bar_path.get("touch") or "").strip().lower()
+    if not (any(t in top for t in _BAR_TOP_OK) and any(t in touch for t in _BAR_TOUCH_OK)):
+        return checklist, observations
+    for item in checklist:
+        if item["point"] == "траектория снаряда" and item["verdict"] != "норма":
+            logger.warning(
+                "video sanitize: жим лёжа, верх %r, касание %r — траектория «%s» → «норма»",
+                top, touch, item["verdict"],
+            )
+            item["verdict"] = "норма"
+            item["what_i_see"] = (
+                f"вверху снаряд {top}, касание — {touch}: на опускании уходит к ногам, "
+                "на подъёме обратно к голове — обычная дуга жима"
+            )
+    kept = []
+    for obs in observations:
+        text = f"{obs.get('what') or ''} {obs.get('evidence') or ''}".lower()
+        if any(w in text for w in _BAR_WORDS) and any(w in text for w in _DIRECTION_WORDS):
+            logger.warning("video sanitize: жим лёжа, дуга в норме — снято «%s»", obs.get("what"))
+        else:
+            kept.append(obs)
+    return checklist, kept
+
+
 def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
     """Убрать из ответа модели то, что она обещала не писать.
 
@@ -543,6 +613,9 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
 
     checklist = _clean_checklist(data.get("checklist"))
     checklist, observations = _drop_contradictions(checklist, observations)
+    checklist, observations = _apply_bar_path(
+        str(data.get("exercise") or ""), data.get("bar_path"), checklist, observations
+    )
     # Точка помечена отклонением, а в observations его нет — модель потеряла своё
     # же наблюдение по дороге со шага 1 на шаг 2. Ничего не достраиваем: весь
     # checklist едет тренеру целиком (см. to_context_block), так что отклонение
