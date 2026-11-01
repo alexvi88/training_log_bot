@@ -110,6 +110,9 @@ MACHINE_KEYS = {
     # Маршрут пуша и строки «Уведомлений» (push_ios.ios_route): экран и неделя
     # — машинные значения, имя упражнения в нём — показываемое и проверяется.
     "screen", "week",
+    # «Неделя комиксом» (weekly_comic): сцена кадра — машинное перечисление
+    # (bench, night, week_closed…), картинку по нему рисует приложение.
+    "scene",
     # Пол атлета в /v1/settings и /v1/profile — перечисление male/female/null,
     # подпись «Мужской»/«Male» рисует приложение.
     "gender",
@@ -760,9 +763,16 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     import weekly_summary
 
     this_monday = weekly_summary.week_monday(timeutil.user_today(await fresh_db.get_user(111)))
+    # Тренировка этой недели — чтобы «Неделя комиксом» пришла непустой: её
+    # подписи (имя упражнения, подход, счёт недели) — тот же текст для атлета.
+    wid_week = (await w.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
+    await w.call("POST", f"/workouts/{wid_week}/sets", json={"exercise_id": squat_id, "weight": 90, "reps": 5},
+                 expect=201)
+    await w.call("POST", f"/workouts/{wid_week}/finish", json={}, expect=200)
     await fresh_db.save_weekly_digest(111, this_monday.isoformat(), lang, MODEL_TEXT[lang]["answer"])
     await w.call("GET", "/weekly-summary", expect=200)
-    await w.call("GET", f"/weekly-summary?week={this_monday.isoformat()}", expect=200)
+    week = (await w.call("GET", f"/weekly-summary?week={this_monday.isoformat()}", expect=200)).json()
+    assert week["comic"] and len(week["comic"]["panels"]) == 4
     await w.call("GET", "/weekly-summary?week=2999-01-05", expect=400)
     await w.call("GET", "/weekly-summary?week=soon", expect=400)
     await w.call("GET", "/achievements", expect=200)

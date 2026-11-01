@@ -4096,6 +4096,10 @@
     "coachText": {
      "type": "WeeklySummary.CoachText",
      "optional": true
+    },
+    "comic": {
+     "type": "WeeklySummary.Comic",
+     "optional": true
     }
    }
   },
@@ -4111,6 +4115,40 @@
      "optional": false
     },
     "stale": {
+     "type": "Bool",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Comic": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "panels": {
+     "type": "[WeeklySummary.Comic.Panel]",
+     "optional": false
+    }
+   }
+  },
+  "WeeklySummary.Comic.Panel": {
+   "file": "TrainingLog/Models/WeeklySummaryModels.swift",
+   "fields": {
+    "day": {
+     "type": "String",
+     "optional": true
+    },
+    "label": {
+     "type": "String",
+     "optional": false
+    },
+    "scene": {
+     "type": "String",
+     "optional": false
+    },
+    "caption": {
+     "type": "String",
+     "optional": false
+    },
+    "record": {
      "type": "Bool",
      "optional": false
     }
@@ -5699,5 +5737,5 @@
    "nullable": false
   }
  ],
- "_ios_commit": "01cd8127dcb8af34a913808c279e91436e31c7d6"
+ "_ios_commit": "54716514dfabe3eec6947d935a23d479aa6c1f63"
 }

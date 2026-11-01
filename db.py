@@ -7352,6 +7352,45 @@ async def e1rm_records_in_window(
     return await cur.fetchall()
 
 
+async def week_workout_sets(
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+) -> list[aiosqlite.Row]:
+    """Законченные тренировки окна [start_date, end_date] (местные дни) с их
+    подходами — сырьё комикса «Итога недели» (weekly_comic).
+
+    Строка на подход; у тренировки без подходов — строка с NULL в колонках
+    подхода. e1RM — тем же выражением, что у e1rm_records_in_window, чтобы
+    рекордный подход нашёлся ровно тот, который назвал список рекордов.
+    Группа — каноническое имя muscle_groups.name (русское у встроенных).
+
+    Колонки: workout_id, started_at (UTC), d (местный день), sid, exercise_id,
+    display_name, group_name, weight (как записал атлет), reps, load_w (с весом
+    тела), e1rm.
+    """
+    e1rm = _e1rm_sql(formula)
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT w.id AS workout_id, w.started_at, {day} AS d, s.id AS sid,"
+        " s.exercise_id, x.display_name, g.name AS group_name, s.weight, s.reps,"
+        f" {LOAD_WEIGHT_SQL} AS load_w,"
+        f" CASE WHEN s.id IS NULL THEN NULL ELSE {e1rm} END AS e1rm "
+        "FROM workouts w "
+        "LEFT JOIN workout_blocks b ON b.workout_id = w.id "
+        "LEFT JOIN sets s ON s.block_id = b.id "
+        "LEFT JOIN exercises x ON x.id = s.exercise_id "
+        "LEFT JOIN muscle_groups g ON g.id = x.primary_group_id "
+        f"WHERE w.user_id = ? AND w.status = 'finished' AND {day} BETWEEN ? AND ? "
+        "ORDER BY w.started_at, w.id, s.id",
+        (user_id, start_date, end_date),
+    )
+    return await cur.fetchall()
+
+
 async def e1rm_running_records_in_window(
     user_id: int,
     start_date: str,
