@@ -352,7 +352,7 @@ EXERCISE_IMAGE_SLUGS = {
 # от первого (подъём плеч дорисован явно). Имя кадра собирает только frame_name — не подклеивай
 # `f"{slug}_1.jpg"` руками.
 FRAME_REVISION: dict[str, int] = {
-    "barbell_bench_press_medium_grip": 4,
+    "barbell_bench_press_medium_grip": 5,
     "pullups": 3,
     "barbell_squat": 3,
     "seated_dumbbell_press": 3,
