@@ -165,7 +165,7 @@ async def test_bot_picker_offers_similar_above_create(fresh_db, user_id):
 
     kwargs = message.bot.send_message.await_args.kwargs
     assert "Похоже, ты про:" in kwargs["text"]
-    assert "Ничего не нашлось" not in kwargs["text"]
+    assert "Ничего не нашёл" not in kwargs["text"]
     rows = kwargs["reply_markup"].inline_keyboard
     datas = [b.callback_data for row in rows for b in row]
     create_at = datas.index("pick:newquery")

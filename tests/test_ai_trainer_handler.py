@@ -157,7 +157,7 @@ async def test_ai_voice_question_reports_transcription_failure(fresh_db, user_id
     await ai_trainer.ai_voice_question(message, state)
 
     message.reply.assert_awaited_once()
-    assert "распознать" in message.reply.await_args.args[0]
+    assert "Не разобрал" in message.reply.await_args.args[0]
 
 
 async def test_ai_voice_question_rejects_empty_transcription(fresh_db, user_id, monkeypatch):
@@ -686,7 +686,7 @@ async def test_exercise_card_button_rejects_someone_elses_exercise(fresh_db, use
 
     await ai_trainer.ai_exercise_card(callback, state)
 
-    callback.answer.assert_awaited_once_with("Не нашёл это упражнение — экран устарел. Вернись назад и открой заново", show_alert=True)
+    callback.answer.assert_awaited_once_with("Не нашёл это упражнение — вернись назад и открой заново", show_alert=True)
 
 
 # ---------- paging through mentions (ai:mpage:) ----------

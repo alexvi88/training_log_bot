@@ -655,6 +655,6 @@ def test_level_card_shows_the_weight_and_the_bodyweight():
     assert card("ru", "l=3&lift=bench&w=140&r=1&bw=80&u=kg") == "Жим лёжа: 140 кг при весе 80 кг — Продвинутый"
     assert card("en", "l=2&lift=squat&w=225&r=5&bw=180&u=lb") == \
         "Squat: 225 lb × 5 at 180 lb bodyweight — Intermediate"
-    assert card("en", "l=2&lift=squat") == "My squat rank — Intermediate"
+    assert card("en", "l=2&lift=squat") == "My squat standard — Intermediate"
     page = seo_pages.render(seo_pages.Page("strength_lift", "squat", "men"), "en")
     assert "&w='+w+'&r='+r+'&bw='" in page

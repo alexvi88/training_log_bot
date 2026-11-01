@@ -84,7 +84,7 @@ async def test_no_match_says_so_instead_of_crashing(fresh_db, user_id):
     await history.prog_search_text(message, state)
 
     text = message.answer.await_args.args[0]
-    assert "Ничего не нашлось" in text
+    assert "Ничего не нашёл" in text
 
 
 async def test_blank_text_is_ignored(fresh_db, user_id):

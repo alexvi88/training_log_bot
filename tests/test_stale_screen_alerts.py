@@ -23,7 +23,7 @@ async def test_alert_exercise_not_found_names_the_screen_to_reopen():
     await ui.alert_exercise_not_found(callback)
 
     callback.answer.assert_awaited_once_with(
-        "Не нашёл это упражнение — экран устарел. Открой ⚙️ Упражнения заново",
+        "Не нашёл это упражнение — открой ⚙️ Упражнения заново",
         show_alert=True,
     )
 
@@ -34,6 +34,6 @@ async def test_alert_workout_not_found_names_the_screen_to_reopen():
     await ui.alert_workout_not_found(callback)
 
     callback.answer.assert_awaited_once_with(
-        "Не нашёл эту тренировку — экран устарел. Открой 📚 Историю заново",
+        "Не нашёл эту тренировку — открой 📚 Историю заново",
         show_alert=True,
     )
