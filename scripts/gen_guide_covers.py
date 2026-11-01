@@ -17,9 +17,18 @@ fal.media, *.fal.media). Сумму называть владельцу ДО з�
 Промпт = PREFIX + сцена + STYLE (стиль — из TONE_OF_VOICE.md, «Стиль картинок»).
 Сцены — SCENES ниже; полный промпт любого сюжета: PREFIX + SCENES[slug] + STYLE.
 """
-import argparse, base64, io, json, os, time, urllib.error, urllib.request
+
+import argparse
+import base64
 import concurrent.futures as cf
+import io
+import json
+import os
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,7 +39,8 @@ PREFIX = (
     "bodybuilder, deep tan, heavy square jaw, short dark-blond hair slicked back, gold aviator sunglasses, thick "
     "gold chain, black tank top. Calm, confident face: not shouting, not grinning, not winking. Only a few thin "
     "subtle veins on the forearms, no bulging vein network, but the muscles keep their crisp comic-book contours "
-    "and shading. Scene: ")
+    "and shading. Scene: "
+)
 STYLE = (
     " Style exactly like image 1: bold black outlines, flat color fill with soft cel shading on the muscles, "
     "western comic book / arcade cover look; no photorealism, no 3D render; detail in the muscles and iron, the "
@@ -39,7 +49,8 @@ STYLE = (
     "basement gym, not a bright white fitness club. Square 1:1 composition, the main subject centered and large, "
     "readable at a glance as a small icon, few small details, empty margins near the corners and the bottom edge. "
     "No text, no letters, no numbers, no logos, no labels, no brands, no watermarks. No other people unless the "
-    "scene names them.")
+    "scene names them."
+)
 
 SCENES = {
     "protein-per-day": "the coach holds a big plain shaker bottle with no print; next to him on a bench a plate with grilled chicken and boiled eggs.",
@@ -78,43 +89,62 @@ SCENES = {
 
 
 def uri(p):
-    im = Image.open(p).convert("RGB"); im.thumbnail((1024, 1024))
-    b = io.BytesIO(); im.save(b, "JPEG", quality=90)
+    im = Image.open(p).convert("RGB")
+    im.thumbnail((1024, 1024))
+    b = io.BytesIO()
+    im.save(b, "JPEG", quality=90)
     return "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
 
 
 def call(url, body=None, method="GET"):
-    r = urllib.request.Request(url, data=json.dumps(body).encode() if body else None,
-                               headers={"Content-Type": "application/json"}, method=method)
+    r = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode() if body else None,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
     return json.loads(urllib.request.urlopen(r, timeout=120).read())
 
 
 def square(src, dst):
-    im = Image.open(src).convert("RGB"); s = min(im.size)
+    im = Image.open(src).convert("RGB")
+    s = min(im.size)
     x, y = (im.width - s) // 2, (im.height - s) // 2
     im.crop((x, y, x + s, y + s)).resize((1024, 1024), Image.LANCZOS).save(dst, "JPEG", quality=85)
 
 
 def gen(out, slug, n, ref):
-    q = call("https://queue.fal.run/meta/muse-image/edit",
-             {"prompt": PREFIX + SCENES[slug] + STYLE, "image_urls": [ref], "aspect_ratio": "1:1", "num_images": 1}, "POST")
+    q = call(
+        "https://queue.fal.run/meta/muse-image/edit",
+        {"prompt": PREFIX + SCENES[slug] + STYLE, "image_urls": [ref], "aspect_ratio": "1:1", "num_images": 1},
+        "POST",
+    )
     for _ in range(120):
-        if call(q["status_url"])["status"] == "COMPLETED": break
+        if call(q["status_url"])["status"] == "COMPLETED":
+            break
         time.sleep(3)
     raw = f"{out}/{slug}_{n}.raw.jpg"
     urllib.request.urlretrieve(call(q["response_url"])["images"][0]["url"], raw)
-    square(raw, f"{out}/{slug}_{n}.jpg"); os.remove(raw)
+    square(raw, f"{out}/{slug}_{n}.jpg")
+    os.remove(raw)
     return f"{slug}_{n}"
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("out"); ap.add_argument("slugs", nargs="?", default=",".join(SCENES)); ap.add_argument("--n", type=int, default=3)
-    a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); ref = uri(REF)
+    ap.add_argument("out")
+    ap.add_argument("slugs", nargs="?", default=",".join(SCENES))
+    ap.add_argument("--n", type=int, default=3)
+    a = ap.parse_args()
+    os.makedirs(a.out, exist_ok=True)
+    ref = uri(REF)
     jobs = [(s, i) for s in a.slugs.split(",") for i in range(1, a.n + 1)]
     with cf.ThreadPoolExecutor(8) as ex:
         fs = {ex.submit(gen, a.out, s, i, ref): (s, i) for s, i in jobs}
         for f in cf.as_completed(fs):
-            try: print("ok", f.result())
-            except urllib.error.HTTPError as e: print("ERR", fs[f], e.code, e.read().decode()[:200])
-            except Exception as e: print("ERR", fs[f], e)
+            try:
+                print("ok", f.result())
+            except urllib.error.HTTPError as e:
+                print("ERR", fs[f], e.code, e.read().decode()[:200])
+            except Exception as e:
+                print("ERR", fs[f], e)
