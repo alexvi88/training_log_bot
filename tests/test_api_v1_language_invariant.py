@@ -267,6 +267,7 @@ def _route_for(method: str, path: str) -> str | None:
 # Маршруты, которые сценарий не зовёт, — каждый с причиной.
 SKIPPED: dict[str, str] = {
     "GET /media/exercises/{name:path}": "раздаёт файл картинки (не JSON, текста нет)",
+    "GET /media/guides/{name:path}": "раздаёт обложку гайда (не JSON, текста нет)",
     "GET /exercises/{exercise_id:int}/photo": "раздаёт байты фото (не JSON, текста нет)",
     "GET /ai/history/{turn_id:int}/image": "раздаёт байты картинки чата (не JSON)",
     "GET /support/photos/{message_id:int}": "раздаёт байты фото из поддержки (не JSON)",

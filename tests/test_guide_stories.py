@@ -320,3 +320,26 @@ async def test_guides_route_returns_the_full_contract(fresh_db, client_factory, 
         assert set(action) == ACTION_KEYS
     assert all(set(s) == {"key", "title", "slugs"} for s in body["shelves"])
     assert not CYRILLIC.search(resp.text)
+
+
+def test_cover_is_the_guide_drawing_when_the_file_exists(tmp_path, monkeypatch):
+    (tmp_path / "creatine.jpg").write_bytes(b"\xff\xd8jpg")
+    monkeypatch.setattr(G, "GUIDE_COVER_DIR", str(tmp_path))
+    assert G.cover_path("creatine") == "/media/guides/creatine.jpg"
+    assert G.cover_path("whey-protein") is None
+
+
+def test_guide_cover_route_serves_the_file_and_refuses_traversal(tmp_path, monkeypatch):
+    import api_v1_media
+    from api_v1_common import ApiError
+
+    (tmp_path / "creatine.jpg").write_bytes(b"\xff\xd8jpg")
+    resp = api_v1_media._serve_file(str(tmp_path), "creatine.jpg")
+    assert resp.path.endswith("creatine.jpg")
+    for name in ("../guide_stories.py", "missing.jpg"):
+        try:
+            api_v1_media._serve_file(str(tmp_path), name)
+        except ApiError as e:
+            assert e.status_code == 404
+        else:
+            raise AssertionError(name)

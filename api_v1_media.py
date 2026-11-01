@@ -37,6 +37,7 @@ import exercise_descriptions
 import exercise_media
 import exercise_muscles
 import exercise_photos
+import guide_stories
 import i18n
 from api_v1_common import JSONResponse
 from handlers.ai_trainer import MAX_IMAGE_BYTES
@@ -152,10 +153,18 @@ async def get_media_file(request: Request) -> Any:
     отдать файл вне каталога с картинками — get_media_file просто вернёт 404,
     как на любое другое отсутствующее имя.
     """
-    name = request.path_params["name"]
+    return _serve_file(exercise_media.MEDIA_DIR, request.path_params["name"])
 
-    media_root = os.path.realpath(exercise_media.MEDIA_DIR)
-    candidate = os.path.realpath(os.path.join(exercise_media.MEDIA_DIR, name))
+
+async def get_guide_cover(request: Request) -> FileResponse:
+    """Обложка гайда (`media/guides/<slug>.jpg`, см. guide_stories.cover_path) —
+    та же раздача и та же защита от «..», что у кадров упражнений."""
+    return _serve_file(guide_stories.GUIDE_COVER_DIR, request.path_params["name"])
+
+
+def _serve_file(root: str, name: str) -> FileResponse:
+    media_root = os.path.realpath(root)
+    candidate = os.path.realpath(os.path.join(root, name))
 
     # Сравнение с os.sep на конце — чтобы "/media/exercises_evil" не прошёл
     # проверку как "начинается с /media/exercises".
@@ -260,4 +269,5 @@ routes = [
     Route("/exercises/{exercise_id:int}/photo", upload_exercise_photo, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/photo", delete_exercise_photo, methods=["DELETE"]),
     Route("/media/exercises/{name:path}", get_media_file, methods=["GET"]),
+    Route("/media/guides/{name:path}", get_guide_cover, methods=["GET"]),
 ]

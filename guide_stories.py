@@ -31,6 +31,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import functools
+import os
 import re
 from html import unescape
 from typing import Any, Optional
@@ -303,6 +304,18 @@ def _slide(kind: str, title: str, text: str, image: str, items: Optional[list[st
             "items": items or [], "action": None}
 
 
+# Обложки гайдов — свои рисунки (`media/guides/<slug>.jpg`, скрипт
+# `scripts/gen_guide_covers.py`): тренер в подвале под тему гайда. Нет файла —
+# обложкой и первым слайдом служит кадр упражнения, как раньше.
+GUIDE_COVER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "guides")
+
+
+def cover_path(slug: str) -> str | None:
+    if os.path.isfile(os.path.join(GUIDE_COVER_DIR, f"{slug}.jpg")):
+        return f"/media/guides/{slug}.jpg"
+    return None
+
+
 @functools.lru_cache(maxsize=None)
 def _static_guide(slug: str, lang: str) -> dict[str, Any]:
     """Статья на языке `lang` слайдами — без личного (featured, reason, чип,
@@ -313,7 +326,8 @@ def _static_guide(slug: str, lang: str) -> dict[str, Any]:
     params = seo_library.link_params(lang)
     images = frame_paths(slug)
     image = lambda i: images[i % len(images)]  # noqa: E731
-    slides = [_slide("cover", t(f"seo.guide.{slug}.h1"), clip(t(f"seo.guide.{slug}.lead")), image(0))]
+    cover = cover_path(slug) or images[0]
+    slides = [_slide("cover", t(f"seo.guide.{slug}.h1"), clip(t(f"seo.guide.{slug}.lead")), cover)]
     for i in section_numbers(slug):
         slides.append(_slide(
             "section", t(f"seo.guide.{slug}.s{i}.h"), clip(t(f"seo.guide.{slug}.s{i}_html", **params)),
@@ -326,7 +340,7 @@ def _static_guide(slug: str, lang: str) -> dict[str, Any]:
         "slug": slug,
         "title": t(f"seo.guide.{slug}.h1"),
         "card": t(f"seo.guide.{slug}.card"),
-        "cover": images[0],
+        "cover": cover,
         "featured": False,
         "reason": None,
         "url": guide_url(slug, lang),
