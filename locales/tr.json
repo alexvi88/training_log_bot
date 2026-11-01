@@ -2512,6 +2512,8 @@
   "referral_page.manual": "App Store’dan mı kurdun? Bu sayfaya dön ve “Uygulamada aç”a bas — seni kimin davet ettiğini böyle anlarım.",
   "referral_page.not_found.title": "Bu linki okuyamıyorum",
   "referral_page.not_found.body": "Linkte yazım hatası var. Tekrar iste — ya da uygulamayı indirip kendin başla.",
+  "guide_share_page.lead": "Biri sana bir rehber gönderdi. Uygulamada aç — orada onu kısa slaytlara böldüm.",
+  "guide_share_page.btn.site": "Sitede oku",
   "api.error.invalid_referral": "Bu davet kodunu okuyamıyorum. Davet linkini tekrar aç.",
   "coach.renew.confirm": "Yeni kod oluşturayım mı? Eski kod çalışmayı bırakır. Günlüğünü sana zaten açmış danışanlar kalır.",
   "coach.invite_renewed": "Yeni kod hazır — eskisi artık çalışmıyor.",

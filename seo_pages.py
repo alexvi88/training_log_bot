@@ -2683,7 +2683,7 @@ async def seen_route(request: Request) -> Response:
     params = request.query_params
     page = params.get("p", "")
     fetch_site = request.headers.get("sec-fetch-site")
-    if site_stats.valid_page_key(page, (acquisition.REFERRAL_WEB_PAGE_KEY,)) and fetch_site in (None, "same-origin"):
+    if site_stats.valid_page_key(page, (acquisition.REFERRAL_WEB_PAGE_KEY, acquisition.GUIDE_SHARE_PAGE_KEY)) and fetch_site in (None, "same-origin"):
         lang = lang_of_path(page) or lang_from_code(params.get("l", ""))
         await site_stats.record_seen(
             page, lang, user_agent=request.headers.get("user-agent"), referer=params.get("r") or None,

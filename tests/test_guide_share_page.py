@@ -1,12 +1,16 @@
 """Ссылка «поделиться гайдом» `/g/<slug>` (guide_share_page.py).
 
 Гоняется через то же приложение, что поднимает прод (`mcp_server.build_app`):
-iPhone без приложения → App Store с кампанией `ct=guide_<slug>`, остальные →
-статья сайта на языке браузера, незнакомый адрес — 404. Переход — в счётчике
-сайта одной строкой `/g`, без адреса гайда.
+iPhone → страница-развилка (схема приложения, App Store с кампанией
+`ct=guide_<slug>`, статья сайта) — дошедший сюда iPhone не значит «приложения
+нет»; остальные → 302 на статью сайта на языке браузера, незнакомый адрес —
+404. Переход — в счётчике сайта одной строкой `/g`, без адреса гайда.
 """
 
 from __future__ import annotations
+
+import re
+from html import escape
 
 import httpx
 import pytest
@@ -16,6 +20,7 @@ import config
 import db
 import guide_share_page
 import guide_stories
+import i18n
 import product_metrics
 
 BASE = "https://training-log.example.com"
@@ -46,12 +51,60 @@ async def _get(path: str, user_agent: str, lang: str | None = None) -> httpx.Res
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ua", [IPHONE, IPAD])
-async def test_iphone_without_the_app_goes_to_the_app_store(fresh_db, ua):
+async def test_iphone_gets_a_landing_not_a_store_redirect(fresh_db, ua):
+    # Universal Link из встроенного браузера Telegram не срабатывает: iPhone с
+    # приложением тоже доходит сюда — слепой 302 в App Store уводил его в магазин.
     resp = await _get("/g/break-a-plateau", ua, "ru-RU,ru;q=0.9")
 
-    assert resp.status_code == 302
-    assert resp.headers["location"] == f"{STORE}&ct=guide_break-a-plateau"
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
     assert resp.headers["cache-control"] == "no-store"
+    assert "location" not in resp.headers
+    html = resp.text
+    assert '<html lang=ru>' in html
+    assert escape(i18n.t_in("ru", "seo.guide.break-a-plateau.h1")) in html
+    assert escape(i18n.t_in("ru", "guide_share_page.lead")) in html
+    assert 'href="trainingdiary://g/break-a-plateau"' in html
+    assert escape(i18n.t_in("ru", "referral_page.btn.open_app")) in html
+    assert f'href="{STORE}&amp;ct=guide_break-a-plateau"' in html
+    assert escape(i18n.t_in("ru", "referral_page.btn.app_store")) in html
+    assert 'href="/ru/guides/break-a-plateau"' in html
+    assert escape(i18n.t_in("ru", "guide_share_page.btn.site")) in html
+    assert f'src="{BASE}/v1/media/guides/break-a-plateau.jpg"' in html
+    assert "/go/seen" in html
+
+
+@pytest.mark.asyncio
+async def test_landing_speaks_the_browser_language(fresh_db):
+    resp = await _get("/g/creatine", IPHONE, "en-US,en;q=0.9")
+
+    html = resp.text
+    assert "<html lang=en>" in html
+    assert escape(i18n.t_in("en", "seo.guide.creatine.h1")) in html
+    assert escape(i18n.t_in("en", "guide_share_page.lead")) in html
+    assert 'href="/en/guides/creatine"' in html
+    assert not re.search(r"[а-яА-ЯёЁ]", html)
+
+
+@pytest.mark.asyncio
+async def test_landing_cover_is_served(fresh_db):
+    resp = await _get("/g/creatine", IPHONE, "en")
+    src = re.search(r'<img src="([^"]+)"', resp.text).group(1)
+
+    cover = await _get(src.removeprefix(BASE), IPHONE)
+    assert cover.status_code == 200
+    assert cover.headers["content-type"] == "image/jpeg"
+
+
+@pytest.mark.asyncio
+async def test_landing_without_a_cover_file_has_no_image(fresh_db, monkeypatch):
+    monkeypatch.setattr(guide_stories, "cover_path", lambda slug: None)
+
+    resp = await _get("/g/creatine", IPHONE, "en")
+
+    assert resp.status_code == 200
+    assert "<img" not in resp.text
+    assert 'href="trainingdiary://g/creatine"' in resp.text
 
 
 @pytest.mark.asyncio
@@ -76,13 +129,17 @@ async def test_android_and_link_previews_get_the_site(fresh_db):
 
 
 @pytest.mark.asyncio
-async def test_iphone_falls_back_to_the_site_without_a_store_link(fresh_db, monkeypatch):
+async def test_iphone_landing_without_a_store_link_has_no_store_button(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "APP_STORE_URL", "")
 
     resp = await _get("/g/creatine", IPHONE, "fr-FR")
 
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "/fr/guides/creatine"
+    assert resp.status_code == 200
+    html = resp.text
+    assert "apps.apple.com" not in html
+    assert escape(i18n.t_in("fr", "referral_page.btn.app_store")) not in html
+    assert 'href="trainingdiary://g/creatine"' in html
+    assert 'href="/fr/guides/creatine"' in html
 
 
 @pytest.mark.asyncio
@@ -111,7 +168,7 @@ async def test_follow_is_counted_under_one_key(fresh_db):
 
     cur = await db.conn().execute("SELECT kind, page, device, target FROM site_events ORDER BY id")
     rows = [tuple(r) for r in await cur.fetchall()]
-    assert rows == [("view", "/g", "ios", "appstore"), ("view", "/g", "desktop", "site")]
+    assert rows == [("view", "/g", "ios", "page"), ("view", "/g", "desktop", "site")]
 
 
 def test_campaign_fits_the_app_store_limit():
@@ -145,3 +202,16 @@ def test_guide_open_by_a_friends_link_keeps_its_source():
     for source in ("menu", "link"):
         assert clean("guide_open", {"slug": "creatine", "source": source}) == {"slug": "creatine", "source": source}
     assert clean("guide_open", {"slug": "creatine", "source": "push"}) == {"slug": "creatine"}
+
+
+@pytest.mark.asyncio
+async def test_landing_beacon_is_accepted(fresh_db):
+    import mcp_server
+
+    transport = httpx.ASGITransport(app=mcp_server.build_app())
+    async with httpx.AsyncClient(transport=transport, base_url=BASE) as client:
+        resp = await client.post("/go/seen?p=/g&l=en", headers={"user-agent": IPHONE, "sec-fetch-site": "same-origin"})
+    assert resp.status_code == 204
+
+    cur = await db.conn().execute("SELECT kind, page FROM site_events")
+    assert [tuple(r) for r in await cur.fetchall()] == [("seen", "/g")]

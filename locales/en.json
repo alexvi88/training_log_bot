@@ -2512,6 +2512,8 @@
   "referral_page.manual": "Installed it from the App Store? Come back to this page and tap “Open in the app” — that's how I'll know who invited you.",
   "referral_page.not_found.title": "Can't read this link",
   "referral_page.not_found.body": "The link has a typo. Ask for it again — or get the app and start on your own.",
+  "guide_share_page.lead": "Someone sent you a guide. Open it in the app — I've broken it down into short slides there.",
+  "guide_share_page.btn.site": "Read it on the site",
   "api.error.invalid_referral": "Can't read that invite code. Open the invite link again.",
   "coach.renew.confirm": "Issue a new code? The old code stops working. Clients who already opened their diary to you stay.",
   "coach.invite_renewed": "New code's ready — the old one no longer works.",

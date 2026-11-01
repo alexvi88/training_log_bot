@@ -2512,6 +2512,8 @@
   "referral_page.manual": "Instalaste pela App Store? Volta a esta página e toca em “Abrir na app” — é assim que fico a saber quem te convidou.",
   "referral_page.not_found.title": "Não consigo ler este link",
   "referral_page.not_found.body": "O link tem um erro. Pede-o outra vez — ou descarrega a app e começa por tua conta.",
+  "guide_share_page.lead": "Alguém te mandou um guia. Abre-o na app — lá dividi-o em slides curtos.",
+  "guide_share_page.btn.site": "Ler no site",
   "api.error.invalid_referral": "Não consigo ler este código de convite. Abre outra vez o link do convite.",
   "coach.renew.confirm": "Gerar um novo código? O código antigo deixa de funcionar. Os alunos que já te abriram o diário continuam.",
   "coach.invite_renewed": "Código novo pronto — o antigo já não funciona.",

@@ -2512,6 +2512,8 @@
   "referral_page.manual": "Tu l’as installée depuis l’App Store ? Reviens sur cette page et appuie sur « Ouvrir dans l’app » — c’est comme ça que je saurai qui t’a invité.",
   "referral_page.not_found.title": "Je n’arrive pas à lire ce lien",
   "referral_page.not_found.body": "Il y a une faute dans le lien. Redemande-le — ou prends l’app et commence tout seul.",
+  "guide_share_page.lead": "Quelqu’un t’a envoyé un guide. Ouvre-le dans l’app — je l’y ai découpé en slides courtes.",
+  "guide_share_page.btn.site": "Lire sur le site",
   "api.error.invalid_referral": "Je n’arrive pas à lire ce code d’invitation. Rouvre le lien d’invitation.",
   "coach.renew.confirm": "Créer un nouveau code ? L’ancien ne marchera plus. Les clients qui t’ont déjà ouvert leur journal restent.",
   "coach.invite_renewed": "Le nouveau code est prêt — l’ancien ne marche plus.",
