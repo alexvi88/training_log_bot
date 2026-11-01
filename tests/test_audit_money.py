@@ -357,7 +357,7 @@ async def test_video_garbage_answer_does_not_spend_main_quota_but_counts_soft_fa
     assert await video_analysis.analyze(b"bytes", user_id) is None
     block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
     assert block is not None and block.log.startswith("video_fail")
-    assert "не разбирается" in block.user_text
+    assert "не разбираю" in block.user_text
     assert await db.get_ai_video_count_today(user_id) == 0
 
 

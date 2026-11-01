@@ -217,7 +217,7 @@ async def test_workout_button_starts_immediately_and_interrupts_state(fresh_db, 
     assert await state.get_state() == WorkoutFlow.picking_group.state
     assert message.delete.await_count == 1
     started_call = message.answer.await_args
-    assert "Тренировка начата" in started_call.args[0]
+    assert "Начал тренировку" in started_call.args[0]
     # Это сообщение тем же ходом становится живым трекером и редактируется в
     # инлайн-клавиатуру — reply-клавиатуру на него вешать нельзя, иначе клиент
     # сбросит нижний ряд (см. keyboards.persistent_menu).

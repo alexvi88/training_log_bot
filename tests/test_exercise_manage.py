@@ -92,7 +92,7 @@ async def test_typing_no_match_in_exercise_list_shows_empty_state(fresh_db, user
     await exercises.exm_search_text(message, state)
 
     sent_text = message.answer.await_args.args[0]
-    assert "Ничего не нашлось" in sent_text
+    assert "Ничего не нашёл" in sent_text
 
 
 def _make_exercise_callback(user_id: int, data: str):

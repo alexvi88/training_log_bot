@@ -229,9 +229,9 @@ def test_build_workout_summary_max_chars_drops_oldest_exercises():
     ]
     full_text = formatting.build_workout_summary(started, blocks)
     trimmed = formatting.build_workout_summary(started, blocks, max_chars=400)
-    assert formatting.telegram_length(trimmed) <= 400 or "Показано" in trimmed
+    assert formatting.telegram_length(trimmed) <= 400 or "Показываю" in trimmed
     assert len(trimmed) < len(full_text)
-    assert "Показано" in trimmed
+    assert "Показываю" in trimmed
 
 
 def test_fit_workout_text_shrinks_summary_to_leave_room_for_suffix():
@@ -850,7 +850,7 @@ def test_format_progress_screen_count_is_about_the_selected_period():
     assert "из 20 тренировок" in text
     assert "из 23" not in text
     # и подпись стоит внутри тоггла, а не отдельной строкой под ним
-    assert text.index("Показано") < text.index("</blockquote>")
+    assert text.index("Показываю") < text.index("</blockquote>")
 
 
 def test_format_progress_screen_count_line_uses_genitive_after_iz():
@@ -865,14 +865,14 @@ def test_format_progress_screen_no_count_line_when_whole_period_fits():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 11)]
     records = analytics.PersonalRecords()
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=2)
-    assert "Показано" not in text
+    assert "Показываю" not in text
 
 
 def test_format_progress_screen_no_count_line_when_history_fits():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
     records = analytics.PersonalRecords()
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=8)
-    assert "Показано" not in text
+    assert "Показываю" not in text
 
 
 def test_format_progress_screen_delta_scopes_to_selected_period_not_all_time():
@@ -990,7 +990,7 @@ def test_progress_screen_fits_the_caption_limit():
     )
 
     assert formatting.telegram_length(text) <= formatting.CAPTION_LIMIT
-    assert "Показано" in text  # and it says so rather than silently dropping history
+    assert "Показываю" in text  # and it says so rather than silently dropping history
 
 
 def test_progress_screen_single_session_is_not_worth_folding():

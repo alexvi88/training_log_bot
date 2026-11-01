@@ -182,13 +182,13 @@ def test_bodyweight_list_screen_numbers_rows_and_shows_time():
     text = formatting.build_bodyweight_list_screen(rows, "kg", page=0, page_size=10, total=2)
     assert "1. 01.02.2026 08:30 — 80кг" in text
     assert "2. 01.01.2026 07:00 — 82кг" in text
-    assert "Показано" not in text  # everything fits on one page
+    assert "Показываю" not in text  # everything fits on one page
 
 
 def test_bodyweight_list_screen_shows_page_range_when_paginated():
     rows = [{"id": 1, "weight": 80.0, "logged_at": "2026-02-01T08:00:00"}]
     text = formatting.build_bodyweight_list_screen(rows, "kg", page=1, page_size=1, total=3)
-    assert "Показано 2–2 из 3" in text
+    assert "Показываю 2–2 из 3" in text
 
 
 # ---------- unit conversion: set weights ----------
@@ -473,7 +473,7 @@ def test_bodyweight_screen_fits_the_caption_cap_on_a_long_history():
     text = formatting.build_bodyweight_screen(logs)
 
     assert formatting.telegram_length(text) <= formatting.CAPTION_LIMIT
-    assert "Показано" in text  # and it says the list was cut
+    assert "Показываю" in text  # and it says the list was cut
     assert "Напиши вес" in text  # the call to action survives the trim
 
 
@@ -501,7 +501,7 @@ def test_bodyweight_screen_short_history_lists_everything():
     text = formatting.build_bodyweight_screen(logs)
 
     assert "01.01.2026" in text and "02.01.2026" in text
-    assert "Показано" not in text
+    assert "Показываю" not in text
 
 
 def test_bodyweight_screen_folds_a_long_history_behind_a_native_blockquote():
@@ -521,7 +521,7 @@ def test_bodyweight_screen_folds_a_long_history_behind_a_native_blockquote():
 
     assert "<blockquote expandable>" in text
     assert "01.01.2026" in text and "10.01.2026" in text  # nothing trimmed, only folded
-    assert "Показано" not in text
+    assert "Показываю" not in text
 
 
 def test_bodyweight_screen_short_history_is_not_folded():

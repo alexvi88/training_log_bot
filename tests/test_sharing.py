@@ -837,7 +837,7 @@ async def test_a_program_with_one_empty_day_says_which_rule_dropped_it(fresh_db,
     assert [d["name"] for d in payload["days"]] == ["Толкай", "Ноги"]
     text = _program_card_text(callback)
     assert "2 дня из 3" in text
-    assert "пустые дни не передаются" in text
+    assert "пустые дни не передаю" in text
     assert "2 дня из 3" in callback.answer.await_args.args[0]
 
 
@@ -861,7 +861,7 @@ async def test_six_working_days_and_two_empty_do_not_claim_a_loss_that_did_not_h
 
     text = _program_card_text(callback)
     assert "не влезает" not in text
-    assert "пустые дни не передаются" in text
+    assert "пустые дни не передаю" in text
 
 
 async def test_both_causes_at_once_are_named_both(fresh_db, user_id):
@@ -875,7 +875,7 @@ async def test_both_causes_at_once_are_named_both(fresh_db, user_id):
     callback = await _tap(user_id, f"share:prg:{program_id}")
 
     text = _program_card_text(callback)
-    assert "пустые дни не передаются, а остальное не влезло" in text
+    assert "пустые дни не передаю, а остальное не влезло" in text
 
 
 async def test_imported_program_name_fits_the_rename_limit(fresh_db, user_id):

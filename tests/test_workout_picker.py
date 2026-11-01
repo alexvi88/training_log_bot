@@ -270,7 +270,7 @@ async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, use
     await workout.pick_exercise_search(message, state)
 
     sent_text = message.bot.send_message.await_args.kwargs["text"]
-    assert "Ничего не нашлось" in sent_text
+    assert "Ничего не нашёл" in sent_text
     kb = message.bot.send_message.await_args.kwargs["reply_markup"]
     buttons = [b for row in kb.inline_keyboard for b in row]
     create = next(b for b in buttons if b.callback_data == "pick:newquery")
