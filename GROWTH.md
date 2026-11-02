@@ -374,6 +374,9 @@ Hevy/Strong.
 
 ### Где мы есть и что дальше
 
+Факты по подачам (даты, ответы, ссылки) — в `docs/LAUNCH_LOG.md`; таблица
+ниже — план и метки.
+
 | Площадка | Статус | Метка |
 |---|---|---|
 | App Store Connect → Marketing URL | ✅ стоит | `utm_source=appstore` |
