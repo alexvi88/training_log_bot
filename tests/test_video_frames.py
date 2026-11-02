@@ -119,7 +119,7 @@ def test_corrupt_upload_gives_none(payload):
         ("openai", "", "nv", "novita"),
         ("novita", "sk", "nv", "novita"),
         ("novita", "sk", "", "openai"),
-        ("garbage", "sk", "nv", "openai"),
+        ("garbage", "sk", "nv", "novita"),
         ("openai", "", "", None),
     ],
 )
@@ -287,6 +287,44 @@ async def test_novita_backend_still_sends_the_whole_video(monkeypatch, luna):
     kwargs = novita.chat.completions.create.await_args.kwargs
     assert kwargs["messages"][0]["content"] == video_analysis.NOVITA_SYSTEM_PROMPT
     assert any(p["type"] == "video_url" for p in kwargs["messages"][1]["content"])
+
+
+async def test_default_is_qwen_with_frames_fallback(monkeypatch, luna, clip_3s):
+    """Основной — Qwen; он ответил мусором — тот же ролик кадрами в модель
+    тренера, и неудача Qwen в счётчик неудач не идёт (владелец, 2026-11-02)."""
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "novita")
+    monkeypatch.setattr(config, "NOVITA_API_KEY", "nv")
+    novita = MagicMock()
+    novita.chat.completions.create = AsyncMock(return_value=SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="8.5/10 💪"))],
+        usage=SimpleNamespace(prompt_tokens=7000, completion_tokens=900),
+    ))
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: novita)
+
+    out = await video_analysis.analyze(clip_3s, 42)
+
+    novita.chat.completions.create.assert_awaited_once()
+    luna.client.chat.completions.create.assert_awaited()
+    assert out is not None and out["exercise"] == "присед со штангой"
+    luna.video_ok.assert_awaited_once_with(42)
+    luna.video_fail.assert_not_awaited()
+
+
+async def test_default_qwen_answer_is_used_without_frames(monkeypatch, luna):
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "novita")
+    monkeypatch.setattr(config, "NOVITA_API_KEY", "nv")
+    novita = MagicMock()
+    novita.chat.completions.create = AsyncMock(return_value=SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_answer(), ensure_ascii=False)))],
+        usage=SimpleNamespace(prompt_tokens=7000, completion_tokens=900),
+    ))
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: novita)
+
+    out = await video_analysis.analyze(b"mp4-bytes", 42)
+
+    assert out is not None
+    luna.client.chat.completions.create.assert_not_awaited()
+    luna.video_ok.assert_awaited_once_with(42)
 
 
 # ---------- кадры как доказательство ----------

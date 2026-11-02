@@ -1396,10 +1396,25 @@ async def analyze(
     Квоту видео списывает сам (_count_attempt) — за каждый состоявшийся
     платный вызов; проверку ai_limits KIND_VIDEO до вызова делают хендлеры.
     """
-    chosen = backend or config.video_analysis_backend()
+    if backend == "openai":
+        return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
+    if backend == "novita":
+        return await _analyze_novita(video_bytes, user_id, mime_type, exercise_hint, pose_summary)
+    chosen = config.video_analysis_backend()
     if chosen == "openai":
         return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
-    return await _analyze_novita(video_bytes, user_id, mime_type, exercise_hint, pose_summary)
+    # Основной — Qwen (владелец, 2026-11-02: «вернём разбор от квен, а фолбек
+    # оставим на схему с кадрами и основной моделью»). Qwen не ответил, ответил
+    # не JSON или нечего разбирать — тот же ролик идёт кадрами в модель тренера.
+    # Неудача Qwen при этом в счётчик неудач не пишется: попытку решает запасной.
+    fallback = config.video_frames_fallback_available()
+    result = await _analyze_novita(
+        video_bytes, user_id, mime_type, exercise_hint, pose_summary, count_failure=not fallback
+    )
+    if result is None and fallback:
+        logger.warning("video analysis: novita gave nothing for user %s, falling back to frames", user_id)
+        return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
+    return result
 
 
 # Оценка входа на кадр для оборванного вызова (usage тогда не приходит): две
@@ -1687,8 +1702,13 @@ async def _analyze_novita(
     mime_type: str,
     exercise_hint: Optional[str],
     pose_summary: Optional[str],
+    *,
+    count_failure: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Путь "novita": ролик целиком в Qwen.
+
+    count_failure=False — за этим вызовом стоит запасной разбор кадрами, и
+    неудачу Qwen в счётчик неудач видео не пишем: исход решит запасной.
 
     mime_type берётся из самого апдейта, а не подставляется наугад: ролик без
     аудиодорожки Telegram отдаёт как animation, и там встречается и video/mp4, и
@@ -1769,7 +1789,9 @@ async def _analyze_novita(
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")
-    return await _finish(response, user_id, frame_count=None, exercise_hint=exercise_hint)
+    return await _finish(
+        response, user_id, frame_count=None, exercise_hint=exercise_hint, count_failure=count_failure
+    )
 
 
 async def _finish(
@@ -1778,14 +1800,17 @@ async def _finish(
     *,
     frame_count: Optional[int],
     exercise_hint: Optional[str],
+    count_failure: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Ответ модели (деньги уже ушли) → разобранная структура + учёт попытки."""
     parsed = _parse(response, user_id)
     if parsed is None:
-        await _count_attempt(user_id, ok=False)
+        if count_failure:
+            await _count_attempt(user_id, ok=False)
         return None
     result = _sanitize(parsed, frame_count=frame_count, exercise_hint=exercise_hint)
-    await _count_attempt(user_id, ok=result is not None)
+    if result is not None or count_failure:
+        await _count_attempt(user_id, ok=result is not None)
     return result
 
 
