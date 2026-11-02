@@ -137,8 +137,20 @@ async def test_context_block_states_empty_findings_honestly():
     # Живой провал: на пустом списке тренер сказал «чинить нечего, оставляй
     # такой рисунок и наращивай нагрузку» — похвалил технику и велел грузить её,
     # не имея ни одного наблюдения. Запрет на это должен доезжать до него текстом.
-    assert "не хвали" in block
-    assert "добавлять вес" in block
+    # Пустой список — не повод хвалить технику вообще: только то, что описано
+    # в точках «норма», и ни одной поправки (живой провал — общие советы
+    # «контролируй финиш» на чистом жиме).
+    assert "Не хвали то, чего в" in block
+    assert "не давай ни одной поправки" in block
+    assert "максимум ОДНА подсказка" in block
+
+
+async def test_flagged_points_without_observations_are_not_called_clean():
+    block = video_analysis.to_context_block(
+        _analysis(checklist=_checklist(**{"спина": "отклонение"}), observations=[])
+    )
+    assert "техника чистая" not in block
+    assert "по одной подсказке на каждую" in block
 
 
 async def test_checkpoint_marked_normal_without_evidence_becomes_unseen():
@@ -589,7 +601,8 @@ async def test_coach_is_given_a_fixed_answer_structure():
         _analysis(camera_advice="сбоку на уровне бедра")
     )
     assert "Первая строка — главная ошибка" in block
-    assert "2–3 подсказки на следующий подход" in block
+    assert "по одной на КАЖДОЕ отклонение" in block
+    assert "Подсказок не больше, чем отклонений" in block
     assert "Плечи над грифом" in block
     assert "в самом конце ОДНА" in block
     assert "одним «пересними»" in block

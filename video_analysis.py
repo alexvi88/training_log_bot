@@ -109,22 +109,26 @@ def _probe(path: str) -> tuple[bool, Optional[float]]:
     return has_video, duration
 
 
-def frame_plan(duration: Optional[float]) -> tuple[int, float, float]:
+def frame_plan(duration: Optional[float], phase: float = 0.5) -> tuple[int, float, float]:
     """(сколько кадров, шаг между ними в секундах, время первого кадра).
 
     Кадров пропорционально длине (VIDEO_FRAMES_PER_SECOND) в пределах
-    [VIDEO_FRAMES_MIN, VIDEO_FRAMES_MAX]; первый — на полшага от начала, так
-    что кадры ровно покрывают весь ролик, а не жмутся к его началу."""
+    [VIDEO_FRAMES_MIN, VIDEO_FRAMES_MAX]; первый — на phase шага от начала
+    (по умолчанию полшага), так что кадры ровно покрывают весь ролик, а не
+    жмутся к его началу. Разные phase у голосов (_vote_phases) дают каждому
+    свой, сдвинутый набор кадров."""
     fps = config.VIDEO_FRAMES_PER_SECOND
     if not duration:
         return config.VIDEO_FRAMES_MAX, 1.0 / fps, 0.0
     count = round(duration * fps)
     count = max(config.VIDEO_FRAMES_MIN, min(config.VIDEO_FRAMES_MAX, count))
     step = duration / count
-    return count, step, step / 2
+    return count, step, step * phase
 
 
-def extract_frames(video_bytes: bytes) -> Optional[tuple[list[Frame], Optional[float]]]:
+def extract_frames(
+    video_bytes: bytes, phase: float = 0.5
+) -> Optional[tuple[list[Frame], Optional[float]]]:
     """Ролик (mp4/mov/webm/gif — что угодно, что читает ffmpeg) → кадры JPEG.
 
     Синхронная (subprocess) — вызывать через asyncio.to_thread. None — кадров
@@ -149,7 +153,7 @@ def extract_frames(video_bytes: bytes) -> Optional[tuple[list[Frame], Optional[f
             if not has_video:
                 logger.warning("video frames: no video stream in the upload")
                 return None
-            count, step, start = frame_plan(duration)
+            count, step, start = frame_plan(duration, phase)
             # Ролик длиннее потолка сюда в норме не доезжает (хендлеры режут по
             # MAX_VIDEO_SECONDS); если доехал — кадры растянуты на весь ролик.
             out = os.path.join(tmp, "f%03d.jpg")
@@ -157,7 +161,7 @@ def extract_frames(video_bytes: bytes) -> Optional[tuple[list[Frame], Optional[f
                 [
                     _ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
                     "-ss", f"{start:.3f}", "-i", src,
-                    "-vf", f"fps={1.0 / step:.6f},{scale}",
+                    "-vf", f"fps=fps={1.0 / step:.6f}:eof_action=pass,{scale}",
                     "-frames:v", str(count),
                     "-q:v", str(config.VIDEO_FRAME_JPEG_QSCALE),
                     out,
@@ -496,15 +500,17 @@ SYSTEM_PROMPT = """\
    плечевого сустава в жимах), уходит ли вперёд, гуляет ли по пути.
 3. «порядок движения» — что трогается первым и не расходятся ли звенья: таз
    уходит раньше плеч, локти стартуют раньше корпуса и так далее.
-4. «амплитуда» — доводится ли движение до конца в обе стороны, одинаково ли это
-   в разных повторах.
+4. «амплитуда» — доводится ли движение до конца в обе стороны — ПО ТЕЛУ:
+   в верхней точке локти (колени, таз) выпрямлены до замка или явно согнуты;
+   в нижней — снаряд касается груди (доходит до параллели) или нет.
 5. «колени и локти» — куда направлены суставы под нагрузкой, сваливаются ли
    внутрь или разъезжаются.
 6. «опускание» — снаряд опускают под контролем или роняют, есть ли разница
    между подъёмом и опусканием (кадры идут через равное время — сколько кадров
    занимает опускание и сколько подъём).
 7. «повторы между собой» — меняется ли рисунок движения от первого повтора к
-   последнему.
+   последнему — тоже по телу: замок есть в одном и нет в другом, касание есть
+   в одном и нет в другом, таз уходит раньше только к концу.
 
 По каждому пункту: verdict — «норма», «отклонение» или «не видно», поле
 what_i_see, которое ОБЯЗАТЕЛЬНО заполнено во всех трёх случаях, и frames —
@@ -518,6 +524,21 @@ what_i_see, которое ОБЯЗАТЕЛЬНО заполнено во все
 его снимает. Сравнение без кадров обоих повторов — догадка, а не наблюдение.
 Сантиметры на глаз не пиши вовсе: масштаба в кадре нет, пиши по телу — «гриф
 останавливается на уровне сосков, а в первом повторе касался низа грудины».
+
+АМПЛИТУДА И СРАВНЕНИЕ ПОВТОРОВ — ТОЛЬКО ПО ТЕЛУ. Телефон держат в руке или
+ставят как попало: камера плывёт, и «верхняя точка в кадре 11 ниже, чем в
+кадре 15» — это движение камеры, а не атлета. Живой провал ровно такой: два
+одинаковых повтора жима, а разбор — «первый не доходит до верха, второй выше»
+по высоте грифа на экране. Поэтому:
+- Высоту снаряда между кадрами по экрану НЕ сравнивай вовсе.
+- Отклонение по амплитуде — только два случая, оба сказаны через тело: в
+  верхней точке суставы явно не выпрямлены («локти согнуты, замка нет»), или
+  в нижней снаряд не доходит («касания груди нет, гриф останавливается над
+  грудью», «до параллели не доходит»).
+- Небольшая разница в верхней точке при выпрямленных локтях — НЕ отклонение.
+- Сравнение повторов — тем же языком: «в первом повторе замок, во втором
+  локти согнуты (кадры 4 и 12)». Сравнение без такой опоры на тело код
+  снимает.
 
 ПРО УПРАЖНЕНИЕ. Если в запросе названо, какое это упражнение, — верь названию,
 а не своим глазам: его сообщил сам атлет. Если не названо, определи сам и
@@ -1037,6 +1058,75 @@ _REP_COMPARE_RE = re.compile(
 )
 
 
+# Амплитуда и сравнение повторов — только через тело. Живой провал 2.11.2026
+# (тот же жим): «верхняя точка в кадре 11 ниже, чем в кадрах 1 и 15» — высота
+# грифа на экране, а камера в руке плывёт. Отклонение по амплитуде честно
+# только в двух видах: нет замка (суставы явно согнуты вверху) или нет
+# касания / неполная глубина внизу. Текст без такой опоры снимается.
+_AMPLITUDE_POINTS = ("амплитуда", "повторы между собой")
+_AMPLITUDE_RE = re.compile(
+    r"амплитуд|(верхн|нижн)\w*\s+(точк|положен)|недожим|не\s+дож|не\s+доход|недоход"
+    r"|top position|range of motion|short of|lower than|higher than|ниже\s+верхн|выше\s+верхн",
+    re.IGNORECASE,
+)
+_BODY_FAULT_MARKERS = (
+    # нет замка вверху
+    "локт", "локот", "elbow", "lockout", "замок", "замка", "не выпрям", "не разгиб",
+    "согнут", "bent",
+    # нет касания / неполная глубина внизу
+    "не каса", "без касан", "полповтор", "половин", "half rep", "partial",
+    "not touch", "doesn't touch", "does not touch", "above the chest", "над грудью",
+    "не доходит до груд", "не доходя до груд", "не опускается до груд",
+    "short of the chest", "reach the chest", "reach his chest", "reach her chest",
+    "параллел", "parallel", "глубин", "depth",
+)
+
+
+def _has_body_fault(text: str) -> bool:
+    low = text.lower()
+    return any(m in low for m in _BODY_FAULT_MARKERS)
+
+
+def _is_rep_comparison(obs: dict[str, Any]) -> bool:
+    text = f"{obs.get('what') or ''} {obs.get('evidence') or ''}"
+    return obs.get("point") == "повторы между собой" or bool(_REP_COMPARE_RE.search(text))
+
+
+def _require_body_landmarks(
+    checklist: list[dict[str, Any]], observations: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Амплитуда и сравнения повторов без опоры на тело (замок, касание,
+    глубина) → «не видно» / вон."""
+    for item in checklist:
+        if (
+            item["point"] in _AMPLITUDE_POINTS
+            and item["verdict"] == "отклонение"
+            and not _has_body_fault(item.get("what_i_see") or "")
+        ):
+            logger.warning(
+                "video sanitize: «%s» (отклонение) без опоры на тело → «не видно»: %s",
+                item["point"], (item.get("what_i_see") or "")[:200],
+            )
+            item["verdict"] = "не видно"
+            item["what_i_see"] = (
+                "сравнение по высоте снаряда в кадре, без замка или касания — "
+                "камера могла сдвинуться, по кадрам не судим"
+            )
+    kept = []
+    for obs in observations:
+        text = f"{obs.get('what') or ''} {obs.get('evidence') or ''}"
+        about_range = (
+            obs.get("point") in _AMPLITUDE_POINTS
+            or _is_rep_comparison(obs)
+            or bool(_AMPLITUDE_RE.search(text))
+        )
+        if about_range and not _has_body_fault(text):
+            logger.warning("video sanitize: наблюдение «%s» без опоры на тело — снято", obs.get("what"))
+        else:
+            kept.append(obs)
+    return checklist, kept
+
+
 def _rep_by_frame(reps: Any) -> dict[int, int]:
     """Кадр → номер повтора по разметке шага 0 (from_frame..to_frame)."""
     out: dict[int, int] = {}
@@ -1165,6 +1255,7 @@ def _sanitize(
         checklist, observations = _check_frame_evidence(
             checklist, observations, data.get("reps"), frame_count
         )
+    checklist, observations = _require_body_landmarks(checklist, observations)
     checklist, observations = _drop_contradictions(checklist, observations)
     checklist, observations = _apply_bar_path(
         str(data.get("exercise") or ""), data.get("bar_path"), checklist, observations,
@@ -1305,10 +1396,25 @@ async def analyze(
     Квоту видео списывает сам (_count_attempt) — за каждый состоявшийся
     платный вызов; проверку ai_limits KIND_VIDEO до вызова делают хендлеры.
     """
-    chosen = backend or config.video_analysis_backend()
+    if backend == "openai":
+        return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
+    if backend == "novita":
+        return await _analyze_novita(video_bytes, user_id, mime_type, exercise_hint, pose_summary)
+    chosen = config.video_analysis_backend()
     if chosen == "openai":
         return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
-    return await _analyze_novita(video_bytes, user_id, mime_type, exercise_hint, pose_summary)
+    # Основной — Qwen (владелец, 2026-11-02: «вернём разбор от квен, а фолбек
+    # оставим на схему с кадрами и основной моделью»). Qwen не ответил, ответил
+    # не JSON или нечего разбирать — тот же ролик идёт кадрами в модель тренера.
+    # Неудача Qwen при этом в счётчик неудач не пишется: попытку решает запасной.
+    fallback = config.video_frames_fallback_available()
+    result = await _analyze_novita(
+        video_bytes, user_id, mime_type, exercise_hint, pose_summary, count_failure=not fallback
+    )
+    if result is None and fallback:
+        logger.warning("video analysis: novita gave nothing for user %s, falling back to frames", user_id)
+        return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
+    return result
 
 
 # Оценка входа на кадр для оборванного вызова (usage тогда не приходит): две
@@ -1401,64 +1507,193 @@ def _frames_content(frames: list[Frame], duration: Optional[float], user_prompt:
     return content
 
 
+def _vote_phases(votes: int) -> list[float]:
+    """Сдвиг первого кадра (в долях шага) у каждого голоса: 1 → [0.5],
+    2 → [0.25, 0.75], 3 → [1/6, 1/2, 5/6] — наборы кадров не пересекаются."""
+    return [(2 * k + 1) / (2 * votes) for k in range(votes)]
+
+
 async def _analyze_frames(
     video_bytes: bytes,
     user_id: Optional[int],
     exercise_hint: Optional[str],
     pose_summary: Optional[str],
 ) -> Optional[dict[str, Any]]:
-    """Путь "openai": свои кадры → модель зрения тренера → та же структура."""
+    """Путь "openai": свои кадры → модель зрения тренера → та же структура.
+
+    Голосов VIDEO_ANALYSIS_VOTES (по умолчанию 2), параллельно — по времени
+    это один вызов. У каждого голоса СВОЙ набор кадров, сдвинутый на полшага
+    (_vote_phases), а не те же кадры дважды. Почему так: выдуманные отклонения
+    рождаются из конкретных кадров — гриф пойман на полпути к замку, камера
+    дёрнулась между повторами. Те же кадры дважды дают ту же иллюзию дважды
+    (при низкой случайности ответы у одной модели коррелируют), а сдвинутые
+    кадры ловят верх и низ в другие моменты: настоящая ошибка видна в обоих
+    наборах, артефакт кадра — только в одном. Отклонение остаётся, только если
+    его подтвердили все голоса (_consensus). Платит каждый вызов (cost-событие
+    у каждого), квота видео списывается один раз.
+    """
     import ai_trainer  # тяжёлый модуль; здесь, а не наверху — разбор видео ему не нужен до вызова
 
+    votes = max(1, config.VIDEO_ANALYSIS_VOTES)
     # ffmpeg — subprocess на сотни миллисекунд: в поток, не в цикл событий.
-    extracted = await asyncio.to_thread(extract_frames, video_bytes)
-    if not extracted:
+    extracted = await asyncio.gather(
+        *(asyncio.to_thread(extract_frames, video_bytes, phase) for phase in _vote_phases(votes))
+    )
+    sets = [e for e in extracted if e]
+    if not sets:
         # Денег не ушло — и квоту не трогаем, как при сбое сети до ответа.
         logger.warning("video analysis: no frames extracted for user %s", user_id)
         return None
-    frames, duration = extracted
     backend = ai_trainer.vision_backend()._replace(effort=config.VIDEO_ANALYSIS_REASONING_EFFORT)
     user_prompt = _user_prompt(USER_PROMPT, exercise_hint, pose_summary)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": _frames_content(frames, duration, user_prompt)},
-    ]
     kwargs = ai_trainer._model_kwargs(
         backend, user_id, max_tokens=config.VIDEO_ANALYSIS_MAX_TOKENS, quick=False, scope="video"
     )
-    logger.info(
-        "video analysis: %s frames over %ss → %s (effort %s, detail %s)",
-        len(frames), duration, backend.model, backend.effort, config.VIDEO_FRAME_DETAIL,
-    )
-    try:
-        # paid_call: cost-событие по настоящему usage в finally, оборванный
-        # таймаутом — по оценке. Квоты тут нет (kind=None): KIND_VIDEO проверил
-        # хендлер, а списывает _count_attempt ниже, по исходу.
-        response = await ai_trainer.paid_call(
-            user_id, None,
-            lambda: backend.client.chat.completions.create(
-                **kwargs,
-                messages=messages,
-                response_format=_response_schema(),
-                timeout=config.VIDEO_ANALYSIS_TIMEOUT_SECONDS,
-            ),
-            model=backend.model,
-            abort_prompt_tokens=len(frames) * _ABORT_TOKENS_PER_FRAME + len(SYSTEM_PROMPT) // 3,
+
+    async def one_vote(frames: list[Frame], duration: Optional[float]) -> tuple[bool, Optional[dict], Optional[dict]]:
+        """(вызов состоялся — деньги ушли, сырой ответ, вычищенный ответ)."""
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": _frames_content(frames, duration, user_prompt)},
+        ]
+        try:
+            # paid_call: cost-событие по настоящему usage в finally, оборванный
+            # таймаутом — по оценке. Квоты тут нет (kind=None): KIND_VIDEO
+            # проверил хендлер, а списывает _count_attempt ниже, по исходу.
+            response = await ai_trainer.paid_call(
+                user_id, None,
+                lambda: backend.client.chat.completions.create(
+                    **kwargs,
+                    messages=messages,
+                    response_format=_response_schema(),
+                    timeout=config.VIDEO_ANALYSIS_TIMEOUT_SECONDS,
+                ),
+                model=backend.model,
+                abort_prompt_tokens=len(frames) * _ABORT_TOKENS_PER_FRAME + len(SYSTEM_PROMPT) // 3,
+            )
+        except Exception:
+            logger.exception("video analysis call failed for user %s", user_id)
+            return False, None, None
+        usage = getattr(response, "usage", None)
+        logger.info(
+            "video analysis usage: prompt=%s (cached=%s) completion=%s (reasoning=%s) model=%s frames=%s",
+            getattr(usage, "prompt_tokens", 0),
+            getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0),
+            getattr(usage, "completion_tokens", 0),
+            getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0),
+            backend.model, len(frames),
         )
-    except Exception:
-        logger.exception("video analysis call failed for user %s", user_id)
-        return None
-    usage = getattr(response, "usage", None)
+        parsed = _parse(response, user_id)
+        if parsed is None:
+            return True, None, None
+        return True, parsed, _sanitize(parsed, frame_count=len(frames), exercise_hint=exercise_hint)
+
     logger.info(
-        "video analysis usage: prompt=%s (cached=%s) completion=%s (reasoning=%s) model=%s frames=%s",
-        getattr(usage, "prompt_tokens", 0), getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0),
-        getattr(usage, "completion_tokens", 0),
-        getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0),
-        backend.model, len(frames),
+        "video analysis: %s vote(s), %s frames over %ss → %s (effort %s, detail %s)",
+        len(sets), [len(f) for f, _ in sets], sets[0][1], backend.model, backend.effort,
+        config.VIDEO_FRAME_DETAIL,
     )
-    return await _finish(
-        response, user_id, frame_count=len(frames), exercise_hint=exercise_hint,
-    )
+    runs = await asyncio.gather(*(one_vote(frames, duration) for frames, duration in sets))
+    if not any(called for called, _, _ in runs):
+        return None  # ни один вызов не состоялся — денег не ушло
+    logger.info("video votes | %s", _votes_summary([raw for _, raw, _ in runs]))
+    results = [res for _, _, res in runs if res is not None]
+    if not results:
+        await _count_attempt(user_id, ok=False)
+        return None
+    if len(results) == 1 and len(sets) > 1:
+        # Второй голос пропал (сбой, мусор вместо JSON). Отдаём уцелевший,
+        # чтобы сбой провайдера не делал тренера немым на реальной ошибке, —
+        # но без сравнений повторов: это самый выдумываемый класс (живой
+        # провал — «первый повтор ниже второго»), и без подтверждения ему веры нет.
+        result = _drop_rep_comparisons(results[0])
+    elif len(results) == 1:
+        result = results[0]
+    else:
+        result = _consensus(results)
+    result["votes"] = len(results)
+    await _count_attempt(user_id, ok=True)
+    return result
+
+
+_VERDICT_LETTER = {"норма": "н", "отклонение": "О", "не видно": "?"}
+
+
+def _votes_summary(raws: list[Optional[dict[str, Any]]]) -> str:
+    """Одна строка на все голоса — сырые вердикты до чистки, чтобы владелец мог
+    вставить её целиком: «#1 reps=2 спина=н траектория снаряда=О[3,9] … || #2 …»."""
+    parts = []
+    for n, raw in enumerate(raws, start=1):
+        if not isinstance(raw, dict):
+            parts.append(f"#{n} нет ответа")
+            continue
+        points = []
+        for item in raw.get("checklist") or []:
+            if not isinstance(item, dict):
+                continue
+            verdict = _VERDICT_LETTER.get(str(item.get("verdict") or ""), "?")
+            frames = item.get("frames")
+            mark = f"{verdict}{frames}" if verdict == "О" and frames else verdict
+            points.append(f"{item.get('point')}={mark}")
+        obs = [
+            f"{o.get('point')}: {str(o.get('what') or '')[:80]}"
+            for o in raw.get("observations") or [] if isinstance(o, dict)
+        ]
+        parts.append(
+            f"#{n} reps={raw.get('reps_seen')} {' '.join(points)}"
+            + (f" obs=[{'; '.join(obs)}]" if obs else "")
+        )
+    return " || ".join(parts)
+
+
+def _drop_rep_comparisons(result: dict[str, Any]) -> dict[str, Any]:
+    checklist = []
+    for item in result["checklist"]:
+        if item["point"] == "повторы между собой" and item["verdict"] == "отклонение":
+            item = {**item, "verdict": "не видно",
+                    "what_i_see": "второй прогон не состоялся — сравнение повторов не подтверждено"}
+        checklist.append(item)
+    observations = [o for o in result["observations"] if not _is_rep_comparison(o)]
+    return {**result, "checklist": checklist, "observations": observations}
+
+
+def _consensus(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Отклонение остаётся, только если его отметили ВСЕ голоса.
+
+    Точка: «отклонение» у всех → остаётся (описание первого голоса); иначе
+    берётся «норма» того голоса, что её поставил (с его описанием), а если
+    нормы нет ни у кого — «не видно». Наблюдение первого голоса остаётся,
+    только если точка подтверждена и наблюдение по ней есть у каждого голоса.
+    Остальное (упражнение, ракурс, повторы) — от первого голоса."""
+    base = results[0]
+    by_run = [{item["point"]: item for item in r["checklist"]} for r in results]
+    checklist, confirmed = [], set()
+    for item in base["checklist"]:
+        point = item["point"]
+        verdicts = [run.get(point, {}).get("verdict") for run in by_run]
+        if all(v == "отклонение" for v in verdicts):
+            checklist.append(item)
+            if all(any(o.get("point") == point for o in r["observations"]) for r in results):
+                confirmed.add(point)
+            continue
+        if "отклонение" in verdicts:
+            logger.warning("video consensus: «%s» голоса разошлись %s → не отклонение", point, verdicts)
+        normal = next((run[point] for run in by_run if run.get(point, {}).get("verdict") == "норма"), None)
+        if normal is not None:
+            checklist.append(dict(normal))
+        elif item["verdict"] == "отклонение":
+            checklist.append({**item, "verdict": "не видно",
+                              "what_i_see": "голоса разошлись — по кадрам не судим"})
+        else:
+            checklist.append(item)
+    observations = [o for o in base["observations"] if o.get("point") in confirmed]
+    dropped = len(base["observations"]) - len(observations)
+    if dropped:
+        logger.warning("video consensus: снято неподтверждённых наблюдений: %s", dropped)
+    reps = [r.get("reps_seen") for r in results]
+    if len(set(map(str, reps))) > 1:
+        logger.warning("video consensus: голоса разошлись в числе повторов %s", reps)
+    return {**base, "checklist": checklist, "observations": observations}
 
 
 async def _analyze_novita(
@@ -1467,8 +1702,13 @@ async def _analyze_novita(
     mime_type: str,
     exercise_hint: Optional[str],
     pose_summary: Optional[str],
+    *,
+    count_failure: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Путь "novita": ролик целиком в Qwen.
+
+    count_failure=False — за этим вызовом стоит запасной разбор кадрами, и
+    неудачу Qwen в счётчик неудач видео не пишем: исход решит запасной.
 
     mime_type берётся из самого апдейта, а не подставляется наугад: ролик без
     аудиодорожки Telegram отдаёт как animation, и там встречается и video/mp4, и
@@ -1549,7 +1789,9 @@ async def _analyze_novita(
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")
-    return await _finish(response, user_id, frame_count=None, exercise_hint=exercise_hint)
+    return await _finish(
+        response, user_id, frame_count=None, exercise_hint=exercise_hint, count_failure=count_failure
+    )
 
 
 async def _finish(
@@ -1558,8 +1800,22 @@ async def _finish(
     *,
     frame_count: Optional[int],
     exercise_hint: Optional[str],
+    count_failure: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Ответ модели (деньги уже ушли) → разобранная структура + учёт попытки."""
+    parsed = _parse(response, user_id)
+    if parsed is None:
+        if count_failure:
+            await _count_attempt(user_id, ok=False)
+        return None
+    result = _sanitize(parsed, frame_count=frame_count, exercise_hint=exercise_hint)
+    if result is not None or count_failure:
+        await _count_attempt(user_id, ok=result is not None)
+    return result
+
+
+def _parse(response: Any, user_id: Optional[int]) -> Optional[dict[str, Any]]:
+    """Текст ответа → JSON-объект (или None), с сырыми строками в лог."""
     usage = getattr(response, "usage", None)
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     try:
@@ -1580,10 +1836,8 @@ async def _finish(
             completion_tokens,
             raw[:300],
         )
-        await _count_attempt(user_id, ok=False)
         return None
     if not isinstance(parsed, dict):
-        await _count_attempt(user_id, ok=False)
         return None
     # Что модель на самом деле написала — до всякой чистки (исход чистки — в
     # строках «video sanitize: …»). Без этих строк нельзя отличить «не увидела
@@ -1605,9 +1859,7 @@ async def _finish(
                 item.get("point"), item.get("verdict"),
                 str(item.get("what_i_see") or "")[:200], item.get("frames"),
             )
-    result = _sanitize(parsed, frame_count=frame_count, exercise_hint=exercise_hint)
-    await _count_attempt(user_id, ok=result is not None)
-    return result
+    return parsed
 
 
 def to_context_block(analysis: dict[str, Any]) -> str:
@@ -1640,9 +1892,13 @@ def to_context_block(analysis: dict[str, Any]) -> str:
         "эксперт со справкой.\n"
         "Структура строго такая. Первая строка — главная ошибка, одной фразой, "
         "как факт: «Бёдра поднимаются раньше плеч, и тягу добирает спина». "
-        "Дальше 2–3 подсказки на следующий подход — повелительно и коротко, "
-        "каждая своей строкой: «Плечи над грифом», «Спину жёстко до замка», "
-        "«Сначала выжми пол ногами». Если ракурс плохой — в самом конце ОДНА "
+        "Дальше подсказки на следующий подход — по одной на КАЖДОЕ отклонение "
+        "из списка ниже (не больше трёх), повелительно и коротко, каждая своей "
+        "строкой: «Плечи над грифом», «Спину жёстко до замка», «Сначала выжми "
+        "пол ногами». Подсказок не больше, чем отклонений: совет без своего "
+        "отклонения — вода («держи траекторию одинаковой», «контролируй финиш», "
+        "«каждый повтор до одной точки», «keep it consistent») и запрещён. "
+        "Если ракурс плохой — в самом конце ОДНА "
         "строка, откуда снять лучше всего (например: «Сними сбоку на уровне "
         "бедра, чтобы гриф и спина были в кадре целиком»).\n"
         "Решительность: наблюдения с высокой и средней уверенностью говори "
@@ -1709,20 +1965,34 @@ def to_context_block(analysis: dict[str, Any]) -> str:
                 + f". Из чего следует: {obs.get('evidence')}"
             )
     else:
-        # Самый опасный исход, и на нём тренер уже обжигался: на пустом списке он
-        # сказал «чинить нечего, оставляй такой рисунок и наращивай нагрузку» —
-        # то есть похвалил технику и велел грузить её сильнее, имея на руках
-        # ровно ничего. Отсутствие находок это не данные о технике, и по CLAUDE.md
-        # утверждать по нему нельзя ничего.
-        lines.append(
-            "\nОтклонений не нашли. Это НЕ значит «техника хорошая» — значит, по "
-            "этому ролику заметного не увидели, а половина картины на видео и не "
-            "видна. Не выдумывай ошибку, чтобы было что сказать, но и не хвали "
-            "технику, не называй рисунок движения правильным и не советуй на этом "
-            "основании добавлять вес. Скажи честно: по этим точкам чисто, "
-            "уверенного разбора по одному ролику не выходит — и позови снять "
-            "ещё, с другого ракурса или на рабочем весе."
-        )
+        # Раньше здесь стояло «не хвали и не советуй добавлять вес» (тренер
+        # однажды на пустом списке велел грузить кривой паттерн). Перегиб в
+        # другую сторону оказался не лучше: на чистом жиме тренер набил ответ
+        # общими поправками («каждый повтор до одной точки», «контролируй
+        # финиш»), которых не было ни в одном наблюдении. Пустой список после
+        # согласных голосов — это данные: по этим кадрам чинить нечего. Хвалить
+        # можно ровно то, что описано в точках «норма», — не технику вообще.
+        flagged = any(item.get("verdict") == "отклонение" for item in checklist)
+        votes = analysis.get("votes") or 1
+        if flagged:
+            lines.append(
+                "\nОтдельных наблюдений нет, но точки выше с пометкой отклонения — "
+                "это и есть находки: разбирай их, по одной подсказке на каждую, и "
+                "ничего сверх них."
+            )
+        else:
+            lines.append(
+                "\nОтклонений не нашли"
+                + (f" ({votes} независимых прогона по разным кадрам сошлись)" if votes > 1 else "")
+                + ". Ответ — два-три предложения: по этому ролику техника чистая; "
+                "назови одну-две конкретные вещи, сделанные хорошо, — только из "
+                "точек «чисто» выше и их описания, не общими словами (нет таких "
+                "точек — хвалить нечего, так и скажи); и максимум ОДНА подсказка "
+                "вперёд (например, добавить вес в следующий раз). Не выдумывай "
+                "ошибку, чтобы было что сказать, и не давай ни одной поправки: "
+                "нечего чинить — значит нечего советовать. Не хвали то, чего в "
+                "точках нет, и не называй технику идеальной — речь об этом ролике."
+            )
 
     if analysis.get("not_visible"):
         lines.append(

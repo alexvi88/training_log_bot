@@ -519,7 +519,7 @@ MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(20 * 1024 * 1024)))
 # (провайдер сам выбирает мало кадров низкого разрешения; на жиме лёжа со
 # стороны ног это дало «гриф уходит за голову» на учебной дуге). Нет ключа у
 # выбранного — берётся другой (config.video_analysis_backend).
-VIDEO_ANALYSIS_BACKEND = os.getenv("VIDEO_ANALYSIS_BACKEND", "openai").strip().lower()
+VIDEO_ANALYSIS_BACKEND = os.getenv("VIDEO_ANALYSIS_BACKEND", "novita").strip().lower()
 
 # Кадров — пропорционально длине ролика, а не фиксированное число: на 3-секундном
 # повторе 16 кадров — это каждые 0.2 с, а на 20-секундной пятёрке — один кадр на
@@ -546,6 +546,12 @@ VIDEO_FRAME_DETAIL = os.getenv("VIDEO_FRAME_DETAIL", "high")
 # Пространственная работа (где гриф относительно плеч по кадрам, какой повтор
 # какой) — не «быстрый» вызов: effort none здесь отвечал бы без рассуждения.
 VIDEO_ANALYSIS_REASONING_EFFORT = os.getenv("VIDEO_ANALYSIS_REASONING_EFFORT", "medium")
+# Сколько независимых разборов одного ролика (каждый — на своём наборе кадров,
+# сдвинутом на долю шага; параллельно, так что по времени это один вызов).
+# Отклонение доходит до тренера, только если его отметили ВСЕ голоса: живой
+# провал — «первый повтор ниже второго» на двух одинаковых повторах жима —
+# был артефактом конкретных кадров. Каждый голос оплачивается, квота видео — одна.
+VIDEO_ANALYSIS_VOTES = max(1, int(os.getenv("VIDEO_ANALYSIS_VOTES", "2")))
 
 # Общий потолок на тело HTTP-запроса `/v1` (см. body_limit.py) — до чтения,
 # ASGI-мидлварь поверх всего приложения (и `/v1`, и MCP на том же порту, см.
@@ -661,11 +667,16 @@ def video_analysis_backend() -> Optional[str]:
     Выбранный VIDEO_ANALYSIS_BACKEND без ключа уступает другому: разбор с
     запасными глазами лучше, чем пропавшая кнопка."""
     have = {"openai": bool(OPENAI_API_KEY), "novita": bool(NOVITA_API_KEY)}
-    preferred = VIDEO_ANALYSIS_BACKEND if VIDEO_ANALYSIS_BACKEND in have else "openai"
+    preferred = VIDEO_ANALYSIS_BACKEND if VIDEO_ANALYSIS_BACKEND in have else "novita"
     if have[preferred]:
         return preferred
     other = "novita" if preferred == "openai" else "openai"
     return other if have[other] else None
+
+
+def video_frames_fallback_available() -> bool:
+    """Есть ли запасной разбор кадрами в модели тренера за основным Qwen."""
+    return bool(OPENAI_API_KEY) and bool(NOVITA_API_KEY)
 
 
 def video_analysis_available() -> bool:
