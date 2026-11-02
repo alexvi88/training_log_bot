@@ -9,7 +9,7 @@
 днём, с датой. Статус меняешь — старый не стираешь, дописываешь в «Заметки».
 Неизвестное пишется как `?`, а не догадкой.
 
-Статусы: `черновик` → `подано` → `на ревью` → `опубликовано` / `отказ` /
+Статусы: `черновик` → `запланировано` / `подано` → `на ревью` → `опубликовано` / `отказ` /
 `не подаём`.
 
 ## Каталоги и витрины
@@ -23,7 +23,7 @@
 | Каталог приложений ChatGPT | ? | ? | — | — | — | На 2026-11-02 `/.well-known/openai-apps-challenge` отдаёт 404 — секрет `OPENAI_APPS_CHALLENGE` не стоит, домен, видимо, не подтверждали. |
 | Glama | не заявлено | — | ? | — | `utm_source=glama` | `/.well-known/glama.json` отдаёт 404 (нет `GLAMA_MAINTAINER_EMAIL`). Сервер может быть подтянут из реестра без нас. |
 | AlternativeTo | опубликовано | 2026-10-18 | ≤2026-11-02 | alternativeto.net/software/athlete-diary | `utm_source=alternativeto` | Отмечены альтернативами: Hevy, Strong, Fitbod, JEFIT, FitNotes, Boostcamp, Alpha Progression. |
-| Product Hunt | черновик | — | — | — | `utm_source=producthunt`, `ct=producthunt`, `?start=src_ph` | Форма начата 2026-11-02. Нужна галерея 1270×760. |
+| Product Hunt | запланировано | 2026-11-03 | 2026-11-05, 11:01 МСК (00:01 PT) | — | `utm_source=producthunt`, `ct=producthunt`, `?start=src_ph` | Галерея: обложка + 5 кадров 1270×760. Мейкер — свой аккаунт (Hunter + Maker). Теги: Health & Fitness, Artificial Intelligence, iOS. После дня — вписать место, апвоуты, визиты. |
 
 ## Публикации
 
