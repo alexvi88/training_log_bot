@@ -181,6 +181,8 @@ def luna(monkeypatch):
     """Поддельная модель зрения + перехват цены и квоты."""
     monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "openai")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
+    # один голос — проверяем сам вызов; голосование — отдельными тестами ниже
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_VOTES", 1)
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_answer(), ensure_ascii=False)))],
@@ -458,3 +460,190 @@ def test_eval_example_expectations_parse_and_check():
     assert any("повторов 3" in f for f in fails)
     assert any("за голов" in f for f in fails)
     assert ev.check(bench, None) == ["разбора нет (None)"]
+
+
+
+# ---------- голосование (VIDEO_ANALYSIS_VOTES) ----------
+
+
+def _reply(answer):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(answer, ensure_ascii=False)))],
+        usage=SimpleNamespace(prompt_tokens=7000, completion_tokens=3000),
+    )
+
+
+def _clean_bench():
+    """Нормальный жим, два повтора, ни одного отклонения."""
+    return _answer(
+        exercise="жим лёжа", checklist=_checklist(), observations=[],
+        bar_path={"top": "над плечами", "touch": "середина груди"},
+    )
+
+
+async def test_default_is_two_votes_on_shifted_frames_billed_twice_quota_once(luna, monkeypatch, clip_3s):
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_VOTES", 2)
+    assert video_analysis._vote_phases(2) == [0.25, 0.75]
+    out = await video_analysis.analyze(clip_3s, 42)
+
+    calls = luna.client.chat.completions.create.await_args_list
+    assert len(calls) == 2
+    labels = [
+        [p["text"] for p in c.kwargs["messages"][1]["content"][1:] if p["type"] == "text"]
+        for c in calls
+    ]
+    # свой набор кадров у каждого голоса: первый кадр в 0.1 с и в 0.4 с
+    assert {labels[0][0], labels[1][0]} == {"кадр 1 из 6, 0.1 с", "кадр 1 из 6, 0.4 с"}
+    assert len(luna.costs) == 2
+    luna.video_ok.assert_awaited_once_with(42)
+    luna.video_fail.assert_not_awaited()
+    # оба голоса отметили колени — подтверждено
+    assert [o["point"] for o in out["observations"]] == ["колени и локти"]
+    assert out["votes"] == 2
+
+
+async def test_deviation_seen_by_one_vote_only_is_dropped(luna, monkeypatch, clip_3s):
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_VOTES", 2)
+    luna.client.chat.completions.create.side_effect = [_reply(_answer()), _reply(_clean_bench())]
+    luna.client.chat.completions.create.return_value = None
+
+    out = await video_analysis.analyze(clip_3s, 42)
+
+    knees = next(i for i in out["checklist"] if i["point"] == "колени и локти")
+    assert knees["verdict"] == "норма"
+    assert out["observations"] == []
+    block = video_analysis.to_context_block(out)
+    assert "2 независимых прогона" in block and "техника чистая" in block
+
+
+async def test_one_vote_failing_keeps_the_other_minus_rep_comparisons(luna, monkeypatch, clip_3s):
+    """Сбой одного голоса не делает тренера немым на реальной ошибке, но
+    сравнение повторов без подтверждения не проходит."""
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_VOTES", 2)
+    answer = _answer(checklist=_checklist(**{"колени и локти": "отклонение", "повторы между собой": "отклонение"}))
+    answer["checklist"][6]["what_i_see"] = "в первом повторе локти в замке, во втором согнуты (кадры 1 и 4)"
+    answer["checklist"][6]["frames"] = [1, 4]
+    answer["observations"].append({
+        "point": "повторы между собой", "what": "во втором повторе локти не выпрямляются",
+        "phase": "верхняя точка", "frames": [1, 4], "when": "2.0 с", "reps": [1, 2],
+        "evidence": "в кадре 1 локти прямые, в кадре 4 согнуты", "severity": "стоит поправить",
+        "confidence": "средняя",
+    })
+    luna.client.chat.completions.create.side_effect = [_reply(answer), RuntimeError("502")]
+
+    out = await video_analysis.analyze(clip_3s, 42)
+
+    by_point = {i["point"]: i["verdict"] for i in out["checklist"]}
+    assert by_point["колени и локти"] == "отклонение"
+    assert by_point["повторы между собой"] == "не видно"
+    assert [o["point"] for o in out["observations"]] == ["колени и локти"]
+    assert len(luna.costs) == 1  # упавший вызов usage не принёс
+    luna.video_ok.assert_awaited_once_with(42)
+
+
+async def test_all_votes_garbage_counts_one_failure(luna, monkeypatch, clip_3s):
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_VOTES", 2)
+    luna.client.chat.completions.create.return_value.choices[0].message.content = "не JSON"
+    assert await video_analysis.analyze(clip_3s, 42) is None
+    assert len(luna.costs) == 2
+    luna.video_fail.assert_awaited_once()
+    luna.video_ok.assert_not_awaited()
+
+
+def test_consensus_needs_every_vote_for_a_checkpoint_and_its_observation():
+    a = _sanitize(_answer())
+    b_answer = _answer()
+    b_answer["observations"] = []  # точку отметил, наблюдения не дал
+    b = _sanitize(b_answer)
+    out = video_analysis._consensus([a, b])
+    assert next(i for i in out["checklist"] if i["point"] == "колени и локти")["verdict"] == "отклонение"
+    assert out["observations"] == []
+
+
+def test_votes_summary_is_one_pasteable_line():
+    line = video_analysis._votes_summary([_answer(), None])
+    assert "\n" not in line
+    assert line.startswith("#1 reps=2 ")
+    assert "колени и локти=О[2, 5]" in line and "спина=н" in line
+    assert "#2 нет ответа" in line
+
+
+# ---------- амплитуда и сравнение повторов — только по телу ----------
+
+# Дословно из живого лога 2.11.2026 (нормальный жим, камера в руке): чистое
+# сравнение высоты грифа на экране, без замка и касания.
+_LIVE_AMPLITUDE = (
+    "В первом повторе после нижней точки гриф возвращается только до верхнего положения в "
+    "кадре 11; оно ниже верхнего положения в кадрах 1 и 15…"
+)
+_LIVE_REPS = "Верхняя точка первого цикла в кадре 11 ниже верхней точки второго цикла в кадре 15"
+
+
+def _live_screen_height_answer():
+    answer = _answer(
+        exercise="жим лёжа",
+        reps=[
+            {"rep": 1, "from_frame": 1, "to_frame": 11, "top_frame": 1, "bar_at_top": "над плечами",
+             "bottom_frame": 9, "bar_at_bottom": "середина груди", "note": ""},
+            {"rep": 2, "from_frame": 11, "to_frame": 15, "top_frame": 11, "bar_at_top": "над плечами",
+             "bottom_frame": 13, "bar_at_bottom": "середина груди", "note": ""},
+        ],
+        bar_path={"top": "над плечами", "touch": "середина груди"},
+        checklist=_checklist(**{"амплитуда": "отклонение", "повторы между собой": "отклонение"}),
+        observations=[
+            {"point": "амплитуда", "what": "первый повтор не доходит до верхнего положения",
+             "phase": "верхняя точка", "frames": [1, 11, 15], "when": "5.5 с", "reps": [1],
+             "evidence": _LIVE_AMPLITUDE, "severity": "стоит поправить", "confidence": "средняя"},
+            {"point": "повторы между собой", "what": "верхняя точка первого повтора ниже второго",
+             "phase": "верхняя точка", "frames": [11, 15], "when": "5.5 с", "reps": [1, 2],
+             "evidence": _LIVE_REPS, "severity": "мелочь", "confidence": "средняя"},
+        ],
+    )
+    answer["checklist"][3]["what_i_see"] = _LIVE_AMPLITUDE
+    answer["checklist"][3]["frames"] = [1, 11, 15]
+    answer["checklist"][6]["what_i_see"] = _LIVE_REPS
+    answer["checklist"][6]["frames"] = [11, 15]
+    return answer
+
+
+def test_live_screen_height_comparisons_are_dropped():
+    with i18n.use_lang("en"):
+        out = _sanitize(_live_screen_height_answer(), frames=15, hint="bench press")
+    by_point = {i["point"]: i["verdict"] for i in out["checklist"]}
+    assert by_point["амплитуда"] == "не видно"
+    assert by_point["повторы между собой"] == "не видно"
+    assert out["observations"] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в верхней точке второго повтора локти согнуты, замка нет (кадр 13)",
+        "во втором повторе гриф не касается груди, останавливается над грудью (кадр 13)",
+        "second rep: elbows stay bent at the top, no lockout",
+    ],
+)
+def test_amplitude_stated_against_the_body_survives(text):
+    answer = _live_screen_height_answer()
+    answer["checklist"][3]["what_i_see"] = text
+    answer["observations"] = [{**answer["observations"][0], "evidence": text, "frames": [9, 13]}]
+    out = _sanitize(answer, frames=15)
+    assert next(i for i in out["checklist"] if i["point"] == "амплитуда")["verdict"] == "отклонение"
+    assert len(out["observations"]) == 1
+
+
+def test_frames_prompt_bans_screen_height_comparisons():
+    prompt = video_analysis.SYSTEM_PROMPT
+    assert "Высоту снаряда между кадрами по экрану НЕ сравнивай" in prompt
+    assert "Небольшая разница в верхней точке при выпрямленных локтях — НЕ отклонение" in prompt
+
+
+def test_coach_prompt_forbids_filler_tips():
+    """Живой провал: на чистом жиме тренер дал «каждый повтор до одной точки»,
+    «держи траекторию», «контролируй финиш» — ни одна не из наблюдений."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "по одной\n  короткой повелительной подсказке НА КАЖДОЕ отклонение" in prompt
+    assert "Подсказка без своего отклонения — вода" in prompt
+    assert "Поправок при этом не давать ни одной" in prompt
+    block = video_analysis.to_context_block(_sanitize(_answer()))
+    assert "Подсказок не больше, чем отклонений" in block
