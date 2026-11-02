@@ -377,7 +377,7 @@ Hevy/Strong.
 | Площадка | Статус | Метка |
 |---|---|---|
 | App Store Connect → Marketing URL | ✅ стоит | `utm_source=appstore` |
-| AlternativeTo | ✅ заявка 18.10.2026, ждёт модерации (1–7 дней) | `utm_source=alternativeto` |
+| AlternativeTo | ✅ опубликовано (alternativeto.net/software/athlete-diary), подано 18.10.2026 | `utm_source=alternativeto` |
 | There's An AI For That | — | `utm_source=taaft` |
 | Futurepedia | — | `utm_source=futurepedia` |
 | Toolify.ai | — | `utm_source=toolify` |
