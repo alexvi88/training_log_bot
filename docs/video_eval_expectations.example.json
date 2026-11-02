@@ -1,0 +1,25 @@
+{
+  "clips": [
+    {
+      "file": "bench_from_feet_head_right.mp4",
+      "hint": "bench press",
+      "exercise_any": ["жим", "bench"],
+      "reps": 2,
+      "checkpoints": {"траектория снаряда": "норма"},
+      "max_observations": 0,
+      "forbid_words": ["за голов", "behind the head", "5 см"]
+    },
+    {
+      "file": "deadlift_rounded_back_side.mp4",
+      "exercise_any": ["станов", "deadlift"],
+      "reps": 3,
+      "checkpoints": {"спина": "отклонение"}
+    },
+    {
+      "file": "barbell_row_side.mp4",
+      "hint": "тяга штанги к поясу",
+      "exercise_any": ["тяга", "row"],
+      "forbid_words": ["станов"]
+    }
+  ]
+}

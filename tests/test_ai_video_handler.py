@@ -211,6 +211,7 @@ async def test_oversized_file_rejected_before_download(wired):
 
 async def test_missing_key_tells_user_to_type(monkeypatch, wired):
     monkeypatch.setattr(config, "NOVITA_API_KEY", "")
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "")
     message = _message()
     await handler.ai_video_question(message, _state())
 

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from typing import Optional
 
 BOT_TOKEN = os.getenv("TG_TOKEN", "")
 
@@ -509,6 +510,43 @@ MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "20"))
 # по длине упирается раньше; этот стоит вторым рубежом от 4K-роликов.
 MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(20 * 1024 * 1024)))
 
+# --- Разбор видео: чьими глазами (video_analysis.analyze) ---
+#
+# "openai" (по умолчанию): кадры из ролика режем сами (ffmpeg из imageio-ffmpeg,
+# video_analysis.extract_frames) и шлём пронумерованной последовательностью с
+# метками времени в модель зрения тренера (ai_trainer.vision_backend,
+# OPENAI_VISION_MODEL). "novita": прежний путь — ролик целиком в Qwen на Novita
+# (провайдер сам выбирает мало кадров низкого разрешения; на жиме лёжа со
+# стороны ног это дало «гриф уходит за голову» на учебной дуге). Нет ключа у
+# выбранного — берётся другой (config.video_analysis_backend).
+VIDEO_ANALYSIS_BACKEND = os.getenv("VIDEO_ANALYSIS_BACKEND", "openai").strip().lower()
+
+# Кадров — пропорционально длине ролика, а не фиксированное число: на 3-секундном
+# повторе 16 кадров — это каждые 0.2 с, а на 20-секундной пятёрке — один кадр на
+# пол-повтора, и нижняя точка проскакивает. 2 кадра в секунду ловят и верх, и
+# касание в обычном темпе (повтор 2–3 с). Пол — чтобы короткий клип всё же
+# давал верх и низ; потолок — от MAX_VIDEO_SECONDS, длиннее ролик всё равно не
+# принимаем, а если приехал длиннее — кадры растягиваются на весь ролик.
+VIDEO_FRAMES_PER_SECOND = float(os.getenv("VIDEO_FRAMES_PER_SECOND", "2"))
+VIDEO_FRAMES_MIN = int(os.getenv("VIDEO_FRAMES_MIN", "6"))
+VIDEO_FRAMES_MAX = int(
+    os.getenv("VIDEO_FRAMES_MAX", "") or max(VIDEO_FRAMES_MIN, round(MAX_VIDEO_SECONDS * VIDEO_FRAMES_PER_SECOND))
+)
+# Размер кадра: вписывается в 768×512 (портретный — в 512×768), не растягивая
+# мелкие ролики. Ровно две плитки 512 у модели зрения на detail=high, то есть
+# ~425 токенов на кадр, — а гриф в таком кадре ~10–15 px, видно и касание, и
+# положение над плечами. detail=low (одна картинка 512×512 за 85 токенов) сжимает
+# кадр 16:9 до ~512×288: гриф в 5–6 px и JPEG-каша вокруг — то самое «не понял,
+# где гриф», из-за которого и меняем глаза. Экономия там ~5 раз на копейках.
+VIDEO_FRAME_LONG_SIDE = int(os.getenv("VIDEO_FRAME_LONG_SIDE", "768"))
+VIDEO_FRAME_SHORT_SIDE = int(os.getenv("VIDEO_FRAME_SHORT_SIDE", "512"))
+# -q:v у ffmpeg-mjpeg: 2 — лучшее, 31 — худшее; 5 — примерно quality 80.
+VIDEO_FRAME_JPEG_QSCALE = int(os.getenv("VIDEO_FRAME_JPEG_QSCALE", "5"))
+VIDEO_FRAME_DETAIL = os.getenv("VIDEO_FRAME_DETAIL", "high")
+# Пространственная работа (где гриф относительно плеч по кадрам, какой повтор
+# какой) — не «быстрый» вызов: effort none здесь отвечал бы без рассуждения.
+VIDEO_ANALYSIS_REASONING_EFFORT = os.getenv("VIDEO_ANALYSIS_REASONING_EFFORT", "medium")
+
 # Общий потолок на тело HTTP-запроса `/v1` (см. body_limit.py) — до чтения,
 # ASGI-мидлварь поверх всего приложения (и `/v1`, и MCP на том же порту, см.
 # mcp_server.build_app). Раньше потолка не было вовсе ни на одном уровне
@@ -617,9 +655,22 @@ AI_HISTORY_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("AI_HISTORY_SUMMARY_TIMEOUT
 AI_GATE_QUESTION_MAX_CHARS = int(os.getenv("AI_GATE_QUESTION_MAX_CHARS", "600"))
 
 
+def video_analysis_backend() -> Optional[str]:
+    """Кто разбирает видео: "openai" | "novita" | None (некому).
+
+    Выбранный VIDEO_ANALYSIS_BACKEND без ключа уступает другому: разбор с
+    запасными глазами лучше, чем пропавшая кнопка."""
+    have = {"openai": bool(OPENAI_API_KEY), "novita": bool(NOVITA_API_KEY)}
+    preferred = VIDEO_ANALYSIS_BACKEND if VIDEO_ANALYSIS_BACKEND in have else "openai"
+    if have[preferred]:
+        return preferred
+    other = "novita" if preferred == "openai" else "openai"
+    return other if have[other] else None
+
+
 def video_analysis_available() -> bool:
     """Показывать ли разбор видео и принимать ли ролики в чате тренера."""
-    return bool(NOVITA_API_KEY)
+    return video_analysis_backend() is not None
 
 # --- LLM cost accounting for the daily admin report (see db.cost_events / ---
 # admin_tasks.py). ai_trainer.py logs a cost_events row per real chat-completion

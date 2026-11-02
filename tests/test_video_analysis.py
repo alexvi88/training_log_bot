@@ -18,6 +18,14 @@ import video_analysis
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _novita_path(monkeypatch):
+    """Эти тесты — про путь "novita" (видео целиком в Qwen) и общую чистку.
+    Путь по кадрам — tests/test_video_frames.py."""
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "novita")
+    monkeypatch.setattr(config, "NOVITA_API_KEY", "test-key")
+
+
 def _checklist(**verdicts):
     """Семь точек, по умолчанию все пройдены с описанием увиденного."""
     return [

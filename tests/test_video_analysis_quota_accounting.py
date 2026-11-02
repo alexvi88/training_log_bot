@@ -63,6 +63,7 @@ async def _cost_events(db):
 @pytest.fixture(autouse=True)
 def _models(monkeypatch):
     monkeypatch.setattr(config, "NOVITA_API_KEY", "test-key")
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "novita")
     monkeypatch.setattr(video_analysis, "_gone_models", set())
 
 

@@ -19,8 +19,9 @@ web_search (_openai_web_search_findings), без наших DB-инструме�
 основной ответ идёт без найденного. Поиска по X больше нет.
 
 Фото в вопросе смотрит config.OPENAI_VISION_MODEL (по умолчанию та же Luna) —
-одна точка, vision_backend(). Видео разбирает отдельная модель
-(video_analysis.py, Novita), говорит про него тренер.
+одна точка, vision_backend(). Видео разбирает отдельный вызов
+(video_analysis.py: свои кадры в vision_backend(), запасной путь — Novita) и
+возвращает структуру наблюдений, говорит про него тренер.
 """
 
 import asyncio
@@ -634,6 +635,7 @@ async def paid_call(
     source: str = "bot",
     on_block: Optional[Callable[[ai_limits.Block], Awaitable[None]]] = None,
     messages: Optional[list[dict[str, Any]]] = None,
+    abort_prompt_tokens: Optional[int] = None,
 ) -> Any:
     """Единая обёртка «проверить лимит → вызвать модель → залогировать цену»
     для НЕстримящих платных вызовов (`client.chat.completions.create`, один
@@ -671,6 +673,8 @@ async def paid_call(
     Таймаут и отмена (`_ABORT_ERRORS`) тоже не остаются бесплатными: ответа нет,
     а запрос ушёл, поэтому пишется оценка по длине `messages` (передай их, если
     они у тебя есть; без них — типичный размер, `_ABORT_FALLBACK_PROMPT_TOKENS`).
+    Запрос с картинками длиной в символах не меряется (base64 раздул бы оценку
+    в десятки раз) — такой вызов передаёт свою оценку в `abort_prompt_tokens`.
     """
     if kind is not None:
         block = await ai_limits.check(user_id, kind)
@@ -687,7 +691,9 @@ async def paid_call(
     # этого хода, второй раз не считается.
     async with shutdown_drain.track_unless_inside("paid"):
         try:
-            async with _bill_if_aborted(user_id, model, messages=messages, source=source):
+            async with _bill_if_aborted(
+                user_id, model, messages=messages, prompt_tokens=abort_prompt_tokens, source=source
+            ):
                 response = await coro_factory()
             return response
         finally:
