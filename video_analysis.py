@@ -1,10 +1,24 @@
 """Разбор видео подхода: глаза тренера, но не его голос.
 
-Видео уходит в Qwen3-VL на Novita и возвращается структурой наблюдений — не
-текстом для человека. Говорить с атлетом будет тренер (см. ai_trainer.ask,
-параметр video_context): у него характер, история подходов и инструменты по
-базе, а у этой модели только кадры. Ровно так же устроен живой веб-поиск —
-отдельная модель добывает факты, основная их озвучивает.
+Два пути, выбор — config.video_analysis_backend():
+
+- "openai" (по умолчанию): кадры из ролика режем сами (extract_frames —
+  ffmpeg из imageio-ffmpeg, ~2 кадра в секунду, 768×512) и шлём их
+  пронумерованной последовательностью с метками времени в модель зрения
+  тренера (ai_trainer.vision_backend). Раньше ролик целиком уходил провайдеру,
+  и тот сам решал, сколько кадров и какого размера смотреть: ~7k токенов на
+  8 секунд, то есть горстка мелких кадров. На нормальном жиме лёжа, снятом со
+  стороны ног, модель по ним написала «на подъёме гриф уходит за голову» и
+  выдумала недожим во втором повторе. Свои кадры — это известное число,
+  известный размер и номера, на которые модель обязана ссылаться
+  (_check_frame_evidence).
+- "novita": прежний путь — видео целиком в Qwen на Novita (запасной).
+
+Возвращается структура наблюдений — не текст для человека. Говорить с атлетом
+будет тренер (см. ai_trainer.ask, параметр video_context): у него характер,
+история подходов и инструменты по базе, а у этой модели только кадры. Ровно так
+же устроен живой веб-поиск — отдельная модель добывает факты, основная их
+озвучивает.
 
 Почему структура, а не готовый текст. В живых прогонах Qwen на «оцени технику»
 выдавал «Общая оценка: 8.5/10» и «Отличная работа, продолжайте в том же
@@ -14,10 +28,15 @@
 остаётся один.
 """
 
+import asyncio
 import base64
 import json
 import logging
+import os
 import re
+import subprocess
+import tempfile
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from openai import AsyncOpenAI, NotFoundError
@@ -33,10 +52,11 @@ _client: Optional[AsyncOpenAI] = None
 
 
 def is_configured() -> bool:
-    return bool(config.NOVITA_API_KEY)
+    return config.video_analysis_backend() is not None
 
 
 def _get_client() -> AsyncOpenAI:
+    """Клиент Novita (путь "novita")."""
     global _client
     if _client is None:
         _client = AsyncOpenAI(
@@ -48,6 +68,125 @@ def _get_client() -> AsyncOpenAI:
             max_retries=0,
         )
     return _client
+
+
+# ---------- кадры из ролика (путь "openai") ----------
+
+
+@dataclass(frozen=True)
+class Frame:
+    index: int      # с 1 — так модель на него и ссылается
+    seconds: float  # время от начала ролика
+    jpeg: bytes
+
+
+_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+_FFMPEG_TIMEOUT_SECONDS = 60
+
+
+def _ffmpeg_path() -> str:
+    # Тот же статический бинарник, что режет кадр-превью (chat_attachments):
+    # pip-wheel без apt — собирается и на Fly (python:slim), и на Amvera.
+    import imageio_ffmpeg
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _probe(path: str) -> tuple[bool, Optional[float]]:
+    """(есть ли видеодорожка, длительность в секундах или None)."""
+    result = subprocess.run(
+        [_ffmpeg_path(), "-hide_banner", "-i", path],
+        capture_output=True, timeout=_FFMPEG_TIMEOUT_SECONDS,
+    )
+    info = result.stderr.decode("utf-8", "replace")
+    has_video = bool(re.search(r"Stream #.*Video:", info))
+    m = _DURATION_RE.search(info)
+    duration = None
+    if m:
+        duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+        if duration <= 0:
+            duration = None
+    return has_video, duration
+
+
+def frame_plan(duration: Optional[float]) -> tuple[int, float, float]:
+    """(сколько кадров, шаг между ними в секундах, время первого кадра).
+
+    Кадров пропорционально длине (VIDEO_FRAMES_PER_SECOND) в пределах
+    [VIDEO_FRAMES_MIN, VIDEO_FRAMES_MAX]; первый — на полшага от начала, так
+    что кадры ровно покрывают весь ролик, а не жмутся к его началу."""
+    fps = config.VIDEO_FRAMES_PER_SECOND
+    if not duration:
+        return config.VIDEO_FRAMES_MAX, 1.0 / fps, 0.0
+    count = round(duration * fps)
+    count = max(config.VIDEO_FRAMES_MIN, min(config.VIDEO_FRAMES_MAX, count))
+    step = duration / count
+    return count, step, step / 2
+
+
+def extract_frames(video_bytes: bytes) -> Optional[tuple[list[Frame], Optional[float]]]:
+    """Ролик (mp4/mov/webm/gif — что угодно, что читает ffmpeg) → кадры JPEG.
+
+    Синхронная (subprocess) — вызывать через asyncio.to_thread. None — кадров
+    нет: битый файл, не видео, ffmpeg упал. Ролик на диске живёт только во
+    временной папке на время нарезки (сам ролик мы не храним, см. политику).
+    """
+    if not isinstance(video_bytes, (bytes, bytearray)) or not video_bytes:
+        return None
+    long_side, short_side = config.VIDEO_FRAME_LONG_SIDE, config.VIDEO_FRAME_SHORT_SIDE
+    # Вписать в 768×512 (портретный — в 512×768) без растягивания мелкого.
+    box_w = f"if(gte(iw,ih),{long_side},{short_side})"
+    box_h = f"if(gte(iw,ih),{short_side},{long_side})"
+    scale = (
+        f"scale=w='min(iw,{box_w})':h='min(ih,{box_h})':force_original_aspect_ratio=decrease"
+    )
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "input")
+            with open(src, "wb") as fh:
+                fh.write(video_bytes)
+            has_video, duration = _probe(src)
+            if not has_video:
+                logger.warning("video frames: no video stream in the upload")
+                return None
+            count, step, start = frame_plan(duration)
+            # Ролик длиннее потолка сюда в норме не доезжает (хендлеры режут по
+            # MAX_VIDEO_SECONDS); если доехал — кадры растянуты на весь ролик.
+            out = os.path.join(tmp, "f%03d.jpg")
+            result = subprocess.run(
+                [
+                    _ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+                    "-ss", f"{start:.3f}", "-i", src,
+                    "-vf", f"fps={1.0 / step:.6f},{scale}",
+                    "-frames:v", str(count),
+                    "-q:v", str(config.VIDEO_FRAME_JPEG_QSCALE),
+                    out,
+                ],
+                capture_output=True, timeout=_FFMPEG_TIMEOUT_SECONDS,
+            )
+            names = sorted(n for n in os.listdir(tmp) if n.startswith("f") and n.endswith(".jpg"))
+            if not names:
+                logger.warning(
+                    "video frames: ffmpeg produced nothing (rc=%s): %s",
+                    result.returncode, result.stderr.decode("utf-8", "replace")[-300:],
+                )
+                return None
+            frames: list[Frame] = []
+            previous = None
+            for i, name in enumerate(names):
+                with open(os.path.join(tmp, name), "rb") as fh:
+                    data = fh.read()
+                # Источник реже нашей частоты (GIF на 5 кадров в секунду) —
+                # fps-фильтр дублирует кадры. Повтор картинки — лишние токены
+                # и ложное «замер в верхней точке».
+                if not data or data == previous:
+                    continue
+                previous = data
+                frames.append(Frame(len(frames) + 1, round(start + i * step, 2), data))
+    except Exception:
+        logger.exception("video frames: extraction failed")
+        return None
+    return (frames or None) and (frames, duration)
 
 
 # Промпт выстрадан живыми прогонами, и каждый провал стоит помнить, потому что
@@ -98,7 +237,7 @@ CHECKPOINTS = (
     "повторы между собой",
 )
 
-SYSTEM_PROMPT = """\
+NOVITA_SYSTEM_PROMPT = """\
 Ты — система разбора видео силовых упражнений. Ты НЕ разговариваешь с атлетом:
 твой вывод читает другая модель, которая сама с ним поговорит.
 
@@ -283,12 +422,258 @@ bar_path заполняй только в жимах лёжа (штанга, г�
 порядке: "спина", "траектория снаряда", "порядок движения", "амплитуда",
 "колени и локти", "опускание", "повторы между собой"."""
 
-USER_PROMPT = (
+NOVITA_USER_PROMPT = (
     "Разбери это видео. Сначала пройди все семь контрольных точек — каждую с "
     "тем, что видно в кадре. Потом observations: по одной записи на каждую "
     "точку с вердиктом «отклонение», и ничего сверх них."
 )
 
+
+# Промпт пути "openai" — те же выстраданные правила, что у NOVITA_SYSTEM_PROMPT
+# выше (их история — в длинном комментарии над CHECKPOINTS), но под кадры с
+# номерами и с ШАГОМ 0. Живой провал, ради которого он появился: жим лёжа со
+# стороны ног (голова справа в кадре), учебная дуга «грудь → над плечами», а
+# разбор — «на подъёме гриф уходит за голову» и выдуманный недожим во втором
+# повторе. Направление модель брала по экрану, а «повторы разные» — из
+# ниоткуда. Поэтому сначала ракурс и где в кадре голова и ноги, потом по
+# каждому повтору — где снаряд относительно тела в верхней и нижней точке, и
+# только из этих точек — направления. Каждое отклонение называет кадры; без
+# кадров и без кадров ОБОИХ повторов в сравнении код его снимает
+# (_check_frame_evidence). Текст стабилен — шапка кэша: всё про конкретный
+# ролик едет в пользовательском сообщении.
+SYSTEM_PROMPT = """\
+Ты — система разбора подхода силового упражнения по кадрам. Тебе приходят
+кадры ОДНОГО ролика строго по порядку времени, перед каждым подпись: «кадр 3
+из 16, 1.2 с». Ты НЕ разговариваешь с атлетом: твой вывод читает другая
+модель, которая сама с ним поговорит.
+
+Работа делится на три шага, и ни один нельзя пропустить.
+
+ШАГ 0 — РАКУРС И ТОЧКИ ТЕЛА. До любых вердиктов:
+- view: откуда снято (сбоку | спереди | сзади | три четверти), с какой стороны
+  кадра голова атлета и с какой — ноги (слева | справа | сверху | снизу |
+  не видно). Это по картинке, а не по догадке об упражнении.
+- reps: посчитай повторы по кадрам. Повтор — от верхней точки через нижнюю
+  обратно к верхней. На каждый повтор: с какого по какой кадр он идёт, номер
+  кадра верхней точки и где там снаряд ОТНОСИТЕЛЬНО ТЕЛА («над плечевыми
+  суставами», «над серединой стопы», «у колен»), номер кадра нижней точки и
+  где снаряд там («касание на низе груди», «чуть ниже колен»). Неполный
+  повтор на краю ролика — тоже запись, с пометкой в поле note.
+- reps_seen — число повторов, видных целиком, и оно сходится с reps.
+
+НАПРАВЛЕНИЕ ДВИЖЕНИЯ — здесь модель путается чаще всего. Живые провалы: в
+жиме лёжа гриф на опускании уходил от лица к низу груди, а разбор написал
+«гриф уходит к лицу на опускании»; в другом ролике, снятом со стороны ног,
+учебную дугу назвали «на подъёме гриф уходит за голову». Оба раза
+направление брали по экрану и переворачивали. Поэтому:
+- «к голове», «к ногам», «вперёд», «назад» выводятся ТОЛЬКО из точек шага 0:
+  где снаряд по телу в верхнем кадре и где в нижнем. Слова «влево», «вправо»,
+  «к краю кадра» — запрещены: камера стоит то со стороны головы, то со
+  стороны ног, и «к голове» на экране бывает и влево, и вправо.
+- Любое утверждение «куда уходит снаряд» в what_i_see и evidence называет ДВЕ
+  точки по телу и их кадры: «вверху над плечами (кадр 3), касание на низе
+  грудины (кадр 6)». Без двух точек направления не пиши.
+- Опускание — от верхней точки к нижней, подъём — обратно. Сначала найди по
+  кадрам, где снаряд выше и где ниже, и только потом решай, что есть что.
+- Жимы лёжа (штанга, гантели, тренажёр): в верхней точке снаряд над
+  плечевыми суставами, касание — на нижней половине груди. Значит, на
+  опускании он ЗАКОННО уходит в сторону ног, а на подъёме — обратно к голове,
+  к позиции над плечами. Эта дуга — норма, а не отклонение. Отклонение —
+  наоборот: касание у ключиц или шеи, снаряд над лицом или за плечами в
+  верхней точке, либо путь меняется от повтора к повтору.
+- В жимах лёжа отдельно заполни bar_path — где снаряд в верхней точке и где
+  он касается груди, по телу атлета, а не по кадру. Код сверяет эти две точки сам: верх над
+  плечами и касание на низе или середине груди — значит дуга в норме, что бы
+  ни было написано в «траектории».
+- Не уверен в направлении — verdict «не видно» с причиной, а не догадка.
+
+ШАГ 1 — КОНТРОЛЬНЫЕ ТОЧКИ. Пройди РОВНО СЕМЬ пунктов ниже, в этом порядке, ни
+одного не пропуская. Пропущенный пункт делает весь ответ негодным.
+
+1. «спина» — изгиб позвоночника и как он МЕНЯЕТСЯ под нагрузкой: где поясница и
+   грудной отдел в начале движения, в самом тяжёлом месте и в конце.
+2. «траектория снаряда» — где идёт снаряд относительно середины стопы (или
+   плечевого сустава в жимах), уходит ли вперёд, гуляет ли по пути.
+3. «порядок движения» — что трогается первым и не расходятся ли звенья: таз
+   уходит раньше плеч, локти стартуют раньше корпуса и так далее.
+4. «амплитуда» — доводится ли движение до конца в обе стороны, одинаково ли это
+   в разных повторах.
+5. «колени и локти» — куда направлены суставы под нагрузкой, сваливаются ли
+   внутрь или разъезжаются.
+6. «опускание» — снаряд опускают под контролем или роняют, есть ли разница
+   между подъёмом и опусканием (кадры идут через равное время — сколько кадров
+   занимает опускание и сколько подъём).
+7. «повторы между собой» — меняется ли рисунок движения от первого повтора к
+   последнему.
+
+По каждому пункту: verdict — «норма», «отклонение» или «не видно», поле
+what_i_see, которое ОБЯЗАТЕЛЬНО заполнено во всех трёх случаях, и frames —
+номера кадров, на которых это видно.
+
+КАДРЫ — ДОКАЗАТЕЛЬСТВО. Отклонение без номеров кадров, где оно видно, код
+выбрасывает: «не показал — не видел». Номера — только из присланных (от 1 до
+последнего). Утверждение о РАЗНИЦЕ между повторами («второй повтор не
+доходит до груди», «к третьему повтору таз уходит раньше») называет кадры
+ОБОИХ сравниваемых повторов — тот, где хорошо, и тот, где хуже; иначе код
+его снимает. Сравнение без кадров обоих повторов — догадка, а не наблюдение.
+Сантиметры на глаз не пиши вовсе: масштаба в кадре нет, пиши по телу — «гриф
+останавливается на уровне сосков, а в первом повторе касался низа грудины».
+
+ПРО УПРАЖНЕНИЕ. Если в запросе названо, какое это упражнение, — верь названию,
+а не своим глазам: его сообщил сам атлет. Если не названо, определи сам и
+поставь в exercise_confidence «низкая» или «средняя» — тренер тогда переспросит,
+прежде чем разбирать.
+
+И главное: НЕ подгоняй наблюдения под типовые ошибки того упражнения, которое
+тебе показалось. Живой провал ровно такой: тягу штанги к поясу приняли за
+становую и выдали три классические ошибки становой — круглая поясница, таз
+раньше плеч, гриф уходит от голени, — просто потому, что для становой это самый
+частый набор. Звучало убедительно, а к кадрам отношения не имело. Описывай то,
+что в кадре, даже если это не похоже ни на одну знакомую ошибку.
+
+ГДЕ ПРОХОДИТ ГРАНИЦА между «норма» и «отклонение» — читай, здесь калибровка.
+
+«норма» значит «я посмотрел и там ДЕЙСТВИТЕЛЬНО хорошо», а не «ничего не
+бросилось в глаза». Между этими двумя вещами вся разница.
+
+Сомневаешься между «норма» и «отклонение» — ставь «отклонение» с confidence
+«низкая». Цена ошибок разная и несимметричная: помеченное отклонение с низкой
+уверенностью тренер подаст мягко, как «глянь на это», и человек ничего не
+теряет. А пропущенное отклонение превращается в молчание, молчание тренер
+читает как «техника в порядке» и советует добавить вес на кривом паттерне.
+
+Но «низкая» — только для настоящего сомнения, а не для неидеального кадра.
+Отклонение, которое видно целиком хотя бы на одном повторе, — confidence
+«высокая», даже если ракурс низкий или часть тела перекрыта на других
+повторах. what, what_i_see и evidence пиши утверждениями — «бёдра поднимаются
+раньше плеч», «гриф уходит от голени на кадре 5», — без «похоже», «кажется»,
+«возможно», «seems», «appears», «may». Неуверенность выражает поле confidence,
+а не слова в тексте.
+
+Семь «норма» подряд — исход РЕДКИЙ. Обычный ролик из зала снят на рабочем
+весе, и там почти всегда есть что подправить хотя бы по мелочи. Если у тебя
+получилось чисто по всем семи — вернись и перепроверь спину и порядок движения
+отдельно, чаще всего провал прячется именно там.
+
+При этом выдумывать нечего: «отклонение» без того, что видно в кадре, — такая
+же ложь, как «норма» не глядя. Не ищи брак ради брака, но и не округляй
+сомнение в пользу атлета.
+
+what_i_see описывает ЭТИ кадры, а не правило упражнения. «Спина прямая, как и
+должно быть» — правило, так нельзя. «На съёме поясница держит прогиб, лопатки
+над грифом, к середине подъёма прогиб не меняется (кадры 2–5)» — описание, так
+можно. Если описать увиденное нечем — значит это не «норма», а «не видно», и в
+what_i_see пиши, что именно в кадре мешает.
+
+«норма» стоит ровно столько же, сколько «отклонение»: и то и другое нужно
+показать в кадре. Ставить «норма» пунктам, куда ты на самом деле не смотрел,
+запрещено — это худшая из возможных ошибок, потому что тренер поверит и
+посоветует грузить кривой паттерн.
+
+ШАГ 2 — ОТКЛОНЕНИЯ. Каждый пункт с verdict = «отклонение» ОБЯЗАН дать запись в
+observations (поле point — какой это пункт) с доказательством в evidence и
+кадрами в frames. Ничего сверх контрольных точек не выдумывай — но и ни одной
+не теряй.
+
+ЗАПРЕЩЕНО:
+- Оценки в баллах, проценты, «8.5/10», сводные рейтинги.
+- Похвала, подбадривание, обращения к человеку, эмодзи.
+- Советы и рекомендации. Что делать — решает не ты.
+- Перечислять общие правила упражнения. «Штанга должна скользить по ногам»,
+  «спина должна быть прямой» — это учебник. Такие формулировки допустимы
+  ТОЛЬКО как описание конкретного отклонения с указанием кадров.
+
+ПРО «НЕ ВИДНО» — читай внимательно, здесь чаще всего ошибаются.
+
+Список not_visible — это ограничения ИМЕННО ЭТОЙ СЪЁМКИ, и каждый пункт обязан
+объяснить в поле why, что конкретно в кадре мешает: обрезано по колено, атлет
+за стойкой, блин закрывает гриф, темно, снято сверху, спина к камере.
+
+Не пиши в not_visible то, чего не видно ни на одной съёмке в принципе:
+напряжение мышц, работу кора, намерения, усилие, боль, дыхание. Это не
+ограничение ракурса, и в списке им не место.
+
+Со съёмки СБОКУ видны: изгиб позвоночника и его изменение под нагрузкой,
+траектория снаряда относительно середины стопы, углы в колене и
+тазобедренном, наклон корпуса, положение головы, момент фиксации. Не заявляй,
+что этого не видно, если ракурс боковой и кадр не обрезан.
+
+НЕПРОТИВОРЕЧИВОСТЬ: если view.usable = true и view.problem пустой, то
+not_visible должен быть пустым или содержать один-два пункта. Нельзя
+одновременно утверждать, что ракурс хороший, и что судить по нему нельзя. Если
+not_visible получается длинным — значит ракурс плохой, и тогда usable = false
+с заполненным problem.
+
+Пустой список observations допустим, но только если все семь точек честно
+пройдены и в каждой стоит «норма» с описанием увиденного. «Посмотрел всё и
+отклонений не нашёл» — честно, а «проставил норму не глядя» — нет.
+
+Отвечай строго одним JSON-объектом, поля в этом порядке:
+
+{
+  "view": {
+    "angle": "сбоку | спереди | сзади | три четверти | не определить",
+    "head_side": "слева | справа | сверху | снизу | не видно",
+    "feet_side": "слева | справа | сверху | снизу | не видно",
+    "usable": <true/false>,
+    "problem": "что мешает, или \\"\\""
+  },
+  "exercise": "какое упражнение, или \\"не определил\\"",
+  "exercise_confidence": "высокая | средняя | низкая",
+  "reps": [
+    {
+      "rep": 1,
+      "from_frame": 1, "to_frame": 6,
+      "top_frame": 1, "bar_at_top": "где снаряд по телу в верхней точке",
+      "bottom_frame": 4, "bar_at_bottom": "где снаряд по телу в нижней точке",
+      "note": "неполный, обрезан и т.п., или \\"\\""
+    }
+  ],
+  "reps_seen": <сколько повторов видно целиком>,
+  "bar_path": {
+    "top": "над плечами | над лицом или шеей | над грудью | не видно",
+    "touch": "низ груди | середина груди | верх груди или шея | не видно"
+  },
+  "checklist": [
+    {
+      "point": "спина",
+      "verdict": "норма | отклонение | не видно",
+      "what_i_see": "что видно в кадрах — обязательно, в том числе для «норма»",
+      "frames": [<номера кадров>],
+      "when": "1.2 с"
+    }
+  ],
+  "observations": [
+    {
+      "point": "какой из семи пунктов",
+      "what": "что расходится с разумным исполнением",
+      "phase": "съём | подъём | верхняя точка | опускание | между повторами",
+      "frames": [<номера кадров, где это видно>],
+      "when": "1.2 с",
+      "reps": [<номера повторов, которых это касается>],
+      "evidence": "что конкретно видно в этих кадрах, из чего это следует",
+      "severity": "мешает | стоит поправить | мелочь",
+      "confidence": "высокая | средняя | низкая"
+    }
+  ],
+  "not_visible": [{"what": "...", "why": "что именно в этой съёмке мешает"}],
+  "camera_advice": "как переснять, если ракурс плохой, иначе \\"\\""
+}
+
+bar_path заполняй только в жимах лёжа (штанга, гантели, тренажёр); в остальных
+упражнениях оба поля — «не видно».
+
+В checklist ровно семь записей, поле point строго из этого списка и в этом
+порядке: "спина", "траектория снаряда", "порядок движения", "амплитуда",
+"колени и локти", "опускание", "повторы между собой"."""
+
+USER_PROMPT = (
+    "Разбери этот подход по кадрам. Сначала ракурс и где в кадре голова и ноги, "
+    "потом каждый повтор — кадры верхней и нижней точки и где там снаряд по телу. "
+    "Потом все семь контрольных точек — каждую с тем, что видно, и номерами "
+    "кадров. Потом observations: по одной записи на каждую точку с вердиктом "
+    "«отклонение», с кадрами, и ничего сверх них."
+)
 
 # То, что не видно ни на одном видео в принципе. Промпт это запрещает прямым
 # текстом, и модель всё равно вписывала сюда «напряжение мышц кора и ягодиц»,
@@ -384,6 +769,19 @@ def _is_unobservable(text: str) -> bool:
     return any(marker in low for marker in _UNOBSERVABLE_MARKERS)
 
 
+def _frame_list(raw: Any) -> list[int]:
+    """Номера кадров из ответа модели: числа или строки с числом, без повторов."""
+    out: list[int] = []
+    for value in raw if isinstance(raw, list) else []:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if isinstance(value, int) and value not in out:
+            out.append(value)
+    return out
+
+
 def _clean_checklist(raw: Any) -> list[dict[str, Any]]:
     """Контрольные точки от модели → то, за что она отчиталась на самом деле.
 
@@ -409,9 +807,10 @@ def _clean_checklist(raw: Any) -> list[dict[str, Any]]:
         if verdict != "не видно" and not seen:
             logger.info("video sanitize: точка «%s» без описания → «не видно»", point)
             verdict = "не видно"
-        cleaned.append(
-            {"point": point, "verdict": verdict, "what_i_see": seen, "when": item.get("when")}
-        )
+        cleaned.append({
+            "point": point, "verdict": verdict, "what_i_see": seen, "when": item.get("when"),
+            "frames": _frame_list(item.get("frames")),
+        })
 
     by_point = {item["point"]: item for item in cleaned}
     missing = [p for p in CHECKPOINTS if p not in by_point]
@@ -440,6 +839,8 @@ _OPPOSITES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("округл", "сутул", "горб"), ("прям", "нейтрал", "ровн")),
 )
 _TIMESTAMP_RE = re.compile(r"\b(\d{1,2}:\d{2})\b")
+# Путь по кадрам ссылается не на 0:02, а на «кадр 5» / «кадры 5–6».
+_FRAME_REF_RE = re.compile(r"кадр\w*\s+(\d+)")
 
 
 def _claims(text: str) -> list[tuple[frozenset[str], str, int, int]]:
@@ -450,7 +851,9 @@ def _claims(text: str) -> list[tuple[frozenset[str], str, int, int]]:
     с предложением, а не всё со всем."""
     out = []
     for sentence in re.split(r"(?<=[.!?;])\s+", text.lower()):
-        stamps = frozenset(_TIMESTAMP_RE.findall(sentence))
+        stamps = frozenset(
+            _TIMESTAMP_RE.findall(sentence) + [f"#{n}" for n in _FRAME_REF_RE.findall(sentence)]
+        )
         if not stamps:
             continue
         for part, markers in _BODY_PARTS.items():
@@ -515,32 +918,93 @@ def _drop_contradictions(
 # (`bar_path`), а решение о дуге принимает код: верх над плечами и касание
 # на низе или середине груди — траектория в норме, а утверждения о
 # направлении снаряда снимаются.
-_LYING_PRESS_MARKERS = (("жим", "лёж"), ("жим", "леж"), ("bench",))
-_BAR_TOP_OK = ("над плечами",)
-_BAR_TOUCH_OK = ("низ груди", "середина груди")
-_BAR_WORDS = ("гриф", "штанг", "снаряд", "гантел", "рукоят", "траектор")
+_LYING_PRESS_MARKERS = (
+    ("жим", "лёж"), ("жим", "леж"), ("жим", "скамь"), ("жим", "горизонт"), ("bench",),
+)
+_BAR_WORDS = ("гриф", "штанг", "снаряд", "гантел", "рукоят", "траектор", "bar", "dumbbell")
 # Только слова о направлении дуги: перекос грифа или неровный темп — другие
-# ошибки, и их код не трогает.
+# ошибки, и их код не трогает. «За голову» и «назад» — из живого провала
+# 2.11.2026 (съёмка со стороны ног): без них наблюдение «на подъёме уходит
+# назад за голову» пережило бы даже сработавшую проверку и доехало до тренера.
 _DIRECTION_WORDS = (
-    "к лицу", "к голове", "к шее", "к плечам", "к ногам", "к животу", "к поясу", "дуг",
+    "к лицу", "от лица", "к голове", "за голов", "к шее", "к плечам", "к ногам", "к животу",
+    "к поясу", "назад", "вперёд", "вперед", "дуг",
+    "toward the face", "towards the face", "toward the head", "towards the head",
+    "behind the head", "toward the feet", "towards the feet", "arc",
 )
 
 
-def _is_lying_press(exercise: str) -> bool:
-    low = exercise.lower()
-    return any(all(m in low for m in group) for group in _LYING_PRESS_MARKERS)
+def _is_lying_press(*names: Optional[str]) -> bool:
+    for name in names:
+        low = (name or "").lower()
+        if any(all(m in low for m in group) for group in _LYING_PRESS_MARKERS):
+            return True
+    return False
+
+
+def _top_over_shoulders(text: str) -> bool:
+    """«над плечами», «над плечевыми суставами», «over the shoulders» — да;
+    над лицом, шеей, за плечами, «не видно» — нет."""
+    low = text.lower()
+    if any(bad in low for bad in ("лиц", "шея", "шеи", "шее", "шею", "голов", "за плеч", "не видно", "face", "neck", "head", "behind", "not visible")):
+        return False
+    return "плеч" in low or "shoulder" in low
+
+
+def _touch_on_lower_chest(text: str) -> bool:
+    """Касание на низе или середине груди (грудины, на уровне сосков) — да;
+    верх груди, ключицы, шея, живот — нет."""
+    low = text.lower()
+    if any(bad in low for bad in ("верх", "ключиц", "шея", "шеи", "шее", "шею", "живот", "не видно", "upper", "collarbone", "neck", "belly", "not visible")):
+        return False
+    on_chest = any(w in low for w in ("груд", "сосок", "соск", "chest", "sternum", "nipple"))
+    low_or_mid = any(w in low for w in ("низ", "нижн", "середин", "сосок", "соск", "lower", "bottom", "mid", "nipple"))
+    return on_chest and low_or_mid
+
+
+def _bar_path_points(bar_path: Any, reps: Any) -> Optional[tuple[str, str]]:
+    """Две точки дуги, подтверждающие норму, — из bar_path, а если там пусто или
+    мимо — из повторов шага 0, когда ВСЕ описанные повторы сходятся."""
+    if isinstance(bar_path, dict):
+        top = str(bar_path.get("top") or "").strip()
+        touch = str(bar_path.get("touch") or "").strip()
+        if _top_over_shoulders(top) and _touch_on_lower_chest(touch):
+            return top, touch
+    described = [
+        (str(r.get("bar_at_top") or "").strip(), str(r.get("bar_at_bottom") or "").strip())
+        for r in (reps if isinstance(reps, list) else [])
+        if isinstance(r, dict) and r.get("bar_at_top") and r.get("bar_at_bottom")
+    ]
+    if described and all(_top_over_shoulders(t) and _touch_on_lower_chest(b) for t, b in described):
+        return described[0]
+    return None
 
 
 def _apply_bar_path(
-    exercise: str, bar_path: Any, checklist: list[dict[str, Any]], observations: list[dict[str, Any]]
+    exercise: str,
+    bar_path: Any,
+    checklist: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    *,
+    hint: Optional[str] = None,
+    reps: Any = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Дуга жима лёжа по двум точкам модели — решает код, а не её вердикт."""
-    if not _is_lying_press(exercise) or not isinstance(bar_path, dict):
+    """Дуга жима лёжа по двум точкам модели — решает код, а не её вердикт.
+
+    Почему не сработало 2.11.2026 (жим лёжа со стороны ног, англоязычный
+    атлет): сверка шла точным совпадением с «над плечами» / «низ груди», а
+    модель пишет то «над плечевыми суставами», то «нижняя часть груди»; и
+    даже сработав, проверка не сняла бы наблюдение «уходит назад за голову» —
+    «за голову» не было в словах направления. Плюс строка «video checkpoint»
+    в логе печатается ДО чистки, так что по ней не видно, сработала ли
+    подмена: исход смотри в строке «video sanitize: жим лёжа …»."""
+    if not _is_lying_press(exercise, hint):
         return checklist, observations
-    top = str(bar_path.get("top") or "").strip().lower()
-    touch = str(bar_path.get("touch") or "").strip().lower()
-    if not (any(t in top for t in _BAR_TOP_OK) and any(t in touch for t in _BAR_TOUCH_OK)):
+    points = _bar_path_points(bar_path, reps)
+    if points is None:
+        logger.info("video sanitize: жим лёжа, точки дуги норму не подтвердили: %r", bar_path)
         return checklist, observations
+    top, touch = points
     for item in checklist:
         if item["point"] == "траектория снаряда" and item["verdict"] != "норма":
             logger.warning(
@@ -562,11 +1026,96 @@ def _apply_bar_path(
     return checklist, kept
 
 
-def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
+# Сравнение повторов: «второй повтор не доходит на 5 см», «к третьему таз
+# уходит раньше». Живой провал — ровно такое выдумали на ролике из двух
+# одинаковых повторов. Принимаем, только если названы кадры ОБОИХ повторов.
+_REP_COMPARE_RE = re.compile(
+    r"(перв|втор|трет|четв|пят|шест|последн|следующ|предыдущ|друг|остальн)\w*\s+(повтор|раз)"
+    r"|от повтора к повтору|в отличие от|по сравнению с"
+    r"|\brep\s*\d|\b(first|second|third|last|other|later)\s+reps?\b|from rep to rep",
+    re.IGNORECASE,
+)
+
+
+def _rep_by_frame(reps: Any) -> dict[int, int]:
+    """Кадр → номер повтора по разметке шага 0 (from_frame..to_frame)."""
+    out: dict[int, int] = {}
+    for i, item in enumerate(reps if isinstance(reps, list) else [], start=1):
+        if not isinstance(item, dict):
+            continue
+        number = item.get("rep") if isinstance(item.get("rep"), int) else i
+        lo, hi = item.get("from_frame"), item.get("to_frame")
+        if isinstance(lo, int) and isinstance(hi, int) and lo <= hi:
+            for f in range(lo, hi + 1):
+                out.setdefault(f, number)
+        for key in ("top_frame", "bottom_frame"):
+            if isinstance(item.get(key), int):
+                out.setdefault(item[key], number)
+    return out
+
+
+def _check_frame_evidence(
+    checklist: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    reps: Any,
+    frame_count: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """«Не показал — не видел». Отклонение без настоящих номеров кадров (1..N)
+    снимается: в checklist — до «не видно», из observations — вон. Сравнение
+    повторов без кадров двух разных повторов — туда же."""
+    rep_of = _rep_by_frame(reps)
+
+    def valid(frames: Any) -> list[int]:
+        return [f for f in _frame_list(frames) if 1 <= f <= frame_count]
+
+    def two_reps(frames: list[int]) -> bool:
+        return len({rep_of[f] for f in frames if f in rep_of}) >= 2
+
+    for item in checklist:
+        if item["verdict"] != "отклонение":
+            continue
+        frames = valid(item.get("frames"))
+        item["frames"] = frames
+        reason = None
+        if not frames:
+            reason = "не назвала кадров, где это видно"
+        elif item["point"] == "повторы между собой" and not two_reps(frames):
+            reason = "сравнивает повторы, не назвав кадров обоих"
+        if reason:
+            logger.warning("video sanitize: «%s» (отклонение) %s → «не видно»", item["point"], reason)
+            item["verdict"] = "не видно"
+            item["what_i_see"] = f"модель {reason} — по кадрам не судим"
+    kept = []
+    for obs in observations:
+        frames = valid(obs.get("frames"))
+        text = f"{obs.get('what') or ''} {obs.get('evidence') or ''}"
+        compare = obs.get("point") == "повторы между собой" or bool(_REP_COMPARE_RE.search(text))
+        if not frames:
+            logger.warning("video sanitize: наблюдение «%s» без кадров — снято", obs.get("what"))
+        elif compare and not two_reps(frames):
+            logger.warning(
+                "video sanitize: наблюдение «%s» сравнивает повторы без кадров обоих — снято",
+                obs.get("what"),
+            )
+        else:
+            kept.append({**obs, "frames": frames})
+    return checklist, kept
+
+
+def _sanitize(
+    data: dict[str, Any],
+    *,
+    frame_count: Optional[int] = None,
+    exercise_hint: Optional[str] = None,
+) -> dict[str, Any]:
     """Убрать из ответа модели то, что она обещала не писать.
 
     Чинит ровно те отклонения, которые видели живьём, и ничего не достраивает:
     пустой разбор так и остаётся пустым — это честный исход.
+
+    frame_count — сколько кадров видела модель (путь "openai"): тогда каждое
+    отклонение обязано ссылаться на настоящие кадры. У пути "novita" номеров
+    кадров нет, и эта проверка не делается.
     """
     view = data.get("view") or {}
     usable = bool(view.get("usable", True))
@@ -612,9 +1161,14 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
         not_visible = not_visible[:2]
 
     checklist = _clean_checklist(data.get("checklist"))
+    if frame_count:
+        checklist, observations = _check_frame_evidence(
+            checklist, observations, data.get("reps"), frame_count
+        )
     checklist, observations = _drop_contradictions(checklist, observations)
     checklist, observations = _apply_bar_path(
-        str(data.get("exercise") or ""), data.get("bar_path"), checklist, observations
+        str(data.get("exercise") or ""), data.get("bar_path"), checklist, observations,
+        hint=exercise_hint, reps=data.get("reps"),
     )
     # Точка помечена отклонением, а в observations его нет — модель потеряла своё
     # же наблюдение по дороге со шага 1 на шаг 2. Ничего не достраиваем: весь
@@ -645,7 +1199,10 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
         "exercise": (data.get("exercise") or "не определил"),
         "exercise_confidence": (data.get("exercise_confidence") or "").strip().lower(),
         "reps_seen": data.get("reps_seen"),
-        "view": {"angle": view.get("angle"), "usable": usable, "problem": problem},
+        "view": {
+            "angle": view.get("angle"), "usable": usable, "problem": problem,
+            **{k: view[k] for k in ("head_side", "feet_side") if view.get(k)},
+        },
         "checklist": checklist,
         "observations": observations,
         "not_visible": not_visible,
@@ -706,17 +1263,212 @@ def _video_models() -> list[str]:
     return alive or ordered[:1]
 
 
+def _user_prompt(base: str, exercise_hint: Optional[str], pose_summary: Optional[str]) -> str:
+    # Подпись к ролику — единственный надёжный источник упражнения, и он важнее
+    # глаз модели. Живой провал: тягу штанги к поясу она приняла за становую и
+    # выдала три классические ошибки становой (круглая поясница, таз раньше
+    # плеч, гриф от голени) — не потому, что видела их, а потому, что для
+    # становой это самый частый набор. Названное упражнение эту подгонку
+    # обрывает. Дописывается к пользовательской части, а не к системной:
+    # системный промпт обязан оставаться неизменным, иначе кэш промахивается
+    # на каждом ролике.
+    user_prompt = base
+    if exercise_hint:
+        user_prompt = (
+            f"Атлет подписал ролик так: «{exercise_hint}». Если там названо "
+            f"упражнение — это оно и есть, верь подписи, а не своим глазам, и "
+            f"поставь exercise_confidence «высокая».\n\n" + base
+        )
+    # Цифры с телефона — тоже в пользовательскую часть, по той же причине.
+    if pose_summary:
+        user_prompt = pose_summary_block(pose_summary) + "\n\n" + user_prompt
+    return user_prompt
+
+
 async def analyze(
     video_bytes: bytes,
     user_id: Optional[int],
     mime_type: str = "video/mp4",
     exercise_hint: Optional[str] = None,
     pose_summary: Optional[str] = None,
+    *,
+    backend: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Видео → структура наблюдений, или None если разобрать не удалось.
 
     None означает ровно «наблюдений нет»: тренер в этом случае отвечает без
     видео, а не извиняется за чужую поломку.
+
+    backend — "openai" | "novita"; по умолчанию config.video_analysis_backend()
+    (явный выбор нужен скрипту сравнения, scripts/video_eval.py).
+
+    Квоту видео списывает сам (_count_attempt) — за каждый состоявшийся
+    платный вызов; проверку ai_limits KIND_VIDEO до вызова делают хендлеры.
+    """
+    chosen = backend or config.video_analysis_backend()
+    if chosen == "openai":
+        return await _analyze_frames(video_bytes, user_id, exercise_hint, pose_summary)
+    return await _analyze_novita(video_bytes, user_id, mime_type, exercise_hint, pose_summary)
+
+
+# Оценка входа на кадр для оборванного вызова (usage тогда не приходит): две
+# плитки 512 на detail=high — 85 + 2×170. Настоящую цену пишет usage ответа.
+_ABORT_TOKENS_PER_FRAME = 425
+
+
+def _response_schema() -> dict[str, Any]:
+    """Строгая JSON-схема ответа (как у машинных вызовов тренера). Порядок
+    свойств — порядок генерации: ракурс и повторы раньше вердиктов."""
+    s, i = {"type": "string"}, {"type": "integer"}
+
+    def obj(props: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object", "properties": props,
+            "required": list(props), "additionalProperties": False,
+        }
+
+    def enum(*values: str) -> dict[str, Any]:
+        return {"type": "string", "enum": list(values)}
+
+    sides = enum("слева", "справа", "сверху", "снизу", "не видно")
+    frames = {"type": "array", "items": i}
+    level = enum("высокая", "средняя", "низкая")
+    schema = obj({
+        "view": obj({
+            "angle": enum("сбоку", "спереди", "сзади", "три четверти", "не определить"),
+            "head_side": sides,
+            "feet_side": sides,
+            "usable": {"type": "boolean"},
+            "problem": s,
+        }),
+        "exercise": s,
+        "exercise_confidence": level,
+        "reps": {"type": "array", "items": obj({
+            "rep": i, "from_frame": i, "to_frame": i,
+            "top_frame": i, "bar_at_top": s,
+            "bottom_frame": i, "bar_at_bottom": s,
+            "note": s,
+        })},
+        "reps_seen": i,
+        "bar_path": obj({
+            "top": enum("над плечами", "над лицом или шеей", "над грудью", "не видно"),
+            "touch": enum("низ груди", "середина груди", "верх груди или шея", "не видно"),
+        }),
+        "checklist": {"type": "array", "items": obj({
+            "point": enum(*CHECKPOINTS),
+            "verdict": enum(*_VERDICTS),
+            "what_i_see": s,
+            "frames": frames,
+            "when": s,
+        })},
+        "observations": {"type": "array", "items": obj({
+            "point": enum(*CHECKPOINTS),
+            "what": s,
+            "phase": s,
+            "frames": frames,
+            "when": s,
+            "reps": {"type": "array", "items": i},
+            "evidence": s,
+            "severity": enum(*_SEVERITY_ORDER),
+            "confidence": level,
+        })},
+        "not_visible": {"type": "array", "items": obj({"what": s, "why": s})},
+        "camera_advice": s,
+    })
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "video_review", "strict": True, "schema": schema},
+    }
+
+
+def _frames_content(frames: list[Frame], duration: Optional[float], user_prompt: str) -> list[dict[str, Any]]:
+    total = len(frames)
+    head = (
+        f"Кадров: {total}"
+        + (f", ролик {duration:.1f} с" if duration else "")
+        + ", по порядку времени.\n\n" + user_prompt
+    )
+    content: list[dict[str, Any]] = [{"type": "text", "text": head}]
+    for frame in frames:
+        content.append({"type": "text", "text": f"кадр {frame.index} из {total}, {frame.seconds:.1f} с"})
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/jpeg;base64," + base64.b64encode(frame.jpeg).decode(),
+                "detail": config.VIDEO_FRAME_DETAIL,
+            },
+        })
+    return content
+
+
+async def _analyze_frames(
+    video_bytes: bytes,
+    user_id: Optional[int],
+    exercise_hint: Optional[str],
+    pose_summary: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Путь "openai": свои кадры → модель зрения тренера → та же структура."""
+    import ai_trainer  # тяжёлый модуль; здесь, а не наверху — разбор видео ему не нужен до вызова
+
+    # ffmpeg — subprocess на сотни миллисекунд: в поток, не в цикл событий.
+    extracted = await asyncio.to_thread(extract_frames, video_bytes)
+    if not extracted:
+        # Денег не ушло — и квоту не трогаем, как при сбое сети до ответа.
+        logger.warning("video analysis: no frames extracted for user %s", user_id)
+        return None
+    frames, duration = extracted
+    backend = ai_trainer.vision_backend()._replace(effort=config.VIDEO_ANALYSIS_REASONING_EFFORT)
+    user_prompt = _user_prompt(USER_PROMPT, exercise_hint, pose_summary)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": _frames_content(frames, duration, user_prompt)},
+    ]
+    kwargs = ai_trainer._model_kwargs(
+        backend, user_id, max_tokens=config.VIDEO_ANALYSIS_MAX_TOKENS, quick=False, scope="video"
+    )
+    logger.info(
+        "video analysis: %s frames over %ss → %s (effort %s, detail %s)",
+        len(frames), duration, backend.model, backend.effort, config.VIDEO_FRAME_DETAIL,
+    )
+    try:
+        # paid_call: cost-событие по настоящему usage в finally, оборванный
+        # таймаутом — по оценке. Квоты тут нет (kind=None): KIND_VIDEO проверил
+        # хендлер, а списывает _count_attempt ниже, по исходу.
+        response = await ai_trainer.paid_call(
+            user_id, None,
+            lambda: backend.client.chat.completions.create(
+                **kwargs,
+                messages=messages,
+                response_format=_response_schema(),
+                timeout=config.VIDEO_ANALYSIS_TIMEOUT_SECONDS,
+            ),
+            model=backend.model,
+            abort_prompt_tokens=len(frames) * _ABORT_TOKENS_PER_FRAME + len(SYSTEM_PROMPT) // 3,
+        )
+    except Exception:
+        logger.exception("video analysis call failed for user %s", user_id)
+        return None
+    usage = getattr(response, "usage", None)
+    logger.info(
+        "video analysis usage: prompt=%s (cached=%s) completion=%s (reasoning=%s) model=%s frames=%s",
+        getattr(usage, "prompt_tokens", 0), getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0),
+        getattr(usage, "completion_tokens", 0),
+        getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0),
+        backend.model, len(frames),
+    )
+    return await _finish(
+        response, user_id, frame_count=len(frames), exercise_hint=exercise_hint,
+    )
+
+
+async def _analyze_novita(
+    video_bytes: bytes,
+    user_id: Optional[int],
+    mime_type: str,
+    exercise_hint: Optional[str],
+    pose_summary: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Путь "novita": ролик целиком в Qwen.
 
     mime_type берётся из самого апдейта, а не подставляется наугад: ролик без
     аудиодорожки Telegram отдаёт как animation, и там встречается и video/mp4, и
@@ -724,24 +1476,7 @@ async def analyze(
     чужой вывеской.
     """
     data_url = f"data:{mime_type};base64," + base64.b64encode(video_bytes).decode()
-    # Подпись к ролику — единственный надёжный источник упражнения, и он важнее
-    # глаз модели. Живой провал: тягу штанги к поясу она приняла за становую и
-    # выдала три классические ошибки становой (круглая поясница, таз раньше
-    # плеч, гриф от голени) — не потому, что видела их, а потому, что для
-    # становой это самый частый набор. Названное упражнение эту подгонку
-    # обрывает. Дописывается к USER_PROMPT, а не к системному: системный обязан
-    # оставаться неизменным, иначе кэш промахивается на каждом ролике.
-    user_prompt = USER_PROMPT
-    if exercise_hint:
-        user_prompt = (
-            f"Атлет подписал ролик так: «{exercise_hint}». Если там названо "
-            f"упражнение — это оно и есть, верь подписи, а не своим глазам, и "
-            f"поставь exercise_confidence «высокая».\n\n" + USER_PROMPT
-        )
-    # Цифры с телефона — тоже в пользовательскую часть, по той же причине, что
-    # и подпись: системный промпт обязан оставаться неизменным ради кэша.
-    if pose_summary:
-        user_prompt = pose_summary_block(pose_summary) + "\n\n" + user_prompt
+    user_prompt = _user_prompt(NOVITA_USER_PROMPT, exercise_hint, pose_summary)
     # response_format добавляется только по флагу: не всякая модель умеет строгий
     # JSON, и провайдер отвечает на неподдерживаемый параметр не мягким
     # игнорированием, а 400 — то есть разбор падает целиком (см.
@@ -750,7 +1485,7 @@ async def analyze(
     if config.VIDEO_ANALYSIS_JSON_MODE:
         extra["response_format"] = {"type": "json_object"}
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": NOVITA_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [
@@ -814,7 +1549,23 @@ async def analyze(
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")
-    raw = (response.choices[0].message.content or "").strip()
+    return await _finish(response, user_id, frame_count=None, exercise_hint=exercise_hint)
+
+
+async def _finish(
+    response: Any,
+    user_id: Optional[int],
+    *,
+    frame_count: Optional[int],
+    exercise_hint: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Ответ модели (деньги уже ушли) → разобранная структура + учёт попытки."""
+    usage = getattr(response, "usage", None)
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    try:
+        raw = (response.choices[0].message.content or "").strip()
+    except (AttributeError, IndexError, TypeError):
+        raw = ""
     payload = _strip_reasoning(raw)
     try:
         parsed = json.loads(payload)
@@ -834,20 +1585,27 @@ async def analyze(
     if not isinstance(parsed, dict):
         await _count_attempt(user_id, ok=False)
         return None
-    # Что модель на самом деле написала по каждой точке — до всякой чистки.
-    # Без этой строки нельзя отличить «не увидела круглую спину» от «увидела и
-    # проштамповала норму учебной фразой»: наружу оба случая выглядят одинаково
-    # (тренер молчит), а чинятся противоположным — первое кадрами, второе
-    # промптом. Раньше в логах были только счётчики, и выбирать приходилось
-    # наугад.
+    # Что модель на самом деле написала — до всякой чистки (исход чистки — в
+    # строках «video sanitize: …»). Без этих строк нельзя отличить «не увидела
+    # круглую спину» от «увидела и проштамповала норму учебной фразой»: наружу
+    # оба случая выглядят одинаково (тренер молчит), а чинятся противоположным
+    # — первое кадрами, второе промптом.
+    view = parsed.get("view") if isinstance(parsed.get("view"), dict) else {}
+    logger.info(
+        "video raw | exercise=%r view=%s/%s head=%s feet=%s reps_seen=%s reps=%s bar_path=%s",
+        parsed.get("exercise"), view.get("angle"), view.get("usable"),
+        view.get("head_side"), view.get("feet_side"), parsed.get("reps_seen"),
+        json.dumps(parsed.get("reps"), ensure_ascii=False)[:600] if parsed.get("reps") else None,
+        parsed.get("bar_path"),
+    )
     for item in parsed.get("checklist") or []:
         if isinstance(item, dict):
             logger.info(
-                "video checkpoint | %s | %s | %s",
+                "video checkpoint (raw) | %s | %s | %s | frames %s",
                 item.get("point"), item.get("verdict"),
-                str(item.get("what_i_see") or "")[:200],
+                str(item.get("what_i_see") or "")[:200], item.get("frames"),
             )
-    result = _sanitize(parsed)
+    result = _sanitize(parsed, frame_count=frame_count, exercise_hint=exercise_hint)
     await _count_attempt(user_id, ok=result is not None)
     return result
 
@@ -946,6 +1704,7 @@ def to_context_block(analysis: dict[str, Any]) -> str:
             lines.append(
                 f"- [{severity}, уверенность {confidence}] "
                 f"{obs.get('what')} — фаза: {obs.get('phase')}, {obs.get('when')}"
+                + (f", кадры {', '.join(map(str, obs['frames']))}" if obs.get("frames") else "")
                 + (f", повторы {reps}" if reps else "")
                 + f". Из чего следует: {obs.get('evidence')}"
             )
