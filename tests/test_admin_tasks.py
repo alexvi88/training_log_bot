@@ -412,3 +412,73 @@ async def test_the_oauth_purge_runs_on_its_own(fresh_db, user_id, monkeypatch):
     # начатое минуту назад.
     cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
     assert [row["code"] for row in await cur.fetchall()] == [live]
+
+
+async def test_prune_deletes_in_batches_and_keeps_fresh_rows(fresh_db, user_id, monkeypatch):
+    db = fresh_db
+    """Большая чистка идёт порциями (короткие транзакции), а не одним DELETE —
+    итог тот же: старое удалено целиком, свежее на месте."""
+    monkeypatch.setattr(db, "PRUNE_BATCH_PAUSE_SECONDS", 0)
+    old = (dt.date.today() - dt.timedelta(days=40)).isoformat()
+    new = dt.date.today().isoformat()
+    for _ in range(7):
+        await db.conn().execute(
+            "INSERT INTO user_events (telegram_id, kind, content, created_at) VALUES (?, 'tap', '', ?)",
+            (user_id, old),
+        )
+    await db.conn().execute(
+        "INSERT INTO user_events (telegram_id, kind, content, created_at) VALUES (?, 'tap', '', ?)", (user_id, new)
+    )
+    await db.conn().commit()
+
+    commits = []
+    real_commit = db.conn().commit
+
+    async def counting_commit():
+        commits.append(1)
+        await real_commit()
+
+    monkeypatch.setattr(db.conn(), "commit", counting_commit)
+    monkeypatch.setattr(db, "PRUNE_BATCH_ROWS", 3)
+
+    assert await db.prune_old_user_events(30) == 7
+    assert len(commits) == 3  # 3 + 3 + 1
+    cur = await db.conn().execute("SELECT created_at FROM user_events")
+    assert [r[0] for r in await cur.fetchall()] == [new]
+
+
+async def test_retention_step_retries_when_database_is_locked(fresh_db, monkeypatch):
+    db = fresh_db
+    """«database is locked» — чужой замок (Litestream), не поломка: шаг
+    повторяется и проходит, чистка считается удавшейся."""
+    import sqlite3
+
+    monkeypatch.setattr(admin_tasks, "RETENTION_LOCK_RETRY_SECONDS", 0)
+    calls = []
+
+    async def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return 0
+
+    monkeypatch.setattr(db, "prune_old_user_events", flaky)
+    assert await admin_tasks._run_retention_cleanup() is True
+    assert len(calls) == 2
+
+
+async def test_retention_step_gives_up_after_retries(fresh_db, monkeypatch, caplog):
+    db = fresh_db
+    import sqlite3
+
+    monkeypatch.setattr(admin_tasks, "RETENTION_LOCK_RETRY_SECONDS", 0)
+    calls = []
+
+    async def locked(*args, **kwargs):
+        calls.append(1)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "prune_old_user_events", locked)
+    assert await admin_tasks._run_retention_cleanup() is False
+    assert len(calls) == admin_tasks.RETENTION_LOCK_RETRIES + 1
+    assert any("user_events" in r.message for r in caplog.records if r.levelname == "ERROR")

@@ -1407,6 +1407,40 @@ _conn: Optional[aiosqlite.Connection] = None
 _write_lock = asyncio.Lock()
 
 
+# Чистка ретеншна удаляет порциями, а не одним DELETE на всю таблицу. Один
+# большой DELETE — это одна длинная пишущая транзакция и мегабайты WAL разом:
+# Litestream (start.sh) держит к той же базе своё соединение и на таком WAL
+# дольше копирует и чекпойнтит, а запись бота в это время упирается в
+# SQLITE_BUSY дольше SQLITE_BUSY_TIMEOUT_SECONDS. Так и было 03.11.2026 в 07:00:
+# «Retention cleanup step user_events failed: database is locked» и ещё два
+# десятка таких же ошибок за 15 минут. Порция — короткая транзакция, между
+# порциями замок записи отпускается, и обычные записи идут своим чередом.
+PRUNE_BATCH_ROWS = 2000
+PRUNE_BATCH_PAUSE_SECONDS = 0.05
+
+
+async def _prune_in_batches(table: str, where: str, params: tuple, *, batch: int | None = None) -> int:
+    """DELETE FROM table WHERE where — порциями по PRUNE_BATCH_ROWS строк,
+    каждая своей транзакцией под _write_lock. Возвращает, сколько удалено.
+
+    `table` и `where` — только литералы из этого модуля, не ввод снаружи.
+    """
+    size = batch or PRUNE_BATCH_ROWS
+    total = 0
+    while True:
+        async with _write_lock:
+            cur = await conn().execute(
+                f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE {where} LIMIT ?)",
+                (*params, size),
+            )
+            await conn().commit()
+            deleted = cur.rowcount
+        total += deleted
+        if deleted < size:
+            return total
+        await asyncio.sleep(PRUNE_BATCH_PAUSE_SECONDS)
+
+
 def _utc_now() -> dt.datetime:
     """UTC как naive datetime (см. timeutil.utc_now; db не импортирует timeutil)."""
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
@@ -11754,10 +11788,7 @@ async def prune_old_cost_events(retention_days: int) -> int:
     """Drop cost_events older than retention_days — only the daily report/backup job reads
     this table, and only ever one day back, so nothing needs it to grow forever."""
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
-    async with _write_lock:
-        cur = await conn().execute("DELETE FROM cost_events WHERE created_at < ?", (cutoff,))
-        await conn().commit()
-        return cur.rowcount
+    return await _prune_in_batches("cost_events", "created_at < ?", (cutoff,))
 
 
 # ---------- лог действий пользователей ----------
@@ -12457,18 +12488,12 @@ async def count_site_visit_buckets() -> int:
 
 async def prune_old_site_events(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
-    async with _write_lock:
-        cur = await conn().execute("DELETE FROM site_events WHERE created_at < ?", (cutoff,))
-        await conn().commit()
-    return cur.rowcount
+    return await _prune_in_batches("site_events", "created_at < ?", (cutoff,))
 
 
 async def prune_old_analytics_events(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
-    async with _write_lock:
-        cur = await conn().execute("DELETE FROM analytics_events WHERE created_at < ?", (cutoff,))
-        await conn().commit()
-    return cur.rowcount
+    return await _prune_in_batches("analytics_events", "created_at < ?", (cutoff,))
 
 
 def _day_bounds(day: str) -> tuple[str, str]:
@@ -12755,10 +12780,7 @@ async def prune_old_funnel_events(retention_days: int) -> int:
     """Выкинуть шаги воронки старше retention_days — тот же срок, что у
     продуктовых событий (config.ANALYTICS_RETENTION_DAYS)."""
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
-    async with _write_lock:
-        cur = await conn().execute("DELETE FROM funnel_events WHERE created_at < ?", (cutoff,))
-        await conn().commit()
-    return cur.rowcount
+    return await _prune_in_batches("funnel_events", "created_at < ?", (cutoff,))
 
 
 async def prune_old_user_events(retention_days: int) -> int:
@@ -12768,10 +12790,7 @@ async def prune_old_user_events(retention_days: int) -> int:
     смотрят в него всегда про недавнее: «что человек делал на этой неделе».
     """
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
-    async with _write_lock:
-        cur = await conn().execute("DELETE FROM user_events WHERE created_at < ?", (cutoff,))
-        await conn().commit()
-        return cur.rowcount
+    return await _prune_in_batches("user_events", "created_at < ?", (cutoff,))
 
 
 # ---------- отчёты о сбоях iOS (MetricKit) ----------
