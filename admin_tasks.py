@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import time
 from contextlib import suppress
@@ -789,11 +790,34 @@ async def _run_retention_cleanup() -> bool:
     all_ok = True
     for name, step in steps:
         try:
-            await step()
+            await _retry_if_locked(name, step)
         except Exception:
             all_ok = False
             logger.exception("Retention cleanup step %s failed", name)
     return all_ok
+
+
+# «database is locked» на чистке — это чужое соединение (Litestream) держит
+# замок дольше таймаута, а не поломка шага: через минуту тот же DELETE проходит.
+# Две повторные попытки, потом — ошибка в лог и догон на следующем старте.
+RETENTION_LOCK_RETRIES = 2
+RETENTION_AFTER_BACKUP_SECONDS = 1800
+RETENTION_LOCK_RETRY_SECONDS = 60.0
+
+
+async def _retry_if_locked(name: str, step) -> None:
+    for attempt in range(RETENTION_LOCK_RETRIES + 1):
+        try:
+            await step()
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or attempt == RETENTION_LOCK_RETRIES:
+                raise
+            logger.warning(
+                "Retention cleanup step %s: database is locked, retry %d in %.0f s",
+                name, attempt + 1, RETENTION_LOCK_RETRY_SECONDS,
+            )
+            await asyncio.sleep(RETENTION_LOCK_RETRY_SECONDS)
 
 
 async def run_retention_cleanup_job() -> None:
@@ -813,7 +837,10 @@ async def run_retention_cleanup_job() -> None:
     """
     await _catch_up_missed_retention()
     while True:
-        await asyncio.sleep(_seconds_until_next_run(config.ADMIN_REPORT_HOUR))
+        # Через полчаса после суточного бэкапа (тот же ADMIN_REPORT_HOUR):
+        # VACUUM INTO читает базу целиком, а Litestream в это время копит WAL —
+        # удаления поверх этого и упирались в «database is locked».
+        await asyncio.sleep(_seconds_until_next_run(config.ADMIN_REPORT_HOUR) + RETENTION_AFTER_BACKUP_SECONDS)
         try:
             if await _run_retention_cleanup():
                 _mark_retention_ok()
