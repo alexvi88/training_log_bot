@@ -5996,5 +5996,8 @@
   "guides.plateau.reason": "{exercise} не растёт {weeks, plural, one {# неделю} few {# недели} many {# недель} other {# недели}}",
   "guides.plateau.chip": "{exercise} · e1RM {e1rm} — {weeks, plural, one {# неделя} few {# недели} many {# недель} other {# недели}} без роста",
   "guides.newbie.reason": "Ты только начинаешь — с этого и начни",
-  "guides.volume.chip": "Подходов за 7 дней: {groups}"
+  "guides.volume.chip": "Подходов за 7 дней: {groups}",
+  "seo.android_gate.title": "Приложение пока только для iPhone",
+  "seo.android_gate.lead": "На Android я работаю в Telegram: тот же тренер, подход — одной строкой «100 8». Аккаунт общий с приложением для iPhone.",
+  "seo.android_gate.store_html": "Всё равно открыть <a href=\"{href}\">App Store</a>."
 }

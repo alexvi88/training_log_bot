@@ -1041,3 +1041,39 @@ async def test_switch_landing_on_hevy_and_strong_but_not_csv():
     assert "Import from Hevy" in hevy
     csv = responses["/en/import/csv"].text
     assert "class=switch-chips" not in csv and "class=csv-visual" in csv
+
+
+async def test_app_store_click_from_android_lands_on_a_bot_page_not_a_dead_end(monkeypatch):
+    """С Android приложение не поставить: вместо редиректа в App Store —
+    страница с ботом главной кнопкой на языке страницы, откуда кликнули.
+    Ссылка «всё равно в App Store» ведёт дальше без второго счёта клика."""
+    monkeypatch.setattr(config, "APP_STORE_URL", STORE)
+    counted = []
+    real_count = seo_pages._count
+
+    async def spy(kind, page, lang, request, **kw):
+        counted.append((kind, kw.get("target")))
+        return await real_count(kind, page, lang, request, **kw)
+
+    monkeypatch.setattr(seo_pages, "_count", spy)
+    for lang in seo_pages.LANGS:
+        counted.clear()
+        seg = seo_pages.lang_segment(lang)
+        gate = await _get("/go/appstore?f=warmup",
+                          headers={"user-agent": UA_ANDROID, "referer": f"{HOST}/{seg}/tools/warmup"})
+        assert gate.status_code == 200, lang
+        assert gate.headers["content-language"] == lang
+        assert 'name=robots content="noindex"' in gate.text
+        assert i18n.t_in(lang, "seo.android_gate.title").replace("'", "&#x27;") in gate.text
+        assert 'class="btn primary" href="/go/bot?f=warmup"' in gate.text
+        assert 'href="/go/appstore?f=warmup&amp;android=1"' in gate.text
+        assert counted == [("click", "appstore")]
+
+        counted.clear()
+        anyway = await _get("/go/appstore?f=warmup&android=1", headers={"user-agent": UA_ANDROID})
+        assert anyway.status_code == 302
+        assert anyway.headers["location"] == seo_pages.app_store_link("warmup")
+        assert counted == []
+
+    iphone = await _get("/go/appstore?f=warmup", headers={"user-agent": UA_IPHONE})
+    assert iphone.status_code == 302 and iphone.headers["location"] == seo_pages.app_store_link("warmup")

@@ -5995,5 +5995,8 @@
   "guides.plateau.reason": "{exercise} wächst seit {weeks, plural, one {# Woche} other {# Wochen}} nicht",
   "guides.plateau.chip": "{exercise} · e1RM {e1rm} — {weeks, plural, one {# Woche} other {# Wochen}} ohne Zuwachs",
   "guides.newbie.reason": "Du fängst gerade an: Fang hier an",
-  "guides.volume.chip": "Sätze in 7 Tagen: {groups}"
+  "guides.volume.chip": "Sätze in 7 Tagen: {groups}",
+  "seo.android_gate.title": "Die App gibt es vorerst nur für iPhone",
+  "seo.android_gate.lead": "Auf Android bin ich in Telegram: derselbe Coach, ein Satz ist eine Zeile — „100 8“. Dein Konto ist dasselbe wie in der iPhone-App.",
+  "seo.android_gate.store_html": "Trotzdem den <a href=\"{href}\">App Store</a> öffnen."
 }

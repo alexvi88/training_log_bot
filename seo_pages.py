@@ -2752,12 +2752,41 @@ async def go_diary_route(request: Request) -> Response:
     return await go_bot_route(request)
 
 
+ANDROID_GATE_PARAM = "android"
+
+
+def render_android_gate(lang: str, block: str) -> str:
+    """Страница вместо App Store для Android: приложения там нет, и прямой
+    редирект на apps.apple.com был тупиком — по логам сайта половина кликов
+    «App Store» из поиска приходила именно с Android. Главная кнопка — бот
+    (тот же блок `f=`, клик считается как обычный клик в бот), App Store —
+    строкой ниже, без повторного счёта."""
+    import coach_invite_page
+
+    t = _t(lang)
+    title = t("seo.android_gate.title")
+    store_href = f"{go_url('appstore', block)}&{ANDROID_GATE_PARAM}=1"
+    body = (
+        f"<h1>{_e(title)}</h1><p>{_e(t('seo.android_gate.lead'))}</p>"
+        f'<a class="btn primary" href="{_e(go_url("bot", block))}">{_e(t("seo.cta.bot"))}</a>'
+        f'<p class=muted>{t("seo.android_gate.store_html", href=_e(store_href))}</p>'
+    )
+    return coach_invite_page._page(lang, title, body)
+
+
 async def go_appstore_route(request: Request) -> Response:
     block = _block_arg(request)
     store = config.app_store_url()
     if not store:
         return RedirectResponse(go_url("bot", block), status_code=302, headers={"Cache-Control": "no-store"})
-    await _count("click", _click_page(request, block), None, request, target="appstore")
+    gate_passed = request.query_params.get(ANDROID_GATE_PARAM) == "1"
+    if not gate_passed:
+        await _count("click", _click_page(request, block), None, request, target="appstore")
+    if device_of(request) == "android" and not gate_passed:
+        lang = lang_of_path(urlsplit(request.headers.get("referer") or "").path) or legal_pages.page_lang(request)
+        return HTMLResponse(render_android_gate(lang, block), headers={
+            "Cache-Control": "no-store", "Vary": "User-Agent, Accept-Language", "Content-Language": lang, **_SECURITY,
+        })
     return RedirectResponse(app_store_link(block) or store, status_code=302, headers={"Cache-Control": "no-store", **_SECURITY})
 
 
