@@ -5995,5 +5995,8 @@
   "guides.plateau.reason": "{exercise} ne progresse plus depuis {weeks, plural, one {# semaine} other {# semaines}}",
   "guides.plateau.chip": "{exercise} · e1RM {e1rm} — {weeks, plural, one {# semaine} other {# semaines}} sans progrès",
   "guides.newbie.reason": "Tu débutes : commence par ici",
-  "guides.volume.chip": "Séries sur 7 jours : {groups}"
+  "guides.volume.chip": "Séries sur 7 jours : {groups}",
+  "seo.android_gate.title": "Pour l'instant, l'app est réservée à l'iPhone",
+  "seo.android_gate.lead": "Sur Android, je suis sur Telegram : le même coach, une série tient en une ligne — « 100 8 ». Ton compte est le même que dans l'app iPhone.",
+  "seo.android_gate.store_html": "Ouvrir quand même l'<a href=\"{href}\">App Store</a>."
 }

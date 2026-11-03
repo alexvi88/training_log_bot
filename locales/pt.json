@@ -5995,5 +5995,8 @@
   "guides.plateau.reason": "{exercise} está há {weeks, plural, one {# semana} other {# semanas}} sem evoluir",
   "guides.plateau.chip": "{exercise} · e1RM {e1rm} — {weeks, plural, one {# semana} other {# semanas}} sem evoluir",
   "guides.newbie.reason": "Você está começando: comece por aqui",
-  "guides.volume.chip": "Séries em 7 dias: {groups}"
+  "guides.volume.chip": "Séries em 7 dias: {groups}",
+  "seo.android_gate.title": "O app por enquanto é só para iPhone",
+  "seo.android_gate.lead": "No Android eu estou no Telegram: o mesmo treinador, cada série em uma linha — “100 8”. Sua conta é a mesma do app de iPhone.",
+  "seo.android_gate.store_html": "Abrir a <a href=\"{href}\">App Store</a> mesmo assim."
 }

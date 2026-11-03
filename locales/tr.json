@@ -5995,5 +5995,8 @@
   "guides.plateau.reason": "{exercise} {weeks, plural, one {# haftadır} other {# haftadır}} artmıyor",
   "guides.plateau.chip": "{exercise} · e1RM {e1rm} — {weeks, plural, one {# hafta} other {# hafta}} artış yok",
   "guides.newbie.reason": "Yeni başlıyorsun: buradan başla",
-  "guides.volume.chip": "7 günde set: {groups}"
+  "guides.volume.chip": "7 günde set: {groups}",
+  "seo.android_gate.title": "Uygulama şimdilik yalnızca iPhone için",
+  "seo.android_gate.lead": "Android’de Telegram’dayım: aynı koç, her set tek satır — “100 8”. Hesabın iPhone uygulamasıyla aynı.",
+  "seo.android_gate.store_html": "Yine de <a href=\"{href}\">App Store</a>’u aç."
 }
