@@ -3,7 +3,8 @@
 
 Что пишется (`db.site_events`): вид события (`view` — открыл страницу,
 `click` — нажал кнопку «в бота» или «в App Store» через `/go/*`, `embed` —
-показ встроенного калькулятора на чужом сайте), ключ страницы (путь без
+показ встроенного калькулятора на чужом сайте, `prefetch` — браузер скачал
+страницу заранее, из выдачи поиска, а человек её не открыл), ключ страницы (путь без
 домена), язык, домен источника (`google`, `t.me`… или `direct` — без полного
 адреса, по которому пришли), вид устройства (ios, android, desktop, bot),
 имя поискового робота, `utm_source` и куда вёл клик. IP, User-Agent целиком и
@@ -240,6 +241,24 @@ def _clean_family(value: str) -> Optional[str]:
     return cleaned or None
 
 
+# Предзагрузка: браузер скачал страницу заранее, человек её не открыл. Так
+# Chrome на Android берёт верхние результаты выдачи Google (Referer google,
+# настоящий UA телефона, JS не исполняется), и до 05.11.2026 это писалось как
+# `view` с `ref=google device=android` — без единого `seen`. Пишется отдельным
+# видом: людьми не считается, а число — грубый след того, что страница была в
+# выдаче наверху, пока Search Console отстаёт на 2–3 дня.
+PREFETCH_KIND = "prefetch"
+_PURPOSE_HEADERS = ("sec-purpose", "purpose", "x-purpose", "x-moz")
+
+
+def is_prefetch(headers: Any) -> bool:
+    """Запрос — предзагрузка или пререндер, а не переход человека."""
+    if headers is None:
+        return False
+    value = " ".join(headers.get(name) or "" for name in _PURPOSE_HEADERS).lower()
+    return "prefetch" in value or "prerender" in value
+
+
 def looks_automated(headers: Any) -> Optional[str]:
     """Чего не хватает «компьютеру» из того, что шлёт любой живой браузер при
     переходе на страницу: `no-al` — нет Accept-Language, `no-sf` — нет
@@ -313,6 +332,8 @@ async def record(kind: str, page: str, lang: Optional[str], *, user_agent: Optio
 
     `headers` — заголовки запроса страницы: по ним «компьютер», похожий на
     автомат, попадает в лог с сырым UA (в базу — только семейство)."""
+    if kind == "view" and is_prefetch(headers):
+        kind = PREFETCH_KIND
     device, crawler = classify_ua(user_agent)
     source = referrer_name(referer, own_hosts)
     utm_clean = clean_utm(utm)
@@ -457,6 +478,12 @@ def format_growth_block(stats: dict[str, Any], period: str, seo_signups: list[An
     lines.append(
         f"Клики: в бота {to_bot}, в App Store {to_store} — {_share(to_bot + to_store, views)} от просмотров"
     )
+    prefetches = stats.get("prefetches") or []
+    if prefetches:
+        lines.append(
+            f"Предзагрузка из выдачи (браузер скачал, человек не открыл): {sum(n for _, n in prefetches)} ("
+            + ", ".join(f"{escape(str(r))} {n}" for r, n in prefetches) + ")"
+        )
     if stats["embeds"]:
         lines.append(f"Показы калькулятора на чужих сайтах: {stats['embeds']}")
     if stats["crawlers"]:

@@ -250,3 +250,41 @@ async def test_bots_dont_flood_the_log(fresh_db, caplog):
             if r.name == "site_stats" and r.levelname == "INFO" and r.getMessage().startswith("site view")]
     assert len(info) == 1 and "crawler=other" in info[0]
     assert len(await _rows(fresh_db)) == 6
+
+
+UA_ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+
+
+async def test_search_prefetch_is_its_own_kind_not_a_visit(fresh_db, caplog):
+    """Chrome на Android заранее скачивает верхние результаты выдачи Google:
+    Referer google, UA телефона, `Sec-Purpose: prefetch`, JS не исполняется.
+    До 05.11.2026 это писалось `view` — «Android из Google» без единого `seen`.
+    Теперь это `prefetch`: ни в людях, ни в «без подтверждения», отдельной
+    строкой в /growth."""
+    caplog.set_level("INFO", logger="site_stats")
+    async with _client() as client:
+        for purpose in ("prefetch;anonymous-client-ip", "prefetch;prerender"):
+            await client.get("/es/exercises/front-squat", headers={
+                "User-Agent": UA_ANDROID, "Referer": "https://www.google.com/", "Sec-Purpose": purpose, **BROWSER_HEADERS})
+        # Обычный переход того же телефона — по-прежнему `view`.
+        await client.get("/es/exercises/front-squat", headers={
+            "User-Agent": UA_ANDROID, "Referer": "https://www.google.com/", **BROWSER_HEADERS})
+
+    kinds = sorted(r["kind"] for r in await _rows(fresh_db))
+    assert kinds == ["prefetch", "prefetch", "view"]
+    assert "site prefetch /es/exercises/front-squat" in caplog.text
+
+    stats = await fresh_db.site_stats(7)
+    assert stats["prefetches"] == [("google", 2)]
+    assert stats["unconfirmed"] == 0  # маячков ещё не было — счёт серверный
+    assert stats["views"] == 1
+    block = site_stats.format_growth_block(stats, "7 дн.", [])
+    assert "Предзагрузка из выдачи (браузер скачал, человек не открыл): 2 (google 2)" in block
+
+
+def test_is_prefetch_reads_the_purpose_headers():
+    assert site_stats.is_prefetch({"sec-purpose": "prefetch"})
+    assert site_stats.is_prefetch({"purpose": "prefetch"})
+    assert site_stats.is_prefetch({"sec-purpose": "prefetch;prerender"})
+    assert not site_stats.is_prefetch({"accept-language": "es"})
+    assert not site_stats.is_prefetch(None)
