@@ -205,3 +205,41 @@ async def test_media_traversal_cannot_escape_via_sibling_prefix(fresh_db, client
     client = client_factory()
     resp = await client.get("/media/exercises/../exercisesEVIL/whatever.jpg")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stale_redraw_name_serves_the_current_frame(fresh_db, client_factory):
+    """Перерисованный кадр получает новое имя, старый файл удаляется, а
+    приложение держит прошлые адреса в кэше (05.11.2026: `pushups_r2_1.jpg` →
+    404 при живом `pushups_r3_1.jpg`). Старое имя отдаёт нынешний кадр."""
+    client = client_factory()
+    current = exercise_media.frame_name("pushups", 1)
+    assert current != "pushups_r2_1.jpg"
+    fresh = await client.get(f"/media/exercises/{current}")
+    # `pushups_1.jpg` (кадр открытой базы до перерисовки) лежит на диске и
+    # отдаётся как есть; подмена — только для отсутствующих имён.
+    for stale in ("pushups_r2_1.jpg", "pushups_r1_1.jpg"):
+        resp = await client.get(f"/media/exercises/{stale}")
+        assert resp.status_code == 200, stale
+        assert resp.content == fresh.content
+    thumb = await client.get("/media/exercises/thumbs/pushups_r2_1.jpg")
+    assert thumb.status_code == 200
+    assert thumb.content == (await client.get(f"/media/exercises/thumbs/{current}")).content
+    # Неизвестный слаг и не-кадр — по-прежнему 404, выйти из каталога нельзя.
+    assert (await client.get("/media/exercises/does_not_exist_r2_1.jpg")).status_code == 404
+    assert (await client.get("/media/exercises/../../etc/passwd_1.jpg")).status_code == 404
+
+
+def test_every_deleted_redraw_name_resolves_to_an_existing_file():
+    """Все имена кадров, которые когда-либо были в каталоге и удалены, ведут к
+    живому файлу — проверка на каждом слаге с версией."""
+    import os
+
+    import api_v1_media
+
+    for slug, rev in exercise_media.FRAME_REVISION.items():
+        for n in (1, 2):
+            for old in range(1, rev):
+                name = api_v1_media._current_frame_name(f"{slug}_r{old}_{n}.jpg")
+                assert name == exercise_media.frame_name(slug, n)
+                assert os.path.isfile(os.path.join(exercise_media.MEDIA_DIR, name)), name
