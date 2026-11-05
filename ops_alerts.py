@@ -403,6 +403,10 @@ def take_apns_counts() -> tuple[int, int]:
 EXPECTED_API_FAILURES: dict[tuple[str, str, int], str] = {
     ("*", "*", 401): "токен протух или вышли — приложение само ведёт ко входу",
     ("GET", "/exercises/{exercise_id}/photo", 404): "своего фото у упражнения нет — обычное состояние",
+    ("GET", "/exercises/{exercise_id}/description", 404): (
+        "у своего упражнения нет описания техники — обычное состояние; полноту описаний "
+        "каталога на всех языках держат тесты, а не эта тревога"
+    ),
     ("POST", "/ai/program/save", 409): "имя программы занято — приложение спрашивает «заменить?»",
 }
 API_FAILURE_REPEAT_SECONDS = 24 * 60 * 60
