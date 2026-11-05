@@ -190,6 +190,7 @@ LOCALIZED: list[str] = [
     # описание, у сводки — заголовок, звание и подписи плиток; и те, и другие
     # рендерятся через i18n.use_lang(users.lang). Остальные api_v1_* отдают
     # только числа и машинные коды — они в NEVER_LOCALIZED.
+    "workout_autoclose.py",
     "api_v1_achievements.py",
     "api_v1_dashboard.py",
     # Зал славы: тот же приём, что у api_v1_achievements/api_v1_dashboard —

@@ -5998,5 +5998,9 @@
   "guides.volume.chip": "Séries em 7 dias: {groups}",
   "seo.android_gate.title": "Por agora, a app é só para iPhone",
   "seo.android_gate.lead": "No Android estou no Telegram: o mesmo treinador, cada série numa linha — «100 8». A tua conta é a mesma da app de iPhone.",
-  "seo.android_gate.store_html": "Abrir a <a href=\"{href}\">App Store</a> na mesma."
+  "seo.android_gate.store_html": "Abrir a <a href=\"{href}\">App Store</a> na mesma.",
+  "push.ios.finish_reminder.title": "Fechar o treino?",
+  "push.ios.finish_reminder.body": "{sets, plural, one {# série anotada} other {# séries anotadas}}. Terminaste? Fecha o treino e eu calculo o resultado.",
+  "push.ios.auto_finished.title": "Fechei o teu treino",
+  "push.ios.auto_finished.body": "Deixaste-o aberto e fechei-o eu: {sets, plural, one {# série guardada} other {# séries guardadas}}. O resumo está no histórico."
 }

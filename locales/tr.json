@@ -5998,5 +5998,9 @@
   "guides.volume.chip": "7 günde set: {groups}",
   "seo.android_gate.title": "Uygulama şimdilik yalnızca iPhone için",
   "seo.android_gate.lead": "Android’de Telegram’dayım: aynı koç, her set tek satır — “100 8”. Hesabın iPhone uygulamasıyla aynı.",
-  "seo.android_gate.store_html": "Yine de <a href=\"{href}\">App Store</a>’u aç."
+  "seo.android_gate.store_html": "Yine de <a href=\"{href}\">App Store</a>’u aç.",
+  "push.ios.finish_reminder.title": "Antrenmanı kapatalım mı?",
+  "push.ios.finish_reminder.body": "{sets, plural, one {# set kaydedildi} other {# set kaydedildi}}. Bitti mi? Antrenmanı kapat, sonuçları hesaplayayım.",
+  "push.ios.auto_finished.title": "Antrenmanını kapattım",
+  "push.ios.auto_finished.body": "Açık bırakmıştın, ben kapattım: {sets, plural, one {# set kaydedildi} other {# set kaydedildi}}. Özet geçmişte."
 }

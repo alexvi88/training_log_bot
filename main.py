@@ -44,6 +44,7 @@ import ops_alerts
 import product_metrics
 import review_watch
 import shutdown_drain
+import workout_autoclose
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -558,6 +559,9 @@ async def main() -> None:
         admin_job, backup_watch_job, engagement_job, retention_job, metrics_job, *alerts_background
     ]
     background.append(asyncio.create_task(ops_alerts.run_heartbeat()))
+    # Забытые в приложении тренировки: напомнить, потом закрыть самим
+    # (workout_autoclose.py).
+    background.append(asyncio.create_task(workout_autoclose.run_job()))
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))

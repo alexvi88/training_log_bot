@@ -145,6 +145,12 @@ DEFAULT_E1RM_FORMULA = os.getenv("E1RM_FORMULA", "epley")
 # Hours after which an abandoned active workout triggers a prompt to finish/discard.
 STALE_WORKOUT_HOURS = 6
 
+# Забытая тренировка в приложении (workout_autoclose.py): столько минут без
+# нового подхода — пуш «Закрыть тренировку?», столько часов — тренировка с
+# подходами закрывается сама, концом по последнему подходу.
+WORKOUT_REMIND_IDLE_MINUTES = int(os.getenv("WORKOUT_REMIND_IDLE_MINUTES", "90"))
+WORKOUT_AUTO_FINISH_IDLE_HOURS = int(os.getenv("WORKOUT_AUTO_FINISH_IDLE_HOURS", "4"))
+
 # Number of recent exercises to show first when picking from a muscle group.
 # One button per row (the name needs reading, unlike the history list's dates),
 # so this doubles as the picker's page length — 12 meant 15 rows of keyboard
