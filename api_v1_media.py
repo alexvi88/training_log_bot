@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import mimetypes
 import os
-from typing import Any
+import re
+from typing import Any, Optional
 
 from starlette.requests import Request
 from starlette.responses import FileResponse
@@ -153,7 +154,34 @@ async def get_media_file(request: Request) -> Any:
     отдать файл вне каталога с картинками — get_media_file просто вернёт 404,
     как на любое другое отсутствующее имя.
     """
-    return _serve_file(exercise_media.MEDIA_DIR, request.path_params["name"])
+    name = request.path_params["name"]
+    try:
+        return _serve_file(exercise_media.MEDIA_DIR, name)
+    except ApiError:
+        current = _current_frame_name(name)
+        if current is None or current == name:
+            raise
+        return _serve_file(exercise_media.MEDIA_DIR, current)
+
+
+# Кадр каталога: `[thumbs/]<слаг>[_r<версия>]_<1|2>.jpg`.
+_FRAME_RE = re.compile(r"^(thumbs/)?([a-z0-9_]+?)(?:_r\d+)?_([12])\.jpg$")
+
+
+def _current_frame_name(name: str) -> Optional[str]:
+    """Имя нынешней версии того же кадра — для адреса прошлой перерисовки.
+
+    Перерисованный кадр получает новое имя (`exercise_media.frame_name`,
+    `FRAME_REVISION`), а старый файл удаляется — к 05.11.2026 так ушли 103
+    кадра. Приложение же держит адреса из прошлых ответов в своём кэше, и
+    упражнение показывалось пустым (`pushups_r2_1.jpg` → 404 при живом
+    `pushups_r3_1.jpg`). Отдаём тот же кадр нынешней версии — чинится у всех
+    уже установленных сборок сразу. `None` — это не имя кадра каталога."""
+    match = _FRAME_RE.match(name)
+    if match is None:
+        return None
+    prefix, slug, n = match.group(1) or "", match.group(2), int(match.group(3))
+    return prefix + exercise_media.frame_name(slug, n)
 
 
 async def get_guide_cover(request: Request) -> FileResponse:
