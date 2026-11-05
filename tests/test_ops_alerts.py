@@ -269,3 +269,27 @@ def test_spend_alert_once_per_level_per_day(monkeypatch):
     assert ops_alerts.spend_alert_text(ai_limits.KIND_SPEND_SOFT, 12.0, "2026-09-29") is None
     assert "замолчал" in ops_alerts.spend_alert_text(ai_limits.KIND_SPEND_HARD, 26.0, "2026-09-29")
     assert ops_alerts.spend_alert_text(ai_limits.KIND_SPEND_SOFT, 11.0, "2026-09-30") is not None
+
+
+def test_api_4xx_summary_once_per_day_and_skips_expected(monkeypatch):
+    """Отказы /v1 4xx — часовой сводкой: новый вид сразу, тот же вид — не
+    чаще раза в сутки; ожидаемые (401, нет своего фото) и 5xx — мимо."""
+    monkeypatch.setattr(ops_alerts, "_api_failures", {})
+    monkeypatch.setattr(ops_alerts, "_api_failure_alerted", {})
+    for _ in range(3):
+        ops_alerts.note_api_failure("GET", "/media/exercises/{name}", "/media/exercises/pushups_r2_1.jpg", 404)
+    ops_alerts.note_api_failure("GET", "/me", "/me", 401)
+    ops_alerts.note_api_failure("GET", "/exercises/{exercise_id}/photo", "/exercises/7/photo", 404)
+    ops_alerts.note_api_failure("POST", "/ai/ask", "/ai/ask", 500)
+
+    text = ops_alerts.take_api_failures_text(now=1_000_000.0)
+    assert text is not None
+    assert "GET /media/exercises/{name}</code> → 404 ×3" in text
+    assert "pushups_r2_1.jpg" in text
+    assert "GET /me<" not in text and "photo" not in text and "→ 500" not in text
+
+    ops_alerts.note_api_failure("GET", "/media/exercises/{name}", "/media/exercises/x_r1_1.jpg", 404)
+    assert ops_alerts.take_api_failures_text(now=1_000_000.0 + 3600) is None
+    ops_alerts.note_api_failure("GET", "/media/exercises/{name}", "/media/exercises/x_r1_1.jpg", 404)
+    assert ops_alerts.take_api_failures_text(now=1_000_000.0 + 25 * 3600) is not None
+    assert ops_alerts.take_api_failures_text(now=1_000_000.0 + 26 * 3600) is None

@@ -35,7 +35,8 @@
 пришедший отчёт; тревога — только если такого же сбоя (вид, версия, сборка,
 тип исключения, сигнал) в базе ещё не было. Повторы видны в `/crashes`.
 
-**Часовые проверки** (`run_hourly_checks`): суточный расход AI дошёл до
+**Часовые проверки** (`run_hourly_checks`): новые за сутки виды отказа /v1
+с кодом 4xx (`note_api_failure`, кроме `EXPECTED_API_FAILURES`); суточный расход AI дошёл до
 мягкого или жёсткого потолка (`ai_limits.spend_level`) — раз на ступень за
 сутки; большинство пушей APNs за час не доставлено (ключ отозван, сменился
 bundle id) — это `logger.warning`, в тревоги из лога оно не попадает.
@@ -393,6 +394,64 @@ def take_apns_counts() -> tuple[int, int]:
     return counts
 
 
+# Отказы /v1 (4xx). 500 уже приходят тревогой из лога (ERROR), а 4xx пишутся
+# только WARNING-строкой `[ios] … | 404` (api_v1_activity._log_failure) — так
+# 05.11.2026 нашлись битые картинки упражнений (`/media/exercises/*_r2_*` →
+# 404), о которых не узнал бы никто. Раз в час — сводка видов отказа (метод,
+# маршрут, код), каждый вид — не чаще раза в сутки. Обычные, ожидаемые отказы
+# ниже — с причиной; новый шум добавляй сюда же, а не глуши всё.
+EXPECTED_API_FAILURES: dict[tuple[str, str, int], str] = {
+    ("*", "*", 401): "токен протух или вышли — приложение само ведёт ко входу",
+    ("GET", "/exercises/{exercise_id}/photo", 404): "своего фото у упражнения нет — обычное состояние",
+    ("POST", "/ai/program/save", 409): "имя программы занято — приложение спрашивает «заменить?»",
+}
+API_FAILURE_REPEAT_SECONDS = 24 * 60 * 60
+API_FAILURE_LINES = 10
+
+_api_failures: dict[tuple[str, str, int], list] = {}  # вид → [сколько, пример пути]
+_api_failure_alerted: dict[tuple[str, str, int], float] = {}
+
+
+def _expected_api_failure(method: str, template: str, status: int) -> bool:
+    return any(
+        (m in ("*", method)) and (t in ("*", template)) and code == status
+        for m, t, code in EXPECTED_API_FAILURES
+    )
+
+
+def note_api_failure(method: str, template: str, path: str, status: int) -> None:
+    """Отказ /v1 с кодом 4xx — в часовую сводку (5xx уже тревога из лога)."""
+    if not 400 <= status < 500 or _expected_api_failure(method, template, status):
+        return
+    entry = _api_failures.setdefault((method, template, status), [0, path])
+    entry[0] += 1
+
+
+def take_api_failures_text(now: Optional[float] = None) -> Optional[str]:
+    """Сводка новых за сутки видов отказа за прошедший час; счётчики — с нуля."""
+    now = time.time() if now is None else now
+    fresh = []
+    for key, (count, sample) in sorted(_api_failures.items(), key=lambda kv: -kv[1][0]):
+        last = _api_failure_alerted.get(key)
+        if last is not None and now - last < API_FAILURE_REPEAT_SECONDS:
+            continue
+        _api_failure_alerted[key] = now
+        fresh.append((key, count, sample))
+    _api_failures.clear()
+    if not fresh:
+        return None
+    lines = ["⚠️ <b>Отказы /v1 за час</b> (новые за сутки):"]
+    for (method, template, status), count, sample in fresh[:API_FAILURE_LINES]:
+        line = f"• <code>{escape(method)} {escape(template)}</code> → {status} ×{count}"
+        if sample != template:
+            line += f" (напр. <code>{escape(sample)}</code>)"
+        lines.append(line)
+    if len(fresh) > API_FAILURE_LINES:
+        lines.append(f"…и ещё {len(fresh) - API_FAILURE_LINES}")
+    lines.append("Ожидаемый отказ — добавь в ops_alerts.EXPECTED_API_FAILURES с причиной.")
+    return "\n".join(lines)
+
+
 def apns_alert_text(attempts: int, failures: int) -> Optional[str]:
     if attempts < APNS_MIN_ATTEMPTS or failures < attempts * APNS_FAIL_SHARE:
         return None
@@ -429,6 +488,9 @@ async def run_hourly_checks() -> None:
         try:
             attempts, failures = take_apns_counts()
             text = apns_alert_text(attempts, failures)
+            if text:
+                enqueue_text(text)
+            text = take_api_failures_text()
             if text:
                 enqueue_text(text)
             level = await ai_limits.spend_level()

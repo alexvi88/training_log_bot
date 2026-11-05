@@ -311,6 +311,9 @@ class LogApiActions(BaseHTTPMiddleware):
             template,
             response.status_code,
         )
+        import ops_alerts
+
+        ops_alerts.note_api_failure(request.method.upper(), template, request.url.path, response.status_code)
 
     async def _record(
         self, request, response, body: dict | None = None, voice: str | None = None
