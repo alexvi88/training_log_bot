@@ -285,6 +285,12 @@ CREATE TABLE IF NOT EXISTS workouts (
     coach_notified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
+-- Напоминание «Закрыть тренировку?» уже ушло (workout_autoclose.py): по
+-- одному на тренировку, переживает рестарт процесса.
+CREATE TABLE IF NOT EXISTS workout_finish_reminders (
+    workout_id INTEGER PRIMARY KEY,
+    sent_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS workout_blocks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4072,6 +4078,8 @@ _WIPE_ORPHAN_DELETES = (
     "(SELECT id FROM workouts WHERE user_id = ?)",
     "DELETE FROM exercise_notes WHERE workout_id IN "
     "(SELECT id FROM workouts WHERE user_id = ?)",
+    "DELETE FROM workout_finish_reminders WHERE workout_id IN "
+    "(SELECT id FROM workouts WHERE user_id = ?)",
     "DELETE FROM routine_exercises WHERE routine_id IN "
     "(SELECT id FROM routines WHERE user_id = ?)",
 )
@@ -6240,6 +6248,30 @@ async def finish_workout(
             await _emit_workout_finished(before, finished_at)
         await conn().commit()
         return done
+
+
+async def list_idle_active_workouts(idle_since: str) -> list[aiosqlite.Row]:
+    """Идущие тренировки с подходами, где последний подход записан раньше
+    `idle_since` (UTC ISO): id, user_id, started_at, sets, last_set_at.
+    Для workout_autoclose — забытые в приложении тренировки."""
+    cur = await conn().execute(
+        "SELECT w.id, w.user_id, w.started_at, COUNT(s.id) AS sets, MAX(s.created_at) AS last_set_at "
+        "FROM workouts w JOIN workout_blocks b ON b.workout_id = w.id JOIN sets s ON s.block_id = b.id "
+        "WHERE w.status = 'active' GROUP BY w.id HAVING MAX(s.created_at) < ? ORDER BY w.id",
+        (idle_since,),
+    )
+    return await cur.fetchall()
+
+
+async def claim_workout_finish_reminder(workout_id: int) -> bool:
+    """Отметить, что напоминание о забытой тренировке ушло. False — уже было."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT OR IGNORE INTO workout_finish_reminders (workout_id, sent_at) VALUES (?, ?)",
+            (workout_id, now_iso()),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> None:

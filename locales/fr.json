@@ -5998,5 +5998,9 @@
   "guides.volume.chip": "Séries sur 7 jours : {groups}",
   "seo.android_gate.title": "Pour l'instant, l'app est réservée à l'iPhone",
   "seo.android_gate.lead": "Sur Android, je suis sur Telegram : le même coach, une série tient en une ligne — « 100 8 ». Ton compte est le même que dans l'app iPhone.",
-  "seo.android_gate.store_html": "Ouvrir quand même l'<a href=\"{href}\">App Store</a>."
+  "seo.android_gate.store_html": "Ouvrir quand même l'<a href=\"{href}\">App Store</a>.",
+  "push.ios.finish_reminder.title": "On clôture la séance ?",
+  "push.ios.finish_reminder.body": "{sets, plural, one {# série notée} other {# séries notées}}. Fini ? Clôture la séance et je calcule le bilan.",
+  "push.ios.auto_finished.title": "J'ai clôturé ta séance",
+  "push.ios.auto_finished.body": "Tu l'as laissée ouverte, je l'ai clôturée : {sets, plural, one {# série enregistrée} other {# séries enregistrées}}. Bilan dans l'historique."
 }

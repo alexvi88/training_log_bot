@@ -5998,5 +5998,9 @@
   "guides.volume.chip": "Sets in 7 days: {groups}",
   "seo.android_gate.title": "The app is iPhone-only for now",
   "seo.android_gate.lead": "On Android I'm in Telegram: same coach, a set is one line — “100 8”. Your account is shared with the iPhone app.",
-  "seo.android_gate.store_html": "Open the <a href=\"{href}\">App Store</a> anyway."
+  "seo.android_gate.store_html": "Open the <a href=\"{href}\">App Store</a> anyway.",
+  "push.ios.finish_reminder.title": "Finish your workout?",
+  "push.ios.finish_reminder.body": "{sets, plural, one {# set logged} other {# sets logged}}. Done? Close the workout and I'll add up your results.",
+  "push.ios.auto_finished.title": "I closed your workout",
+  "push.ios.auto_finished.body": "You left it open, so I closed it: {sets, plural, one {# set} other {# sets}} saved. Results are in History."
 }

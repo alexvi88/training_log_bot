@@ -5998,5 +5998,9 @@
   "guides.volume.chip": "Sätze in 7 Tagen: {groups}",
   "seo.android_gate.title": "Die App gibt es vorerst nur für iPhone",
   "seo.android_gate.lead": "Auf Android bin ich in Telegram: derselbe Coach, ein Satz ist eine Zeile — „100 8“. Dein Konto ist dasselbe wie in der iPhone-App.",
-  "seo.android_gate.store_html": "Trotzdem den <a href=\"{href}\">App Store</a> öffnen."
+  "seo.android_gate.store_html": "Trotzdem den <a href=\"{href}\">App Store</a> öffnen.",
+  "push.ios.finish_reminder.title": "Training abschließen?",
+  "push.ios.finish_reminder.body": "{sets, plural, one {# Satz eingetragen} other {# Sätze eingetragen}}. Fertig? Schließ das Training ab, ich rechne alles aus.",
+  "push.ios.auto_finished.title": "Training abgeschlossen",
+  "push.ios.auto_finished.body": "Du hast es offen gelassen, ich hab's abgeschlossen: {sets, plural, one {# Satz gespeichert} other {# Sätze gespeichert}}. Zusammenfassung im Verlauf."
 }

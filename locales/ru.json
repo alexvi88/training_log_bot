@@ -5999,5 +5999,9 @@
   "guides.volume.chip": "Подходов за 7 дней: {groups}",
   "seo.android_gate.title": "Приложение пока только для iPhone",
   "seo.android_gate.lead": "На Android я работаю в Telegram: тот же тренер, подход — одной строкой «100 8». Аккаунт общий с приложением для iPhone.",
-  "seo.android_gate.store_html": "Всё равно открыть <a href=\"{href}\">App Store</a>."
+  "seo.android_gate.store_html": "Всё равно открыть <a href=\"{href}\">App Store</a>.",
+  "push.ios.finish_reminder.title": "Закрыть тренировку?",
+  "push.ios.finish_reminder.body": "{sets, plural, one {Записал # подход} few {Записал # подхода} many {Записал # подходов} other {Записал # подхода}}. Закончил — закрой тренировку, посчитаю итоги.",
+  "push.ios.auto_finished.title": "Закрыл тренировку сам",
+  "push.ios.auto_finished.body": "Ты её не закрыл, и я закрыл сам: {sets, plural, one {# подход} few {# подхода} many {# подходов} other {# подхода}} на месте. Итоги — в истории."
 }
