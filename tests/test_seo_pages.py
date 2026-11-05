@@ -142,7 +142,7 @@ async def test_sitemap_lists_every_page_in_every_language_and_no_embeds():
     assert not [loc for loc in locs if "/embed/" in loc]
     for url in root.findall("s:url", ns):
         langs = {link.get("hreflang") for link in url.findall("x:link", ns)}
-        assert langs == {"ru", "en", "x-default"}
+        assert langs == {seo_pages.hreflang(c) for c in seo_pages.INDEXED_LANGS} | {"x-default"}
 
 
 async def test_robots_allows_search_and_ai_crawlers_and_points_to_sitemap():
