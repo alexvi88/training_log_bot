@@ -33,7 +33,10 @@ headless…) и для «компьютера» в строку пишется �
 (`ua_family`: слово робота, `python-requests`, `Chrome/120 Windows`) — не
 сам UA; сырой UA (первые 200 символов) — только в лог процесса, и только
 у безымянных роботов и у «компьютеров», похожих на автомат (нет
-Accept-Language или Sec-Fetch-Mode — их шлёт любой живой браузер).
+Accept-Language или Sec-Fetch-Mode — их шлёт любой живой браузер); робот
+без имени и автомат — раз в сутки на семейство UA, дальше DEBUG. Без
+Accept-Language «компьютер» пишется роботом `suspect` (`is_scripted`) и
+людьми, кликами и «без подтверждения» не считается.
 
 Роботы (Googlebot, bingbot, GPTBot, OAI-SearchBot, PerplexityBot, ClaudeBot…)
 считаются отдельно: обход — это не посетитель, но видеть, ходит ли к нам
@@ -269,6 +272,23 @@ def looks_automated(headers: Any) -> Optional[str]:
     return ",".join(missing) or None
 
 
+# «Компьютер» без Accept-Language — скрипт, а не браузер: его шлёт любой живой
+# браузер на любой переход (Sec-Fetch-Mode — нет у старого Safari, по нему
+# одному не судим). Такой скрейпер с UA Chrome/148 Windows весь день обходил
+# glossary/guides и ходил по `/go/*`, а его клики «в App Store» считались
+# людскими. Пишется роботом (`device=bot`) с этим именем: из людей, кликов и
+# «без подтверждения» уходит сразу везде, а в /growth — строкой роботов.
+SUSPECT_CRAWLER = "suspect"
+
+
+def is_scripted(suspect: Optional[str]) -> bool:
+    return bool(suspect) and "no-al" in suspect.split(",")
+
+
+def crawler_label(name: Any) -> str:
+    return "похоже на автомат" if name == SUSPECT_CRAWLER else str(name)
+
+
 def _raw_ua(user_agent: Optional[str]) -> str:
     return (user_agent or "").replace('"', "'").replace("\n", " ")[:RAW_UA_LOG_CHARS]
 
@@ -314,7 +334,7 @@ _unnamed_seen: set[tuple[str, str]] = set()
 def _log_level(crawler: Optional[str], family: Optional[str]):
     if not crawler:
         return logger.info
-    if crawler not in ("other", "unknown"):
+    if crawler not in ("other", "unknown", SUSPECT_CRAWLER):
         return logger.debug
     key = (dt.date.today().isoformat(), family or "-")
     if key in _unnamed_seen:
@@ -339,8 +359,10 @@ async def record(kind: str, page: str, lang: Optional[str], *, user_agent: Optio
     utm_clean = clean_utm(utm)
     family = ua_family(user_agent)
     suspect = looks_automated(headers) if device == "desktop" else None
+    if is_scripted(suspect):
+        device, crawler = "bot", SUSPECT_CRAWLER
     raw = ""
-    if crawler in ("other", "unknown") or suspect:
+    if crawler in ("other", "unknown", SUSPECT_CRAWLER) or suspect:
         raw = f' ua="{_raw_ua(user_agent)}"'
     _log_level(crawler, family)(
         "site %s %s lang=%s ref=%s device=%s%s%s%s%s%s", kind, page, lang or "-", source, device,
@@ -487,10 +509,10 @@ def format_growth_block(stats: dict[str, Any], period: str, seo_signups: list[An
     if stats["embeds"]:
         lines.append(f"Показы калькулятора на чужих сайтах: {stats['embeds']}")
     if stats["crawlers"]:
-        lines.append("Роботы: " + ", ".join(f"{escape(str(c))} {n}" for c, n in stats["crawlers"]))
+        lines.append("Роботы: " + ", ".join(f"{escape(crawler_label(c))} {n}" for c, n in stats["crawlers"]))
         others = stats.get("other_bots") or []
         if others:
-            lines.append("Роботы без имени (other) по UA: " + ", ".join(f"{escape(str(f))} {n}" for f, n in others))
+            lines.append("Роботы без имени и автоматы по UA: " + ", ".join(f"{escape(str(f))} {n}" for f, n in others))
         on_demand = [(c, n) for c, n in stats["crawlers"] if c in AI_ON_DEMAND]
         if on_demand:
             lines.append(

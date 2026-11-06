@@ -12451,7 +12451,7 @@ async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10
             "GROUP BY crawler ORDER BY n DESC, crawler")],
         "other_bots": [(r[0], r[1]) for r in await rows(
             f"SELECT COALESCE(ua_family, '?'), COUNT(*) n FROM site_events WHERE kind = 'view' AND device = 'bot' "
-            f"AND crawler IN ('other', 'unknown') AND {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT 8")],
+            f"AND crawler IN ('other', 'unknown', 'suspect') AND {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT 8")],
         "clicks": {r[0]: r[1] for r in await rows(
             f"SELECT target, COUNT(*) n FROM site_events WHERE kind = 'click' AND device <> 'bot' AND {window} GROUP BY target")},
         "embeds": (await rows(f"SELECT COUNT(*) FROM site_events WHERE kind = 'embed' AND device <> 'bot' AND {window}"))[0][0],
