@@ -105,9 +105,12 @@ async def test_raw_ua_goes_to_log_only_for_unnamed_bots_and_automated_desktops(f
     assert "Mozilla" not in dump and "203.0.113" not in dump
 
     stats = await fresh_db.site_stats(7)
-    assert stats["other_bots"] == [("SeznamBot", 1)]
+    # «Компьютер» без Accept-Language — автомат: роботом, рядом с безымянными.
+    assert sorted(stats["other_bots"]) == [("Chrome/120 Windows", 1), ("SeznamBot", 1)]
+    assert dict(stats["crawlers"])["suspect"] == 1
     block = site_stats.format_growth_block(stats, "7 дн.", [])
-    assert "Роботы без имени (other) по UA: SeznamBot 1" in block
+    assert "похоже на автомат 1" in block
+    assert "Роботы без имени и автоматы по UA:" in block and "SeznamBot 1" in block
 
 
 async def test_every_counted_page_carries_the_beacon_with_its_own_key():
@@ -135,9 +138,13 @@ async def test_human_views_are_the_confirmed_ones(fresh_db):
             "p": "/tr/tools/1rm", "l": "tr", "r": "https://www.google.com/search?q=secret", "utm_source": "Habr"},
             headers={"User-Agent": UA_DESKTOP, **SEEN_HEADERS})
         assert seen.status_code == 204 and seen.headers["cache-control"] == "no-store"
-        # Скрейпер с браузерным UA: страницу берёт, JS не исполняет.
+        # Скрейпер с браузерным UA и Accept-Language: страницу берёт, JS не исполняет.
         for _ in range(3):
-            await client.get("/tr/exercises", headers={"User-Agent": UA_DESKTOP, "Referer": f"{HOST}/tr"})
+            await client.get("/tr/exercises", headers={
+                "User-Agent": UA_DESKTOP, "Referer": f"{HOST}/tr", "Accept-Language": "en"})
+        # Без Accept-Language — сразу автомат: ни в «без подтверждения», ни в клики.
+        await client.get("/tr/glossary", headers={"User-Agent": UA_DESKTOP})
+        await client.get("/go/appstore?f=timer", headers={"User-Agent": UA_DESKTOP})
         # Рендер Googlebot исполняет JS — маячок отброшен по UA.
         await client.post("/go/seen", params={"p": "/tr"}, headers={"User-Agent": UA_GOOGLEBOT, **SEEN_HEADERS})
         # Чужой сайт, мусорный ключ и GET — тоже мимо.
@@ -146,7 +153,8 @@ async def test_human_views_are_the_confirmed_ones(fresh_db):
         await client.post("/go/seen", params={"p": "/tr/../../etc"}, headers={"User-Agent": UA_DESKTOP, **SEEN_HEADERS})
         assert (await client.get("/go/seen", params={"p": "/tr"}, headers={"User-Agent": UA_DESKTOP})).status_code == 405
         # Клик по App Store — считается как раньше.
-        await client.get("/go/bot?f=rm1", headers={"User-Agent": UA_DESKTOP, "Referer": f"{HOST}/tr/tools/1rm"})
+        await client.get("/go/bot?f=rm1", headers={
+            "User-Agent": UA_DESKTOP, "Referer": f"{HOST}/tr/tools/1rm", **BROWSER_HEADERS})
 
     rows = await _rows(fresh_db)
     seen_rows = [r for r in rows if r["kind"] == "seen"]
@@ -171,10 +179,11 @@ async def test_human_views_are_the_confirmed_ones(fresh_db):
     assert "Без подтверждения браузером: 4 (компьютер: Chrome/120 Windows 4)" in block
     assert "Откуда: google 1" in block
     assert "Клики: в бота 1, в App Store 0 — 100.0% от просмотров" in block
+    assert "похоже на автомат 1" in block  # обходы считаются по просмотрам, клик автомата — мимо
 
     feed = [r for r in await fresh_db.site_visits_feed() if r["crawler"] is None]
     assert [(r["page"], r["n"]) for r in feed] == [("/tr/tools/1rm", 1)]
-    assert await fresh_db.count_site_visit_buckets() == 1
+    assert await fresh_db.count_site_visit_buckets() == 2  # человек + окно автомата в ленте роботов
 
 
 async def test_history_before_the_beacon_stays_readable_and_labelled(fresh_db):

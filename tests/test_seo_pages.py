@@ -906,9 +906,11 @@ async def test_visits_and_clicks_are_counted_without_ip_or_full_referrer(fresh_d
         await client.get("/ru/tools/1rm?utm_source=Habr!", headers={
             "User-Agent": UA_IPHONE, "Referer": "https://www.google.com/search?q=1rm+secret"})
         await client.get("/en", headers={"User-Agent": UA_GOOGLEBOT})
-        await client.get("/embed/en/1rm", headers={"User-Agent": UA_DESKTOP, "Referer": "https://blog.example.org/post"})
+        browser = {"Accept-Language": "en", "Sec-Fetch-Mode": "navigate"}
+        await client.get("/embed/en/1rm", headers={
+            "User-Agent": UA_DESKTOP, "Referer": "https://blog.example.org/post", **browser})
         await client.get("/go/bot?f=rm1_log", headers={"User-Agent": UA_IPHONE, "Referer": f"{HOST}/ru/tools/1rm"})
-        await client.get("/go/appstore?f=rm1", headers={"User-Agent": UA_DESKTOP})
+        await client.get("/go/appstore?f=rm1", headers={"User-Agent": UA_DESKTOP, **browser})
     cur = await fresh_db.conn().execute("SELECT * FROM site_events ORDER BY id")
     rows = [dict(r) for r in await cur.fetchall()]
     columns = set(rows[0])
