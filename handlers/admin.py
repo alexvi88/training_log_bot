@@ -1032,7 +1032,32 @@ async def cmd_growth(message: Message, state: FSMContext):
         f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
         f"вместо «имя» латиница, цифры и «_»."
     )
-    await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    for chunk in _pack_sections(text, formatting.MESSAGE_LIMIT):
+        await message.answer(chunk, parse_mode="HTML", disable_web_page_preview=True)
+
+
+def _pack_sections(text: str, limit: int) -> list[str]:
+    """Длинный отчёт — несколькими сообщениями, по границам разделов.
+
+    /growth перерос 4096 символов Telegram (блок сайта с метками и
+    предзагрузкой) и падал целиком: «message is too long». Режем по пустым
+    строкам между разделами, чтобы HTML-теги не рвались посередине; раздел
+    длиннее лимита — по строкам (formatting.split_for_telegram).
+    """
+    chunks: list[str] = []
+    current = ""
+    for section in text.split("\n\n"):
+        pieces = [section] if len(section) <= limit else formatting.split_for_telegram(section, limit)
+        for piece in pieces:
+            candidate = f"{current}\n\n{piece}" if current else piece
+            if len(candidate) > limit:
+                chunks.append(current)
+                current = piece
+            else:
+                current = candidate
+    if current:
+        chunks.append(current)
+    return chunks or [text]
 
 
 CRASHES_WINDOW_DAYS = 7
