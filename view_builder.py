@@ -499,9 +499,15 @@ async def sets_beat_record(
     if is_bodyweight:
         prior_best_reps = max(prior.max_reps_at_weight.values(), default=0)
         return any(r > prior_best_reps for _w, r, _rpe in logged)
+    # Повторы на лучшем весе: 64×13 после 64×11 — рекорд, хотя e1RM у
+    # подхода длиннее E1RM_MAX_REPS не считается (0), а вес не новый. Только
+    # на верхнем весе: 20×15 после 60×12 — не рекорд, а лёгкий подход.
+    top_reps = prior.max_reps_at_weight.get(prior.max_weight, 0)
     for weight, reps, rpe in logged:
         if weight > prior.max_weight:
             return True
         if analytics.e1rm(weight, reps, formula, rpe) > prior.max_e1rm:
+            return True
+        if weight == prior.max_weight and reps > top_reps:
             return True
     return False

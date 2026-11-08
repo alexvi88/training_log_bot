@@ -231,3 +231,25 @@ def test_best_reps_gold_index_rules():
     assert view_builder.best_reps_gold_index([12, 14], 10) == 1
     assert view_builder.best_reps_gold_index([14, 14], 10) == 0
     assert view_builder.best_reps_gold_index([8, 10], 10) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weight, reps, expected", [
+    (64, 13, True),   # больше повторов на лучшем весе — рекорд, хоть e1RM (>12 повт.) и не считается
+    (64, 11, False),  # повторил — не рекорд
+    (20, 15, False),  # много повторов на лёгком весе — не рекорд
+])
+async def test_more_reps_at_top_weight_is_a_record(fresh_db, client_factory, weight, reps, expected):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Разгибание на блоке"})).json()["id"]
+
+    first = (await client.post("/workouts/backfill", json={"date": "2024-01-01"})).json()["id"]
+    await client.post(f"/workouts/{first}/sets", json={"exercise_id": exercise_id, "weight": 64, "reps": 11})
+    await client.post(f"/workouts/{first}/finish", json={})
+
+    second = (await client.post("/workouts/active")).json()["id"]
+    resp = await client.post(
+        f"/workouts/{second}/sets", json={"exercise_id": exercise_id, "weight": weight, "reps": reps}
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["is_record"] is expected
