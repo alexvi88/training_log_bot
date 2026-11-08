@@ -420,3 +420,26 @@ def test_unit_words_are_not_cut_out_of_real_words():
 def test_unit_stripping_leaves_every_old_form_alone():
     for text in ("100 8", "100x8x3", "+20 8@9", "102,5 8", "8"):
         assert parser.strip_unit_words(text) == text
+
+
+# --- Роли чисел по словам-единицам (живой лог 07.11: «12reps 20kg», «70kg») ---
+
+@pytest.mark.parametrize("text, weight, reps", [
+    ("12reps 20kg", 20.0, 12),
+    ("12 reps x 20 kg", 20.0, 12),
+    ("12 20kg", 20.0, 12),
+    ("12reps 20", 20.0, 12),
+    ("8 повторов 100 кг", 100.0, 8),
+    ("20kg 12reps", 20.0, 12),
+    ("100 кг 8 раз", 100.0, 8),
+    ("15 kg / 90 reps", 15.0, 90),
+])
+def test_unit_words_decide_which_number_is_weight(text, weight, reps):
+    (ps,) = parse_sets_line(text)
+    assert (ps.weight, ps.reps, ps.weight_omitted, ps.unit_explicit) == (weight, reps, False, True)
+
+
+def test_weight_without_reps_is_not_a_set_of_reps():
+    # «70kg» раньше записывалось 0 кг × 70 повторов.
+    with pytest.raises(ParseError):
+        parse_sets_line("70kg")

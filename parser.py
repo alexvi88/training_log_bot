@@ -120,10 +120,42 @@ _UNIT_WORDS = (
     "кг", r"килограмм\w*",
     "reps?", "repetitions?", "повт", r"повтор\w*", "раз",
 )
+_REPS_WORDS_FROM = 8  # _UNIT_WORDS: сначала единицы веса, с этого индекса — повторы
 _UNIT_WORDS_RE = re.compile(
     rf"(?<!{_LETTER})(?:{'|'.join(_UNIT_WORDS)})(?!{_LETTER})\.?",
     re.IGNORECASE,
 )
+
+
+# Роли чисел по словам-единицам. Срезка выше выкидывала слова и оставляла
+# порядок: «12reps 20kg» записывалось 12 кг × 20, а «70kg» — 0 кг × 70
+# повторов (голое число — это повторы). По живому логу 07.11 атлет так
+# вводил подходы в жиме ногами и сгибаниях и стирал их по одному. Если
+# человек назвал единицы, роли берутся из слов, а не из порядка.
+_WEIGHT_WORD = f"(?:{'|'.join(_UNIT_WORDS[:_REPS_WORDS_FROM])})"
+_REPS_WORD = f"(?:{'|'.join(_UNIT_WORDS[_REPS_WORDS_FROM:])})"
+_NUM = r"\+?\d+(?:[.,]\d+)?"
+_GAP = rf"\s*(?:{_SEP}\s*)?"
+_END = rf"(?!{_LETTER})\.?"
+_REPS_THEN_WEIGHT_RE = re.compile(
+    rf"^(?P<reps>\d+)\s*{_REPS_WORD}{_END}{_GAP}(?P<weight>{_NUM})(?:\s*{_WEIGHT_WORD}{_END})?\s*$",
+    re.IGNORECASE,
+)
+_BARE_THEN_WEIGHT_RE = re.compile(
+    rf"^(?P<reps>\d+){_GAP}(?P<weight>{_NUM})\s*{_WEIGHT_WORD}{_END}\s*$", re.IGNORECASE,
+)
+_WEIGHT_ONLY_RE = re.compile(rf"^{_NUM}\s*{_WEIGHT_WORD}{_END}\s*$", re.IGNORECASE)
+
+
+def _order_by_unit_words(token: str) -> str:
+    """«12reps 20kg» / «12 20kg» → «20 12»: вес вперёд, если единицы так сказали.
+    «70kg» без повторов — не подход: ParseError, а не 0 × 70."""
+    if _WEIGHT_ONLY_RE.match(token.strip()):
+        raise ParseError(examples_hint())
+    match = _REPS_THEN_WEIGHT_RE.match(token.strip()) or _BARE_THEN_WEIGHT_RE.match(token.strip())
+    if match:
+        return f"{match['weight']} {match['reps']}"
+    return token
 
 
 def strip_unit_words(text: str) -> str:
@@ -148,7 +180,7 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     несколькими подходами.
     """
     unit_explicit = bool(_UNIT_WORDS_RE.search(token))
-    text = strip_unit_words(token)
+    text = strip_unit_words(_order_by_unit_words(token) if unit_explicit else token)
     if not text:
         raise ParseError(examples_hint())
 
