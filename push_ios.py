@@ -417,3 +417,17 @@ def you_video_alert(days: int, gender: Optional[str]) -> tuple[str, str]:
 def you_video_route(days: int) -> dict:
     """Маршрут банера о вехе: `{"screen": "you_video", "days": <веха>}`."""
     return {"screen": SCREEN_YOU_VIDEO, "days": int(days)}
+
+
+# «Год в подвале» (engagement._send_year_review_pushes): банер ведёт на экран
+# итога года — `{"screen": "year_review", "year": <год>}`.
+SCREEN_YEAR_REVIEW = "year_review"
+
+
+def year_review_alert(year: int) -> tuple[str, str]:
+    """(title, body) банера итога года на языке вокруг (use_lang у вызывающего)."""
+    return i18n.t("push.ios.year_review.title"), i18n.t("push.ios.year_review.body", year=year)
+
+
+def year_review_route(year: int) -> dict:
+    return {"screen": SCREEN_YEAR_REVIEW, "year": int(year)}

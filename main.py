@@ -70,6 +70,9 @@ from handlers import (
     sharing,
     workout,
 )
+from handlers import (
+    year_review as year_review_handlers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +373,9 @@ def setup_routers(dp: Dispatcher) -> None:
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
+    # «Год в подвале» (/year и кнопка `year:show`) — тоже без состояний и
+    # нужен из любого сценария: кнопка приходит под итогом импорта и в рассылке.
+    dp.include_router(year_review_handlers.router)
     # Та же причина, и вдвойне: pre_checkout_query обязан ответить за 10
     # секунд, а successful_payment — реальные деньги, которым нельзя застрять
     # в чужом catch-all'е, если платёж пришёл посреди тренировки или чата с
@@ -412,6 +418,7 @@ def _public_commands(lang: str) -> list[BotCommand]:
         BotCommand(command="start", description=i18n.t_in(lang, "bot.commands.start")),
         BotCommand(command="help", description=i18n.t_in(lang, "bot.commands.help")),
         BotCommand(command="ai_trainer", description=i18n.t_in(lang, "bot.commands.ai_trainer")),
+        BotCommand(command="year", description=i18n.t_in(lang, "bot.commands.year")),
         BotCommand(command="feedback", description=i18n.t_in(lang, "bot.commands.feedback")),
     ]
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
@@ -460,6 +467,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="ai_retry", description="Ответить на вопрос, где тренер сорвался: /ai_retry id|@ник (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
                 BotCommand(command="testpush", description="Проверочный пуш на iOS (админ)"),
+                BotCommand(command="testyear", description="«Год в подвале» себе прямо сейчас: альбом и пуш (админ)"),
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="growth", description="Воронка по источникам (админ)"),
                 BotCommand(command="crashes", description="Сбои iOS-приложения по версиям (админ)"),

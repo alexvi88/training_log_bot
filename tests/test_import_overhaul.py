@@ -374,6 +374,9 @@ async def test_h7_undo_import_removes_exactly_that_batch(fresh_db):
     mine = await _log(db, 111, bench, "2026-07-01T12:00:00", [(70.0, 5)])
     result = (await client.post("/import/csv", json={"csv": OWNER_CSV})).json()
     assert result["batch_id"] and result["achievements_unlocked"] >= 1
+    # Раскрытие: история августа 2026 — «Год в подвале» за 2026 уже есть.
+    import datetime as _dt
+    assert result["year_review"] is (_dt.date.today().year == 2026)
     batches = (await client.get("/import/batches")).json()["batches"]
     assert [(b["batch_id"], b["source"], b["workouts"], b["can_undo"]) for b in batches] == [
         (result["batch_id"], "hevy", 6, True)

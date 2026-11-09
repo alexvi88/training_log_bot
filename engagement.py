@@ -975,6 +975,12 @@ async def _send_daily_pushes(bot: Bot) -> None:
     except Exception:
         logger.exception("Failed to send you-video milestone pushes")
 
+    # «Год в подвале» — в первую неделю декабря, тоже после сигнальных пулов.
+    try:
+        await _send_year_review_pushes(bot, hour)
+    except Exception:
+        logger.exception("Failed to send year review pushes")
+
     try:
         await _send_feedback_pushes(hour)
     except Exception:
@@ -1299,6 +1305,89 @@ async def _send_you_video_push(
         telegram_id, category, f"{title}\n{body}", local_date.isoformat(), channel=None
     )
     await db.mark_you_video_milestone(telegram_id, days)
+    return True
+
+
+# ---------- «Год в подвале», раз в год ----------
+
+# Окно рассылки: с 1 по 7 декабря по местной дате атлета. Неделя, а не день —
+# занятый другим пушем день (has_push_today) просто сдвигает итог на завтра.
+YEAR_REVIEW_MONTH = 12
+YEAR_REVIEW_FIRST_DAY = 1
+YEAR_REVIEW_LAST_DAY = 7
+
+
+def year_review_due(local_date: dt.date) -> bool:
+    return (
+        local_date.month == YEAR_REVIEW_MONTH
+        and YEAR_REVIEW_FIRST_DAY <= local_date.day <= YEAR_REVIEW_LAST_DAY
+    )
+
+
+def year_review_dedup_key(year: int) -> str:
+    """Ключ дедупа в `pushes.sent_on`: один итог на год, а не на день."""
+    return dt.date(year, YEAR_REVIEW_MONTH, YEAR_REVIEW_FIRST_DAY).isoformat()
+
+
+async def _send_year_review_pushes(bot: Bot, hour: int) -> None:
+    """Один проход по пулу дневника: у кого окно декабря и вечерний час —
+    альбом года в Telegram и банер iOS на экран итога. Тренировок за год нет
+    — никому ничего: звать «посмотри год» к пустому году нечестно."""
+    for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids():
+        if telegram_id in REVIEW_ACCOUNT_IDS:
+            continue
+        if not should_send_feedback_now(tz_offset, hour):
+            continue
+        local_date = _local_now(tz_offset).date()
+        if not year_review_due(local_date):
+            continue
+        try:
+            user = await db.get_user(telegram_id)
+            lang = user["lang"] if user and user["lang"] in i18n.SUPPORTED else i18n.DEFAULT_LANG
+            with i18n.use_lang(lang):
+                await _send_year_review_push(bot, telegram_id, user, local_date)
+            await asyncio.sleep(SEND_DELAY)
+        except Exception:
+            logger.exception("Failed to send the year review push to user %s", telegram_id)
+
+
+async def _send_year_review_push(bot: Bot, telegram_id: int, user, local_date: dt.date) -> bool:
+    import year_review
+    from handlers import year_review as year_review_handlers
+
+    category = push_texts.YEAR_REVIEW
+    year = local_date.year
+    key = year_review_dedup_key(year)
+    if user is None or await db.has_push_on(telegram_id, category, key):
+        return False
+    if await db.has_push_today(telegram_id, local_date.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES):
+        return False
+    if await year_review.collect(telegram_id, year, user) is None:
+        return False
+    title, body = push_ios.year_review_alert(year)
+    lang = i18n.get_lang()
+    delivered = False
+    if await db.get_push_tokens(telegram_id, "ios"):
+        delivery = await inbox.deliver(
+            telegram_id, category, title, body, lang=lang, route=push_ios.year_review_route(year)
+        )
+        delivered = delivery.accepted or delivery.inbox_id is not None
+    message_id = None
+    if user["telegram_linked"]:
+        try:
+            message_id = await year_review_handlers.send_year(
+                bot, telegram_id, telegram_id, source="push", quiet_if_empty=True
+            )
+        except TelegramForbiddenError:
+            await db.update_user(telegram_id, pushes_enabled=0)
+        except TelegramAPIError:
+            logger.exception("Failed to deliver the year review to user %s", telegram_id)
+    if message_id is None and not delivered:
+        return False
+    await db.record_push(
+        telegram_id, category, f"{title}\n{body}", key,
+        channel=db.PUSH_CHANNEL_TG if message_id is not None else None, tg_message_id=message_id,
+    )
     return True
 
 
