@@ -2888,6 +2888,10 @@
     "achievements": {
      "type": "[ImportAchievement]",
      "optional": true
+    },
+    "yearReview": {
+     "type": "Bool",
+     "optional": true
     }
    }
   },
@@ -3089,6 +3093,11 @@
     "read": {
      "type": "Bool",
      "optional": false
+    },
+    "shareable": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3154,6 +3163,11 @@
      "optional": true
     },
     "clientId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "year": {
      "type": "Int",
      "optional": true,
      "default": true
@@ -4723,6 +4737,69 @@
     }
    }
   },
+  "YearReview": {
+   "file": "TrainingLog/Models/YearReviewModels.swift",
+   "fields": {
+    "year": {
+     "type": "Int",
+     "optional": false
+    },
+    "short": {
+     "type": "Bool",
+     "optional": false
+    },
+    "workouts": {
+     "type": "Int",
+     "optional": false
+    },
+    "slides": {
+     "type": "[YearReviewSlide]",
+     "optional": false
+    },
+    "persona": {
+     "type": "YearReviewPersona",
+     "optional": false
+    },
+    "shareText": {
+     "type": "String",
+     "optional": false
+    },
+    "shareUrl": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "YearReviewPersona": {
+   "file": "TrainingLog/Models/YearReviewModels.swift",
+   "fields": {
+    "kind": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "body": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "YearReviewSlide": {
+   "file": "TrainingLog/Models/YearReviewModels.swift",
+   "fields": {
+    "index": {
+     "type": "Int",
+     "optional": false
+    },
+    "kind": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
   "YouTimeline": {
    "file": "TrainingLog/Features/Home/GymYouTimelapse.swift",
    "fields": {
@@ -5872,7 +5949,14 @@
    "path": "/workouts/{}/sets/{}",
    "root": "SetLog",
    "nullable": false
+  },
+  {
+   "swift": "APIClient.yearReview",
+   "method": "GET",
+   "path": "/year-review",
+   "root": "YearReview",
+   "nullable": true
   }
  ],
- "_ios_commit": "1a1031da07d9bbfe71840c34b5586efe7f8bb0cc"
+ "_ios_commit": "e6860b999e629a11800ad5328bdb79e64d20e378"
 }
