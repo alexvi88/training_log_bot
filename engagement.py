@@ -66,6 +66,7 @@ import i18n
 import inbox
 import keyboards
 import product_metrics
+import push_card
 import push_ios
 import push_texts
 import timeutil
@@ -703,7 +704,9 @@ async def _deliver(
     #
     # Клавиатура теперь есть у любого пуша: у дайджеста своей CTA нет, но и
     # тупиком он быть не должен — там встаёт «🏠 Меню» (см. push_cta_keyboard).
-    kb = keyboards.push_cta_keyboard(cta_key, with_tz_hint=show_tz_hint)
+    kb = keyboards.push_cta_keyboard(
+        cta_key, with_tz_hint=show_tz_hint, shareable=push_card.shareable(decision.category)
+    )
 
     # APNs — независимый от Telegram канал: свой try/except, чтобы сбой
     # одного не трогал другой (см. _send_apns_push и apns.send_alert, которая

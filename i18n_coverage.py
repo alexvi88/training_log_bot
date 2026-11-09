@@ -316,6 +316,9 @@ LOCALIZED: list[str] = [
     "year_review.py",
     "api_v1_year.py",
     "handlers/year_review.py",
+    # «Пуш как мем»: карточка пуша о пропуске — push_card.* через i18n.t.
+    "push_card.py",
+    "handlers/push_share.py",
     # «Гайды» (GET /v1/guides): статьи сайта слайдами — seo.guide.* через
     # i18n.t_in, кнопки, полки и личные строки — guides.*. Своих литералов нет.
     "guide_stories.py",

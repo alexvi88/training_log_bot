@@ -65,6 +65,7 @@ from handlers import (
     ios_link,
     mcp_access,
     persistent_menu,
+    push_share,
     routines,
     settings,
     sharing,
@@ -376,6 +377,9 @@ def setup_routers(dp: Dispatcher) -> None:
     # «Год в подвале» (/year и кнопка `year:show`) — тоже без состояний и
     # нужен из любого сценария: кнопка приходит под итогом импорта и в рассылке.
     dp.include_router(year_review_handlers.router)
+    # «📤 Поделиться» под пушем о пропуске — та же причина: пуш приходит посреди
+    # любого сценария, и кнопка под ним не должна тонуть в чужом catch-all.
+    dp.include_router(push_share.router)
     # Та же причина, и вдвойне: pre_checkout_query обязан ответить за 10
     # секунд, а successful_payment — реальные деньги, которым нельзя застрять
     # в чужом catch-all'е, если платёж пришёл посреди тренировки или чата с

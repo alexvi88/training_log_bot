@@ -10,6 +10,9 @@
   несуществующая или уже прочитанная строка — не ошибка, а `marked: 0`:
   строку могла убрать ночная чистка (config.INBOX_RETENTION_DAYS), пока пуш
   лежал в Центре уведомлений.
+- `GET /inbox/{id}/card.png` — «Пуш как мем» (push_card.py): строка о
+  пропуске картинкой-сторис для «Поделиться». Только у строк с
+  `shareable: true`; остальным и чужим — 404.
 
 Отдаются только строки на текущем языке атлета: текст лежит готовым, на
 языке пуша (см. схему inbox в db.py), и в ответе /v1 чужого языка не бывает.
@@ -28,6 +31,7 @@ from starlette.routing import Route
 import api_v1_common as common
 import db
 import i18n
+import push_card
 from api_v1_common import JSONResponse
 
 ApiError = common.ApiError
@@ -51,6 +55,8 @@ def item_json(row: Any) -> dict[str, Any]:
         "route": route if isinstance(route, dict) else None,
         "created_at": row["created_at"],
         "read": row["read_at"] is not None,
+        # «📤 Поделиться» на карточке — пуш о пропуске картинкой (card.png ниже).
+        "shareable": push_card.shareable(row["category"]),
     }
 
 
@@ -87,7 +93,19 @@ async def mark_read(request: Request) -> JSONResponse:
     return JSONResponse({"marked": marked, "unread": await unread_for(user_id)})
 
 
+async def get_card(request: Request):
+    from starlette.responses import Response
+
+    user_id = await common.authed_user_id(request)
+    row = await db.get_inbox_item(user_id, int(request.path_params["item_id"]))
+    if row is None or not push_card.shareable(row["category"]):
+        raise ApiError(404, "not_found", "no shareable inbox item")
+    png = await push_card.build(row["body"], row["title"] or "", lang=row["lang"] or i18n.get_lang())
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+
 routes = [
     Route("/inbox", list_inbox, methods=["GET"]),
+    Route("/inbox/{item_id:int}/card.png", get_card, methods=["GET"]),
     Route("/inbox/read", mark_read, methods=["POST"]),
 ]

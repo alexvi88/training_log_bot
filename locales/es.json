@@ -6047,5 +6047,11 @@
   "api.error.year_invalid": "Ese año no está en tu diario. Elige un año en el que entrenaste.",
   "year.bot.failed": "No pude armar tu año — algo falló de mi lado. Prueba /year otra vez en un minuto.",
   "push.ios.year_review.title": "AÑO EN EL SÓTANO",
-  "push.ios.year_review.body": "¡HOLA ATLETA! Conté tu {year}: cada entreno, cada récord. Lo puse en tarjetas, échale un vistazo."
+  "push.ios.year_review.body": "¡HOLA ATLETA! Conté tu {year}: cada entreno, cada récord. Lo puse en tarjetas, échale un vistazo.",
+  "push_card.now": "ahora",
+  "push_card.caption": "Mi diario de entrenos me manda esto",
+  "push_card.btn": "📤 Compartir",
+  "push_card.bot.text": "Aquí tienes la imagen. Reenvíala o súbela a tu historia — que sepan quién te vigila.",
+  "push_card.share_text": "Mi diario de entrenos no me tiene piedad. Pruébalo tú:",
+  "push_card.gone": "Ya no puedo recuperar el texto de esta notificación. Comparte la próxima — no me olvidaré de enviarla."
 }

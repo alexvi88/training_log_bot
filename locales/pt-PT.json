@@ -6047,5 +6047,11 @@
   "api.error.year_invalid": "Esse ano não está no teu diário. Escolhe um ano em que treinaste.",
   "year.bot.failed": "Não consegui montar o teu ano — algo falhou do meu lado. Tenta /year outra vez daqui a um minuto.",
   "push.ios.year_review.title": "ANO NA CAVE",
-  "push.ios.year_review.body": "OLÁ ATLETA! Contei o teu {year}: cada treino, cada recorde. Pus em cartões, dá uma vista de olhos."
+  "push.ios.year_review.body": "OLÁ ATLETA! Contei o teu {year}: cada treino, cada recorde. Pus em cartões, dá uma vista de olhos.",
+  "push_card.now": "agora",
+  "push_card.caption": "O meu diário de treinos manda-me isto",
+  "push_card.btn": "📤 Partilhar",
+  "push_card.bot.text": "Aqui está a imagem. Reencaminha ou publica na tua story — que saibam quem está de olho em ti.",
+  "push_card.share_text": "O meu diário de treinos não tem pena de mim. Experimenta:",
+  "push_card.gone": "Já não consigo ir buscar o texto desta notificação. Partilha a próxima — não me vou esquecer de a enviar."
 }
