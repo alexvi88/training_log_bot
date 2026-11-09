@@ -6047,11 +6047,5 @@
   "api.error.year_invalid": "That year isn't in your diary. Pick a year you trained in.",
   "year.bot.failed": "Couldn't put your year together — something broke on my side. Try /year again in a minute.",
   "push.ios.year_review.title": "YEAR IN THE BASEMENT",
-  "push.ios.year_review.body": "HEY ATHLETE! I counted up your {year} — every workout, every record. Put it into cards, take a look.",
-  "push_card.now": "now",
-  "push_card.caption": "My workout diary sends me this",
-  "push_card.btn": "📤 Share",
-  "push_card.bot.text": "Here's the picture. Forward it or post it to your story — let them know who's keeping an eye on you.",
-  "push_card.share_text": "My workout diary doesn't go easy on me. Try it yourself:",
-  "push_card.gone": "I can't get this push's text anymore. Share the next one — I won't forget to send it."
+  "push.ios.year_review.body": "HEY ATHLETE! I counted up your {year} — every workout, every record. Put it into cards, take a look."
 }

@@ -271,7 +271,6 @@ SKIPPED: dict[str, str] = {
     "GET /exercises/{exercise_id:int}/photo": "раздаёт байты фото (не JSON, текста нет)",
     "GET /ai/history/{turn_id:int}/image": "раздаёт байты картинки чата (не JSON)",
     "GET /support/photos/{message_id:int}": "раздаёт байты фото из поддержки (не JSON)",
-    "GET /inbox/{item_id:int}/card.png": "раздаёт PNG пуша о пропуске (текст в нём держит test_push_card)",
 }
 
 # Ответы не-JSON, которые сценарий зовёт, но языком не проверяет.

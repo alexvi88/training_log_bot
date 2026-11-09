@@ -2326,7 +2326,7 @@ def feedback_keyboard() -> InlineKeyboardMarkup:
 
 
 def push_cta_keyboard(
-    text: Optional[str] = "push.cta.default", *, with_tz_hint: bool = False, shareable: bool = False
+    text: Optional[str] = "push.cta.default", *, with_tz_hint: bool = False
 ) -> InlineKeyboardMarkup:
     """Attached to daily-rotation push notifications: routes straight into starting a workout.
 
@@ -2366,16 +2366,10 @@ def push_cta_keyboard(
         b.button(text=i18n.t(text), callback_data="push:start_workout")
     else:
         b.button(text=i18n.t("btn.home_menu"), callback_data="live:back_to_menu")
-    if shareable:
-        # «Пуш как мем» (push_card.py): пропуск — картинкой-сторис с тренером.
-        b.button(text=i18n.t("push_card.btn"), callback_data=PUSH_CARD_CALLBACK)
     if with_tz_hint:
         b.button(text=i18n.t("btn.tz_hint"), callback_data="settings:tz")
     b.adjust(1)
     return b.as_markup()
-
-
-PUSH_CARD_CALLBACK = "push:share_card"
 
 
 def import_overview_cta_keyboard() -> InlineKeyboardMarkup:

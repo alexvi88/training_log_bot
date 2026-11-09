@@ -6047,11 +6047,5 @@
   "api.error.year_invalid": "Cette année n'est pas dans ton carnet. Choisis une année où tu t'es entraîné.",
   "year.bot.failed": "Je n'ai pas pu assembler ton année — quelque chose a cassé de mon côté. Réessaie /year dans une minute.",
   "push.ios.year_review.title": "ANNÉE À LA CAVE",
-  "push.ios.year_review.body": "SALUT ATHLÈTE ! J'ai fait le compte de ton {year} : chaque séance, chaque record. C'est en cartes, jette un œil.",
-  "push_card.now": "maintenant",
-  "push_card.caption": "Mon carnet d'entraînement m'envoie ça",
-  "push_card.btn": "📤 Partager",
-  "push_card.bot.text": "Voilà l'image. Transfère-la ou mets-la en story — qu'ils sachent qui te surveille.",
-  "push_card.share_text": "Mon carnet d'entraînement ne me fait pas de cadeau. Essaie :",
-  "push_card.gone": "Je ne retrouve plus le texte de cette notification. Partage la prochaine — je n'oublierai pas de l'envoyer."
+  "push.ios.year_review.body": "SALUT ATHLÈTE ! J'ai fait le compte de ton {year} : chaque séance, chaque record. C'est en cartes, jette un œil."
 }

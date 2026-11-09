@@ -6047,11 +6047,5 @@
   "api.error.year_invalid": "Dieses Jahr gibt es in deinem Tagebuch nicht. Wähl ein Jahr, in dem du trainiert hast.",
   "year.bot.failed": "Ich konnte dein Jahr nicht zusammenstellen — bei mir ist etwas kaputtgegangen. Versuch /year in einer Minute noch mal.",
   "push.ios.year_review.title": "JAHR IM KELLER",
-  "push.ios.year_review.body": "HEY ATHLET! Ich habe dein {year} durchgezählt — jedes Training, jeden Rekord. In Karten gepackt, schau rein.",
-  "push_card.now": "jetzt",
-  "push_card.caption": "Mein Trainingstagebuch schreibt mir so was",
-  "push_card.btn": "📤 Teilen",
-  "push_card.bot.text": "Hier ist das Bild. Leite es weiter oder poste es in deiner Story — sollen alle wissen, wer dich im Blick hat.",
-  "push_card.share_text": "Mein Trainingstagebuch nimmt mich nicht mit Samthandschuhen an. Probier's selbst:",
-  "push_card.gone": "Den Text dieser Nachricht bekomme ich nicht mehr. Teil die nächste — ich vergesse nicht, sie zu schicken."
+  "push.ios.year_review.body": "HEY ATHLET! Ich habe dein {year} durchgezählt — jedes Training, jeden Rekord. In Karten gepackt, schau rein."
 }

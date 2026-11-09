@@ -6047,11 +6047,5 @@
   "api.error.year_invalid": "Bu yıl günlüğünde yok. Antrenman yaptığın bir yılı seç.",
   "year.bot.failed": "Yılını toparlayamadım — bende bir şey bozuldu. Bir dakika sonra /year'i tekrar dene.",
   "push.ios.year_review.title": "BODRUMDA BİR YIL",
-  "push.ios.year_review.body": "SELAM ATLET! {year} yılını saydım — her antrenman, her rekor. Kartlara koydum, bir bak.",
-  "push_card.now": "şimdi",
-  "push_card.caption": "Antrenman günlüğüm bana bunu yazıyor",
-  "push_card.btn": "📤 Paylaş",
-  "push_card.bot.text": "İşte görsel. İlet ya da hikâyende paylaş — seni kimin izlediğini bilsinler.",
-  "push_card.share_text": "Antrenman günlüğüm bana hiç acımıyor. Sen de dene:",
-  "push_card.gone": "Bu bildirimin metnine artık ulaşamıyorum. Bir sonrakini paylaş — göndermeyi unutmam."
+  "push.ios.year_review.body": "SELAM ATLET! {year} yılını saydım — her antrenman, her rekor. Kartlara koydum, bir bak."
 }
