@@ -373,7 +373,7 @@ def setup_routers(dp: Dispatcher) -> None:
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
-    # «Год в подвале» (/year и кнопка `year:show`) — тоже без состояний и
+    # «Итоги года» (/year и кнопка `year:show`) — тоже без состояний и
     # нужен из любого сценария: кнопка приходит под итогом импорта и в рассылке.
     dp.include_router(year_review_handlers.router)
     # Та же причина, и вдвойне: pre_checkout_query обязан ответить за 10
@@ -467,7 +467,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="ai_retry", description="Ответить на вопрос, где тренер сорвался: /ai_retry id|@ник (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
                 BotCommand(command="testpush", description="Проверочный пуш на iOS (админ)"),
-                BotCommand(command="testyear", description="«Год в подвале» себе прямо сейчас: альбом и пуш (админ)"),
+                BotCommand(command="testyear", description="«Итоги года» себе прямо сейчас: альбом и пуш (админ)"),
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="growth", description="Воронка по источникам (админ)"),
                 BotCommand(command="crashes", description="Сбои iOS-приложения по версиям (админ)"),

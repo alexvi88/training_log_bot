@@ -1,4 +1,4 @@
-"""/year — «Год в подвале» в боте: альбом сторис итога года и кнопка
+"""/year — «Итоги года» в боте: альбом сторис итога года и кнопка
 «Поделиться» с реферальной ссылкой.
 
 Числа и слайды — year_review.py (тот же итог, что `GET /v1/year-review` у
@@ -43,7 +43,7 @@ SHOW_CALLBACK = "year:show"
 
 
 def open_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка «🏆 Мой год в подвале» — под итогом импорта и в рассылке."""
+    """Кнопка «🏆 Мои итоги года» — под итогом импорта и в рассылке."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n.t("year.btn.open"), callback_data=SHOW_CALLBACK)],
     ])

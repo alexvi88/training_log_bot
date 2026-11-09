@@ -311,7 +311,7 @@ async def cmd_testpush(message: Message, state: FSMContext):
 
 @router.message(Command("testyear"))
 async def cmd_testyear(message: Message, state: FSMContext):
-    """«Год в подвале» прямо сейчас, мимо окна 1–7 декабря и дедупа:
+    """«Итоги года» прямо сейчас, мимо окна 1–7 декабря и дедупа:
     `/testyear` — себе, `/testyear <user_id>` — итог этого атлета (альбом
     приходит сюда, баннер iOS — на его телефон). То же, что сделает рассылка:
     альбом в Telegram и баннер с маршрутом на экран года в приложении.

@@ -61,7 +61,7 @@ FEEDBACK_ASK = "feedback_ask"
 # видео живёт в приложении (engagement._send_you_video_pushes, короткий текст —
 # push.ios.you_video.<веха>.*, см. push_ios.you_video_alert).
 YOU_VIDEO = "you_video"
-# «Год в подвале» — раз в год, в первую неделю декабря: альбом итога в
+# «Итоги года» — раз в год, в первую неделю декабря: альбом итога в
 # Telegram и баннер iOS с маршрутом на экран года (engagement._send_year_review_pushes).
 YEAR_REVIEW = "year_review"
 
@@ -140,7 +140,7 @@ CATEGORY_LABELS: dict[str, str] = {
     NEWBIE_NUDGE: "Новичок без тренировок",
     FEEDBACK_ASK: "Запрос отзыва (iOS)",
     YOU_VIDEO: "Веха: видео «как ты рос» (iOS)",
-    YEAR_REVIEW: "Год в подвале",
+    YEAR_REVIEW: "Итоги года",
 }
 
 

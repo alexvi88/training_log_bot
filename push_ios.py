@@ -419,7 +419,7 @@ def you_video_route(days: int) -> dict:
     return {"screen": SCREEN_YOU_VIDEO, "days": int(days)}
 
 
-# «Год в подвале» (engagement._send_year_review_pushes): банер ведёт на экран
+# «Итоги года» (engagement._send_year_review_pushes): банер ведёт на экран
 # итога года — `{"screen": "year_review", "year": <год>}`.
 SCREEN_YEAR_REVIEW = "year_review"
 

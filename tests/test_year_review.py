@@ -1,4 +1,4 @@
-"""«Год в подвале» (year_review.py): правила «личности года», какие слайды
+"""«Итоги года» (year_review.py): правила «личности года», какие слайды
 попадают в колоду, язык и глифы того, что уезжает в PNG, сбор из базы,
 GET /v1/year-review и картинка слайда, команда /year в боте и раскрытие
 после импорта."""
@@ -81,7 +81,7 @@ def test_full_deck_order():
     kinds = [type(s).__name__ for s in deck.slides]
     assert kinds == ["StatSlide", "BarbellSlide", "StatSlide", "BodySlide", "StatSlide", "StatSlide"]
     cover, final = deck.slides[0], deck.slides[-1]
-    assert cover.value == "120" and cover.chip == "Year in the basement"
+    assert cover.value == "120" and cover.chip == "Year in review"
     assert final.headline == deck.persona.title and not final.value
 
 
@@ -98,7 +98,7 @@ def test_growth_slide_when_no_records():
 
 def test_short_form_for_a_new_athlete():
     deck = _deck(workouts=3, lang="ru")
-    assert deck.slides[0].chip == "Первые недели в подвале"
+    assert deck.slides[0].chip == "Первые недели"
     assert deck.persona.kind == "start"
 
 

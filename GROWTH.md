@@ -56,7 +56,7 @@ Campaigns. Поэтому `APP_STORE_URL` на сервере задаётся �
 |---|---|
 | Сторис «ТЫ» в приложении (карточка «ТЫ» в подвале, итог тренировки) | `ct=you_story` — дописывает приложение (`AppStoreLink.tagged`) |
 | Страница приглашения `/i/ref_<id>` | `ct=ref_<id>` — дописывает сервер (`acquisition.with_campaign`) |
-| «Год в подвале» (`/year` в боте, `GET /v1/year-review` → `share_url`) | `ct=year_review` — дописывает сервер (`year_review.share_url`); в боте под альбомом — реферальная `?start=ref_<id>`, открытия — событие `year_review_open` (`source` command\|button\|import\|push) |
+| «Итоги года» (`/year` в боте, `GET /v1/year-review` → `share_url`) | `ct=year_review` — дописывает сервер (`year_review.share_url`); в боте под альбомом — реферальная `?start=ref_<id>`, открытия — событие `year_review_open` (`source` command\|button\|import\|push) |
 | Визитка тренировки, бот | без `ct` — как задано в `APP_STORE_URL` |
 
 Сама отправка сторис видна в продуктовых событиях (`analytics_events`,

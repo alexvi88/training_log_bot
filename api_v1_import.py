@@ -547,7 +547,7 @@ async def _do_import_csv(request: Request, user_id: int) -> JSONResponse:
             "batch_id": result["batch_id"],
             "achievements_unlocked": len(badges),
             "achievements": badges,
-            # «Год в подвале» по привезённой истории: true — за текущий год
+            # «Итоги года» по привезённой истории: true — за текущий год
             # есть законченные тренировки, и приложение может сразу открыть
             # GET /year-review (раскрытие после импорта).
             "year_review": await _year_review_ready(user_id) if result["imported"] else False,

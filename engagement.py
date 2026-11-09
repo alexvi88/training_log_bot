@@ -975,7 +975,7 @@ async def _send_daily_pushes(bot: Bot) -> None:
     except Exception:
         logger.exception("Failed to send you-video milestone pushes")
 
-    # «Год в подвале» — в первую неделю декабря, тоже после сигнальных пулов.
+    # «Итоги года» — в первую неделю декабря, тоже после сигнальных пулов.
     try:
         await _send_year_review_pushes(bot, hour)
     except Exception:
@@ -1308,7 +1308,7 @@ async def _send_you_video_push(
     return True
 
 
-# ---------- «Год в подвале», раз в год ----------
+# ---------- «Итоги года», раз в год ----------
 
 # Окно рассылки: с 1 по 7 декабря по местной дате атлета. Неделя, а не день —
 # занятый другим пушем день (has_push_today) просто сдвигает итог на завтра.

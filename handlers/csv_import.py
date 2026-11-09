@@ -2227,7 +2227,7 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
                 text, parse_mode="HTML",
                 reply_markup=keyboards.import_result_keyboard(result["batch_id"]),
             )
-        # Раскрытие: привезённая история — сразу «Год в подвале» по ней же,
+        # Раскрытие: привезённая история — сразу «Итоги года» по ней же,
         # альбомом под итогом (импорт засчитывается в год, как и в звание).
         _spawn(_reveal_year(callback.bot, callback.message.chat.id, user_id))
 

@@ -222,16 +222,13 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # только тап, кому ушло — не пишем. source — откуда: story (из сторис),
     # shelf (с обложки на полке экрана «Гайды»), menu (из ряда «Меню»).
     "guide_share": frozenset({"slug", "source"}),
-    # «Год в подвале» (YearReviewView, year_review.py): открыл (source push|
+    # «Итоги года» (YearReviewView, year_review.py): открыл (source push|
     # profile|import, slides — сколько слайдов в колоде) → нажал «Поделиться»
     # → системный лист закрылся (activity, как у сторис «ТЫ»). Бот пишет то
     # же year_review_open сам (source command|button|import|push|admin).
     "year_review_open": frozenset({"source", "slides"}),
     "year_review_share": frozenset({"source"}),
     "year_review_shared": frozenset({"source", "activity"}),
-    # «Пуш как мем» (push_card.py): «Поделиться» под пушем о пропуске в
-    # «Уведомлениях» — category его пуша (skip_7…). Бот — свой push_card_share.
-    "push_card_share": frozenset({"category"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
