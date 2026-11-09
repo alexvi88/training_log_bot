@@ -448,3 +448,17 @@ def test_crop_takes_one_arm():
     x0, _y0, w, h = body_map.crop_rect("biceps", 1.0)
     assert w == pytest.approx(h)
     assert x0 + w <= body_map.body_map_data.VIEW_BOX_WIDTH / 2 + 40
+
+
+@pytest.mark.parametrize("total", [84, 12_770, 128_000])  # до 6400 т за год
+def test_plate_count_fits_between_the_racks(total):
+    """«× N» под грифом не заезжает под стойку: у итога года блинов
+    пятизначное число, и при 13pt правая стойка резала его («× 1277»)."""
+    canvas = fs._Canvas("ru")
+    width = fs.CARD_W - 36  # ширина штанги на слайде (render_barbell)
+    label = f"× {total}"
+    room = fs.label_room(width, 46)
+    size = fs._fit_size(canvas, label, 13, room, minimum=7)
+    assert canvas.text_width(label, size) <= room
+    if total < 1000:
+        assert size == 13  # обычный тоннаж — прежний кегль

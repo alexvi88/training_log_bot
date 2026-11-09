@@ -105,7 +105,9 @@ async def get_year_review_slide(request: Request) -> Response:
     import asyncio
 
     png = await asyncio.to_thread(year_review.render_slide, deck.slides[index], deck.signature, deck.lang)
-    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+    # no-store, не max-age: адрес слайда одинаков у всех аккаунтов, и URLCache
+    # телефона после смены аккаунта отдавал картинку прежнего (с его числами).
+    return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 routes = [
