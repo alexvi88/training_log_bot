@@ -2227,6 +2227,18 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
                 text, parse_mode="HTML",
                 reply_markup=keyboards.import_result_keyboard(result["batch_id"]),
             )
+        # Раскрытие: привезённая история — сразу «Итоги года» по ней же,
+        # альбомом под итогом (импорт засчитывается в год, как и в звание).
+        _spawn(_reveal_year(callback.bot, callback.message.chat.id, user_id))
+
+
+async def _reveal_year(bot, chat_id: int, user_id: int) -> None:
+    from handlers import year_review as year_review_handlers
+
+    try:
+        await year_review_handlers.send_year(bot, chat_id, user_id, source="import", quiet_if_empty=True)
+    except Exception:
+        logger.exception("year reveal after import failed for user %s", user_id)
 
 
 def _result_text(result: dict, dup_count: int, stats: dict) -> str:

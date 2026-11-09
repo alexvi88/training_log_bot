@@ -7303,6 +7303,56 @@ async def exercise_e1rm_growth(
     return row["before_max"], row["window_max"]
 
 
+async def exercise_e1rm_first_and_best(
+    user_id: int,
+    exercise_id: int,
+    start_date: str,
+    end_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+) -> tuple[float, float]:
+    """(лучший e1RM первого дня упражнения в окне, лучший e1RM за всё окно) —
+    «январский ты против нынешнего» для итога года (year_review). В отличие от
+    exercise_e1rm_growth база — не история до окна, а первая тренировка внутри
+    него: у атлета, пришедшего в этом году, истории до окна нет вовсе.
+    Нули — упражнения с повторами в окне не было."""
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    e1rm = _e1rm_sql(formula)
+    cur = await conn().execute(
+        f"SELECT {day} AS d, MAX({e1rm}) AS e "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"AND s.exercise_id = ? AND s.reps > 0 AND {day} BETWEEN ? AND ? "
+        f"GROUP BY {day} ORDER BY d",
+        (user_id, exercise_id, start_date, end_date),
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return 0.0, 0.0
+    return rows[0]["e"] or 0.0, max(row["e"] or 0.0 for row in rows)
+
+
+async def list_finished_workout_local_hours(
+    user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
+) -> list[int]:
+    """Местный час начала каждой законченной тренировки окна — «обычно в
+    зале к 19:00» в итоге года. Занесённые задним числом тренировки стоят на
+    условном полудне (timeutil.backdated_moment) и сюда не попадают: их час
+    придуман, а не прожит."""
+    offset = await _tz_offset_of(user_id, tz_offset)
+    day = _local_day("started_at", offset)
+    cur = await conn().execute(
+        f"SELECT CAST(strftime('%H', started_at, '{int(offset):+d} hours') AS INTEGER) AS h "
+        "FROM workouts WHERE user_id = ? AND status = 'finished' "
+        f"AND {day} BETWEEN ? AND ? AND started_at != finished_at",
+        (user_id, start_date, end_date),
+    )
+    return [row["h"] for row in await cur.fetchall()]
+
+
 async def daily_tonnage(
     user_id: int,
     start_date: str,

@@ -222,6 +222,13 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # только тап, кому ушло — не пишем. source — откуда: story (из сторис),
     # shelf (с обложки на полке экрана «Гайды»), menu (из ряда «Меню»).
     "guide_share": frozenset({"slug", "source"}),
+    # «Итоги года» (YearReviewView, year_review.py): открыл (source push|
+    # profile|import, slides — сколько слайдов в колоде) → нажал «Поделиться»
+    # → системный лист закрылся (activity, как у сторис «ТЫ»). Бот пишет то
+    # же year_review_open сам (source command|button|import|push|admin).
+    "year_review_open": frozenset({"source", "slides"}),
+    "year_review_share": frozenset({"source"}),
+    "year_review_shared": frozenset({"source", "activity"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
@@ -244,13 +251,16 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     # link — гайд открыт по ссылке друга `/g/<slug>` (Universal Link).
     ("guide_open", "source"): frozenset({"menu", "link"}),
     ("guide_share", "source"): frozenset({"story", "shelf", "menu"}),
+    ("year_review_open", "source"): frozenset({"push", "profile", "import"}),
+    ("year_review_share", "source"): frozenset({"push", "profile", "import"}),
+    ("year_review_shared", "source"): frozenset({"push", "profile", "import"}),
     ("guide_action", "action"): frozenset({
         "progress", "exercise_progress", "programs", "import", "video", "coach_question", "rest_timer",
     }),
 }
 
 # Свойства-счётчики (не токены): целое от 0 до потолка, остальное выкидывается.
-_COUNT_PROPS = frozenset({"workouts", "nth", "slides_seen"})
+_COUNT_PROPS = frozenset({"workouts", "nth", "slides_seen", "slides"})
 _MAX_COUNT = 100_000
 
 # Тип действия системного листа iOS — reverse-DNS id (точки, регистр), а не

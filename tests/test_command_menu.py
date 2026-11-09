@@ -73,7 +73,7 @@ async def test_default_scope_advertises_the_user_facing_sections(monkeypatch):
     )
     commands = default_call.args[0]
     assert [c.command for c in commands] == [
-        "start", "help", "ai_trainer", "feedback",
+        "start", "help", "ai_trainer", "year", "feedback",
     ]
 
 
@@ -93,7 +93,7 @@ async def test_mcp_available_adds_public_url_commands_to_default_scope(monkeypat
     )
     commands = default_call.args[0]
     assert [c.command for c in commands] == [
-        "start", "help", "ai_trainer", "feedback", "mcp", "ios", "link_app",
+        "start", "help", "ai_trainer", "year", "feedback", "mcp", "ios", "link_app",
     ]
 
 
@@ -114,6 +114,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
         "start",
         "help",
         "ai_trainer",
+        "year",
         "feedback",
         "check_users",
         "ai_dialogs",
@@ -121,6 +122,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
         "ai_retry",
         "pushes",
         "testpush",
+        "testyear",
         "activity",
         "growth",
         "crashes",

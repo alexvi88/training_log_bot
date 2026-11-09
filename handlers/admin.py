@@ -40,6 +40,7 @@ import i18n
 import inbox
 import keyboards
 import product_metrics
+import push_ios
 import push_texts
 import seo_pages
 import site_stats
@@ -306,6 +307,51 @@ async def cmd_testpush(message: Message, state: FSMContext):
             f"❌ Apple пуш не принял ({shelf}). Причина — в логах: "
             "fly logs -a training-log-bot | grep -i apns"
         )
+
+
+@router.message(Command("testyear"))
+async def cmd_testyear(message: Message, state: FSMContext):
+    """«Итоги года» прямо сейчас, мимо окна 1–7 декабря и дедупа:
+    `/testyear` — себе, `/testyear <user_id>` — итог этого атлета (альбом
+    приходит сюда, баннер iOS — на его телефон). То же, что сделает рассылка:
+    альбом в Telegram и баннер с маршрутом на экран года в приложении.
+    В `pushes` не пишется — настоящую декабрьскую рассылку проверка не съест."""
+    if not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    parts = (message.text or "").split()
+    target = message.from_user.id
+    if len(parts) > 1:
+        try:
+            target = int(parts[1])
+        except ValueError:
+            await message.answer("Формат: /testyear или /testyear <user_id>")
+            return
+    from handlers import year_review as year_review_handlers
+
+    user = await db.get_user(target)
+    if user is None:
+        await message.answer(f"❌ Пользователя {target} нет.")
+        return
+    lang = user["lang"] or i18n.DEFAULT_LANG
+    year = timeutil.user_today(user).year
+    with i18n.use_lang(lang):
+        sent = await year_review_handlers.send_year(
+            message.bot, message.chat.id, target, source="admin", quiet_if_empty=True
+        )
+        title, body = push_ios.year_review_alert(year)
+    if sent is None:
+        await message.answer(f"❌ У {target} за {year} нет законченных тренировок — итога нет, пуш не шлю.")
+        return
+    delivery = await inbox.deliver(
+        target, push_texts.YEAR_REVIEW, title, body, lang=lang, route=push_ios.year_review_route(year)
+    )
+    banner = (
+        f"баннер iOS принят на {delivery.accepted} устр." if delivery.accepted
+        else "баннера нет (нет iOS-токена или APNs не настроен)"
+    )
+    shelf = "строка в «Уведомлениях» есть" if delivery.inbox_id is not None else "в «Уведомления» не легло"
+    await message.answer(f"✅ Альбом выше, {banner}, {shelf}.")
 
 
 @router.message(Command("pushes"))
