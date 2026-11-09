@@ -925,6 +925,18 @@ def _sag(x: float, width: float, hook_x: float, bend: float) -> float:
     return bend * (u * u - hook * hook) / (1 - hook * hook)
 
 
+# Стойка — 7pt шириной по центру крюка (`_barbell`), и до неё ещё зазор.
+_RACK_HALF = 3.5
+_RACK_GAP = 4
+
+
+def label_room(width: float, diameter: float) -> float:
+    """Сколько места подписи «× N» между внутренними краями стоек, за вычетом
+    блина и отступа после него."""
+    inner = width - 2 * (width * 0.34) - 2 * (_RACK_HALF + _RACK_GAP)
+    return inner - diameter - 5
+
+
 def _barbell(canvas: _Canvas, slide: BarbellSlide, left: float, top: float, width: float) -> None:
     per_side, total = plates_per_side(slide)
     bend = math.sqrt(min(1.0, slide.kilograms / _FULL_BEND_KG)) if slide.kilograms > 0 else 0
@@ -954,7 +966,11 @@ def _barbell(canvas: _Canvas, slide: BarbellSlide, left: float, top: float, widt
     # Блин на полу лицом к зрителю и «× N».
     diameter = 46
     label = f"× {total}"  # l10n: число блинов, цифры одинаковы на всех языках
-    label_w = canvas.text_width(label, 13)
+    # Блин и «× N» стоят между стойками и не должны под них заезжать: у
+    # тоннажа итога года (year_review) блинов пятизначное число, и при 13pt
+    # правая стойка резала его («× 1277»). Не влезает — подпись ужимается.
+    label_size = _fit_size(canvas, label, 13, label_room(width, diameter), minimum=7)
+    label_w = canvas.text_width(label, label_size)
     group_w = diameter + 5 + label_w
     gx = left + width / 2 - group_w / 2
     cy = floor_y - diameter / 2
@@ -970,7 +986,8 @@ def _barbell(canvas: _Canvas, slide: BarbellSlide, left: float, top: float, widt
                 - canvas.line_height(w_size) / 2, weight, w_size, ink)
     canvas.text(cx - canvas.text_width(slide.plate_mark, m_size) / 2, cy + 12 + canvas.metrics(m_size)[0]
                 - canvas.line_height(m_size) / 2, slide.plate_mark, m_size, ink)
-    canvas.text(gx + diameter + 5, cy + canvas.metrics(13)[0] - canvas.line_height(13) / 2, label, 13, WHITE)
+    canvas.text(gx + diameter + 5, cy + canvas.metrics(label_size)[0] - canvas.line_height(label_size) / 2,
+                label, label_size, WHITE)
     # Стойки с J-крюком.
     for hx in (hook, width - hook):
         x = left + hx

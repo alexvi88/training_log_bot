@@ -199,6 +199,8 @@ async def test_collect_counts_the_year(fresh_db, client_factory):
 
     slide = await client.get("/year-review/slides/0.png")
     assert slide.status_code == 200 and slide.headers["content-type"] == "image/png"
+    # Адрес один на всех: кэш телефона не должен отдать слайд прежнего аккаунта.
+    assert slide.headers["cache-control"] == "no-store"
     assert Image.open(io.BytesIO(slide.content)).size == (fs.WIDTH, fs.HEIGHT)
     assert (await client.get(f"/year-review/slides/{len(body['slides'])}.png")).status_code == 404
 
