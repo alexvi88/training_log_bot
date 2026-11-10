@@ -8315,8 +8315,31 @@ async def delete_empty_blocks(workout_id: int, keep_block_id: Optional[int] = No
     for block in await list_blocks_for_workout(workout_id):
         if block["id"] == keep_block_id:
             continue
-        if not await list_sets_for_block(block["id"]):
-            await delete_block(block["id"])
+        await _delete_block_if_empty(block["id"])
+
+
+async def _delete_block_if_empty(block_id: int) -> bool:
+    """Удалить блок, только если подходов в нём нет — проверка и удаление
+    одним шагом под `_write_lock`.
+
+    Раньше проверка шла отдельно, до блокировки: 10.11.2026 атлет удалил подход
+    (чистка пустых блоков после правки), а в ту же секунду приложение записало
+    подход строкой в другой блок той же тренировки. Подход лёг между «блок
+    пуст» и `DELETE`, и удаление упало `FOREIGN KEY constraint failed` на
+    `sets`. Теперь подход, успевший лечь, просто оставляет блок на месте."""
+    async with _write_lock:
+        db = conn()
+        try:
+            cur = await db.execute("SELECT 1 FROM sets WHERE block_id = ? LIMIT 1", (block_id,))
+            if await cur.fetchone() is not None:
+                return False
+            await db.execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
+            await db.execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_set(set_id: int) -> Optional[aiosqlite.Row]:
