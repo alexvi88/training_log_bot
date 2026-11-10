@@ -310,6 +310,25 @@ async def test_default_is_qwen_with_frames_fallback(monkeypatch, luna, clip_3s):
     luna.video_fail.assert_not_awaited()
 
 
+async def test_qwen_error_with_frames_fallback_is_not_an_alert(monkeypatch, luna, clip_3s, caplog):
+    """Qwen ответил 400, разбор сделал запасной путь: в лог — предупреждение, а
+    не ERROR, иначе ops_alerts шлёт 🚨 о сбое, которого атлет не увидел
+    (ревьюер Apple, 10.11.2026)."""
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "novita")
+    monkeypatch.setattr(config, "NOVITA_API_KEY", "nv")
+    novita = MagicMock()
+    novita.chat.completions.create = AsyncMock(side_effect=RuntimeError("invalid request error"))
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: novita)
+    caplog.set_level("INFO", logger="video_analysis")
+
+    out = await video_analysis.analyze(clip_3s, 42)
+
+    assert out is not None
+    errors = [r for r in caplog.records if r.name == "video_analysis" and r.levelname == "ERROR"]
+    assert errors == []
+    assert any("novita call failed" in r.getMessage() for r in caplog.records)
+
+
 async def test_default_qwen_answer_is_used_without_frames(monkeypatch, luna):
     monkeypatch.setattr(config, "VIDEO_ANALYSIS_BACKEND", "novita")
     monkeypatch.setattr(config, "NOVITA_API_KEY", "nv")
