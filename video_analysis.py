@@ -1752,8 +1752,15 @@ async def _analyze_novita(
             # повторять заведомый 404 на каждом ролике незачем.
             logger.error("video model %s is gone (404), trying the next one", model)
             _gone_models.add(model)
-        except Exception:
-            logger.exception("video analysis call failed for user %s", user_id)
+        except Exception as exc:
+            if count_failure:
+                logger.exception("video analysis call failed for user %s", user_id)
+            else:
+                # За Qwen стоит разбор кадрами: его сбой — ещё не сбой для
+                # атлета, и тревогой (ERROR → ops_alerts) он не идёт. Ошибкой
+                # кричит только запасной путь, если не справится и он. Так
+                # 10.11 ревьюер Apple получил разбор, а в чат пришла 🚨.
+                logger.warning("video analysis: novita call failed for user %s: %s", user_id, exc)
             return None
     if response is None:
         logger.error("video analysis: no video model left (all returned 404)")
