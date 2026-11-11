@@ -708,6 +708,12 @@ MAIN_LIFTS: tuple[str, ...] = (
 )
 
 
+# Группы, без которых тренировка — не полная: оценка прогресса
+# (progress_score.volume_share) считает их объём всегда, даже если атлет их не
+# тренирует, — пропущенные ноги должны быть видны. Каноничные имена каталога.
+CORE_VOLUME_GROUPS: tuple[str, ...] = ("Грудь", "Спина", "Ноги")
+
+
 def main_lift_identity(original_name: Optional[str]) -> Optional[str]:
     """Какое из MAIN_LIFTS это упражнение — по идентичности, или None.
 

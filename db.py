@@ -7303,6 +7303,34 @@ async def exercise_e1rm_growth(
     return row["before_max"], row["window_max"]
 
 
+async def list_scored_sets(
+    user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
+) -> list[aiosqlite.Row]:
+    """Подходы законченных тренировок окна [start_date, end_date] (местные
+    дни) — сырьё оценки прогресса (progress_score). Одна строка на подход, со
+    всем, что нужно формуле: местный день, упражнение (имя на показ и
+    идентичность), группа, нагрузка по LOAD_WEIGHT_SQL и записанный вес (по
+    нему видно режим «своим весом»), повторы. Подходы без повторов не нужны.
+    Перенесённые тренировки входят: это история атлета, а не опыт с нашим вводом."""
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT w.id AS workout_id, {day} AS day, s.exercise_id, "
+        "       e.display_name, e.original_name, e.primary_group_id AS group_id, "
+        "       g.name AS group_name, "
+        f"      {LOAD_WEIGHT_SQL} AS load, s.weight AS weight, s.reps AS reps "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "LEFT JOIN muscle_groups g ON g.id = e.primary_group_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0 "
+        f"AND {day} BETWEEN ? AND ? "
+        "ORDER BY w.started_at, s.id",
+        (user_id, start_date, end_date),
+    )
+    return await cur.fetchall()
+
+
 async def exercise_e1rm_first_and_best(
     user_id: int,
     exercise_id: int,

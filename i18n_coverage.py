@@ -308,6 +308,10 @@ LOCALIZED: list[str] = [
     # подсказка и подписи — weekly.* через i18n.t внутри use_lang(users.lang).
     "weekly_summary.py",
     "api_v1_weekly.py",
+    # Оценка прогресса по неделям (GET /v1/progress/score): формула —
+    # progress_score, подписи — api_v1_progress_score через i18n.
+    "progress_score.py",
+    "api_v1_progress_score.py",
     # «Неделя комиксом» (поле comic итога недели): подписи и метки кадров —
     # weekly.comic.* через i18n.t, сцены — машинные значения.
     "weekly_comic.py",

@@ -796,6 +796,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert week["comic"] and len(week["comic"]["panels"]) == 4
     await w.call("GET", "/weekly-summary?week=2999-01-05", expect=400)
     await w.call("GET", "/weekly-summary?week=soon", expect=400)
+    # Оценка прогресса по неделям: подписи частей, порогов и «что поднимет балл» —
+    # на языке атлета; неверное число недель — ошибка на его языке.
+    await w.call("GET", "/progress/score", expect=200)
+    await w.call("GET", "/progress/score?weeks=0", expect=400)
     # «Итоги года»: числа, «личность года» и подписи слайдов — на языке
     # атлета; картинка слайда — PNG (текст в ней держит test_year_review).
     year = (await w.call("GET", "/year-review", expect=200)).json()

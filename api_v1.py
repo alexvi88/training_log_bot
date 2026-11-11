@@ -63,6 +63,7 @@ import api_v1_mcp
 import api_v1_media
 import api_v1_programs
 import api_v1_progress
+import api_v1_progress_score
 import api_v1_sharing
 import api_v1_support
 import api_v1_templates
@@ -2528,6 +2529,7 @@ routes += (
     + api_v1_funnel.routes
     + api_v1_dashboard.routes
     + api_v1_weekly.routes
+    + api_v1_progress_score.routes
     + api_v1_year.routes
     + api_v1_guides.routes
     + api_v1_progress.routes
