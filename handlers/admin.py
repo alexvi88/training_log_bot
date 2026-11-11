@@ -881,6 +881,18 @@ async def _drop_activity_extras(callback: CallbackQuery, state: FSMContext) -> N
             await callback.bot.delete_message(chat_id, message_id)
 
 
+async def _send_activity_text(message: Message, state: FSMContext, text: str, reply_markup) -> None:
+    """Лента в ответ на сообщение (поиск атлета) — новыми сообщениями, кнопки под
+    последним куском; куски перед ним запоминаются, как при листании."""
+    chunks = ui.split_html(text, ACTIVITY_CHUNK_LIMIT)
+    extra: list[int] = []
+    for chunk in chunks[:-1]:
+        sent = await message.answer(chunk, parse_mode="HTML")
+        extra.append(sent.message_id)
+    await message.answer(chunks[-1], reply_markup=reply_markup, parse_mode="HTML")
+    await state.update_data(admin_activity_extra_ids=extra)
+
+
 async def _show_activity_text(
     callback: CallbackQuery, state: FSMContext, text: str, reply_markup
 ) -> None:
@@ -915,6 +927,10 @@ async def _show_activity_users(target: Message | CallbackQuery, state: FSMContex
     users = await db.list_users_with_event_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
     has_next = (page + 1) * USERS_PAGE_SIZE < total
     kb = keyboards.admin_activity_users_keyboard(users, page, has_next)
+    if users:
+        kb.inline_keyboard.insert(
+            0, [InlineKeyboardButton(text="🔎 Найти атлета", callback_data="admin:acq")]
+        )
     if isinstance(target, CallbackQuery):
         await _drop_activity_extras(target, state)
     text = "👀 Что делают пользователи — выбери, чью ленту открыть:" if users else "Пользователей пока нет."
@@ -924,7 +940,9 @@ async def _show_activity_users(target: Message | CallbackQuery, state: FSMContex
         await target.answer(text, reply_markup=kb)
 
 
-async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target_user_id: int, page: int):
+async def _show_activity_feed(
+    target: Message | CallbackQuery, state: FSMContext, target_user_id: int, page: int
+):
     await state.set_state(AdminFlow.browsing_activity)
     await state.update_data(admin_activity_user=target_user_id, admin_activity_page=page)
     user = await db.get_user(target_user_id)
@@ -944,7 +962,10 @@ async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target
         text = f"👀 {escape(who)} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_feed_keyboard(target_user_id, page, has_next)
-    await _show_activity_text(callback, state, text, kb)
+    if isinstance(target, CallbackQuery):
+        await _show_activity_text(target, state, text, kb)
+    else:
+        await _send_activity_text(target, state, text, kb)
 
 
 SITE_FEED_PAGE_SIZE = 30
@@ -1505,12 +1526,83 @@ async def cmd_events_csv(message: Message, state: FSMContext, command: CommandOb
         await message.answer_document(FSInputFile(users_path))
 
 
+def _activity_pick_label(row) -> str:
+    label = keyboards.admin_user_label(row["username"], row["email"], row["telegram_id"])
+    if row["first_name"]:
+        label += f" · {row['first_name']}"
+    if row["username"] or row["email"]:
+        label += f" · {row['telegram_id']}"
+    return label
+
+
+async def _activity_search(message: Message, state: FSMContext, query: str) -> None:
+    """Найти атлета по id / @нику / части ника, имени или почты и открыть его
+    ленту; несколько совпадений — список кнопок на ту же ленту."""
+    query = query.strip()
+    data = await state.get_data()
+    page = data.get("admin_activity_users_page", 0)
+    await state.set_state(AdminFlow.browsing_activity_users)
+    await state.update_data(admin_activity_users_page=page)
+
+    user_id = await _resolve_athlete(query)
+    if user_id is not None:
+        await _show_activity_feed(message, state, user_id, page=0)
+        return
+    matches, total = await db.search_users_for_admin(query, limit=AI_DIALOGS_SEARCH_LIMIT)
+    if not matches:
+        await message.answer(
+            f"Не нашёл атлета «{query}». Пришли id, @ник или часть имени — "
+            "или открой общий список: /activity"
+        )
+        return
+    if total == 1:
+        await _show_activity_feed(message, state, matches[0]["telegram_id"], page=0)
+        return
+    b = InlineKeyboardBuilder()
+    for row in matches:
+        b.button(text=_activity_pick_label(row), callback_data=f"admin:acu:{row['telegram_id']}")
+    b.button(text=i18n.t("btn.to_list"), callback_data=f"admin:acp:{page}")
+    b.adjust(1)
+    more = f" Показал первые {len(matches)} — уточни запрос." if total > len(matches) else ""
+    await message.answer(
+        f"Под «{query}» подходят {total} атлетов — выбери, чью ленту открыть.{more}",
+        reply_markup=b.as_markup(),
+    )
+
+
 @router.message(Command("activity"))
-async def cmd_activity(message: Message, state: FSMContext):
+async def cmd_activity(message: Message, state: FSMContext, command: CommandObject | None = None):
     if not _is_admin(message.from_user.id):
         return
     await state.clear()
+    arg = (command.args if command else None) or ""
+    if arg.strip():
+        await _activity_search(message, state, arg)
+        return
     await _show_activity_users(message, state, page=0)
+
+
+@router.callback_query(F.data == "admin:acq")
+async def admin_activity_search_start(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    page = data.get("admin_activity_users_page", 0)
+    await _drop_activity_extras(callback, state)
+    await state.set_state(AdminFlow.activity_search)
+    await state.update_data(admin_activity_users_page=page)
+    b = InlineKeyboardBuilder()
+    b.button(text="Отмена", callback_data=f"admin:acp:{page}")
+    await ui.safe_edit(callback, AI_DIALOGS_SEARCH_PROMPT, reply_markup=b.as_markup())
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminFlow.activity_search), F.text, ~F.text.startswith("/"))
+async def admin_activity_search_receive(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await _activity_search(message, state, message.text)
 
 
 @router.callback_query(F.data.startswith("admin:acp:"))

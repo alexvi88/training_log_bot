@@ -74,6 +74,7 @@ class AdminFlow(StatesGroup):
     browsing_activity_users = State()
     browsing_activity = State()
     browsing_activity_all = State()
+    activity_search = State()  # /activity → «🔎 Найти атлета»: ждём id, @ник или имя
     broadcast_choosing_lang = State()
     broadcast_awaiting_message = State()
     broadcast_awaiting_message_en = State()
