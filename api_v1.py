@@ -32,7 +32,7 @@ from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.routing import Route
 
 import achievement_sync
@@ -2570,6 +2570,7 @@ def build_app() -> Starlette:
         ],
         exception_handlers={
             ApiError: _api_error_handler,
+            ClientDisconnect: common.client_disconnect_handler,
             Exception: _unhandled_error_handler,
         },
     )

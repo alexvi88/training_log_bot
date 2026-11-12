@@ -18,8 +18,9 @@ import re
 import uuid
 from typing import Any, Optional
 
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse as _StarletteJSONResponse
+from starlette.responses import Response
 
 import config
 import db
@@ -196,6 +197,20 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
         status_code=exc.status_code,
         headers=exc.headers,
     )
+
+
+# Код «клиент закрыл запрос» (как у nginx): отвечать уже некому, а в
+# сводку отказов /v1 он не идёт — ops_alerts.EXPECTED_API_FAILURES.
+CLIENT_CLOSED_STATUS = 499
+
+
+async def client_disconnect_handler(request: Request, exc: ClientDisconnect) -> Response:
+    """Телефон оборвал запрос, не дослав тело: ушёл в фон, пропала сеть.
+    Это не сбой сервера — без трейсбэка в журнал (он поднимал тревогу ERROR
+    на POST /funnel), одной строкой INFO. Ловится для всех ручек разом, а не
+    в каждой, что читает тело: их десятки."""
+    logger.info("api_v1: client disconnected on %s %s", request.method, request.url.path)
+    return Response(status_code=CLIENT_CLOSED_STATUS)
 
 
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
