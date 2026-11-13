@@ -201,6 +201,22 @@ async def test_video_context_block_is_built_in_the_users_language(fresh_db):
     assert f"(уверенность {i18n.t_in('ru', 'ai.video.confidence_high')})" not in block
 
 
+@pytest.mark.parametrize("lang", ["en", "fr", "pt-PT"])
+async def test_video_context_block_names_the_exercise_in_the_users_language(fresh_db, lang):
+    """Живой кадр витрины: французский разбор начинался «Sur **Становая тяга**»."""
+    import seed_data
+    import video_analysis
+
+    analysis = {"exercise": "становая тяга", "view": {}, "observations": []}
+    with i18n.use_lang(lang):
+        block = video_analysis.to_context_block(analysis)
+    shown = seed_data.localized_exercise_name("Становая тяга", lang)
+    assert f"Упражнение на видео: {shown}" in block
+    assert "становая тяга" not in block.casefold()
+    with i18n.use_lang("ru"):
+        assert "Упражнение на видео: становая тяга" in video_analysis.to_context_block(analysis)
+
+
 async def test_factcheck_runs_under_the_users_language(fresh_db, monkeypatch):
     seen = []
 
