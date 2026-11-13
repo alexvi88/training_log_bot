@@ -1869,6 +1869,30 @@ def _parse(response: Any, user_id: Optional[int]) -> Optional[dict[str, Any]]:
     return parsed
 
 
+def _shown_exercise(raw: Any) -> str:
+    """Имя упражнения из протокола → на языке ответа.
+
+    Модель зрения отвечает по русскому протоколу и пишет имя по-русски
+    («становая тяга»). Тренер цитирует его жирным как есть, и французский
+    атлет получал «Sur **Становая тяга**…» (живой кадр витрины). Имя из
+    каталога переводим; незнакомое русское имя не на русском языке ответа
+    помечаем, что его надо перевести, а не цитировать.
+    """
+    import seed_data
+
+    name = str(raw or "").strip()
+    lang = i18n.get_lang()
+    if not name or lang == i18n.DEFAULT_LANG:
+        return name
+    needle = name.casefold()
+    for _group, canonical in seed_data.EXERCISE_TEMPLATES:
+        if canonical.casefold() == needle:
+            return seed_data.localized_exercise_name(canonical, lang)
+    if re.search("[а-яё]", needle):
+        return f"{name} (название по-русски — назови упражнение на языке ответа, не цитируй)"
+    return name
+
+
 def to_context_block(analysis: dict[str, Any]) -> str:
     """Наблюдения → текст, который получает тренер.
 
@@ -1926,7 +1950,7 @@ def to_context_block(analysis: dict[str, Any]) -> str:
         "комментариев о себе.\n"
         "Честность при этом не отменяется: ошибку, которой нет в списке, не "
         "придумывай. Но отклонение из списка называй прямо.",
-        f"Упражнение на видео: {analysis.get('exercise')}"
+        f"Упражнение на видео: {_shown_exercise(analysis.get('exercise'))}"
         + (
             f" (уверенность {_localized_enum(analysis['exercise_confidence'], _CONFIDENCE_KEYS)})."
             if analysis.get("exercise_confidence") else "."
