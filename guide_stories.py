@@ -351,7 +351,8 @@ def _static_guide(slug: str, lang: str) -> dict[str, Any]:
                          items[:MAX_TAKEAWAYS]))
     return {
         "slug": slug,
-        "title": t(f"seo.guide.{slug}.h1"),
+        # Короткое имя для карточек и полок; полный заголовок статьи — на обложке.
+        "title": t(f"seo.guide.{slug}.short"),
         "card": t(f"seo.guide.{slug}.card"),
         "cover": cover,
         "featured": False,
