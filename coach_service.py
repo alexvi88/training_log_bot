@@ -499,7 +499,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
     # Рост e1RM — тот же блок и тот же расчёт, что у атлета наверху его
     # «Прогресса» (dashboard_data.lift_growth): тренер видит клиента тем же
     # экраном. Пустые плитки и заголовок — роста не видно (мало истории).
-    growth_tiles, growth_title = await dashboard_data.lift_growth(
+    growth_tiles, growth_title, growth_strength = await dashboard_data.lift_growth(
         client_id, client, dates, today, shown_name=lambda name: client_exercise_name(client, name)
     )
     return {
@@ -512,6 +512,7 @@ async def client_progress(client: Any, weeks: int = PROGRESS_WEEKS) -> dict[str,
                 {"exercise": exercise, "growth": growth, "detail": detail, "exercise_id": exercise_id}
                 for exercise, growth, detail, exercise_id in growth_tiles
             ],
+            "strength": growth_strength,
         },
         "lifts": lifts,
         "records": records,

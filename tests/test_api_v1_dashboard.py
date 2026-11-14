@@ -93,7 +93,7 @@ async def test_dashboard_has_headline_rank_and_tiles_after_a_workout(fresh_db, c
     assert any(row["sets"] == 3 for row in body["volume"]["rows"])
     for row in body["volume"]["rows"]:
         assert set(row) == {"group", "sets", "status"}
-    assert set(body["lifts"]) == {"title", "note", "tiles"}
+    assert set(body["lifts"]) == {"title", "note", "tiles", "strength"}
 
 
 @pytest.mark.asyncio
@@ -202,3 +202,44 @@ async def test_dashboard_rank_gap_matches_hall_of_fame(fresh_db, client_factory,
     assert rank["name"] == hof_rank["name"] and rank["level"] == hof_rank["level"]
     for text in (rank["gap_text"], rank["next_name"]):
         assert bool(CYRILLIC.search(text)) == (lang == "ru"), text
+
+
+# «Сила за N недель» (analytics.strength_index): все движения окна, а не
+# только выросшие плитки — просевшие тянут итог вниз.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_dashboard_strength_counts_every_lift(fresh_db, client_factory, lang):
+    client = await _linked_client(fresh_db, client_factory, lang=lang)
+    group_id = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    bench = await db.create_exercise(111, "Bench Press", group_id)
+    squat = await db.create_exercise(111, "Squat", group_id)
+    curl = await db.create_exercise(111, "Curl", group_id)
+    # Тренировка 10 недель назад — база плиток и восьминедельное окно; сила
+    # считается только внутри окна.
+    for days_ago, b, s in ((70, 100, 100), (50, 100, 100), (40, 100, 100), (20, 110, 90), (5, 110, 90)):
+        await _session(111, bench, days_ago, b)
+        await _session(111, squat, days_ago, s)
+        await _session(111, curl, days_ago, 30)
+
+    lifts = (await client.get("/dashboard")).json()["lifts"]
+    strength = lifts["strength"]
+
+    # Плитки — только выросший жим, сила — все три: +10, −10 и 0 поровну.
+    assert [t["exercise"] for t in lifts["tiles"]] == ["BENCH PRESS"]
+    assert strength["growth_pct"] == 0.0
+    assert (strength["lifts"], strength["up"], strength["flat"], strength["down"]) == (3, 1, 1, 1)
+    for key in ("title", "caption", "breakdown"):
+        assert strength[key]
+        assert bool(CYRILLIC.search(strength[key])) == (lang == "ru"), strength[key]
+    assert "3" in strength["caption"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_strength_is_null_without_history(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    group_id = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    bench = await db.create_exercise(111, "Bench Press", group_id)
+    await _session(111, bench, 2, 100)
+
+    assert (await client.get("/dashboard")).json()["lifts"]["strength"] is None
+

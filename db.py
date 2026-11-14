@@ -7303,6 +7303,35 @@ async def exercise_e1rm_growth(
     return row["before_max"], row["window_max"]
 
 
+async def exercise_session_e1rms(
+    user_id: int,
+    exercise_id: int,
+    start_date: str,
+    end_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+    exclude_workout_ids: Iterable[int] = (),
+) -> list[float]:
+    """Лучший e1RM каждой законченной тренировки с упражнением в окне (местные
+    дни, включительно), по времени — ряд для «Силы за N недель»
+    (analytics.strength_index): там сравниваются медианы первых и последних
+    тренировок окна, а не два максимума."""
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    without, without_params = _without_workouts(exclude_workout_ids)
+    cur = await conn().execute(
+        f"SELECT MAX({_e1rm_sql(formula)}) AS best "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"AND s.exercise_id = ? AND s.reps > 0 AND {day} BETWEEN ? AND ?{without} "
+        "GROUP BY w.id ORDER BY MIN(w.started_at), w.id",
+        (user_id, exercise_id, start_date, end_date, *without_params),
+    )
+    return [float(r["best"] or 0) for r in await cur.fetchall()]
+
+
 async def exercise_e1rm_first_and_best(
     user_id: int,
     exercise_id: int,

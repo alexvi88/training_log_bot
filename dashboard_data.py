@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterable, Optional
 import analytics
 import db
 import formatting
+import i18n
 import seed_data
 import timeutil
 
@@ -74,6 +75,8 @@ class MenuDashboard:
     lift_tiles: list[tuple[str, str, str, int]] = field(default_factory=list)
     lifts_title: str = ""
     lifts_note: str = ""
+    #: «Сила за N недель» — strength_json, None — не посчитать
+    strength: Optional[dict[str, Any]] = None
     #: (ключ группы, подходов в неделю) по BODY_VOLUME_GROUPS — см. body_volume
     body_volume: tuple[tuple[str, float], ...] = ()
     #: (ключ группы, подходов всего) за те же BODY_VOLUME_WEEKS недель
@@ -134,7 +137,7 @@ async def collect(
     )
     dashboard = analytics.compute_dashboard(dates, today)
 
-    lift_tiles, lifts_title = await lift_growth(
+    lift_tiles, lifts_title, strength = await lift_growth(
         user_id, user, dates, today, exclude_workout_ids=excluded
     )
 
@@ -160,6 +163,7 @@ async def collect(
         lift_tiles=lift_tiles,
         lifts_title=lifts_title,
         lifts_note=formatting.MENU_LIFTS_NOTE,
+        strength=strength,
         body_volume=volume_per_week(sets),
         body_sets=sets,
     )
@@ -306,17 +310,18 @@ async def lift_growth(
     *,
     exclude_workout_ids: Iterable[int] = (),
     shown_name: Callable[[str], str] = lambda name: name,
-) -> tuple[list[tuple], str]:
-    """Плитки роста e1RM и их заголовок («РОСТ E1RM ЗА 8 НЕДЕЛЬ») — блок
+) -> tuple[list[tuple], str, Optional[dict[str, Any]]]:
+    """Плитки роста e1RM, их заголовок и «Сила за N недель» (strength_json) («РОСТ E1RM ЗА 8 НЕДЕЛЬ») — блок
     «Прогресса» атлета под разбором тренера. Один расчёт на сводку атлета
     (`collect`) и на «Прогресс клиента» у тренера (coach_service.client_progress):
     приложение рисует оба одним видом, и цифры не должны разъезжаться.
 
     `dates` — местные дни законченных тренировок (от них зависит, хватает ли
     истории на восемь недель), `shown_name` — как показать имя упражнения:
-    тренеру каталожное — на его языке. Роста нет — `([], "")`."""
+    тренеру каталожное — на его языке. Роста нет — `([], "", None)`; силы нет
+    (ни у одного движения не набралось двух тренировок с весом) — None третьим."""
     if not dates:
-        return [], ""
+        return [], "", None
     excluded = tuple(exclude_workout_ids)
     tz = timeutil.offset_hours(user)
     formula = user["e1rm_formula"]
@@ -329,6 +334,7 @@ async def lift_growth(
     )
     lift_start = today - dt.timedelta(weeks=lift_window_weeks)
     growth: list[tuple[str, float, float, int]] = []
+    strength_rows: list[tuple[list[float], int]] = []
     for row in await db.top_exercises_by_frequency(
         user_id, lift_start.isoformat(), today.isoformat(), limit=None,
         min_sessions=LIFT_MIN_SESSIONS, tz_offset=tz,
@@ -339,8 +345,40 @@ async def lift_growth(
             exclude_workout_ids=excluded,
         )
         growth.append((shown_name(row["display_name"]), before_max, window_max, row["id"]))
+        strength_rows.append((
+            await db.exercise_session_e1rms(
+                user_id, row["id"], lift_start.isoformat(), today.isoformat(), formula,
+                tz_offset=tz, exclude_workout_ids=excluded,
+            ),
+            row["sets_count"],
+        ))
     tiles = formatting.menu_lift_tiles(growth, user["unit"])
-    return tiles, formatting.menu_lifts_title(lift_window_weeks) if tiles else ""
+    return (
+        tiles,
+        formatting.menu_lifts_title(lift_window_weeks) if tiles else "",
+        strength_json(analytics.strength_index(strength_rows), lift_window_weeks),
+    )
+
+
+def strength_json(index: "analytics.StrengthIndex | None", weeks: int) -> Optional[dict[str, Any]]:
+    """`lifts.strength` в /v1/dashboard (и `growth.strength` в прогрессе
+    клиента у тренера): общий рост по всем движениям окна — число на доске
+    «Прогресса» вместо среднего по выросшим плиткам. Тексты — на языке
+    запроса."""
+    if index is None:
+        return None
+    return {
+        "title": i18n.t("dashboard.strength.title", weeks=weeks, n=weeks),
+        # Число, а не строка: «+4.9%» рисует приложение тем же форматом, что
+        # и прежнее среднее (MenuTileNumbers.growthText).
+        "growth_pct": index.growth_pct,
+        "caption": i18n.t("dashboard.strength.caption", n=index.lifts),
+        "breakdown": i18n.t("dashboard.strength.breakdown", up=index.up, flat=index.flat, down=index.down),
+        "lifts": index.lifts,
+        "up": index.up,
+        "flat": index.flat,
+        "down": index.down,
+    }
 
 
 async def rank_promotion(user_id: int, user) -> "analytics.Rank | None":
