@@ -193,6 +193,7 @@ import exercise_mentions
 import formatting
 import i18n
 import program_mentions
+import progress_card
 import running_texts
 import shutdown_drain
 import timeutil
@@ -865,9 +866,17 @@ async def _turn_response(
                 exclude_program_name=program_json["name"] if program_json else None,
             )
 
+    # Карточка прогресса — только на готовый вопрос «Как мой прогресс?» и
+    # только своему атлету (см. progress_card); на остальное — null.
+    progress_json: Optional[dict[str, Any]] = None
+    if subject is None and turn.get("answer") and ai_trainer.is_progress_preset(goal):
+        with i18n.use_lang(lang):
+            progress_json = await progress_card.card_json(user_id)
+
     return {
         "answer": turn["answer"],
         "program": program_json,
+        "progress": progress_json,
         "questions": questions_json,
         # Кнопки отката того, что тренер сделал этим ходом (см.
         # `_store_undo_actions` и `POST /ai/undo`). Пустой список — обычное
