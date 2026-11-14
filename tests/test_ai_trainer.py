@@ -1337,7 +1337,7 @@ async def test_the_system_prompt_carries_no_date():
     Языковой хвост (см. ai_trainer._with_language_tail) на этот инвариант не
     влияет: он тоже не зависит от даты, только от i18n.get_lang().
     """
-    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT)
+    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT + ai_trainer._evidence_block())
     assert "Сегодня" not in ai_trainer._system_prompt()
 
 

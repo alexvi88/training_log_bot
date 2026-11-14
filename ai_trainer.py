@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 import contextvars
 import datetime as dt
+import functools
 import json
 import logging
 import random
@@ -1631,7 +1632,46 @@ def _system_prompt() -> str:
     конце последнего user-сообщения (см. _ask_plain), а не в системном
     промпте: там она разъезжается по одному ходу за раз, а не по всем сразу.
     """
-    return _with_language_tail(SYSTEM_PROMPT)
+    return _with_language_tail(SYSTEM_PROMPT + _evidence_block())
+
+
+# Гайды сайта (seo_library.GUIDES) — отобранные и проверенные по исследованиям
+# факты с источниками. Раньше тренер отвечал на «сколько белка», «сколько
+# подходов», «сколько отдыхать» из общих знаний модели, и его вилки расходились
+# с нашими же гайдами («1.6–2.2» вместо «около 1.6, до 2.2 — с запасом»).
+# Теперь выжимки гайдов («Коротко», takeaways) едут в системный промпт: он
+# стабилен у всех атлетов и кэшируется — повторно эти ~10 тыс. знаков стоят
+# 10% цены входа. Русский каталог — как и весь промпт; язык ответа задаёт хвост.
+# Про приложение, а не про тренировки, — вне списка.
+_EVIDENCE_SKIP = frozenset({"how-to-keep-a-workout-log", "switch-from-hevy-or-strong"})
+_EVIDENCE_HEAD = (
+    "ОПОРНЫЕ ФАКТЫ — выжимки наших гайдов; каждый проверен по исследованиям. "
+    "На вопросы о тренировках, питании, добавках и восстановлении отвечай в их "
+    "рамках: цифры и вилки бери отсюда, а не из общих знаний; если твоё знание "
+    "расходится с ними — прав этот список. Где факт даёт базу и запас («около "
+    "1.6, с запасом до 2.2»), называй базу главной цифрой, а запас — оговоркой. "
+    "Чего здесь нет — отвечай как обычно, не противореча списку."
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _evidence_block() -> str:
+    """Выжимки гайдов для системного промпта — один раз на процесс: текст
+    каталога не меняется без деплоя, а промпт обязан быть байт-в-байт тем же."""
+    import seo_library  # локально: seo_library тянет страницы сайта
+
+    params = seo_library.link_params("ru")
+    lines = []
+    for slug in seo_library.GUIDES:
+        if slug in _EVIDENCE_SKIP:
+            continue
+        title = i18n.t_in("ru", f"seo.guide.{slug}.h1", **params)
+        facts = "; ".join(
+            line.strip().rstrip(".") for line in i18n.t_in("ru", f"seo.guide.{slug}.takeaways", **params).splitlines()
+            if line.strip()
+        )
+        lines.append(f"• {title}: {facts}.")
+    return "\n\n" + _EVIDENCE_HEAD + "\n" + "\n".join(lines)
 
 
 SEARCH_SYSTEM_PROMPT = """\
