@@ -39,6 +39,7 @@ English-only by accident.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 import db
@@ -1361,6 +1362,96 @@ def legacy_program_texts(key: str, field: str) -> set[str]:
 # читаются одинаково. Исключение — планка и прочее «на время», где к схеме
 # приписана единица: «3×30–60 сек».
 _TARGET_SECONDS_SUFFIX = " сек"
+
+
+# ---------- program catalog: time and equipment ----------
+#
+# Новичок на странице готовой программы первым делом спрашивает «подойдёт ли
+# мне»: сколько это по времени и есть ли в моём зале нужное. Оборудование —
+# по каноническому (русскому) имени упражнения, только для тех, что стоят в
+# WORKOUT_PROGRAMS: каталог небольшой и меняется руками, а новое упражнение без
+# строки здесь test_catalog_program_meta поймает. Подписи — ключи
+# program.equipment.<тег> во всех каталогах.
+EQUIPMENT_ORDER = ("barbell", "rack", "dumbbells", "bench", "cable", "machine", "bars")
+
+PROGRAM_EXERCISE_EQUIPMENT: dict[str, tuple[str, ...]] = {
+    "Болгарские выпады": ("dumbbells", "bench"),
+    "Выпады с гантелями": ("dumbbells",),
+    "Гиперэкстензия": ("machine",),
+    "Жим гантелей на наклонной скамье": ("dumbbells", "bench"),
+    "Жим гантелей сидя": ("dumbbells", "bench"),
+    "Жим ногами": ("machine",),
+    "Жим штанги лёжа": ("barbell", "bench"),
+    "Жим штанги стоя": ("barbell", "rack"),
+    "Отведение ноги в кроссовере": ("cable",),
+    "Отжимания на брусьях": ("bars",),
+    "Планка": (),
+    "Подтягивания": ("bars",),
+    "Подъём гантелей на бицепс молотом": ("dumbbells",),
+    "Подъём на носки стоя": ("machine",),
+    "Подъём ног в висе": ("bars",),
+    "Подъём штанги на бицепс": ("barbell",),
+    "Присед со штангой": ("barbell", "rack"),
+    "Разведение гантелей в стороны": ("dumbbells",),
+    "Разведение ног в тренажёре": ("machine",),
+    "Разгибание на трицепс на блоке": ("cable",),
+    "Разгибание ног в тренажёре": ("machine",),
+    "Румынская тяга": ("barbell",),
+    "Сведение рук в кроссовере": ("cable",),
+    "Сгибание ног в тренажёре": ("machine",),
+    "Скручивания": (),
+    "Становая тяга": ("barbell",),
+    "Тяга верхнего блока": ("cable",),
+    "Тяга нижнего блока": ("cable",),
+    "Тяга штанги в наклоне": ("barbell",),
+    "Французский жим": ("barbell", "bench"),
+    "Ягодичный мостик": (),
+    "Ягодичный мостик со штангой": ("barbell", "bench"),
+}
+
+# Минут на подход вместе с отдыхом — по нижней границе повторов в схеме:
+# тяжёлые 3–5 повторов отдыхают дольше, лёгкие 10+ — короче. Плюс разминка.
+_SCHEME = re.compile(r"(\d+)\s*[x\u00d7]\s*(\d+)")
+_WARMUP_MINUTES = 5
+
+
+def _set_minutes(target: str) -> tuple[int, float]:
+    """(подходов, минут на подход) по схеме «3×6–10», «3×30–60 сек»."""
+    m = _SCHEME.search(target or "")
+    if m is None:
+        return 0, 0.0
+    sets, low = int(m.group(1)), int(m.group(2))
+    if target.endswith(_TARGET_SECONDS_SUFFIX):
+        return sets, 1.5
+    if low <= 5:
+        return sets, 3.5
+    if low <= 8:
+        return sets, 2.5
+    return sets, 2.0
+
+
+def program_minutes(key: str) -> int:
+    """Средняя длительность дня программы, минут, округлено до 5."""
+    program = PROGRAM_BY_KEY[key]
+    days = []
+    for _day_name, exercises in program["days"]:
+        total = float(_WARMUP_MINUTES)
+        for _ex, target in exercises:
+            sets, per_set = _set_minutes(target)
+            total += sets * per_set
+        days.append(total)
+    return int(5 * round(sum(days) / len(days) / 5))
+
+
+def program_equipment(key: str, lang: str) -> list[str]:
+    """Что понадобится в зале — подписи на языке атлета, в порядке EQUIPMENT_ORDER."""
+    tags = {
+        tag
+        for _day_name, exercises in PROGRAM_BY_KEY[key]["days"]
+        for ex, _target in exercises
+        for tag in PROGRAM_EXERCISE_EQUIPMENT.get(ex, ())
+    }
+    return [i18n.t_in(lang, f"program.equipment.{tag}") for tag in EQUIPMENT_ORDER if tag in tags]
 
 
 def localized_target(target: str | None, lang: str) -> str | None:

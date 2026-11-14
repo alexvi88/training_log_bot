@@ -677,6 +677,9 @@ def _catalog_program_json(program: dict, lang: str) -> dict[str, Any]:
         "name": seed_data.localized_program_name(key, lang),
         "meta": seed_data.localized_program_meta(key, lang),
         "description": seed_data.localized_program_description(key, lang),
+        # «Подойдёт ли мне»: средняя длительность дня и что нужно в зале.
+        "minutes": seed_data.program_minutes(key),
+        "equipment": seed_data.program_equipment(key, lang),
         "days": [
             {
                 "name": seed_data.localized_program_day_name(key, i, lang),
