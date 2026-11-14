@@ -39,3 +39,17 @@ def test_redrawn_exercises_keep_stock_frames():
         for name in (f"{slug}_1.jpg", f"{slug}_2.jpg", f"thumbs/{slug}_1.jpg"):
             path = os.path.join(exercise_media.MEDIA_DIR, name)
             assert os.path.isfile(path), f"missing stock {path}"
+
+
+def test_redrawn_frames_are_three_by_two():
+    """Рисунок генерируется в 3:2 и так и лежит. 25 упражнений, чей сток
+    вертикальный, квадратный или 16:9, однажды втиснули в размер стока —
+    тренер выходил сплющенным («зауженные кадры», «перекособоченные»)."""
+    from PIL import Image
+
+    for slug in exercise_media.FRAME_REVISION:
+        for n in (1, 2):
+            path = os.path.join(exercise_media.MEDIA_DIR, exercise_media.frame_name(slug, n))
+            with Image.open(path) as im:
+                w, h = im.size
+            assert abs(w / h - 1.5) < 0.02, f"{path}: {w}×{h}"
