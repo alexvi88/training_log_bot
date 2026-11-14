@@ -981,6 +981,16 @@
     "days": {
      "type": "[CatalogDay]",
      "optional": false
+    },
+    "minutes": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "equipment": {
+     "type": "[String]",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -6038,5 +6048,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "dc6e050a30929ff0fec222c7409e999ade139b61"
+ "_ios_commit": "11af925a8b1d367b508c6f47287115f3f76b30b4"
 }
