@@ -449,7 +449,7 @@ def test_prompt_has_a_static_section_on_judging_progress():
     assert "Если среди доступных инструментов есть веб-поиск" not in prompt
     assert "не притворяйся, что искал в интернете" in prompt
     # Промпт — статичный префикс: ни даты, ни данных атлета.
-    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT)
+    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT + ai_trainer._evidence_block())
 
 
 def test_prompt_shapes_a_progress_review():
