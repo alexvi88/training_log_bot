@@ -807,3 +807,47 @@ async def test_hidden_names_are_real_catalog_templates():
     assert names >= seed_data.CATALOG_HIDDEN
     popular = {n for group in seed_data.CATALOG_POPULAR_FIRST.values() for n in group}
     assert not (seed_data.CATALOG_HIDDEN & popular)
+
+
+async def test_catalog_top_all_is_real_and_keeps_group_order():
+    """Общий топ «Все» не переставляет экран группы: внутри каждой группы
+    ранг идёт ровно по месту в `CATALOG_POPULAR_FIRST`, а дальше — по порядку
+    каталога."""
+    import seed_data
+
+    names = {name for _, name in seed_data.EXERCISE_TEMPLATES}
+    assert len(set(seed_data.CATALOG_TOP_ALL)) == len(seed_data.CATALOG_TOP_ALL)
+    assert set(seed_data.CATALOG_TOP_ALL) <= names
+    assert not (set(seed_data.CATALOG_TOP_ALL) & seed_data.CATALOG_HIDDEN)
+    by_group: dict[str, list[str]] = {}
+    for group, name in seed_data.EXERCISE_TEMPLATES:
+        if name not in by_group.setdefault(group, []):
+            by_group[group].append(name)
+    for group, members in by_group.items():
+        popular = list(seed_data.CATALOG_POPULAR_FIRST.get(group, ()))
+        expected = popular + [n for n in members if n not in popular]
+        ranked = sorted(members, key=seed_data.catalog_popularity)
+        assert ranked == expected, group
+
+
+async def test_all_catalog_starts_with_basics_and_ends_with_shrugs_and_abs():
+    """«Все»: сначала общий топ, шрагов и пресса по кругу вровень с грудью
+    нет (владелец: «в начале куча шрагов… и 500 упражнений на пресс»)."""
+    import seed_data
+
+    group_of = {}
+    for group, name in seed_data.EXERCISE_TEMPLATES:
+        group_of.setdefault(name, group)
+    shown = sorted((n for n in group_of if not seed_data.is_catalog_hidden(n)),
+                   key=seed_data.catalog_popularity)
+    top = len(seed_data.CATALOG_TOP_ALL)
+    assert shown[:top] == list(seed_data.CATALOG_TOP_ALL)
+    assert shown[:3] == ["Жим штанги лёжа", "Присед со штангой", "Подтягивания"]
+    head = shown[:top]
+    assert sum(group_of[n] == "Пресс" for n in head) <= 3
+    assert sum(group_of[n] == "Другое" for n in head) <= 1
+    rest = shown[top:]
+    groups = [group_of[n] for n in rest]
+    first_tail = next(i for i, g in enumerate(groups) if g in ("Пресс", "Другое"))
+    assert all(g in ("Пресс", "Другое") for g in groups[first_tail:])
+    assert groups[-1] == "Другое"
