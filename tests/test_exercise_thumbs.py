@@ -50,7 +50,7 @@ def test_every_catalog_thumb_url_points_at_a_thumb_file():
 def test_thumb_falls_back_to_full_frame_without_a_thumb_file(monkeypatch, tmp_path):
     monkeypatch.setattr(exercise_media, "THUMBS_DIR", str(tmp_path))
     url = exercise_media.thumb_url_for({"name": "Жим штанги лёжа", "original_name": "Жим штанги лёжа"})
-    assert url == "/media/exercises/barbell_bench_press_medium_grip_r5_1.jpg"
+    assert url == "/media/exercises/" + exercise_media.frame_name("barbell_bench_press_medium_grip", 1)
 
 
 @pytest.mark.asyncio
