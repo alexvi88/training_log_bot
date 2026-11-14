@@ -916,6 +916,13 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert asked["actions"], "тренер завёл упражнение — кнопка отката обязана прийти"
     assert len(asked["mentions"]["exercises"]) >= 2, "ответ назвал два упражнения — чипы обязаны прийти"
     await w.call("POST", "/ai/ask", json={"question": ""}, expect=400)
+    # Готовый вопрос «Как мой прогресс?» — под ответом карточка прогресса
+    # (progress_card): имена движений атлета на его языке, цели числами.
+    progress_turn = (await w.call("POST", "/ai/ask", json={
+        "question": i18n.t_in(lang, "ai.screen.preset.progress.question"),
+    }, expect=200)).json()
+    assert progress_turn["progress"] and progress_turn["progress"]["lifts"], "у атлета есть подходы — карточка обязана прийти"
+    assert any(lift["next"] for lift in progress_turn["progress"]["lifts"]), "цель на следующий раз обязана прийти"
     # Тот же ход стримом: события `chunk`/`status`/`done` — не JSON-ответ, и
     # обходчик их не читает, поэтому разбираем их здесь и меряем тем же
     # `language_violations`.

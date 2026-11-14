@@ -28,6 +28,11 @@
      "type": "AIMentions",
      "optional": false
     },
+    "progress": {
+     "type": "AIProgressCard",
+     "optional": true,
+     "default": true
+    },
     "limits": {
      "type": "AILimits",
      "optional": false
@@ -360,6 +365,86 @@
     },
     "sets": {
      "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "AIProgressCard": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "windowWeeks": {
+     "type": "Int",
+     "optional": false
+    },
+    "unit": {
+     "type": "String",
+     "optional": false
+    },
+    "lifts": {
+     "type": "[AIProgressCard.Lift]",
+     "optional": false
+    },
+    "more": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "AIProgressCard.Lift": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "points": {
+     "type": "[AIProgressCard.Point]",
+     "optional": false
+    },
+    "e1rm": {
+     "type": "Double",
+     "optional": false
+    },
+    "changePct": {
+     "type": "Int",
+     "optional": true
+    },
+    "next": {
+     "type": "AIProgressCard.Target",
+     "optional": true
+    }
+   }
+  },
+  "AIProgressCard.Point": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "e1rm": {
+     "type": "Double",
+     "optional": false
+    }
+   }
+  },
+  "AIProgressCard.Target": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "weight": {
+     "type": "Double",
+     "optional": false
+    },
+    "reps": {
+     "type": "Int",
+     "optional": false
+    },
+    "bodyweight": {
+     "type": "Bool",
      "optional": false
     }
    }
@@ -5953,5 +6038,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "4846a0ce98adc04bc7c05cc9ee49ce4abaa8bd42"
+ "_ios_commit": "dc6e050a30929ff0fec222c7409e999ade139b61"
 }

@@ -6975,6 +6975,34 @@ _PRESET_PREFETCH: dict[str, tuple[str, ...]] = {
 }
 
 
+def is_progress_preset(question: str) -> bool:
+    """Готовый вопрос «Как мой прогресс?» на любом языке — под ответом на него
+    приложение рисует карточку прогресса (progress_card)."""
+    asked = (question or "").strip()
+    key = "ai.screen.preset.progress.question"
+    return bool(asked) and any(asked == i18n.t_in(lang, key).strip() for lang in i18n.SUPPORTED)
+
+
+# Хвост вопроса «Как мой прогресс?» в приложении: под ответом оно само рисует
+# таблицу движений (progress_card) — e1RM за окно, прирост, цель. Тренер,
+# перечисляющий те же цифры текстом, дублирует таблицу стеной строк. В боте
+# таблицы нет — там этой строки нет и ответ прежний.
+APP_PROGRESS_CARD_NOTE = (
+    "Под твоим ответом приложение само покажет таблицу: каждое движение, его e1RM "
+    "за последние недели с приростом в процентах и цель на следующую тренировку. "
+    "Не перечисляй движения с цифрами e1RM и целями — это уже в таблице. Ответь "
+    "в 2–4 предложениях: общий вывод, что встало и почему, один главный шаг."
+)
+
+
+def _progress_card_line(question: str, *, for_client: bool = False) -> str:
+    """APP_PROGRESS_CARD_NOTE для хвоста вопроса — или пусто: только в
+    приложении, только на «Как мой прогресс?» и не в чате «программа атлету»."""
+    if for_client or not APP_CLIENT.get() or not is_progress_preset(question):
+        return ""
+    return APP_PROGRESS_CARD_NOTE
+
+
 def _preset_prefetch_tools(question: str) -> tuple[str, ...]:
     """Какие инструменты заранее вызвать для этого вопроса; пусто — не пресет."""
     asked = (question or "").strip()
@@ -7075,6 +7103,9 @@ async def _ask_plain(
     # днём они были заданы, а следующий вопрос допишет уже свежую.
     today = await _user_today(user_id)
     question_with_date = f"{question}\n\nСегодня {today.isoformat()}.\n{_client_line()}"
+    card_line = _progress_card_line(question, for_client=subject is not None)
+    if card_line:
+        question_with_date += f"\n{card_line}"
     # Пол — того, кто спрашивает. В режиме «программа атлету» (subject)
     # программа пишется для клиента живого тренера, и пол самого тренера
     # совету про клиента только навредит — там строки нет.
