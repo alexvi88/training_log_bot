@@ -1726,3 +1726,67 @@ def client_lift_verdict(changes: list[LiftChange], has_record: bool) -> Optional
     if down:
         return CLIENT_DROPPING
     return CLIENT_FLAT if changes else None
+
+
+# ---------- «Сила за N недель»: общий рост по всем движениям ----------
+
+#: Сколько первых и последних тренировок окна сравнивается медианой: одна
+#: удачная или разбитая тренировка не двигает итог.
+STRENGTH_EDGE_SESSIONS = 3
+#: Потолок веса одного движения: десять подходов жима из двадцати за окно не
+#: делают итог «ростом жима».
+STRENGTH_MAX_WEIGHT = 0.25
+#: |рост| меньше этого — «держится», а не «растёт» или «просело».
+STRENGTH_FLAT_PCT = 1.0
+
+
+@dataclass(frozen=True)
+class StrengthIndex:
+    #: Взвешенный рост, проценты (4.9 — это +4.9%).
+    growth_pct: float
+    lifts: int
+    up: int
+    flat: int
+    down: int
+
+
+def lift_change_pct(session_e1rms: list[float]) -> Optional[float]:
+    """Рост одного движения за окно, проценты: медиана последних тренировок
+    против медианы первых (по STRENGTH_EDGE_SESSIONS, на короткой истории —
+    по половине, чтобы края не перекрывались). None — меньше двух тренировок
+    или нет веса в начале (вес тела без отягощения)."""
+    n = len(session_e1rms)
+    k = min(STRENGTH_EDGE_SESSIONS, n // 2)
+    if k < 1:
+        return None
+    first = statistics.median(session_e1rms[:k])
+    last = statistics.median(session_e1rms[-k:])
+    if first <= 0:
+        return None
+    return (last / first - 1) * 100
+
+
+def strength_index(lifts: Iterable[tuple[list[float], int]]) -> Optional[StrengthIndex]:
+    """Общий рост силы по ВСЕМ движениям окна, а не по выросшим.
+
+    `lifts` — (лучший e1RM каждой тренировки по порядку, рабочих подходов в
+    окне) на движение. Вес движения — его доля подходов, но не больше
+    STRENGTH_MAX_WEIGHT, затем веса нормируются: что человек делает больше,
+    то и весит больше, но одно движение не решает за всех. Просевшие входят
+    со своим минусом — среднее по одним выросшим врало бы вверх."""
+    changes: list[tuple[float, int]] = []
+    for e1rms, sets_count in lifts:
+        change = lift_change_pct(e1rms)
+        if change is not None and sets_count > 0:
+            changes.append((change, sets_count))
+    if not changes:
+        return None
+    total_sets = sum(sets for _, sets in changes)
+    weights = [min(sets / total_sets, STRENGTH_MAX_WEIGHT) for _, sets in changes]
+    norm = sum(weights)
+    growth = sum(w / norm * change for w, (change, _) in zip(weights, changes, strict=True))
+    up = sum(1 for change, _ in changes if change >= STRENGTH_FLAT_PCT)
+    down = sum(1 for change, _ in changes if change <= -STRENGTH_FLAT_PCT)
+    return StrengthIndex(
+        growth_pct=round(growth, 1), lifts=len(changes), up=up, flat=len(changes) - up - down, down=down,
+    )

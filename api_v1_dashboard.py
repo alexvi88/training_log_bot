@@ -71,6 +71,9 @@ def _dashboard_json(
                  "exercise_id": exercise_id}
                 for exercise, growth, detail, exercise_id in data.lift_tiles
             ],
+            # «Сила за N недель» по всем движениям (dashboard_data.strength_json)
+            # или null; ключ добавлен, старые клиенты его не читают.
+            "strength": data.strength,
         },
     }
     # Фигура «ТЫ» в сцене зала: среднее рабочих подходов в неделю за 8 недель

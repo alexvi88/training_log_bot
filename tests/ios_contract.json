@@ -1818,6 +1818,48 @@
     "tiles": {
      "type": "[Dashboard.Lifts.Tile]",
      "optional": false
+    },
+    "strength": {
+     "type": "Dashboard.Lifts.Strength",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "Dashboard.Lifts.Strength": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "growthPct": {
+     "type": "Double",
+     "optional": false
+    },
+    "caption": {
+     "type": "String",
+     "optional": false
+    },
+    "breakdown": {
+     "type": "String",
+     "optional": false
+    },
+    "lifts": {
+     "type": "Int",
+     "optional": false
+    },
+    "up": {
+     "type": "Int",
+     "optional": false
+    },
+    "flat": {
+     "type": "Int",
+     "optional": false
+    },
+    "down": {
+     "type": "Int",
+     "optional": false
     }
    }
   },
@@ -6048,5 +6090,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "11af925a8b1d367b508c6f47287115f3f76b30b4"
+ "_ios_commit": "6d0da9b3b36d41a9c3d2b79df2d54214e974ab92"
 }
