@@ -730,6 +730,16 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     images = exercise_media.get_images_for(ex, await exercise_media.image_style(ex["user_id"]))
     if not images:
         return False
+    if len(images) == 1:
+        # Один кадр (статика, exercise_media.SINGLE_FRAME): альбом из одной
+        # картинки Telegram не принимает.
+        sent = await message.answer_photo(
+            FSInputFile(images[0]),
+            caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
+            parse_mode="HTML",
+        )
+        await state.update_data(exm_media_msg_ids=[sent.message_id])
+        return True
     media = [
         InputMediaPhoto(
             media=FSInputFile(images[0]),

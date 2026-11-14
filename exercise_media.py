@@ -366,7 +366,7 @@ FRAME_REVISION: dict[str, int] = {
     "side_lateral_raise": 4,
     "barbell_curl": 3,
     "triceps_pushdown": 3,
-    "plank": 3,
+    "plank": 4,
     "barbell_shrug": 4,
     "barbell_incline_bench_press_medium_grip": 3,
     "barbell_deadlift": 3,
@@ -437,7 +437,7 @@ FRAME_REVISION: dict[str, int] = {
     "smith_machine_bench_press": 2,
     "leverage_high_row": 2,
     "front_barbell_squat": 3,
-    "upright_barbell_row": 2,
+    "upright_barbell_row": 3,
     "reverse_barbell_curl": 2,
     "tricep_dumbbell_kickback": 2,
     "flat_bench_lying_leg_raise": 2,
@@ -704,13 +704,32 @@ def catalog_key(ex) -> str:
 IMAGE_STYLES = ("drawing", "photo")
 
 
+# Упражнения, которые показываются одним кадром: статика, где «старт» и
+# «конец» — одна поза (владелец про планку: «нахуя там 1 кадр… надо всего
+# один оставить»). Значение — номер стокового кадра для «Фото»: у планки
+# сток `_1` — подготовка на колене, а сама планка — `_2`. Рисунок такого
+# упражнения держит позу в `_1` (`_2` — та же картинка: сайт и проверки
+# ревизий ходят по паре).
+SINGLE_FRAME: dict[str, int] = {"plank": 2}
+
+
+def frame_numbers(slug: str) -> tuple[int, ...]:
+    """Какие кадры рисунка показывать: (1,) у `SINGLE_FRAME`, иначе (1, 2)."""
+    return (1,) if slug in SINGLE_FRAME else (1, 2)
+
+
 def get_images(exercise_name: str, style: str = "drawing") -> list[str]:
-    """Absolute paths to the [start, end] position photos, or [] if none exist."""
+    """Absolute paths to the [start, end] position photos (one for
+    `SINGLE_FRAME`), or [] if none exist."""
     slug = EXERCISE_IMAGE_SLUGS.get(exercise_name)
     if slug is None:
         return []
-    name = (lambda n: f"{slug}_{n}.jpg") if style == "photo" else (lambda n: frame_name(slug, n))
-    paths = [os.path.join(MEDIA_DIR, name(1)), os.path.join(MEDIA_DIR, name(2))]
+    if style == "photo":
+        numbers = (SINGLE_FRAME[slug],) if slug in SINGLE_FRAME else (1, 2)
+        names = [f"{slug}_{n}.jpg" for n in numbers]
+    else:
+        names = [frame_name(slug, n) for n in frame_numbers(slug)]
+    paths = [os.path.join(MEDIA_DIR, name) for name in names]
     return paths if all(os.path.exists(p) for p in paths) else []
 
 

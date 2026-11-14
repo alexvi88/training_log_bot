@@ -2348,7 +2348,15 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     name = seed_data.localized_exercise_name(identity, lang)
     base = base_url(request)
     frame_sizes = "(max-width: 760px) 50vw, 370px"
-    frames = (
+    if slug in exercise_media.SINGLE_FRAME:
+        # Статика (планка): одна поза — один кадр, без подписей «старт/конец».
+        frames = (
+            "<div class=frames><figure>" + exercise_picture(slug, 2, name, sizes=frame_sizes, widths=(360, 720),
+                                                            width=720, height=540, lazy=False)
+            + "</figure></div>"
+        )
+    else:
+        frames = (
         "<div class=frames>"
         "<figure>" + exercise_picture(slug, 1, t("seo.exercise.frame_start", name=name), sizes=frame_sizes, widths=(720,),
                                       width=720, height=540, lazy=False)
@@ -2359,7 +2367,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         + f'<figcaption><b>2</b><span class=cap-long>{_e(t("seo.exercise.cap_end"))}</span>'
         f'<span class=cap-short>{_e(t("seo.exercise.cap_end_short"))}</span></figcaption></figure>'
         "</div>"
-    )
+        )
     steps = "".join(f"<li>{_e(s)}</li>" for s in _steps(identity, lang))
     mistakes = "".join(f"<li>{_e(m)}</li>" for m in t(f"seo.ex.{slug}.mistakes").split("\n") if m.strip())
     programs = _program_pages_for(identity)
@@ -2394,7 +2402,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     article = {
         "@context": "https://schema.org", "@type": "Article",
         "headline": t("seo.exercise.title", name=name)[:110], "description": lead, "inLanguage": hreflang(lang),
-        "image": [base + _media_url(exercise_media.frame_name(slug, 1)), base + _media_url(exercise_media.frame_name(slug, 2))],
+        "image": [base + _media_url(exercise_media.frame_name(slug, n)) for n in exercise_media.frame_numbers(slug)],
         "mainEntityOfPage": base + url_for(page, lang),
         "author": {"@type": "Organization", "name": t("seo.brand"), "url": home},
         "publisher": {"@type": "Organization", "name": t("seo.brand"), "url": home},
@@ -2551,7 +2559,7 @@ def page_images(page: Page, lang: str) -> list[str]:
         return [seo_static.asset_url(f"screens/{shots}-{n}.jpg") for n, _w, _h in seo_static.SCREENS[shots]]
     if page.kind == "exercise":
         slug = _EXERCISE_BY_URL[page.arg]
-        return [_media_url(exercise_media.frame_name(slug, 1)), _media_url(exercise_media.frame_name(slug, 2))]
+        return [_media_url(exercise_media.frame_name(slug, n)) for n in exercise_media.frame_numbers(slug)]
     if page.kind == "pair":
         import seo_library
 

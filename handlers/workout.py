@@ -236,6 +236,20 @@ async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
             return []
         sent = await bot.send_message(chat_id=chat_id, text=caption, parse_mode="HTML")
         return [sent.message_id]
+    if len(images) == 1:
+        # Один кадр (статика, exercise_media.SINGLE_FRAME): альбом из одной
+        # картинки Telegram не принимает.
+        path = images[0]
+        sent = await bot.send_photo(
+            chat_id=chat_id,
+            photo=exercise_media.cached_file_id(path) or FSInputFile(path),
+            caption=caption,
+            parse_mode="HTML",
+        )
+        photos = getattr(sent, "photo", None)
+        if photos:
+            exercise_media.remember_file_id(path, photos[-1].file_id)
+        return [sent.message_id]
     media = [
         InputMediaPhoto(
             media=exercise_media.cached_file_id(path) or FSInputFile(path),

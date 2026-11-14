@@ -55,8 +55,8 @@ async def _linked_client(fresh_db, client_factory, telegram_id=111):
 # media/exercises, но без демо-клипа (*_demo.mp4 не снят ни для одного
 # упражнения на момент написания теста) — покрывает и наличие фото, и
 # отсутствие клипа одним упражнением.
-KNOWN_TEMPLATE = "Планка"
-KNOWN_SLUG = "plank"
+KNOWN_TEMPLATE = "Скручивания"
+KNOWN_SLUG = "crunches"
 
 
 async def _create_exercise(fresh_db, user_id: int, name: str) -> int:
@@ -85,6 +85,14 @@ async def test_media_for_exercise_with_known_template(fresh_db, client_factory):
     assert body["images"][1].endswith(exercise_media.frame_name(KNOWN_SLUG, 2))
     # никакого клипа для этого упражнения ещё не снято
     assert body["animation"] is None
+
+
+async def test_media_for_plank_is_one_frame(fresh_db, client_factory):
+    """Планка — статика (exercise_media.SINGLE_FRAME): приложению уходит один кадр."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = await _create_exercise(fresh_db, 111, "Планка")
+    body = (await client.get(f"/exercises/{exercise_id}/media")).json()
+    assert body["images"] == ["/media/exercises/" + exercise_media.frame_name("plank", 1)]
 
 
 @pytest.mark.asyncio

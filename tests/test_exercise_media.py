@@ -53,3 +53,13 @@ def test_redrawn_frames_are_three_by_two():
             with Image.open(path) as im:
                 w, h = im.size
             assert abs(w / h - 1.5) < 0.02, f"{path}: {w}×{h}"
+
+
+def test_plank_is_one_frame_in_both_styles():
+    """Планка — статика: один кадр, и в рисунке, и в «Фото» (там — сама
+    планка, `_2`, а не подготовка на колене `_1`)."""
+    drawing = exercise_media.get_images("Планка")
+    assert [os.path.basename(p) for p in drawing] == [exercise_media.frame_name("plank", 1)]
+    photo = exercise_media.get_images("Планка", "photo")
+    assert [os.path.basename(p) for p in photo] == ["plank_2.jpg"]
+    assert len(exercise_media.get_images("Жим штанги лёжа")) == 2
