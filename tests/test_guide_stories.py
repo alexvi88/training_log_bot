@@ -349,3 +349,17 @@ def test_guide_cover_route_serves_the_file_and_refuses_traversal(tmp_path, monke
             assert e.status_code == 404
         else:
             raise AssertionError(name)
+
+
+SHORT_TITLE_MAX = 30
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_card_title_is_short_and_cover_keeps_full_h1(lang):
+    """На карточке «Гайдов» длинный заголовок статьи переносился в три строки —
+    карточке своё короткое имя, обложка истории держит полный h1."""
+    for slug in seo_library.GUIDES:
+        g = G.static_guide(slug, lang)
+        assert g["title"] == i18n.t_in(lang, f"seo.guide.{slug}.short")
+        assert len(g["title"]) <= SHORT_TITLE_MAX, (lang, slug, g["title"])
+        assert g["slides"][0]["title"] == i18n.t_in(lang, f"seo.guide.{slug}.h1")
