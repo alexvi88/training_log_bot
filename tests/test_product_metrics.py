@@ -264,6 +264,14 @@ def test_review_prompt_event_keeps_reason_and_counts():
     ) == {}
 
 
+def test_push_ask_card_event_keeps_known_action_and_result():
+    assert product_metrics.clean_props(
+        "push_ask_card", {"action": "result", "result": "granted", "text": "что ввёл человек"}
+    ) == {"action": "result", "result": "granted"}
+    assert product_metrics.clean_props("push_ask_card", {"action": "shown"}) == {"action": "shown"}
+    assert product_metrics.clean_props("push_ask_card", {"action": "hack", "result": "maybe"}) == {}
+
+
 def test_rating_slide_events_keep_only_nth():
     for event in ("rating_slide_shown", "rating_slide_tap"):
         assert product_metrics.clean_props(event, {"nth": 2, "text": "что ввёл человек"}) == {"nth": 2}

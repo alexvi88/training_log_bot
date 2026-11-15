@@ -179,6 +179,10 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # «Оценить в App Store»; nth — который это показ у аккаунта.
     "rating_slide_shown": frozenset({"nth"}),
     "rating_slide_tap": frozenset({"nth"}),
+    # Переспрос уведомлений карточкой в ленте тренировки (iOS PushAskCard):
+    # action shown|enable|settings|dismiss|result; у result — ответ системного
+    # окна (granted|denied).
+    "push_ask_card": frozenset({"action", "result"}),
     # Сервис для тренеров: тренер отправил код приглашения (action shared|copied).
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
@@ -250,6 +254,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
+    ("push_ask_card", "action"): frozenset({"shown", "enable", "settings", "dismiss", "result"}),
+    ("push_ask_card", "result"): frozenset({"granted", "denied"}),
     (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
     (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
     (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,
