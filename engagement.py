@@ -6,7 +6,7 @@ never touches anything that's already visible in a just-finished workout
 screen (that's `handlers/workout.py`'s job). Priority order below (first
 match wins, at most one push per user per day):
 
-  1. Серия: рубеж    — Mondays only, week-streak hit a milestone (celebration)
+  1. Серия: рубеж    — Tuesdays only (streak as of Monday), milestone hit (celebration)
   2. Серия на кону   — weekend only, a running week-streak about to break
   3. Пропуск         — exact day-since-last-workout milestones (jabs live here)
   4. Возвращение     — 21+ days gone, then every 10 days
@@ -188,6 +188,25 @@ def streak_milestone(dashboard: analytics.Dashboard, today: dt.date) -> Optional
     if dashboard.week_streak in STREAK_MILESTONE_WEEKS:
         return dashboard.week_streak
     return None
+
+
+#: Рубеж серии приходит во вторник: утро понедельника всегда за «Итогами
+#: недели» (build_weekly_digest_push), а пуш в день один. Серию при этом
+#: считаем на понедельник (streak_milestone) — там она однозначна.
+STREAK_MILESTONE_WEEKDAY = 1  # вторник
+
+
+def streak_milestone_due(dates: list[dt.date], today: dt.date) -> Optional[int]:
+    """Рубеж серии, который поздравить сегодня (во вторник), или None.
+
+    Считается на вчерашний понедельник по тренировкам до него включительно:
+    логика однократности streak_milestone (понедельник + точное совпадение)
+    остаётся прежней, а тренировка вторника не сдвигает серию на +1 и не
+    съедает рубеж."""
+    if today.weekday() != STREAK_MILESTONE_WEEKDAY:
+        return None
+    monday = today - dt.timedelta(days=1)
+    return streak_milestone(analytics.compute_dashboard([d for d in dates if d <= monday], monday), monday)
 
 
 def rank_near_missing(
@@ -445,11 +464,8 @@ async def _priority_signal(
     telegram_id: int, dates: list[dt.date], dashboard: analytics.Dashboard, today: dt.date,
     *, dry_run: bool = False,
 ) -> Optional[PushDecision]:
-    """Сигналы вечернего слота, которые стоят в приоритете выше дайджеста и могут
-    выпасть на понедельник: рубеж серии (только пн), серия на кону (сб/вс —
-    в понедельник молчит), пропуск, возвращение. Вынесены отдельно, потому что
-    утренний дайджест понедельника спрашивает их же, чтобы уступить (см.
-    build_weekly_digest_push).
+    """Сигналы вечернего слота в порядке приоритета: рубеж серии (вторник, см.
+    streak_milestone_due), серия на кону (сб/вс), пропуск, возвращение.
 
     `dry_run` — только узнать, сработает ли сигнал: без текста (text пустой).
     pick_text двигает мешок ротации, и утренний вопрос «уступить ли?» иначе
@@ -457,7 +473,7 @@ async def _priority_signal(
     async def text_for(category: str, **params: object) -> str:
         return "" if dry_run else await push_texts.pick_text(telegram_id, category, **params)
 
-    milestone_weeks = streak_milestone(dashboard, today)
+    milestone_weeks = streak_milestone_due(dates, today)
     if milestone_weeks is not None:
         weeks_phrase = _weeks_phrase(milestone_weeks)
         text = await text_for(push_texts.STREAK_MILESTONE, weeks=weeks_phrase)
@@ -549,12 +565,12 @@ async def build_weekly_digest_push(
     — DIGEST_LOOKBACK_DAYS суток по вчерашний день включительно.
 
     Один пуш в день (has_push_today): ушёл дайджест — вечерний слот того же
-    понедельника молчит. Зато дайджест уступает тем вечерним сигналам, что и в
-    воскресной схеме стояли выше него и могут выпасть на понедельник
-    (_priority_signal): иначе рубеж серии, который бывает только по
-    понедельникам, не пришёл бы активному атлету никогда, а «неделя без зала»
-    тонула бы в «на прошлой неделе — 0 тренировок». Уступил — вечером уйдёт тот
-    сигнал, а дайджест в эту неделю пропускается.
+    понедельника молчит. Дайджест не уступает другим сигналам (владелец:
+    «итоги всегда»): рубеж серии для этого перенесён на вторник
+    (streak_milestone_due). Не приходит он только тому, у кого на прошлой
+    неделе не было ни одной тренировки: «прошлая неделя дала 0 тренировок» —
+    не итог, и понедельник тогда остаётся вечернему сигналу (пропуск,
+    возвращение).
 
     `allow_ai=False` — без вызова модели, статичным текстом ротации: так он
     строится тем, кто выключил пуши и получит его только во «Уведомлениях» —
@@ -570,11 +586,9 @@ async def build_weekly_digest_push(
     if not date_strings:
         return None
     dates = [dt.date.fromisoformat(s) for s in date_strings]
-    dashboard = analytics.compute_dashboard(dates, today)
-    if await _priority_signal(telegram_id, dates, dashboard, today, dry_run=True) is not None:
-        return None
-
     week_start, week_end = digest_week(today)
+    if not any(week_start <= d <= week_end for d in dates):
+        return None
     yesterday = today - dt.timedelta(days=1)
     since = yesterday - dt.timedelta(days=DIGEST_LOOKBACK_DAYS - 1)
     tonnage = sum((await db.daily_tonnage(telegram_id, since.isoformat(), yesterday.isoformat())).values())

@@ -24,7 +24,7 @@ END_MARKER = "<!-- PUSH_TABLE_END -->"
 # Trigger descriptions per category — kept here (not in push_texts.py) since
 # they describe engagement.py's orchestration logic, not the copy itself.
 TRIGGERS = {
-    push_texts.STREAK_MILESTONE: "Пн, `week_streak` ∈ {4, 8, 12, 26, 52} — ровно на рубеже",
+    push_texts.STREAK_MILESTONE: "Вт (серия на понедельник), `week_streak` ∈ {4, 8, 12, 26, 52} — ровно на рубеже",
     push_texts.STREAK_AT_RISK: "Сб/вс, `week_streak >= 2`, тренировок на этой неделе — 0",
     push_texts.SKIP_3: "Ровно 3 дня с последней тренировки",
     push_texts.SKIP_5: "Ровно 5 дней с последней тренировки",
@@ -35,8 +35,8 @@ TRIGGERS = {
     push_texts.RANK_NEAR: "Пт: до следующего звания ≤ 3 тренировок, тоннаж и частота уже закрыты",
     push_texts.PLATEAU: "Вс: тот же рабочий вес 3 тренировки подряд, каждый раз 12+ повторов",
     push_texts.WEEKLY_DIGEST: (
-        "Пн утром (`WEEKLY_DIGEST_HOUR`), про прошлую неделю пн–вс; тоннаж за 30 дней по вчера > 0; "
-        "уступает рангам 1–4 того же понедельника"
+        "Пн утром (`WEEKLY_DIGEST_HOUR`), про прошлую неделю пн–вс; на прошлой неделе ≥ 1 тренировки; "
+        "не уступает никому — вечером понедельника пуша нет"
     ),
     push_texts.NEWBIE_NUDGE: (
         "Ни одной завершённой тренировки; день 1 после регистрации, затем каждые 5 дней, до дня 30"
