@@ -74,6 +74,15 @@ async def test_reminds_once_after_idle_then_finishes_after_four_hours(fresh_db, 
         "SELECT event, platform FROM analytics_events WHERE user_id = ? AND event = 'workout_finished'", (uid,)
     )
     assert [tuple(r) for r in await cur.fetchall()] == [("workout_finished", "ios")]
+    # Закрыл сервер — у события и у вехи `by=auto`: воронка отделяет их от
+    # закрытых руками.
+    cur = await db.conn().execute(
+        "SELECT event, props FROM analytics_events WHERE user_id = ? "
+        "AND event IN ('workout_finished', 'first_workout_finished')",
+        (uid,),
+    )
+    tagged = {event: json.loads(props).get("by") for event, props in await cur.fetchall()}
+    assert tagged == {"workout_finished": "auto", "first_workout_finished": "auto"}
     cur = await db.conn().execute("SELECT category, title, body, route FROM inbox WHERE user_id = ?", (uid,))
     rows = await cur.fetchall()
     assert [r["category"] for r in rows] == [workout_autoclose.CATEGORY_AUTO_FINISHED]

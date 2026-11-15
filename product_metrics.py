@@ -30,7 +30,8 @@
   `workout_started` (`kind` live|backfill, `plan` yes|no), `set_logged`
   (`source` bot|app|lock_screen|watch, `workout` live|backfill|edit — по одному
   на подход), `workout_finished` (`kind`, `plan`, `sets` и `duration` —
-  корзины), вехи по разу на человека `first_set`, `first_workout_finished`,
+  корзины; `by=auto` — закрыл сервер, workout_autoclose, — у вехи тоже),
+  вехи по разу на человека `first_set`, `first_workout_finished`,
   `second_workout_finished` (импорт не в счёт), `coach_linked` (под атлетом),
   `ai_question` (`kind` text|photo|video|voice — на списании квоты, то есть на
   отвеченный вопрос), `video_review` (состоявшийся разбор видео), `import_done`
@@ -174,6 +175,14 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # приложение» в настройках; workouts — законченных у нас тренировок, nth — какой
     # это запрос у аккаунта. Показала ли система окно, iOS не говорит.
     "review_prompt_requested": frozenset({"reason", "workouts", "nth"}),
+    # Слайд «Оцени дневник» в итогах (iOS FinishRateSlide): долистал / нажал
+    # «Оценить в App Store»; nth — который это показ у аккаунта.
+    "rating_slide_shown": frozenset({"nth"}),
+    "rating_slide_tap": frozenset({"nth"}),
+    # Переспрос уведомлений карточкой в ленте тренировки (iOS PushAskCard):
+    # action shown|enable|settings|dismiss|result; у result — ответ системного
+    # окна (granted|denied).
+    "push_ask_card": frozenset({"action", "result"}),
     # Сервис для тренеров: тренер отправил код приглашения (action shared|copied).
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
@@ -245,6 +254,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
+    ("push_ask_card", "action"): frozenset({"shown", "enable", "settings", "dismiss", "result"}),
+    ("push_ask_card", "result"): frozenset({"granted", "denied"}),
     (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
     (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
     (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,

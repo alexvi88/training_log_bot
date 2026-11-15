@@ -6223,7 +6223,7 @@ def backdated_finished_at(workout) -> str:
 
 
 async def finish_workout(
-    workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None
+    workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None, *, auto: bool = False
 ) -> bool:
     """Mark an active workout finished. Returns False if it wasn't active any
     more — i.e. somebody else just finished it.
@@ -6232,6 +6232,10 @@ async def finish_workout(
     "is it still active?" guard is several awaits away from getting here, which
     is enough of a window for a double-tapped "🏁 Завершить" to produce two
     finish cards for one workout.
+
+    `auto` — закрыл сервер, а не человек (workout_autoclose): события
+    `workout_finished` и вехи получают `by=auto`, чтобы воронка отделяла
+    брошенные пробные тренировки от закрытых руками.
     """
     finished_at = finished_at or now_iso()
     async with _write_lock:
@@ -6245,7 +6249,7 @@ async def finish_workout(
         )
         done = cur.rowcount > 0
         if done and before is not None:
-            await _emit_workout_finished(before, finished_at)
+            await _emit_workout_finished(before, finished_at, auto=auto)
         await conn().commit()
         return done
 
@@ -12377,10 +12381,11 @@ async def _emit_workout_started(user_id: int, status: str, routine_id: Optional[
     )
 
 
-async def _emit_workout_finished(workout: Any, finished_at: str) -> None:
+async def _emit_workout_finished(workout: Any, finished_at: str, *, auto: bool = False) -> None:
     """`workout_finished` и вехи первой/второй законченной тренировки — под
     замком finish_workout, после UPDATE. `workout` — строка ДО завершения
-    (статус ещё active/backfill)."""
+    (статус ещё active/backfill). `auto` — закрыл сервер: свойство `by=auto`
+    у события и у вехи; закрытые руками его не несут."""
     if lifecycle_events.platform() is None:
         return
     try:
@@ -12399,16 +12404,15 @@ async def _emit_workout_finished(workout: Any, finished_at: str) -> None:
                     dt.datetime.fromisoformat(finished_at)
                     - dt.datetime.fromisoformat(workout["started_at"])
                 ).total_seconds()
-        await _emit_event(
-            user_id,
-            lifecycle_events.WORKOUT_FINISHED,
-            {
-                "kind": "backfill" if backfill else "live",
-                "plan": "yes" if workout["routine_id"] else "no",
-                "sets": lifecycle_events.sets_bucket(n_sets),
-                "duration": lifecycle_events.duration_bucket(seconds),
-            },
-        )
+        props = {
+            "kind": "backfill" if backfill else "live",
+            "plan": "yes" if workout["routine_id"] else "no",
+            "sets": lifecycle_events.sets_bucket(n_sets),
+            "duration": lifecycle_events.duration_bucket(seconds),
+        }
+        if auto:
+            props["by"] = "auto"
+        await _emit_event(user_id, lifecycle_events.WORKOUT_FINISHED, props)
         if not n_sets:
             return
         # Сколько у человека законченных своих тренировок, считая эту, — до
@@ -12425,7 +12429,10 @@ async def _emit_workout_finished(workout: Any, finished_at: str) -> None:
             2: lifecycle_events.SECOND_WORKOUT_FINISHED,
         }.get(finished)
         if milestone:
-            await _emit_event(user_id, milestone, {"kind": "backfill" if backfill else "live"}, once=True)
+            milestone_props = {"kind": "backfill" if backfill else "live"}
+            if auto:
+                milestone_props["by"] = "auto"
+            await _emit_event(user_id, milestone, milestone_props, once=True)
     except Exception:
         logger.exception("lifecycle: не записал workout_finished")
 
