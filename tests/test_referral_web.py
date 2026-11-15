@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import httpx
 import pytest
@@ -247,3 +248,116 @@ async def test_malformed_code_is_400_in_athletes_language(fresh_db, client_facto
 
 def test_route_is_registered():
     assert any(getattr(r, "path", "") == "/me/referral" for r in api_v1.routes)
+
+
+# --- `source` при заведении аккаунта через Sign in with Apple ---------------------
+
+
+def _apple(monkeypatch, apple_user_id: str = "apple-src"):
+    import apple_signin
+
+    monkeypatch.setattr(
+        apple_signin, "verify_identity_token",
+        lambda token: apple_signin.AppleIdentity(apple_user_id=apple_user_id, email=None),
+    )
+
+
+async def _signup_event(user_id: int):
+    cur = await db.conn().execute(
+        "SELECT props, platform FROM analytics_events WHERE user_id = ? AND event = 'signup'", (user_id,)
+    )
+    return await cur.fetchone()
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("src_tiktok", ("src_tiktok", None)),
+        ("ref_801", ("referral", 801)),
+        ("ref_-1000000005", ("referral", -1000000005)),
+        ("coach_ABC123", ("coach_invite", None)),
+        ("", None),
+        ("   ", None),
+        ("hello", None),  # не разобралась — пусто, а не unknown
+        ("src_", None),
+        (None, None),
+        (42, None),
+        ("src_" + "x" * 80, None),
+    ],
+)
+def test_app_signup_attribution(raw, expected):
+    got = acquisition.app_signup_attribution(raw)
+    assert (None if got is None else (got.source, got.referrer_id)) == expected
+
+
+async def test_apple_signup_with_channel_source(fresh_db, client_factory, monkeypatch):
+    _apple(monkeypatch)
+    resp = await client_factory().post(
+        "/auth/apple", json={"identity_token": "t", "source": "src_tiktok"}
+    )
+    assert resp.status_code == 200, resp.text
+    user_id = resp.json()["user_id"]
+    user = await db.get_user(user_id)
+    assert user["source"] == "src_tiktok" and user["referrer_id"] is None
+    props, platform = await _signup_event(user_id)
+    assert platform == "ios" and json.loads(props) == {"source": "src_tiktok"}
+
+
+async def test_apple_signup_with_referral_source_counts_for_the_author(fresh_db, client_factory, monkeypatch):
+    await fresh_db.get_or_create_user(telegram_id=REFERRER, username="ref")
+    _apple(monkeypatch)
+    resp = await client_factory().post(
+        "/auth/apple", json={"identity_token": "t", "source": f"ref_{REFERRER}"}
+    )
+    assert resp.status_code == 200, resp.text
+    user_id = await db.resolve_auth_identity("apple", "apple-src")
+    user = await db.get_user(user_id)
+    assert user["source"] == acquisition.SOURCE_REFERRAL and user["referrer_id"] == REFERRER
+    # Первое касание: поздний код после входа источник не переписывает.
+    client = client_factory()
+    client.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+    await fresh_db.get_or_create_user(telegram_id=REFERRER + 1, username="ref2")
+    late = await client.post("/me/referral", json={"code": f"ref_{REFERRER + 1}"})
+    assert late.json() == {"applied": False}
+    assert (await db.get_user(user_id))["referrer_id"] == REFERRER
+
+
+async def test_apple_signup_referral_to_unknown_author_keeps_source_without_author(
+    fresh_db, client_factory, monkeypatch
+):
+    _apple(monkeypatch)
+    resp = await client_factory().post("/auth/apple", json={"identity_token": "t", "source": "ref_424242"})
+    assert resp.status_code == 200, resp.text
+    user = await db.get_user(await db.resolve_auth_identity("apple", "apple-src"))
+    assert user["source"] == acquisition.SOURCE_REFERRAL and user["referrer_id"] is None
+
+
+async def test_apple_signup_without_or_with_junk_source_leaves_it_empty(fresh_db, client_factory, monkeypatch):
+    """Без метки источник пуст (не organic): так поздний /me/referral ещё
+    может лечь. Мусор в поле вход не срывает."""
+    await fresh_db.get_or_create_user(telegram_id=REFERRER, username="ref")
+    _apple(monkeypatch)
+    resp = await client_factory().post(
+        "/auth/apple", json={"identity_token": "t", "source": {"utm": "x"}}
+    )
+    assert resp.status_code == 200, resp.text
+    user_id = await db.resolve_auth_identity("apple", "apple-src")
+    assert (await db.get_user(user_id))["source"] is None
+    props, _ = await _signup_event(user_id)
+    assert props is None
+    client = client_factory()
+    client.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+    claimed = await client.post("/me/referral", json={"code": f"ref_{REFERRER}"})
+    assert claimed.json() == {"applied": True}
+
+
+async def test_apple_source_is_ignored_for_an_existing_account(fresh_db, client_factory, monkeypatch):
+    _apple(monkeypatch)
+    first = await client_factory().post("/auth/apple", json={"identity_token": "t"})
+    assert first.status_code == 200
+    again = await client_factory().post(
+        "/auth/apple", json={"identity_token": "t", "source": "src_tiktok"}
+    )
+    assert again.status_code == 200
+    user_id = await db.resolve_auth_identity("apple", "apple-src")
+    assert (await db.get_user(user_id))["source"] is None
