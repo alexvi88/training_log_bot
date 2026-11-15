@@ -393,10 +393,12 @@ async def test_hint_names_the_most_lagging_group_that_has_sets(fresh_db, client_
 
 # ---------- разбор тренера: хранение, чистка, снос ----------
 
-async def test_sunday_ai_digest_is_stored_and_push_route_carries_the_week(
+async def test_monday_ai_digest_is_stored_and_push_route_carries_last_week(
     fresh_db, user_id, monkeypatch
 ):
-    sunday = dt.date(2026, 7, 19)
+    # Пуш — утром понедельника 20 июля, про неделю 13–19 июля: ключ сохранённого
+    # разбора и маршрута — её понедельник, а не сегодняшний.
+    monday = dt.date(2026, 7, 20)
     start = "2026-07-18T10:00:00"
     wid = await fresh_db.create_finished_workout(user_id, start, start)
     block = await fresh_db.create_block(wid, "single")
@@ -405,12 +407,16 @@ async def test_sunday_ai_digest_is_stored_and_push_route_carries_the_week(
     await fresh_db.append_set(block, ex, 0, 100.0, 8)
     monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
 
-    async def fake_digest(uid):
+    asked = []
+
+    async def fake_digest(uid, week_start=None):
+        asked.append(week_start)
         return "ПРИВЕТ АТЛЕТ! Неделя выдалась крепкой."
 
     monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", fake_digest)
-    decision = await engagement.build_daily_push(user_id, sunday)
+    decision = await engagement.build_weekly_digest_push(user_id, monday)
     assert decision.category == push_texts.AI_WEEKLY
+    assert asked == [dt.date(2026, 7, 13)]
     assert decision.ios_route_params == {"week": "2026-07-13"}
     assert push_ios.ios_route(decision.category, **decision.ios_route_params) == {
         "screen": "dashboard", "week": "2026-07-13",
@@ -427,7 +433,7 @@ async def test_static_digest_also_routes_to_its_week(fresh_db, user_id, monkeypa
     await fresh_db.add_block_exercise(block, ex, 0)
     await fresh_db.append_set(block, ex, 0, 100.0, 8)
     monkeypatch.setattr(config, "AI_WEEKLY_DIGEST_ENABLED", False)
-    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 19))
+    decision = await engagement.build_weekly_digest_push(user_id, dt.date(2026, 7, 20))
     assert decision.category == push_texts.WEEKLY_DIGEST
     assert decision.ios_route_params == {"week": "2026-07-13"}
     assert await fresh_db.get_weekly_digest(user_id, "2026-07-13") is None

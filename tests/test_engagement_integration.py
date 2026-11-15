@@ -122,7 +122,7 @@ async def test_friday_rank_near_push_names_the_rank_and_the_gap(fresh_db, user_i
 
 
 async def _seed_recent_workout(db, user_id):
-    # Sunday 2026-07-19; a workout the day before → tonnage>0, day-since-last not a milestone.
+    # Saturday 2026-07-18; on Sunday 19th / Monday 20th → tonnage>0, day-since-last not a milestone.
     await db.create_finished_workout(
         user_id, started_at="2026-07-18T10:00:00", finished_at="2026-07-18T11:00:00"
     )
@@ -135,33 +135,169 @@ async def _seed_recent_workout(db, user_id):
     await db.add_set(block, ex_id, 1, 0, 100.0, 8)
 
 
-async def test_sunday_digest_uses_ai_when_available(fresh_db, user_id, monkeypatch):
+async def _workout_with_set(db, user_id, day: str, weight: float, reps: int = 10) -> None:
+    wid = await db.create_finished_workout(
+        user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+    )
+    block = await db.create_block(wid, "single")
+    gid = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    ex_id = await db.create_exercise(user_id, f"Жим {day}", gid)
+    await db.add_block_exercise(block, ex_id, 0)
+    await db.add_set(block, ex_id, 1, 0, weight, reps)
+
+
+MONDAY = dt.date(2026, 7, 20)
+SUNDAY = dt.date(2026, 7, 19)
+
+
+async def test_monday_digest_uses_ai_when_available(fresh_db, user_id, monkeypatch):
     await _seed_recent_workout(fresh_db, user_id)
     monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
+    asked = []
 
-    async def fake_digest(uid):
+    async def fake_digest(uid, week_start=None):
+        asked.append(week_start)
         return "ПРИВЕТ АТЛЕТ! Неделя выдалась крепкой."
 
     monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", fake_digest)
 
-    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 19))  # Sunday
+    decision = await engagement.build_weekly_digest_push(user_id, MONDAY)
     assert decision is not None
     assert decision.category == push_texts.AI_WEEKLY
     assert decision.text.startswith("ПРИВЕТ АТЛЕТ")
+    # Модели передана прошлая неделя явно — её понедельник.
+    assert asked == [dt.date(2026, 7, 13)]
 
 
-async def test_sunday_digest_falls_back_to_static_when_ai_returns_none(fresh_db, user_id, monkeypatch):
+async def test_monday_digest_falls_back_to_static_when_ai_returns_none(fresh_db, user_id, monkeypatch):
     await _seed_recent_workout(fresh_db, user_id)
     monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
 
-    async def no_digest(uid):
+    async def no_digest(uid, week_start=None):
         return None
 
     monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", no_digest)
 
-    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 19))
+    decision = await engagement.build_weekly_digest_push(user_id, MONDAY)
     assert decision is not None
     assert decision.category == push_texts.WEEKLY_DIGEST
+
+
+async def test_monday_digest_describes_last_week(fresh_db, user_id, monkeypatch):
+    """Утром понедельника dashboard.this_week = 0, а пуш про прошлую неделю:
+    число тренировок — за пн–вс прошлой, тоннаж «за месяц» — 30 суток по
+    вчера, ключ недели — её понедельник."""
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    # Прошлая неделя 13–19 июля: три тренировки по 1т (100кг × 10).
+    for day in ("2026-07-13", "2026-07-15", "2026-07-18"):
+        await _workout_with_set(fresh_db, user_id, day, 100.0)
+    # Неделей раньше — одна, в 30-дневное окно (20 июня – 19 июля) входит.
+    await _workout_with_set(fresh_db, user_id, "2026-07-08", 100.0)
+    # Первый день окна — в месяц входит, день до него — нет.
+    await _workout_with_set(fresh_db, user_id, "2026-06-20", 50.0)
+    await _workout_with_set(fresh_db, user_id, "2026-06-19", 500.0)
+    # Сегодняшняя (понедельник, рано утром) — уже новая неделя: не в счёт.
+    await _workout_with_set(fresh_db, user_id, "2026-07-20", 300.0)
+
+    decision = await engagement.build_weekly_digest_push(user_id, MONDAY)
+    assert decision is not None and decision.category == push_texts.WEEKLY_DIGEST
+    assert decision.ios_params == {"tonnage": "4.5т", "week_count": "3 тренировки"}
+    assert decision.ios_route_params == {"week": "2026-07-13"}
+
+
+async def test_monday_ai_digest_is_saved_under_last_weeks_key(fresh_db, user_id, monkeypatch):
+    await _seed_recent_workout(fresh_db, user_id)
+    monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
+
+    async def fake_digest(uid, week_start=None):
+        return "ПРИВЕТ АТЛЕТ! Прошлая неделя удалась."
+
+    monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", fake_digest)
+    decision = await engagement.build_weekly_digest_push(user_id, MONDAY)
+    assert decision.ios_route_params == {"week": "2026-07-13"}
+    assert (await fresh_db.get_weekly_digest(user_id, "2026-07-13"))["text"] == "ПРИВЕТ АТЛЕТ! Прошлая неделя удалась."
+    assert await fresh_db.get_weekly_digest(user_id, "2026-07-20") is None
+
+
+async def test_digest_only_on_monday(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    await _seed_recent_workout(fresh_db, user_id)
+    for day in range(14, 20):  # вт … вс
+        assert await engagement.build_weekly_digest_push(user_id, dt.date(2026, 7, day)) is None
+    assert await engagement.build_weekly_digest_push(user_id, MONDAY) is not None
+
+
+async def test_sunday_evening_has_no_digest(fresh_db, user_id, monkeypatch):
+    """Дайджест ушёл с воскресенья: вечерний слот воскресенья без плато молчит,
+    а не шлёт итоги недели, которая ещё идёт."""
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    await _seed_recent_workout(fresh_db, user_id)
+    assert await engagement.build_daily_push(user_id, SUNDAY) is None
+
+
+async def test_sunday_evening_keeps_the_plateau(fresh_db, user_id):
+    gid = (await fresh_db.list_muscle_groups(None, global_only=True))[0]["id"]
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", gid)
+    for day in ("2026-07-13", "2026-07-15", "2026-07-17"):
+        wid = await fresh_db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+        )
+        block = await fresh_db.create_block(wid, "single")
+        await fresh_db.add_block_exercise(block, ex_id, 0)
+        await fresh_db.add_set(block, ex_id, 1, 0, 60.0, 12)
+
+    decision = await engagement.build_daily_push(user_id, SUNDAY)
+    assert decision is not None and decision.category == push_texts.PLATEAU
+    # Плато — только воскресенье: в понедельник вечером его нет.
+    assert await engagement.build_daily_push(user_id, MONDAY) is None
+
+
+async def test_monday_evening_is_quiet_after_the_morning_digest(fresh_db, user_id, monkeypatch):
+    """Один пуш в день: ушёл утренний дайджест — вечерний слот понедельника молчит."""
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    await fresh_db.create_finished_workout(
+        user_id, started_at="2026-07-06T10:00:00", finished_at="2026-07-06T11:00:00"
+    )
+    await _workout_with_set(fresh_db, user_id, "2026-07-13", 100.0)
+    # 17 июля → 20 июля: два целых пустых дня, пропуска нет; дайджест есть.
+    await _workout_with_set(fresh_db, user_id, "2026-07-17", 100.0)
+    decision = await engagement.build_weekly_digest_push(user_id, MONDAY)
+    assert decision is not None
+    await fresh_db.record_push(user_id, decision.category, decision.text, MONDAY.isoformat())
+    assert await engagement.build_daily_push(user_id, MONDAY) is None
+
+
+async def test_digest_yields_to_the_monday_streak_milestone(fresh_db, user_id, monkeypatch):
+    """Рубеж серии бывает только по понедельникам. Дайджест его не съедает:
+    утром уступает, вечером уходит рубеж."""
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    # Четыре недели подряд, по тренировке в среду: 24 июня … 15 июля, плюс суббота 18-го.
+    for day in ("2026-06-24", "2026-07-01", "2026-07-08", "2026-07-15", "2026-07-18"):
+        await _workout_with_set(fresh_db, user_id, day, 100.0)
+    assert await engagement.build_weekly_digest_push(user_id, MONDAY) is None
+    decision = await engagement.build_daily_push(user_id, MONDAY)
+    assert decision is not None and decision.category == push_texts.STREAK_MILESTONE
+
+
+async def test_digest_yields_to_a_skip_milestone(fresh_db, user_id, monkeypatch):
+    """«Неделя без зала» важнее «на прошлой неделе — 0 тренировок» — как и в
+    воскресной схеме, где пропуск стоял выше дайджеста."""
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    # 12 июля → 20 июля: семь целых пустых дней (сегодняшний не в счёте).
+    await _workout_with_set(fresh_db, user_id, "2026-07-12", 100.0)
+    real_pick = push_texts.pick_text
+    picked = []
+
+    async def counting_pick(telegram_id, category, **params):
+        picked.append(category)
+        return await real_pick(telegram_id, category, **params)
+
+    monkeypatch.setattr(push_texts, "pick_text", counting_pick)
+    assert await engagement.build_weekly_digest_push(user_id, MONDAY) is None
+    # Утренний вопрос «уступить ли?» мешок ротации пропуска не трогает.
+    assert picked == []
+    decision = await engagement.build_daily_push(user_id, MONDAY)
+    assert decision is not None and decision.category == push_texts.SKIP_7
 
 
 async def _every_other_day_until_sunday(db, user_id):

@@ -175,7 +175,7 @@ async def test_retry_after_resend_is_also_silent(fresh_db, user_id):
 
 async def test_blocked_user_drops_out_of_the_push_pool(fresh_db, user_id):
     """Раньше блокировка только логировалась: человек оставался в пуле навсегда,
-    и по воскресеньям модель писала дайджест для того, кто его не получит."""
+    и по понедельникам модель писала дайджест для того, кто его не получит."""
     await fresh_db.create_finished_workout(
         user_id, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
     )

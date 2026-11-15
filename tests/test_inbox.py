@@ -201,7 +201,7 @@ async def test_inbox_only_pool_is_app_users_with_pushes_off(fresh_db):
 async def test_inbox_only_digest_does_not_call_the_model(fresh_db, monkeypatch):
     called = AsyncMock(return_value="AI")
     monkeypatch.setattr(engagement, "_ai_weekly_digest_text", called)
-    await engagement.build_daily_push(USER, dt.date(2026, 10, 11), allow_ai=False)
+    await engagement.build_weekly_digest_push(USER, dt.date(2026, 10, 12), allow_ai=False)
     called.assert_not_awaited()
 
 

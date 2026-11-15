@@ -160,7 +160,7 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "workout_card_shared": frozenset({"source", "activity"}),
     # Экран «Итог недели» (GET /v1/weekly-summary): откуда открыли — source
     # push|card — и какой был вердикт (kind из weekly_summary.KINDS). По паре
-    # видно, сколько открывают из воскресного пуша и в какой вердикт
+    # видно, сколько открывают из пуша «Итоги недели» (понедельник) и в какой вердикт
     # конвертируется старт тренировки.
     "weekly_summary_opened": frozenset({"source", "verdict"}),
     # Действие на этом экране: action start|records|lift|share|discuss.

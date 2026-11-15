@@ -12,12 +12,18 @@ match wins, at most one push per user per day):
   4. Возвращение     — 21+ days gone, then every 10 days
   5. Близко к званию — Fridays only, <=3 workouts short of the next rank
   6. Плато           — Sundays only, weight stuck despite 12+ reps
-  7. Аналитика       — Sundays only, weekly digest
+
+Signals 1-6 go out in the evening slot (config.ENGAGEMENT_HOUR). The weekly
+digest («Итоги недели», `build_weekly_digest_push`) has a slot of its own:
+Monday morning (config.WEEKLY_DIGEST_HOUR), about last week Mon–Sun. It still
+yields to 1-4 when one of them falls on that Monday (see its docstring), and
+the one-push-a-day cap means a Monday that got the digest stays quiet in the
+evening.
 
 The two positive signals (1 and 5) are deliberate: with only absence-driven
 pushes, a regular who never skips days never hears from the coach at all —
 except to be scolded. Each is pinned to its own weekday, so it fires at most
-once a week and never competes with the Sunday analytics slot.
+once a week.
 
 Every push is delivered as a photo (the same fixed "coach" image) with the
 push text as its caption.
@@ -39,7 +45,7 @@ banner, just the inbox entry, and no paid AI digest for them.
 
 A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
 up but never finished a single workout. Since these users have no last-workout
-date, none of the five signals above apply to them (they all key off workout
+date, none of the signals above apply to them (they all key off workout
 history) — they get their own periodic nudge timed off `users.created_at` instead.
 """
 
@@ -100,6 +106,12 @@ RANK_NEAR_WEEKDAY = 4  # Friday
 RANK_TONNAGE_EPOCH = "2000-01-01"
 PLATEAU_MIN_REPS = 12
 PLATEAU_SESSIONS = 3
+PLATEAU_WEEKDAY = 6  # Sunday, evening slot
+# «Итоги недели» — понедельник, утренний слот (config.WEEKLY_DIGEST_HOUR): про
+# прошлую неделю, которая к этому часу кончилась у атлета целиком. В
+# воскресенье вечером неделя ещё шла — итог приходил до последней тренировки.
+WEEKLY_DIGEST_WEEKDAY = 0  # Monday
+# Тоннаж «за месяц» в дайджесте — столько суток по вчерашний день включительно.
 DIGEST_LOOKBACK_DAYS = 30
 NEWBIE_START_DAY = 1
 NEWBIE_REPEAT_DAYS = 5
@@ -429,13 +441,54 @@ async def _find_plateau_exercise(telegram_id: int) -> Optional[tuple[int, str]]:
     return None
 
 
-async def build_daily_push(
-    telegram_id: int, today: dt.date, *, allow_ai: bool = True
+async def _priority_signal(
+    telegram_id: int, dates: list[dt.date], dashboard: analytics.Dashboard, today: dt.date,
+    *, dry_run: bool = False,
 ) -> Optional[PushDecision]:
-    """Сигнал дня или None. `allow_ai=False` — воскресный разбор без вызова
-    модели, статичным текстом ротации: так он строится тем, кто выключил пуши
-    и получит его только во «Уведомлениях» — платить за текст, который
-    человек сам попросил ему не присылать, незачем."""
+    """Сигналы вечернего слота, которые стоят в приоритете выше дайджеста и могут
+    выпасть на понедельник: рубеж серии (только пн), серия на кону (сб/вс —
+    в понедельник молчит), пропуск, возвращение. Вынесены отдельно, потому что
+    утренний дайджест понедельника спрашивает их же, чтобы уступить (см.
+    build_weekly_digest_push).
+
+    `dry_run` — только узнать, сработает ли сигнал: без текста (text пустой).
+    pick_text двигает мешок ротации, и утренний вопрос «уступить ли?» иначе
+    сжигал бы вариант, который вечером так и не показали бы."""
+    async def text_for(category: str, **params: object) -> str:
+        return "" if dry_run else await push_texts.pick_text(telegram_id, category, **params)
+
+    milestone_weeks = streak_milestone(dashboard, today)
+    if milestone_weeks is not None:
+        weeks_phrase = _weeks_phrase(milestone_weeks)
+        text = await text_for(push_texts.STREAK_MILESTONE, weeks=weeks_phrase)
+        return PushDecision(push_texts.STREAK_MILESTONE, text, ios_params={"weeks": weeks_phrase})
+
+    if is_streak_at_risk(dashboard, today):
+        weeks_phrase = _weeks_phrase(dashboard.week_streak)
+        days_left = i18n.t("push.days_left.weekend" if today.weekday() == 5 else "push.days_left.default")
+        text = await text_for(push_texts.STREAK_AT_RISK, weeks=weeks_phrase, days_left=days_left)
+        return PushDecision(
+            push_texts.STREAK_AT_RISK, text, ios_params={"weeks": weeks_phrase, "days_left": days_left}
+        )
+
+    days_quiet = days_since_activity(dashboard.days_since_last, await db.last_import_at(telegram_id), today)
+    milestone_day = skip_milestone(full_days_missed(days_quiet), dates)
+    if milestone_day is not None and not await _training_now(telegram_id):
+        category = push_texts.SKIP_CATEGORY_BY_DAY[milestone_day]
+        return PushDecision(category, await text_for(category))
+
+    if is_win_back_day(days_quiet):
+        return PushDecision(push_texts.WIN_BACK, await text_for(push_texts.WIN_BACK))
+
+    return None
+
+
+async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDecision]:
+    """Сигнал дня для вечернего слота (ENGAGEMENT_HOUR) или None.
+
+    Дайджеста недели здесь нет: он уходит своим утренним слотом в понедельник
+    (build_weekly_digest_push). Воскресный вечер остаётся за плато — как и
+    было, только без дайджеста следом за ним."""
     if await db.has_push_today(
         telegram_id, today.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES
     ):
@@ -447,32 +500,9 @@ async def build_daily_push(
     dates = [dt.date.fromisoformat(s) for s in date_strings]
     dashboard = analytics.compute_dashboard(dates, today)
 
-    milestone_weeks = streak_milestone(dashboard, today)
-    if milestone_weeks is not None:
-        weeks_phrase = _weeks_phrase(milestone_weeks)
-        text = await push_texts.pick_text(telegram_id, push_texts.STREAK_MILESTONE, weeks=weeks_phrase)
-        return PushDecision(push_texts.STREAK_MILESTONE, text, ios_params={"weeks": weeks_phrase})
-
-    if is_streak_at_risk(dashboard, today):
-        weeks_phrase = _weeks_phrase(dashboard.week_streak)
-        days_left = i18n.t("push.days_left.weekend" if today.weekday() == 5 else "push.days_left.default")
-        text = await push_texts.pick_text(
-            telegram_id, push_texts.STREAK_AT_RISK, weeks=weeks_phrase, days_left=days_left,
-        )
-        return PushDecision(
-            push_texts.STREAK_AT_RISK, text, ios_params={"weeks": weeks_phrase, "days_left": days_left}
-        )
-
-    days_quiet = days_since_activity(dashboard.days_since_last, await db.last_import_at(telegram_id), today)
-    milestone_day = skip_milestone(full_days_missed(days_quiet), dates)
-    if milestone_day is not None and not await _training_now(telegram_id):
-        category = push_texts.SKIP_CATEGORY_BY_DAY[milestone_day]
-        text = await push_texts.pick_text(telegram_id, category)
-        return PushDecision(category, text)
-
-    if is_win_back_day(days_quiet):
-        text = await push_texts.pick_text(telegram_id, push_texts.WIN_BACK)
-        return PushDecision(push_texts.WIN_BACK, text)
+    signal = await _priority_signal(telegram_id, dates, dashboard, today)
+    if signal is not None:
+        return signal
 
     if today.weekday() == RANK_NEAR_WEEKDAY:
         near = await _find_rank_near(telegram_id, dashboard.total_workouts, dates, today)
@@ -487,7 +517,7 @@ async def build_daily_push(
                 push_texts.RANK_NEAR, text, ios_params={"rank": rank_label, "missing": missing_phrase}
             )
 
-    if today.weekday() == 6:  # Sunday
+    if today.weekday() == PLATEAU_WEEKDAY:
         plateau = await _find_plateau_exercise(telegram_id)
         if plateau is not None:
             exercise_id, exercise_name = plateau
@@ -497,66 +527,112 @@ async def build_daily_push(
                 ios_route_params={"exercise_id": exercise_id, "exercise_name": exercise_name},
             )
 
-        since = (today - dt.timedelta(days=DIGEST_LOOKBACK_DAYS)).isoformat()
-        tonnage = await db.tonnage_since(telegram_id, since)
-        if tonnage > 0:
-            digest_user = await db.get_user(telegram_id)
-            digest_unit = digest_user["unit"] if digest_user else "kg"
-            # Общие для обеих веток ниже (AI и статической) — короткая iOS-версия
-            # этого воскресного слота обходится без best_day/whale (см.
-            # push_ios.py: у push.ios.weekly_digest.* нет таких плейсхолдеров
-            # вовсе, ей хватает того, что есть всегда), так что считать их можно
-            # один раз здесь, а не дублировать в каждой ветке.
-            digest_ios_params = {
-                "tonnage": format_tonnage(tonnage, digest_unit), "week_count": _workouts_phrase(dashboard.this_week),
-            }
-            # Неделя, про которую пуш, — в маршрут iOS-баннера: тап открывает
-            # «Итог недели» именно за неё, даже если пуш открыли в понедельник.
-            week_start = (today - dt.timedelta(days=today.weekday())).isoformat()
-            digest_route = {"week": week_start}
-            ai_text = await _ai_weekly_digest_text(telegram_id) if allow_ai else None
-            if ai_text:
-                # Тот же текст — экрану «Итог недели» в приложении (GET
-                # /v1/weekly-summary): за него уже заплачено, второй вызов модели
-                # не нужен. Язык — тот, на котором текст написан (weekly_digest
-                # пишет на users.lang); сменят язык — экран текст спрячет.
-                await _save_weekly_digest(telegram_id, week_start, digest_user, ai_text)
-                # with_cta=False — как у статического дайджеста ниже: это один и
-                # тот же воскресный слот, и кнопка «начать тренировку» под
-                # аналитикой то появлялась, то нет — в зависимости от того,
-                # ответила ли модель.
-                return PushDecision(
-                    push_texts.AI_WEEKLY, ai_text, with_cta=False, ios_params=digest_ios_params,
-                    ios_route_params=digest_route,
-                )
-            # None when no weekday clearly stands out — pick_text then drops the
-            # variant that would have claimed one, instead of asserting a habit
-            # the history doesn't show.
-            best_weekday = analytics.most_frequent_weekday(dates)
-            # The "это примерно один синий кит"/"about one blue whale" line is
-            # only true near a whale's actual weight (~100-150 t) — see
-            # push_texts.WHALE_MIN_TONNAGE_KG. tonnage_since() returns the
-            # user's own unit (kg or lb), same as _find_rank_near converts
-            # before comparing against a kg threshold.
-            tonnage_kg = formatting.to_kg(tonnage, digest_unit)
-            text = await push_texts.pick_text(
-                telegram_id, push_texts.WEEKLY_DIGEST,
-                tonnage=format_tonnage(tonnage, digest_unit), week_count=_workouts_phrase(dashboard.this_week),
-                best_day=(
-                    i18n.t(f"push.weekday.{best_weekday}") if best_weekday is not None else None
-                ),
-                whale=i18n.t("push.phrase.whale") if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
-            )
-            return PushDecision(
-                push_texts.WEEKLY_DIGEST, text, with_cta=False, ios_params=digest_ios_params,
-                ios_route_params=digest_route,
-            )
-
     return None
 
 
+def digest_week(today: dt.date) -> tuple[dt.date, dt.date]:
+    """(понедельник, воскресенье) недели, про которую дайджест, отправленный
+    `today`: последней законченной — в понедельник это вся прошлая неделя.
+    Та же неделя, что weekly_summary.default_week показывает без маршрута."""
+    monday = today - dt.timedelta(days=today.weekday() + 7)
+    return monday, monday + dt.timedelta(days=6)
+
+
+async def build_weekly_digest_push(
+    telegram_id: int, today: dt.date, *, allow_ai: bool = True
+) -> Optional[PushDecision]:
+    """«Итоги недели» — утренний слот понедельника (WEEKLY_DIGEST_HOUR), или None.
+
+    Описывает ПРОШЛУЮ неделю целиком, пн–вс (digest_week): число тренировок —
+    за неё, а не dashboard.this_week (утром понедельника там 0); ключ недели в
+    маршруте баннера и в сохранённом разборе — её понедельник; тоннаж «за месяц»
+    — DIGEST_LOOKBACK_DAYS суток по вчерашний день включительно.
+
+    Один пуш в день (has_push_today): ушёл дайджест — вечерний слот того же
+    понедельника молчит. Зато дайджест уступает тем вечерним сигналам, что и в
+    воскресной схеме стояли выше него и могут выпасть на понедельник
+    (_priority_signal): иначе рубеж серии, который бывает только по
+    понедельникам, не пришёл бы активному атлету никогда, а «неделя без зала»
+    тонула бы в «на прошлой неделе — 0 тренировок». Уступил — вечером уйдёт тот
+    сигнал, а дайджест в эту неделю пропускается.
+
+    `allow_ai=False` — без вызова модели, статичным текстом ротации: так он
+    строится тем, кто выключил пуши и получит его только во «Уведомлениях» —
+    платить за текст, который человек сам попросил ему не присылать, незачем."""
+    if today.weekday() != WEEKLY_DIGEST_WEEKDAY:
+        return None
+    if await db.has_push_today(
+        telegram_id, today.isoformat(), exclude_categories=DAILY_SLOT_EXCLUDED_CATEGORIES
+    ):
+        return None
+
+    date_strings = await db.list_finished_workout_dates(telegram_id)
+    if not date_strings:
+        return None
+    dates = [dt.date.fromisoformat(s) for s in date_strings]
+    dashboard = analytics.compute_dashboard(dates, today)
+    if await _priority_signal(telegram_id, dates, dashboard, today, dry_run=True) is not None:
+        return None
+
+    week_start, week_end = digest_week(today)
+    yesterday = today - dt.timedelta(days=1)
+    since = yesterday - dt.timedelta(days=DIGEST_LOOKBACK_DAYS - 1)
+    tonnage = sum((await db.daily_tonnage(telegram_id, since.isoformat(), yesterday.isoformat())).values())
+    if tonnage <= 0:
+        return None
+
+    digest_user = await db.get_user(telegram_id)
+    digest_unit = digest_user["unit"] if digest_user else "kg"
+    week_count = _workouts_phrase(sum(1 for d in dates if week_start <= d <= week_end))
+    # Общие для обеих веток ниже (AI и статической) — короткая iOS-версия
+    # дайджеста обходится без best_day/whale (см. push_ios.py: у
+    # push.ios.weekly_digest.* нет таких плейсхолдеров вовсе, ей хватает того,
+    # что есть всегда), так что считать их можно один раз здесь, а не
+    # дублировать в каждой ветке.
+    digest_ios_params = {"tonnage": format_tonnage(tonnage, digest_unit), "week_count": week_count}
+    # Неделя, про которую пуш, — в маршрут iOS-баннера: тап открывает «Итог
+    # недели» именно за неё, даже если пуш открыли через несколько дней.
+    digest_route = {"week": week_start.isoformat()}
+    ai_text = await _ai_weekly_digest_text(telegram_id, week_start) if allow_ai else None
+    if ai_text:
+        # Тот же текст — экрану «Итог недели» в приложении (GET
+        # /v1/weekly-summary): за него уже заплачено, второй вызов модели
+        # не нужен. Язык — тот, на котором текст написан (weekly_digest
+        # пишет на users.lang); сменят язык — экран текст спрячет.
+        await _save_weekly_digest(telegram_id, week_start.isoformat(), digest_user, ai_text)
+        # with_cta=False — как у статического дайджеста ниже: это один и
+        # тот же слот, и кнопка «начать тренировку» под аналитикой то
+        # появлялась, то нет — в зависимости от того, ответила ли модель.
+        return PushDecision(
+            push_texts.AI_WEEKLY, ai_text, with_cta=False, ios_params=digest_ios_params,
+            ios_route_params=digest_route,
+        )
+    # None when no weekday clearly stands out — pick_text then drops the
+    # variant that would have claimed one, instead of asserting a habit
+    # the history doesn't show.
+    best_weekday = analytics.most_frequent_weekday([d for d in dates if d <= week_end])
+    # The "это примерно один синий кит"/"about one blue whale" line is
+    # only true near a whale's actual weight (~100-150 t) — see
+    # push_texts.WHALE_MIN_TONNAGE_KG. daily_tonnage() returns the
+    # user's own unit (kg or lb), same as _find_rank_near converts
+    # before comparing against a kg threshold.
+    tonnage_kg = formatting.to_kg(tonnage, digest_unit)
+    text = await push_texts.pick_text(
+        telegram_id, push_texts.WEEKLY_DIGEST,
+        tonnage=format_tonnage(tonnage, digest_unit), week_count=week_count,
+        best_day=(
+            i18n.t(f"push.weekday.{best_weekday}") if best_weekday is not None else None
+        ),
+        whale=i18n.t("push.phrase.whale") if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
+    )
+    return PushDecision(
+        push_texts.WEEKLY_DIGEST, text, with_cta=False, ios_params=digest_ios_params,
+        ios_route_params=digest_route,
+    )
+
+
 async def _save_weekly_digest(telegram_id: int, week_start: str, user, text: str) -> None:
-    """Запомнить воскресный разбор для экрана «Итог недели». Сбой записи пуш
+    """Запомнить разбор прошлой недели для экрана «Итог недели». Сбой записи пуш
     не отменяет: текст уже готов и оплачен, атлет получит его хотя бы пушем."""
     lang = user["lang"] if user is not None and user["lang"] in i18n.SUPPORTED else i18n.get_lang()
     try:
@@ -565,8 +641,9 @@ async def _save_weekly_digest(telegram_id: int, week_start: str, user, text: str
         logger.exception("weekly digest save failed for user %s", telegram_id)
 
 
-async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:
-    """Personalized AI weekly digest, or None to fall back to the static rotation copy."""
+async def _ai_weekly_digest_text(telegram_id: int, week_start: Optional[dt.date] = None) -> Optional[str]:
+    """Personalized AI digest of the week starting `week_start` (None — the last
+    finished one), or None to fall back to the static rotation copy."""
     if not config.AI_WEEKLY_DIGEST_ENABLED or not ai_trainer.is_configured():
         return None
     # Зовётся из цикла по всем атлетам: HARD-стоп по деньгам проверяем на КАЖДОЙ
@@ -575,7 +652,7 @@ async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:
     if await ai_limits.hard_stop_block() is not None:
         return None
     try:
-        return await ai_trainer.weekly_digest(telegram_id)
+        return await ai_trainer.weekly_digest(telegram_id, week_start=week_start)
     except Exception:
         logger.exception("AI weekly digest failed for user %s", telegram_id)
         return None
@@ -739,7 +816,7 @@ async def _deliver(
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:
         # Заблокировавший бота остаётся в пуле навсегда: попытка отправки каждый
-        # день, а по воскресеньям ещё и дайджест, который перед отправкой пишет
+        # день, а по понедельникам ещё и дайджест, который перед отправкой пишет
         # модель — то есть за текст для несуществующего получателя мы платим.
         # Гасим тумблер: оба пула фильтруют по pushes_enabled, а если человек
         # вернётся — включить пуши обратно можно в настройках.
@@ -826,7 +903,7 @@ def _local_now(tz_offset: int) -> dt.datetime:
 #   это «третий день без зала» в девять утра про вчерашний день, плюс риск двух
 #   пушей за сутки (has_push_today дедуплицирует по факту отправки, а не по
 #   попытке). Сигналы повторяемы сами по себе: скипы считаются по дням,
-#   дайджест приходит по воскресеньям — пропущенный вечер вернётся.
+#   дайджест приходит каждый понедельник — пропущенный вечер вернётся.
 
 # tz_offset == 0 читаем как «пояс неизвестен», а не как «человек живёт по UTC»:
 # дефолт схемы и «настройку не трогали» — одно и то же значение, так что ноль
@@ -874,6 +951,80 @@ def should_send_now(tz_offset: int, hour: int) -> bool:
     return local_hour == hour
 
 
+# ---------- утренний слот «Итогов недели» ----------
+#
+# Дайджест про прошлую неделю уходит в понедельник в config.WEEKLY_DIGEST_HOUR
+# по местному, остальные сигналы — вечером в ENGAGEMENT_HOUR. Утренний тик
+# собирает только дайджест (build_weekly_digest_push): ни пропуск, ни плато,
+# ни новичок, ни хвостовые задачи тика утром не уходят — у них свой час.
+#
+# Известный пояс — как у вечернего слота: местный час == WEEKLY_DIGEST_HOUR,
+# понедельник по местной дате, тихие часы поверх (WEEKLY_DIGEST_HOUR=7 не будит
+# никого: дайджест в такую неделю просто не уходит).
+#
+# Неизвестный пояс (tz_offset == 0, см. tz_is_known) — тот же
+# UNKNOWN_TZ_SEND_HOUR_UTC, что у остальных пушей, и это единственный ответ, а
+# не лень. Бодрое окно — 09:00–21:59 местного (тихие часы), 13 часов;
+# правдоподобные пояса — от UTC−8 (Калифорния) до UTC+12 (Камчатка), 20 часов.
+# Один час UTC во все сразу не попадает, гарантии «никому ночью» для
+# неизвестного пояса нет. Самое безопасное:
+# * 09:00 UTC — единственный час, бодрый сразу для UTC+0…+12: Лондон 09:00,
+#   Берлин 10:00, Москва и Стамбул 12:00, Новосибирск 16:00, Камчатка 21:00.
+#   Это Россия (основная аудитория), Европа и Турция целиком. 08:00 UTC будил
+#   бы Лондон, 10:00 UTC — Камчатку. Утром это выходит только для западной
+#   части (Европа, Калининград, Москва ближе к обеду); восток России получает
+#   «Итоги недели» днём и вечером понедельника — плата за незнание пояса.
+# * В этот момент местная дата — понедельник во всех поясах от UTC−9 до UTC+14,
+#   так что понедельник по UTC-дате — правда везде, и прошлая неделя у всех
+#   кончилась: в воскресенье дайджест не придёт никому.
+# * Проигравшие — Америка и Бразилия без выставленного пояса: у них 09:00 UTC —
+#   это 01:00–06:00. Ровно как и все их остальные пуши (should_send_now), и с
+#   той же страховкой: телеграмный пуш беззвучный (_send_push_photo), а
+#   iOS-баннер бывает только у приложения, которое присылает пояс телефона само
+#   (api_v1_account, device_tz_offset_minutes), — у владельца баннера пояс
+#   известен.
+# * Утро и вечер у неизвестного пояса — один тик (09:00 UTC): сначала дайджест,
+#   не вышел — обычный сигнал дня (due_slots, _build_for_slots). Один пуш в
+#   день остаётся одним.
+SLOT_DIGEST = "digest"
+SLOT_DAILY = "daily"
+
+
+def due_slots(tz_offset: int, hour: int, digest_hour: int) -> tuple[str, ...]:
+    """Какие слоты у человека наступили в этот тик, в порядке сборки: утренний
+    дайджест (только понедельник по местной дате) и/или вечерний сигнал дня."""
+    slots = []
+    if _local_now(tz_offset).weekday() == WEEKLY_DIGEST_WEEKDAY and should_send_now(tz_offset, digest_hour):
+        slots.append(SLOT_DIGEST)
+    if should_send_now(tz_offset, hour):
+        slots.append(SLOT_DAILY)
+    return tuple(slots)
+
+
+async def _build_for_slots(
+    telegram_id: int, local_date: dt.date, slots: tuple[str, ...], *, inbox_only: bool
+) -> Optional[PushDecision]:
+    """Решение по наступившим слотам: дайджест, если он должен и вышел, иначе
+    вечерний сигнал. Сбой сборки дайджеста не отнимает у человека вечерний
+    сигнал того же тика (это бывает только у неизвестного пояса, у которого
+    утро и вечер совпали)."""
+    if SLOT_DIGEST in slots:
+        try:
+            # Флаг — только второму проходу: подменённые в тестах сборщики
+            # знают прежнюю сигнатуру. Модель не зовётся ради записи во
+            # «Уведомления» тому, кто выключил пуши.
+            extra = {"allow_ai": False} if inbox_only else {}
+            decision = await build_weekly_digest_push(telegram_id, local_date, **extra)
+        except Exception:
+            logger.exception("Failed to build the weekly digest for user %s", telegram_id)
+            decision = None
+        if decision is not None:
+            return decision
+    if SLOT_DAILY in slots:
+        return await build_daily_push(telegram_id, local_date)
+    return None
+
+
 async def _send_daily_pushes(bot: Bot) -> None:
     """One hourly tick: send to whoever it's ENGAGEMENT_HOUR for right now.
 
@@ -901,20 +1052,24 @@ async def _send_daily_pushes(bot: Bot) -> None:
     `i18n.use_lang(...)` тем же приёмом, что и weekly_digest.
     """
     hour = config.ENGAGEMENT_HOUR
+    digest_hour = config.WEEKLY_DIGEST_HOUR
 
     # Decide who is due *before* sending anything. Building a push can be slow —
-    # Sunday's digest makes an LLM call per user — so a big list can take the
+    # Monday's digest makes an LLM call per user — so a big list can take the
     # tick past the hour it started in. Re-checking the clock per user as the
     # loop crawled meant everyone near the end fell out of their own send hour
     # and got skipped; by the next tick their hour had passed, so the push was
     # lost for the day rather than merely late.
     # Второй проход — люди с приложением, выключившие пуши: тот же сигнал
     # ложится им только во «Уведомления» (inbox_only, см. _deliver).
+    # Слоты — тоже здесь, до отправок: утро понедельника (дайджест) и вечер
+    # (сигнал дня), см. due_slots. Новичкам дайджест не положен — тренировок
+    # нет, — их пул живёт только вечерним часом.
     due = [
-        (telegram_id, _local_now(tz_offset).date(), inbox_only)
+        (telegram_id, _local_now(tz_offset).date(), inbox_only, slots)
         for inbox_only in (False, True)
         for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids(inbox_only=inbox_only)
-        if should_send_now(tz_offset, hour)
+        if (slots := due_slots(tz_offset, hour, digest_hour))
     ]
     due_newbies = [
         (telegram_id, created_at, tz_offset, _local_now(tz_offset).date(), inbox_only)
@@ -923,14 +1078,11 @@ async def _send_daily_pushes(bot: Bot) -> None:
         if should_send_now(tz_offset, hour)
     ]
 
-    for telegram_id, local_date, inbox_only in due:
+    for telegram_id, local_date, inbox_only, slots in due:
         user = await db.get_user(telegram_id)
         with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
             try:
-                # Флаги — только второму проходу: подменённые в тестах build/
-                # _deliver знают прежнюю сигнатуру.
-                extra = {"allow_ai": False} if inbox_only else {}
-                decision = await build_daily_push(telegram_id, local_date, **extra)
+                decision = await _build_for_slots(telegram_id, local_date, slots, inbox_only=inbox_only)
             except Exception:
                 logger.exception("Failed to build push for user %s", telegram_id)
                 continue

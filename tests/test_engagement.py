@@ -220,6 +220,79 @@ def test_night_push_is_dropped_not_shifted(monkeypatch):
     assert engagement.should_send_now(3, 2) is False    # 09:00 по местному, но час отправки не тот
 
 
+# ---------- утренний слот «Итогов недели» ----------
+
+DIGEST = engagement.SLOT_DIGEST
+DAILY = engagement.SLOT_DAILY
+
+
+def _at(monkeypatch, *args):
+    monkeypatch.setattr(engagement, "_utc_now", lambda: dt.datetime(*args))
+
+
+def test_digest_slot_is_monday_morning_local(monkeypatch):
+    # UTC+3: 06:00 UTC понедельника — 09:00 по местному.
+    _at(monkeypatch, 2026, 7, 20, 6, 0)
+    assert engagement.due_slots(3, 19, 9) == (DIGEST,)
+    # Вечером понедельника — только сигнал дня.
+    _at(monkeypatch, 2026, 7, 20, 16, 0)
+    assert engagement.due_slots(3, 19, 9) == (DAILY,)
+    # Воскресенье, вторник: в утренний час — ничего.
+    _at(monkeypatch, 2026, 7, 19, 6, 0)
+    assert engagement.due_slots(3, 19, 9) == ()
+    _at(monkeypatch, 2026, 7, 21, 6, 0)
+    assert engagement.due_slots(3, 19, 9) == ()
+
+
+def test_digest_slot_follows_the_local_date_not_utc(monkeypatch):
+    # UTC+10 (Владивосток): 23:00 UTC воскресенья — уже 09:00 понедельника.
+    _at(monkeypatch, 2026, 7, 19, 23, 0)
+    assert engagement.due_slots(10, 19, 9) == (DIGEST,)
+    # UTC−5: 14:00 UTC понедельника — 09:00 понедельника там.
+    _at(monkeypatch, 2026, 7, 20, 14, 0)
+    assert engagement.due_slots(-5, 19, 9) == (DIGEST,)
+
+
+def test_digest_hour_in_quiet_hours_never_wakes_anyone(monkeypatch):
+    for hour in range(24):
+        _at(monkeypatch, 2026, 7, 20, hour, 0)
+        assert DIGEST not in engagement.due_slots(3, 19, 7)
+
+
+def test_unknown_tz_gets_digest_and_daily_in_the_one_safe_tick(monkeypatch):
+    """Без пояса утро и вечер — один тик UNKNOWN_TZ_SEND_HOUR_UTC: сначала
+    дайджест, не вышел — сигнал дня. В другие часы — ничего."""
+    for hour in range(24):
+        _at(monkeypatch, 2026, 7, 20, hour, 0)
+        slots = engagement.due_slots(0, 19, 9)
+        if hour == engagement.UNKNOWN_TZ_SEND_HOUR_UTC:
+            assert slots == (DIGEST, DAILY)
+        else:
+            assert slots == ()
+    # Воскресенье по UTC — дайджеста нет.
+    _at(monkeypatch, 2026, 7, 19, engagement.UNKNOWN_TZ_SEND_HOUR_UTC, 0)
+    assert engagement.due_slots(0, 19, 9) == (DAILY,)
+
+
+def test_unknown_tz_digest_is_never_at_night_nor_on_sunday_for_russia_europe_turkey():
+    """Инвариант для неизвестного пояса: в тик UNKNOWN_TZ_SEND_HOUR_UTC
+    понедельника у всех поясов от Лондона до Камчатки (UTC+0…+12) — не тихий
+    час и уже понедельник (прошлая неделя кончилась). Америке без пояса
+    гарантии нет — компромисс описан в engagement.py."""
+    utc = dt.datetime(2026, 7, 20, engagement.UNKNOWN_TZ_SEND_HOUR_UTC, 0)
+    for offset in range(0, 13):
+        local = utc + dt.timedelta(hours=offset)
+        assert not engagement.is_quiet_hour(local.hour), f"UTC+{offset}: {local.hour}:00"
+        assert local.weekday() == engagement.WEEKLY_DIGEST_WEEKDAY, f"UTC+{offset}"
+    # «Понедельник» по UTC-дате правдив и шире: от UTC−9 до UTC+14.
+    for offset in range(-9, 15):
+        assert (utc + dt.timedelta(hours=offset)).weekday() == engagement.WEEKLY_DIGEST_WEEKDAY
+
+
+def test_digest_week_is_last_monday_to_sunday():
+    assert engagement.digest_week(d("2026-07-20")) == (d("2026-07-13"), d("2026-07-19"))
+
+
 # ---------- tonnage formatting ----------
 
 
