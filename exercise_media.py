@@ -668,6 +668,10 @@ FRAME_REVISION: dict[str, int] = {
     "kettlebell_one_legged_deadlift": 2,
     "cable_hip_adduction": 2,
     "lying_machine_squat": 2,
+    "external_rotation": 2,
+    "external_rotation_with_cable": 2,
+    "standing_dumbbell_calf_raise": 2,
+    "step_up_with_knee_raise": 2,
 }
 
 
