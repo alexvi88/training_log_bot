@@ -117,6 +117,7 @@ async def _auto_finish(row: Any) -> int:
     import achievement_sync
     import coach_notify
     import inbox
+    import push_ios
     import view_builder
 
     workout_id, user_id = row["id"], row["user_id"]
@@ -137,6 +138,12 @@ async def _auto_finish(row: Any) -> int:
     with i18n.use_lang(lang):
         title = i18n.t("push.ios.auto_finished.title")
         body = i18n.t("push.ios.auto_finished.body", sets=int(row["sets"]))
-    await inbox.deliver(user_id, CATEGORY_AUTO_FINISHED, title, body, lang=lang, route=ROUTE_WORKOUT, push=False)
+    # Тап по записи ведёт в карточку этой тренировки поверх «Истории» (тот же
+    # экран, что из «Истории»), а не на вкладку «Тренировка»: тренировки там
+    # уже нет — она закрыта. Старые сборки экран не знают и просто открываются.
+    await inbox.deliver(
+        user_id, CATEGORY_AUTO_FINISHED, title, body, lang=lang,
+        route=push_ios.workout_detail_route(workout_id), push=False,
+    )
     logger.info("workout autoclose: finished workout %s of user %s (%s sets)", workout_id, user_id, row["sets"])
     return 1
