@@ -143,6 +143,33 @@ def referrer_from_code(code: Optional[str]) -> Optional[int]:
     return int(rest) if _REFERRER_ID.fullmatch(rest) else None
 
 
+# Метка из ссылки, которой приложение открыли ДО входа (`source` в теле
+# POST /v1/auth/apple): тот же формат, что `?start=` у бота, и тот же потолок
+# Telegram на start-параметр.
+APP_SIGNUP_SOURCE_MAX_LEN = 64
+
+
+def app_signup_attribution(raw: Any) -> Optional[Attribution]:
+    """Источник нового app-only аккаунта из метки, которую приложение
+    сохранило до входа: `src_<слаг>` (ссылка канала), `ref_<id>`
+    (приглашение атлета), `coach_<код>` (приглашение тренера) — разбор тот же,
+    что у `/start` (parse_start_payload).
+
+    None — метки нет или она не разобралась: тогда источник остаётся пустым,
+    а не `organic`/`unknown`, — первое касание побеждает, и пустое место
+    оставляет шанс позднему `POST /v1/me/referral` (код, пришедший уже после
+    входа)."""
+    if not isinstance(raw, str):
+        return None
+    raw = raw.strip()
+    if not raw or len(raw) > APP_SIGNUP_SOURCE_MAX_LEN:
+        return None
+    attribution = parse_start_payload(raw)
+    if attribution.source in (SOURCE_ORGANIC, SOURCE_UNKNOWN):
+        return None
+    return attribution
+
+
 # Потолок длины кампании `ct` у App Store: длиннее Apple молча обрезает.
 APP_STORE_CAMPAIGN_MAX_LEN = 40
 

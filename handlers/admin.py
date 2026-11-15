@@ -1435,8 +1435,11 @@ EVENTS_CSV_MAX_ROWS = 200_000
 
 EVENTS_CSV_COLUMNS = ("ts", "user_id", "platform", "event", "props", "app_version", "own")
 EVENT_USERS_CSV_COLUMNS = (
-    "user_id", "signup_date", "source", "lang", "signup_platform", "has_app", "own",
+    "user_id", "signup_date", "source", "lang", "signup_platform", "has_app", "own", "has_account",
 )
+# Воронка приложения до входа (api_v1_funnel, funnel_events): ключ — установка,
+# не аккаунт, поэтому отдельным файлом, а не строками событий.
+FUNNEL_CSV_COLUMNS = ("ts", "install_id", "step", "lang")
 
 
 def parse_events_csv_days(args: Optional[str]) -> Optional[int]:
@@ -1452,7 +1455,7 @@ def parse_events_csv_days(args: Optional[str]) -> Optional[int]:
 
 async def write_events_csv(path: str, since: str, limit: int, own: set[int]) -> int:
     """Сырые события с `since` в CSV-файл — построчно, без всей выгрузки в
-    памяти. `own` — свои аккаунты (config.limit_preview_ids): строки не
+    памяти. `own` — свои аккаунты (db.own_account_ids): строки не
     выкидываются, а помечаются, отфильтровать — дело разбора. Вернёт число строк."""
     import csv
 
@@ -1473,7 +1476,9 @@ async def write_events_csv(path: str, since: str, limit: int, own: set[int]) -> 
 
 async def write_event_users_csv(path: str, since: str, own: set[int]) -> int:
     """Признаки атлетов из выгрузки для когорт: дата заведения, источник,
-    язык, где завёлся (app-only аккаунт — ios), есть ли вход в приложение."""
+    язык, где завёлся (app-only аккаунт — ios), есть ли вход в приложение.
+    Строка — на каждый user_id событий; у кого записи `users` нет,
+    `has_account` 0 и признаки пустые (db.analytics_event_users)."""
     import csv
 
     rows = await db.analytics_event_users(since)
@@ -1481,23 +1486,42 @@ async def write_event_users_csv(path: str, since: str, own: set[int]) -> int:
         writer = csv.writer(fh)
         writer.writerow(EVENT_USERS_CSV_COLUMNS)
         for row in rows:
+            # Без записи `users` — где завёлся, не знаем: пусто.
+            platform = ("tg" if row["telegram_linked"] else "ios") if row["has_account"] else ""
             writer.writerow([
                 row["user_id"],
                 (row["created_at"] or "")[:10],
                 row["source"] or "",
                 row["lang"] or "",
-                "tg" if row["telegram_linked"] else "ios",
+                platform,
                 1 if row["has_app"] else 0,
                 1 if row["user_id"] in own else 0,
+                1 if row["has_account"] else 0,
             ])
     return len(rows)
+
+
+async def write_funnel_csv(path: str, since: str, limit: int) -> int:
+    """Шаги воронки до входа (funnel_events) с `since`: строка на пару
+    (установка, шаг), первое касание. Вернёт число строк."""
+    import csv
+
+    count = 0
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(FUNNEL_CSV_COLUMNS)
+        async for created_at, install_id, step, lang in db.iter_funnel_events(since, limit):
+            writer.writerow([created_at, install_id, step, lang or ""])
+            count += 1
+    return count
 
 
 @router.message(Command("events_csv"))
 async def cmd_events_csv(message: Message, state: FSMContext, command: CommandObject | None = None):
     """Сырые продуктовые события (analytics_events) за N дней — для любой
-    воронки, которой нет в /metrics: два CSV, события и атлеты (джойн по
-    user_id). Без текста людей — его в событиях нет by design."""
+    воронки, которой нет в /metrics: CSV событий и атлетов (джойн по
+    user_id) и третьим — шаги воронки приложения до входа (по install_id,
+    с аккаунтом не связаны). Без текста людей — его в событиях нет by design."""
     if not _is_admin(message.from_user.id):
         return
     days = parse_events_csv_days(command.args if command else None)
@@ -1512,18 +1536,24 @@ async def cmd_events_csv(message: Message, state: FSMContext, command: CommandOb
     if not total:
         await message.answer(f"За {days} дн. событий нет.")
         return
-    own = config.limit_preview_ids()
+    own = await db.own_account_ids()
     stamp = dt.date.today().isoformat()
     with tempfile.TemporaryDirectory() as tmp:
         events_path = os.path.join(tmp, f"events_{days}d_{stamp}.csv")
         users_path = os.path.join(tmp, f"event_users_{days}d_{stamp}.csv")
         written = await write_events_csv(events_path, since, EVENTS_CSV_MAX_ROWS, own)
         users = await write_event_users_csv(users_path, since, own)
+        funnel_path = os.path.join(tmp, f"funnel_{days}d_{stamp}.csv")
+        funnel = await write_funnel_csv(funnel_path, since, EVENTS_CSV_MAX_ROWS)
         caption = f"События за {days} дн.: {written} строк, атлетов {users}."
         if written < total:
             caption += f" Обрезано: всего {total}, выгружены первые {written} — возьми меньше дней."
         await message.answer_document(FSInputFile(events_path), caption=caption)
         await message.answer_document(FSInputFile(users_path))
+        if funnel:
+            await message.answer_document(
+                FSInputFile(funnel_path), caption=f"Воронка до входа: {funnel} шагов установок."
+            )
 
 
 def _activity_pick_label(row) -> str:

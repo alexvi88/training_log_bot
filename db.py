@@ -3456,6 +3456,7 @@ async def create_app_only_user(
     unit: Optional[str] = None,
     *,
     track_signup: bool = True,
+    signup_source: Optional[str] = None,
 ) -> aiosqlite.Row:
     """Завести аккаунт из приложения, без единого сообщения в Telegram — вход
     через Sign in with Apple, когда этот Apple ID ещё никому не известен и
@@ -3476,7 +3477,10 @@ async def create_app_only_user(
     Без этого американец записывал «225 8» в кг.
 
     Событие `signup` (platform ios); `track_signup=False` — демо-аккаунт App
-    Review (review_demo), это не новичок.
+    Review (review_demo), это не новичок. `signup_source` — метка из ссылки,
+    которой приложение открыли до входа (acquisition.app_signup_attribution),
+    едет в свойства `signup`, как у /start в боте; сам users.source пишет
+    вызывающий через set_user_source.
     """
     db = conn()
     unit = unit if unit in ("kg", "lb") else config.DEFAULT_UNIT
@@ -3498,7 +3502,11 @@ async def create_app_only_user(
             ),
         )
         if track_signup:
-            await _emit_event(new_id, lifecycle_events.SIGNUP, platform=lifecycle_events.PLATFORM_IOS)
+            source = lifecycle_events.signup_source(signup_source)
+            await _emit_event(
+                new_id, lifecycle_events.SIGNUP, {"source": source} if source else None,
+                platform=lifecycle_events.PLATFORM_IOS,
+            )
         await db.commit()
         cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (new_id,))
         return await cur.fetchone()
@@ -12462,16 +12470,60 @@ async def iter_analytics_events(since: str, limit: int, chunk: int = 5000):
 async def analytics_event_users(since: str) -> list[aiosqlite.Row]:
     """Атлеты, у которых есть события с `since`, — признаки для когорт рядом с
     выгрузкой: когда завёлся, откуда пришёл, язык, где завёлся (app-only
-    аккаунт — приложение) и есть ли у него вход в приложение."""
+    аккаунт — приложение) и есть ли у него вход в приложение.
+
+    Строка — на КАЖДЫЙ user_id из событий, а не на каждую строку `users`:
+    событие бывает и у того, чьей записи нет (команда боту без /start —
+    `tg_message` пишется раньше заведения), и такой атлет иначе пропадал из
+    джойна. У него `has_account` 0, остальные признаки пустые.
+
+    `has_app` — тот же «человек с приложением», что у «Уведомлений»
+    (_APP_USER_SQL: входил в приложение, app-only, привязанное устройство), плюс
+    живой токен /v1. Раньше смотрели только токены, и app-only аккаунт, чей
+    токен уже снят (выход, чистка), выходил «ios без приложения»."""
     cur = await conn().execute(
-        "SELECT u.telegram_id AS user_id, u.created_at, u.source, u.lang, u.telegram_linked, "
-        "EXISTS (SELECT 1 FROM api_tokens t WHERE t.user_id = u.telegram_id) AS has_app "
-        "FROM users u WHERE u.telegram_id IN "
-        "(SELECT DISTINCT user_id FROM analytics_events WHERE created_at >= ?) "
-        "ORDER BY u.telegram_id",
+        "SELECT e.user_id, u.telegram_id IS NOT NULL AS has_account, u.created_at, u.source, "
+        "u.lang, u.telegram_linked, "
+        f"CASE WHEN u.telegram_id IS NULL THEN 0 ELSE ({_APP_USER_SQL} "
+        "OR EXISTS (SELECT 1 FROM api_tokens t WHERE t.user_id = u.telegram_id)) END AS has_app "
+        "FROM (SELECT DISTINCT user_id FROM analytics_events WHERE created_at >= ?) e "
+        "LEFT JOIN users u ON u.telegram_id = e.user_id "
+        "ORDER BY e.user_id",
         (since,),
     )
     return await cur.fetchall()
+
+
+async def iter_funnel_events(since: str, limit: int, chunk: int = 5000):
+    """Шаги воронки до входа с `since` — для выгрузки /events_csv рядом с
+    событиями. Ключ — install_id установки, не аккаунт: после входа он ни с
+    кем не связывается (см. таблицу funnel_events). Строки — (created_at,
+    install_id, step, lang)."""
+    cur = await conn().execute(
+        "SELECT created_at, install_id, step, lang FROM funnel_events "
+        "WHERE created_at >= ? ORDER BY id LIMIT ?",
+        (since, limit),
+    )
+    while True:
+        rows = await cur.fetchmany(chunk)
+        if not rows:
+            break
+        for row in rows:
+            yield tuple(row)
+
+
+async def own_account_ids() -> set[int]:
+    """Свои аккаунты для аналитики — одна точка для сводки (product_metrics,
+    утренний отчёт) и выгрузки /events_csv: ADMIN_ID и TEST_USER_ID
+    (config.limit_preview_ids) и все демо-входы по паролю — App Review
+    (REVIEW_DEMO_*), прогон скриншотов с новичком и дорожками (WALK_DEMO_*) и
+    каталоги коннекторов (CATALOG_DEMO_*). У демо провайдер один, `review_demo`
+    (is_password_demo_account), а id синтетический и меняется, когда ревьюер
+    удаляет аккаунт, — поэтому по таблице, а не по константе."""
+    cur = await conn().execute(
+        "SELECT DISTINCT user_id FROM auth_identities WHERE provider = 'review_demo'"
+    )
+    return config.limit_preview_ids() | {row[0] for row in await cur.fetchall()}
 
 
 async def record_site_event(

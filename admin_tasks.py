@@ -442,7 +442,7 @@ async def _build_push_report(day: dt.date) -> str:
     тапа (вчерашний пуш, открытый сегодня, — сегодняшний тап), поэтому CTR —
     тапы суток к доставкам тех же суток. Telegram — первое нажатие кнопки под
     пушем; прочтение без нажатия не видно."""
-    own = config.limit_preview_ids()
+    own = await db.own_account_ids()
     stats = await product_metrics.push_stats(day, own)
     sent = stats["sent_tg"] + stats["sent_ios"]
     lines = ["", "📣 Пуши"]
@@ -490,7 +490,7 @@ async def _build_invite_line(day: dt.date) -> str:
     кто из пришедших в эти сутки уже закончил тренировку у нас. Экран
     «Пригласить» — хвостом в скобках, людьми. День, где всё по нулям, строки
     не даёт: отчёт не шумит."""
-    stats = await product_metrics.invite_stats(day, config.limit_preview_ids())
+    stats = await product_metrics.invite_stats(day, await db.own_account_ids())
     if not (stats["signups"] or stats["open_users"] or stats["senders"]):
         return ""
     line = (
