@@ -137,6 +137,7 @@
   "api.error.ai_model_gone": "Ya no hay selector de modelo del entrenador — respondo con un solo modelo, no hay nada que cambiar.",
   "api.error.bad_request": "No pude leer esa solicitud — actualiza la app y vuelve a intentarlo.",
   "api.error.not_found": "No lo encuentro — la pantalla está desactualizada. Vuelve atrás y ábrela de nuevo",
+  "api.error.guide_not_found": "No encuentro esa guía. Vuelve a la lista de guías y ábrela de nuevo",
   "api.error.rep_range": "Ese rango no existe. Elige uno de cinco: 3–6, 5–12, 8–12, 8–15 o 12–20",
   "api.error.invalid_gender": "No entendí el género. Elige Hombre, Mujer o Sin elegir.",
   "api.error.internal_error": "Algo se rompió de mi lado — inténtalo en un rato.",

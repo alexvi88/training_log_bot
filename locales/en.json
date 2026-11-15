@@ -137,6 +137,7 @@
   "api.error.ai_model_gone": "There's no coach model switch anymore — I answer with one model, nothing to switch.",
   "api.error.bad_request": "I couldn't read that request — update the app and try again.",
   "api.error.not_found": "Can't find that — the screen's stale. Go back and open it again",
+  "api.error.guide_not_found": "Can't find that guide. Go back to the guides and open it again",
   "api.error.rep_range": "No such range. Pick one of five: 3–6, 5–12, 8–12, 8–15 or 12–20",
   "api.error.invalid_gender": "Didn't catch the gender. Pick Male, Female or Not set.",
   "api.error.internal_error": "Something broke on my side — try again in a bit.",

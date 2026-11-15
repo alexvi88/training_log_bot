@@ -200,6 +200,10 @@ RU_LATIN_TEXT_PATHS: dict[str, frozenset[str]] = {
         ".guides[].title", ".guides[].card", ".guides[].slides[].title", ".guides[].slides[].text",
         ".guides[].slides[].items[]",
     }),
+    # «Читать полностью» — та же статья целиком; `html` ещё и с тегами.
+    "GET /guides/{slug}/article": frozenset({
+        ".title", ".lead", ".sections[].title", ".sections[].html", ".takeaways[]",
+    }),
 }
 
 
@@ -808,6 +812,11 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert len(guides["guides"]) == len(guides_catalog.GUIDES) and guides["shelves"]
     volume = next(g for g in guides["guides"] if g["slug"] == "sets-per-muscle-per-week")
     assert volume["slides"][1]["chip"]
+    # «Читать полностью» внутри приложения: статья целиком на языке атлета,
+    # неизвестный гайд — 404 человеческим текстом.
+    article = (await w.call("GET", "/guides/strength-training-after-40/article", expect=200)).json()
+    assert len(article["sections"]) == guides_catalog.GUIDE_SECTIONS["strength-training-after-40"]
+    await w.call("GET", "/guides/no-such-guide/article", expect=404)
     await w.call("GET", "/achievements", expect=200)
     await w.call("GET", "/achievements/nearest", expect=200)
     await w.call("GET", "/achievements/stats", expect=200)

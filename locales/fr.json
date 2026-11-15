@@ -137,6 +137,7 @@
   "api.error.ai_model_gone": "Il n’y a plus de choix de modèle pour le coach — je réponds avec un seul modèle, rien à changer.",
   "api.error.bad_request": "Je n’ai pas pu lire cette requête — mets l’appli à jour et réessaie.",
   "api.error.not_found": "Je ne trouve pas ça — l’écran n’est plus à jour. Reviens en arrière et rouvre-le",
+  "api.error.guide_not_found": "Je ne trouve pas ce guide. Reviens à la liste des guides et rouvre-le",
   "api.error.rep_range": "Cette plage n’existe pas. Choisis-en une des cinq : 3–6, 5–12, 8–12, 8–15 ou 12–20",
   "api.error.invalid_gender": "Je n’ai pas compris le genre. Choisis Homme, Femme ou Non défini.",
   "api.error.internal_error": "Un truc a cassé de mon côté — réessaie dans un moment.",

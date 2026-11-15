@@ -137,6 +137,7 @@
   "api.error.ai_model_gone": "Não existe mais troca de modelo do treinador — eu respondo com um modelo só, não tem o que trocar.",
   "api.error.bad_request": "Não consegui ler esse pedido — atualize o app e tente de novo.",
   "api.error.not_found": "Não encontro isso — a tela está desatualizada. Volte e abra de novo",
+  "api.error.guide_not_found": "Não encontro esse guia. Volte para a lista de guias e abra de novo",
   "api.error.rep_range": "Esse intervalo não existe. Escolha um dos cinco: 3–6, 5–12, 8–12, 8–15 ou 12–20",
   "api.error.invalid_gender": "Não entendi o gênero. Escolha Masculino, Feminino ou Não definido.",
   "api.error.internal_error": "Algo quebrou do meu lado — tente de novo daqui a pouco.",

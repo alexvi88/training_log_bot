@@ -33,8 +33,10 @@ import datetime as dt
 import functools
 import os
 import re
-from html import unescape
+from html import escape, unescape
+from html.parser import HTMLParser
 from typing import Any, Optional
+from urllib.parse import urljoin, urlsplit
 
 import analytics
 import config
@@ -294,9 +296,12 @@ def site_lang(lang: str) -> str:
     return lang if lang in seo_pages.LANGS else seo_pages.X_DEFAULT_LANG
 
 
+def site_base() -> str:
+    return config.site_base_url() or DEFAULT_SITE
+
+
 def guide_url(slug: str, lang: str) -> str:
-    base = config.site_base_url() or DEFAULT_SITE
-    return base + seo_pages.url_for(seo_pages.Page("guide", slug), site_lang(lang))
+    return site_base() + seo_pages.url_for(seo_pages.Page("guide", slug), site_lang(lang))
 
 
 # Ссылка «поделиться гайдом» — `<сайт>/g/<slug>` (guide_share_page.py): у
@@ -308,8 +313,7 @@ SHARE_PATH = "/g/"
 
 
 def share_url(slug: str) -> str:
-    base = config.site_base_url() or DEFAULT_SITE
-    return f"{base}{SHARE_PATH}{slug}"
+    return f"{site_base()}{SHARE_PATH}{slug}"
 
 
 def _slide(kind: str, title: str, text: str, image: str, items: Optional[list[str]] = None) -> dict[str, Any]:
@@ -365,6 +369,129 @@ def _static_guide(slug: str, lang: str) -> dict[str, Any]:
 
 def static_guide(slug: str, lang: str) -> dict[str, Any]:
     return copy.deepcopy(_static_guide(slug, lang))
+
+
+# ---------- статья целиком (GET /v1/guides/{slug}/article) ----------
+
+# «Читать полностью» в приложении: та же статья, что на сайте, — все разделы
+# по порядку (без SKIP_SECTIONS и MAX_SECTIONS сторис), HTML раздела —
+# безопасным подмножеством, которое приложение рисует само.
+ARTICLE_TAGS = frozenset({"p", "ul", "ol", "li", "b", "strong", "i", "em", "a", "br"})
+# Содержимое этих тегов выбрасывается вместе с ними: это не текст статьи.
+_DROP_CONTENT = frozenset({"script", "style", "template", "iframe", "object", "noscript"})
+
+
+def _absolute_https(href: str, base: str) -> Optional[str]:
+    """Ссылка статьи абсолютным https-адресом: относительная — от сайта
+    (как guide_url), чужая схема (javascript:, http:, mailto:) — None."""
+    href = href.strip()
+    if not href:
+        return None
+    url = urljoin(base + "/", href)
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.netloc:
+        return None
+    return url
+
+
+class _ArticleSanitizer(HTMLParser):
+    def __init__(self, base: str):
+        super().__init__(convert_charrefs=True)
+        self.base = base
+        self.out: list[str] = []
+        self.open: list[str] = []  # открытые разрешённые теги, для закрытия по порядку
+        self.dropping = 0  # глубина внутри script/style
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_CONTENT:
+            self.dropping += 1
+            return
+        if self.dropping or tag not in ARTICLE_TAGS:
+            return
+        if tag == "br":
+            self.out.append("<br>")
+            return
+        if tag == "a":
+            href = _absolute_https(dict(attrs).get("href") or "", self.base)
+            if href is None:
+                return  # ссылка, по которой нельзя идти, — просто текст
+            self.out.append(f'<a href="{escape(href, quote=True)}">')
+        else:
+            self.out.append(f"<{tag}>")
+        self.open.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == "br" and not self.dropping:
+            self.out.append("<br>")
+        elif tag not in _DROP_CONTENT:
+            self.handle_starttag(tag, attrs)
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_CONTENT:
+            self.dropping = max(0, self.dropping - 1)
+            return
+        if self.dropping or tag not in self.open:
+            return
+        while self.open:
+            last = self.open.pop()
+            self.out.append(f"</{last}>")
+            if last == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.dropping:
+            self.out.append(escape(data, quote=False))
+
+    def result(self) -> str:
+        self.close()
+        while self.open:
+            self.out.append(f"</{self.open.pop()}>")
+        return "".join(self.out)
+
+
+def sanitize_article_html(html_text: str, base: Optional[str] = None) -> str:
+    """HTML раздела для приложения: только ARTICLE_TAGS, у `<a>` — один `href`
+    абсолютным https; остальные теги снимаются, текст их остаётся
+    (script/style — целиком), атрибуты, кроме href, выбрасываются."""
+    parser = _ArticleSanitizer(base or site_base())
+    parser.feed(html_text)
+    return parser.result()
+
+
+def _plain(text: str) -> str:
+    return " ".join(unescape(_TAG.sub("", text)).split())
+
+
+@functools.lru_cache(maxsize=None)
+def _static_article(slug: str, lang: str) -> dict[str, Any]:
+    lang = site_lang(lang)
+    t = lambda key, **kw: i18n.t_in(lang, key, **kw)  # noqa: E731
+    params = seo_library.link_params(lang)
+    base = site_base()
+    sections = [
+        {"title": t(f"seo.guide.{slug}.s{i}.h"),
+         "html": sanitize_article_html(t(f"seo.guide.{slug}.s{i}_html", **params), base)}
+        for i in range(1, seo_library.GUIDE_SECTIONS[slug] + 1)
+    ]
+    takeaways = [x.strip() for x in t(f"seo.guide.{slug}.takeaways", **params).split("\n") if x.strip()]
+    return {
+        "slug": slug,
+        "title": t(f"seo.guide.{slug}.h1"),
+        "lead": _plain(t(f"seo.guide.{slug}.lead")),
+        "cover": _static_guide(slug, lang)["cover"],
+        "sections": sections,
+        "takeaways": takeaways,
+        "url": guide_url(slug, lang),
+    }
+
+
+def article(slug: str, lang: str) -> Optional[dict[str, Any]]:
+    """Статья целиком на языке `lang` (кэш по статье и языку, отдаётся
+    копией). None — такой статьи нет."""
+    if slug not in seo_library.GUIDE_SECTIONS:
+        return None
+    return copy.deepcopy(_static_article(slug, lang))
 
 
 def action_for(slug: str, lang: str, *, exercise: Optional[tuple[int, str]] = None) -> dict[str, Any]:

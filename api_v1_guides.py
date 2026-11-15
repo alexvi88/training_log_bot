@@ -5,7 +5,8 @@
 здесь — только вход и ответ. Язык — users.lang (authed_user ставит его на
 весь запрос): тексты статей, подписи кнопок и полок, личные строки (плато,
 новичок, объём) — на языке атлета, ссылка «Читать полностью» — страница сайта
-на том же языке.
+на том же языке. Та же статья целиком для чтения внутри приложения —
+`/guides/{slug}/article` (guide_stories.article).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from starlette.routing import Route
 
 import guide_stories
 import i18n
-from api_v1_common import JSONResponse, authed_user
+from api_v1_common import ApiError, JSONResponse, authed_user
 
 
 async def get_guides(request: Request) -> JSONResponse:
@@ -33,6 +34,24 @@ async def get_guides(request: Request) -> JSONResponse:
         return JSONResponse(await guide_stories.build_response(user_id, user))
 
 
+async def get_guide_article(request: Request) -> JSONResponse:
+    """«Читать полностью» внутри приложения: статья сайта целиком.
+
+    `{"slug", "title" (h1), "lead" (текст без разметки), "cover" (та же
+    обложка, что у сторис), "sections": [{"title", "html"}], "takeaways":
+    [строки], "url" (страница сайта, как url у гайда в /guides)}`. Разделы —
+    все, что показывает сайт, по порядку; `html` — подмножество p, ul, ol, li,
+    b, strong, i, em, a[href], br, ссылки — абсолютные https. Нет такой
+    статьи — 404 `guide_not_found`."""
+    _user_id, user = await authed_user(request)
+    slug = request.path_params["slug"]
+    body = guide_stories.article(slug, user["lang"] or "en")
+    if body is None:
+        raise ApiError(404, "guide_not_found", f"unknown guide {slug!r}")
+    return JSONResponse(body)
+
+
 routes = [
     Route("/guides", get_guides, methods=["GET"]),
+    Route("/guides/{slug}/article", get_guide_article, methods=["GET"]),
 ]

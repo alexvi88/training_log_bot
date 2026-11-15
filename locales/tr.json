@@ -137,6 +137,7 @@
   "api.error.ai_model_gone": "Artık koç modeli seçimi yok — tek modelle cevap veriyorum, değiştirecek bir şey yok.",
   "api.error.bad_request": "Bu isteği okuyamadım — uygulamayı güncelle ve tekrar dene.",
   "api.error.not_found": "Bunu bulamıyorum — ekran eskimiş. Geri dön ve yeniden aç",
+  "api.error.guide_not_found": "Bu rehberi bulamıyorum. Rehber listesine dön ve yeniden aç",
   "api.error.rep_range": "Böyle bir aralık yok. Beşinden birini seç: 3–6, 5–12, 8–12, 8–15 ya da 12–20",
   "api.error.invalid_gender": "Cinsiyeti anlayamadım. Erkek, Kadın ya da Seçilmedi’yi seç.",
   "api.error.internal_error": "Bende bir şey bozuldu — biraz sonra tekrar dene.",

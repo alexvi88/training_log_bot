@@ -137,6 +137,7 @@
   "api.error.ai_model_gone": "Einen Modellwechsel beim Coach gibt’s nicht mehr — ich antworte mit einem Modell, da gibt’s nichts umzuschalten.",
   "api.error.bad_request": "Diese Anfrage konnte ich nicht lesen — aktualisier die App und versuch’s noch mal.",
   "api.error.not_found": "Find ich nicht — der Bildschirm ist veraltet. Geh zurück und öffne ihn neu",
+  "api.error.guide_not_found": "Den Guide finde ich nicht. Geh zurück zu den Guides und öffne ihn neu",
   "api.error.rep_range": "Diesen Bereich gibt’s nicht. Wähl einen von fünf: 3–6, 5–12, 8–12, 8–15 oder 12–20",
   "api.error.invalid_gender": "Geschlecht nicht verstanden. Wähl Männlich, Weiblich oder Nicht gewählt.",
   "api.error.internal_error": "Bei mir ist was kaputtgegangen — versuch’s gleich noch mal.",
