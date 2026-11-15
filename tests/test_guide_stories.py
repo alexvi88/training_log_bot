@@ -363,3 +363,123 @@ def test_card_title_is_short_and_cover_keeps_full_h1(lang):
         assert g["title"] == i18n.t_in(lang, f"seo.guide.{slug}.short")
         assert len(g["title"]) <= SHORT_TITLE_MAX, (lang, slug, g["title"])
         assert g["slides"][0]["title"] == i18n.t_in(lang, f"seo.guide.{slug}.h1")
+
+
+# ---------- статья целиком: GET /guides/{slug}/article ----------
+
+ARTICLE_KEYS = {"slug", "title", "lead", "cover", "sections", "takeaways", "url"}
+TAG = re.compile(r"</?([a-zA-Z0-9]+)([^>]*)>")
+
+
+def test_sanitizer_keeps_the_safe_subset_and_strips_the_rest():
+    raw = (
+        '<p class="x" onclick="steal()">Жми <b style="color:red">ровно</b>'
+        "<script>alert(1)</script><style>p{color:red}</style>"
+        '<code>RPE</code> <h2>Заголовок</h2><img src="x.png"><span>текст</span>'
+        '<a href="/ru/guides/junk-volume" rel=nofollow target=_blank>мусорный объём</a> '
+        '<a href="https://pubmed.ncbi.nlm.nih.gov/1/" rel=nofollow>исследование</a> '
+        '<a href="javascript:alert(1)">js</a> <a href="http://insecure.example/">http</a>'
+        "<br/><em>e</em><i>i</i><strong>s</strong> 5 &lt; 6 &amp; 7</p>"
+        "<ul><li>раз</li><li>два</ul><ol><li>три</li></ol>"
+    )
+    out = G.sanitize_article_html(raw, "https://site.example")
+    assert out == (
+        '<p>Жми <b>ровно</b>RPE Заголовоктекст'
+        '<a href="https://site.example/ru/guides/junk-volume">мусорный объём</a> '
+        '<a href="https://pubmed.ncbi.nlm.nih.gov/1/">исследование</a> js http'
+        "<br><em>e</em><i>i</i><strong>s</strong> 5 &lt; 6 &amp; 7</p>"
+        "<ul><li>раз</li><li>два</li></ul><ol><li>три</li></ol>"
+    )
+
+
+def test_sanitizer_closes_what_it_opened():
+    assert G.sanitize_article_html("<p><b>жирно<i>и курсив</b> дальше", "https://s.example") == (
+        "<p><b>жирно<i>и курсив</i></b> дальше</p>"
+    )
+    assert G.sanitize_article_html("текст</p></b>", "https://s.example") == "текст"
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_every_article_has_all_site_sections_in_the_safe_subset(lang):
+    for slug in seo_library.GUIDES:
+        a = G.article(slug, lang)
+        assert set(a) == ARTICLE_KEYS
+        n = seo_library.GUIDE_SECTIONS[slug]
+        assert [s["title"] for s in a["sections"]] == [
+            i18n.t_in(lang, f"seo.guide.{slug}.s{i}.h") for i in range(1, n + 1)
+        ]
+        assert a["title"] == i18n.t_in(lang, f"seo.guide.{slug}.h1")
+        assert a["lead"] and "<" not in a["lead"]
+        assert a["takeaways"] and all(x and "\n" not in x for x in a["takeaways"])
+        assert a["cover"] == G.static_guide(slug, lang)["cover"]
+        assert a["url"] == G.guide_url(slug, lang)
+        for s in a["sections"]:
+            assert s["html"].strip()
+            for m in TAG.finditer(s["html"]):
+                tag, attrs = m.group(1), m.group(2)
+                assert tag in G.ARTICLE_TAGS, (slug, tag)
+                if tag == "a" and not m.group(0).startswith("</"):
+                    assert re.fullmatch(r' href="https://[^"]+"', attrs), (slug, attrs)
+                else:
+                    assert not attrs.strip(), (slug, m.group(0))
+
+
+def test_article_keeps_sections_the_story_skips():
+    """В сторис «Частые вопросы» и «Пример недели» не идут, в статье — идут."""
+    a = G.article("first-week-in-the-gym", "ru")
+    assert len(a["sections"]) == seo_library.GUIDE_SECTIONS["first-week-in-the-gym"] == 8
+    assert len(a["sections"]) > len(G.section_numbers("first-week-in-the-gym"))
+
+
+def test_article_is_cached_per_language_and_returned_as_a_copy():
+    a = G.article("creatine", "en")
+    a["sections"].clear()
+    assert G.article("creatine", "en")["sections"]
+    assert G.article("unknown-guide", "en") is None
+
+
+async def _authed(fresh_db, client_factory, lang):
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    await fresh_db.set_user_lang(111, lang)
+    code = await fresh_db.issue_oauth_link_code(111, ttl_seconds=600, digits=8)
+    client = client_factory()
+    token = (await client.post("/auth/link", json={"code": code})).json()["token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    return client
+
+
+@pytest.mark.asyncio
+async def test_article_route_requires_auth(fresh_db, client_factory):
+    resp = await client_factory().get("/guides/creatine/article")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_article_route_returns_the_whole_article_in_the_athletes_language(fresh_db, client_factory, lang):
+    client = await _authed(fresh_db, client_factory, lang)
+    resp = await client.get("/guides/strength-training-after-40/article")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == ARTICLE_KEYS
+    assert body["slug"] == "strength-training-after-40"
+    assert body["title"] == i18n.t_in(lang, "seo.guide.strength-training-after-40.h1")
+    assert len(body["sections"]) == seo_library.GUIDE_SECTIONS["strength-training-after-40"]
+    assert all(set(s) == {"title", "html"} for s in body["sections"])
+    assert body["url"].startswith("https://") and body["url"].endswith(f"/{lang}/guides/strength-training-after-40")
+    if lang == "en":
+        assert not CYRILLIC.search(resp.text)
+    else:
+        assert CYRILLIC.search(body["title"]) and CYRILLIC.search(body["sections"][0]["html"])
+        assert "/ru/" in "".join(re.findall(r'href="([^"]+)"', "".join(s["html"] for s in body["sections"])))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_unknown_article_is_a_human_404(fresh_db, client_factory, lang):
+    client = await _authed(fresh_db, client_factory, lang)
+    resp = await client.get("/guides/no-such-guide/article")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"] == "guide_not_found"
+    assert body["message"] == i18n.t_in(lang, "api.error.guide_not_found")
