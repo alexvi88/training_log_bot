@@ -245,6 +245,11 @@ async def auth_apple(request: Request) -> JSONResponse:
     `ASAuthorizationAppleIDCredential.authorizationCode`) — сервер меняет его
     на refresh_token для отзыва при удалении аккаунта (apple_signin); без
     настроенного APPLE_SIWA_KEY_ID поле игнорируется.
+    Необязательное `source` (строка) — метка ссылки, которой приложение
+    открыли ДО входа и которую оно сохранило: `src_<слаг>`, `ref_<id>`,
+    `coach_<код>` — формат `?start=` бота (acquisition.app_signup_attribution).
+    Только для НОВОГО аккаунта и один раз (db.set_user_source: первое касание
+    побеждает); прочее значение молча игнорируется, вход не срывается.
     """
     body = await _json_body(request)
     _set_pre_auth_lang(body, request)
@@ -278,6 +283,7 @@ async def auth_apple(request: Request) -> JSONResponse:
             lifecycle_events.enter(
                 lifecycle_events.PLATFORM_IOS, request.headers.get("x-app-version")
             )
+            attribution = acquisition.app_signup_attribution(body.get("source"))
             new_user = await db.create_app_only_user(
                 language_code=_signup_language_code(body, request),
                 # Пояс телефона вместо config.DEFAULT_TZ_OFFSET (+3): без него
@@ -286,8 +292,11 @@ async def auth_apple(request: Request) -> JSONResponse:
                 # необязательное — старые сборки его не шлют.
                 tz_offset=common.device_tz_offset_hours(body.get("tz_offset_minutes")),
                 unit=_signup_unit(body),
+                signup_source=attribution.source if attribution else None,
             )
             user_id = new_user["telegram_id"]
+            if attribution is not None:
+                await _apply_signup_attribution(user_id, attribution)
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
 
     # Код авторизации → refresh_token, чтобы при удалении аккаунта отозвать
@@ -424,6 +433,21 @@ async def me(request: Request) -> JSONResponse:
             # больше нет, и приложение строку «Модель тренера» не показывает.
         }
     )
+
+
+async def _apply_signup_attribution(user_id: int, attribution: acquisition.Attribution) -> None:
+    """Источник нового app-only аккаунта из `source` в /auth/apple. Автор
+    приглашения — только существующий (как у claim_referral): иначе метка
+    ложится без автора и в «кто приводит» не попадает. Сбой не срывает вход."""
+    referrer_id = attribution.referrer_id
+    try:
+        if referrer_id is not None and (
+            referrer_id == user_id or await db.get_user(referrer_id) is None
+        ):
+            referrer_id = None
+        await db.set_user_source(user_id, attribution.source, referrer_id)
+    except Exception:
+        logger.warning("signup source for %s failed", user_id, exc_info=True)
 
 
 async def claim_referral(request: Request) -> JSONResponse:

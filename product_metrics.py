@@ -73,8 +73,9 @@ Telegram в знаменателе и пуши без кнопки-колбэк�
 тренировку в 24 часа после него; пишется на сутки позже, когда окно закрыто.
 По категориям — `pushes_sent:<категория>` и `push_opens:<категория>` (тапы
 обоих каналов; только в CSV). Сводку пушей за вчера утренний отчёт админу (`admin_tasks`) показывает
-тем же расчётом (`push_stats`). Свои аккаунты (`config.limit_preview_ids`) в сводку не входят:
-владелец, гоняющий бота руками, — это не рост.
+тем же расчётом (`push_stats`). Свои аккаунты (`db.own_account_ids`: ADMIN_ID,
+TEST_USER_ID и все демо-входы по паролю — App Review, прогоны, каталоги) в
+сводку не входят: владелец, гоняющий бота руками, и ревьюер — это не рост.
 
 Приглашения (`invite_stats`): `invite_opens`/`invite_open_users` — тапы и
 люди на экране «Пригласить» приложения, `invite_shares`/`invite_share_users`
@@ -100,9 +101,12 @@ Telegram в знаменателе и пуши без кнопки-колбэк�
 Смотреть — админская `/metrics` (handlers/admin.py): таблица за две недели и CSV
 всей сводки. Любая воронка, которой в сводке нет, — по сырым событиям:
 `/events_csv [дней]` (по умолчанию 30) отдаёт CSV событий (ts, user_id,
-platform, event, props, app_version, own) и CSV атлетов из них для когорт
-(дата заведения, источник, язык, где завёлся, есть ли вход в приложение);
-до 200 тысяч строк, обрезку подпись называет.
+platform, event, props, app_version, own — свои аккаунты тем же
+`db.own_account_ids`, что выкидывает их из сводки), CSV атлетов из них для
+когорт (строка на каждый user_id событий: дата заведения, источник, язык, где
+завёлся, есть ли вход в приложение, есть ли запись вообще) и CSV шагов
+воронки до входа (`funnel_events` по install_id — не по аккаунту); до 200
+тысяч строк, обрезку подпись называет.
 """
 
 from __future__ import annotations
@@ -138,6 +142,9 @@ INVITE_SHARE_EVENT = "invite_share"
 INVITE_COPY_EVENT = "invite_copy"
 INVITE_SOURCES = frozenset({"menu", "achievements"})
 
+# Откуда «Поделиться» картинкой тренировки (WorkoutCardSource в приложении).
+WORKOUT_CARD_SOURCES = frozenset({"finish", "history", "coach_program"})
+
 # События, которые принимает POST /v1/events, и какие свойства у каждого. Новое
 # событие приложения — сначала сюда, иначе сервер его молча пропустит.
 CLIENT_EVENTS: dict[str, frozenset[str]] = {
@@ -155,8 +162,10 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # app|lock_screen. Сам подход, когда дойдёт, — серверное set_logged.
     "offline_queued": frozenset({"source"}),
     # Картинка тренировки (WorkoutCardSheet): нажал «Поделиться» — source
-    # finish|history; системный лист закрылся — activity (тип действия iOS
-    # или cancelled, тот же формат, что у сторис «ТЫ»).
+    # finish|history|coach_program (последнее — сторис программы из чата
+    # тренера, «Сохранить картинкой» под черновиком: своего события у неё
+    # нет); системный лист закрылся — activity (тип действия iOS или
+    # cancelled, тот же формат, что у сторис «ТЫ»).
     "workout_card_share": frozenset({"source"}),
     "workout_card_shared": frozenset({"source", "activity"}),
     # Экран «Итог недели» (GET /v1/weekly-summary): откуда открыли — source
@@ -244,6 +253,8 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
 # Прочее значение выкидывается, а не схлопывается в «other»: новый источник
 # сначала заводится здесь.
 PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
+    ("workout_card_share", "source"): WORKOUT_CARD_SOURCES,
+    ("workout_card_shared", "source"): WORKOUT_CARD_SOURCES,
     ("you_story_open", "source"): frozenset({"menu", "finish"}),
     ("you_story_share", "source"): frozenset({"menu", "finish"}),
     ("you_story_shared", "source"): frozenset({"menu", "finish"}),
@@ -619,7 +630,7 @@ async def rollup_day(
 ) -> dict[str, float]:
     """Сложить сутки `day` в daily_metrics; заодно — удержание когорт, чей
     N-й день пришёлся на эти сутки. Идемпотентно: пересчёт перезаписывает."""
-    own = config.limit_preview_ids()
+    own = await db.own_account_ids()
     active = await _active(day, own, cache)
     metrics = await db.day_activity_counts(_day(day), own)
     metrics["active_users"] = len(active)
