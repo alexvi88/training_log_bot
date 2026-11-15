@@ -2037,22 +2037,26 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 суровый, но поддерживающий, вайб подвальной качалки, шаришь за науку. Методика:
 рабочий диапазон 5-12 повторений, недельный объём на мышцу 6-12 подходов.
 
-Тебе дают короткую сводку за неделю с понедельника: сколько тренировок (и сколько
-было на прошлой неделе), суммарный тоннаж, сколько упражнений дали рекорд (если
-дали) и объём (рабочих подходов) по каждой группе мышц со статусом относительно
-целевого диапазона (low = мало, in_range = норм, high = многовато). Строки про
-рекорды нет — значит, рекордов нет, и про них молчи.
+Дайджест приходит атлету утром в понедельник и подводит итог ПРОШЛОЙ недели —
+с понедельника по воскресенье, она уже закончилась. Тебе дают короткую сводку за
+неё: сколько тренировок (и сколько было неделей раньше), суммарный тоннаж,
+сколько упражнений дали рекорд (если дали) и объём (рабочих подходов) по каждой
+группе мышц со статусом относительно целевого диапазона (low = мало, in_range =
+норм, high = многовато). Строки про рекорды нет — значит, рекордов нет, и про
+них молчи.
 
-Напиши короткий еженедельный дайджест-подведение итогов недели. Правила:
+Напиши короткий еженедельный дайджест-подведение итогов прошлой недели. Правила:
 - Начни ровно с фирменного приветствия НА ЯЗЫКЕ ОТВЕТА, с восклицательным знаком,
   без запятой внутри: «ПРИВЕТ АТЛЕТ!» по-русски или «HEY ATHLETE!» по-английски.
 - Неформально, на «ты», тепло и с юмором, свой в доску — без токсичности и шейминга.
+- О прошлой неделе говори в прошедшем времени («на прошлой неделе», «за неделю»), не
+  называй её «этой неделей» и не пиши, будто она ещё идёт или впереди воскресенье.
 - Отметь, что зашло (группы в диапазоне, объём), и мягко ткни в 1-2 группы, где мало
-  (low) — предложи добрать на следующей неделе. Не ругай за пропуски.
+  (low) — предложи добрать на этой, только что начавшейся неделе. Не ругай за пропуски.
 - Если среди low или high группа "Ноги" — не подавай 12 подходов как жёсткий потолок:
   в ногах несколько крупных мышц и обычно больше упражнений, так что объём выше
   общего целевого диапазона там — это нормально, а не перебор.
-- Дай максимум один конкретный совет на следующую неделю.
+- Дай максимум один конкретный совет на начавшуюся неделю.
 - Очень компактно: 3-5 коротких предложений. Без markdown, без списков, без таблиц.
 - Не выдумывай цифры, которых нет в сводке.
 - Пол атлета знаешь, только если в конце сообщения стоит строка «Пол
@@ -2078,11 +2082,18 @@ async def _background_ai_allowed(user) -> bool:
     return not await db.get_push_tokens(user["telegram_id"])
 
 
-async def weekly_digest(user_id: int) -> Optional[str]:
+async def weekly_digest(user_id: int, week_start: Optional[dt.date] = None) -> Optional[str]:
     """A short, personalized weekly wrap-up in the coach voice, or None if unavailable.
 
     One plain completion (no tools) over a compact summary of the week's volume,
-    tonnage, and workout count. Used by the engagement job's Sunday digest slot.
+    tonnage, and workout count. Used by the engagement job's Monday-morning
+    digest slot (engagement.build_weekly_digest_push).
+
+    Неделя — `week_start` (её понедельник) по воскресенье включительно, и она
+    уже кончилась: дайджест приходит в понедельник про прошлую. None — последняя
+    законченная неделя у атлета (та же, что weekly_summary.default_week): в
+    понедельник это вчерашнее воскресенье и шесть дней до него, а не
+    начавшаяся сегодня неделя с нулём тренировок.
 
     Фоновая рассылка — молча выходит на HARD-стопе по деньгам, без сообщения:
     это не ответ на чей-то вопрос, отказывать некому. Вызывающий (engagement.py)
@@ -2103,36 +2114,42 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     with i18n.use_lang(user["lang"]):
         today = timeutil.user_today(user)
         dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-        dash = analytics.compute_dashboard(dates, today)
-        vol = await _weekly_volume(user_id)
-        # Неделя — с понедельника по сегодня, то же окно, что у экрана «Итог
-        # недели» (weekly_summary): раньше тоннаж брался от today − 7 с `>=`,
-        # то есть за восемь суток, и разбор расходился с числом на экране.
-        monday = today - dt.timedelta(days=today.weekday())
+        # Неделя — пн–вс целиком, то же окно, что у экрана «Итог недели»
+        # (weekly_summary.collect) за ту же неделю: раньше тоннаж брался от
+        # today − 7 с `>=`, то есть за восемь суток, и разбор расходился с
+        # числом на экране. Объём по группам — тоже за эту неделю, а не
+        # скользящие семь суток от сегодня.
+        if week_start is None:
+            week_start = today - dt.timedelta(days=today.weekday() + 7)
+        monday = week_start - dt.timedelta(days=week_start.weekday())
+        sunday = monday + dt.timedelta(days=6)
+        week_count = sum(1 for d in dates if monday <= d <= sunday)
+        vol = await _weekly_volume(user_id, start=monday, end=sunday)
         tonnage = sum(
-            (await db.daily_tonnage(user_id, monday.isoformat(), today.isoformat())).values()
+            (await db.daily_tonnage(user_id, monday.isoformat(), sunday.isoformat())).values()
         )
         last_monday = monday - dt.timedelta(days=7)
         last_week = sum(1 for d in dates if last_monday <= d < monday)
         records = len(
             await db.e1rm_records_in_window(
-                user_id, monday.isoformat(), today.isoformat(), user["e1rm_formula"]
+                user_id, monday.isoformat(), sunday.isoformat(), user["e1rm_formula"]
             )
         )
 
         groups_line = "; ".join(
             f"{g['group']}: {g['sets']} подходов ({g['status']})" for g in vol["groups"]
         )
-        # Атлета на прошлой неделе ещё не было (вся история — с этого
-        # понедельника): «на прошлой: 0» модель читала как пропуск. Вместо
-        # неё — строка о первой неделе, в данных, а не в системном промпте.
+        # Атлета неделей раньше ещё не было (вся история — с понедельника
+        # разбираемой недели): «неделей раньше: 0» модель читала как пропуск.
+        # Вместо неё — строка о первой неделе, в данных, а не в системном промпте.
         first_week = not any(d < monday for d in dates)
         last_week_note = (
-            i18n.t("ai.digest.first_week_note") if first_week else f"на прошлой: {last_week}"
+            i18n.t("ai.digest.first_week_note") if first_week else f"неделей раньше: {last_week}"
         )
         summary = (
-            f"Тренировок на этой неделе: {dash.this_week} ({last_week_note}).\n"
-            f"Суммарный тоннаж с понедельника: {tonnage:.0f} {user['unit']}.\n"
+            f"Неделя {monday.isoformat()} — {sunday.isoformat()} (пн–вс, уже закончилась).\n"
+            f"Тренировок за неделю: {week_count} ({last_week_note}).\n"
+            f"Суммарный тоннаж за неделю: {tonnage:.0f} {user['unit']}.\n"
         )
         if records:
             summary += f"Рекордов за неделю (упражнений с новым лучшим e1RM): {records}.\n"
@@ -3933,22 +3950,26 @@ def _program_detail_payload(program: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _weekly_volume(user_id: int) -> dict[str, Any]:
+async def _weekly_volume(
+    user_id: int, *, start: Optional[dt.date] = None, end: Optional[dt.date] = None
+) -> dict[str, Any]:
     """Объём по группам мышц — ровно та же арифметика, что у панели «ОБЪЁМ ЗА 7
     ДНЕЙ» на главном экране: скользящее окно analytics.VOLUME_WINDOW_DAYS по
-    сегодня.
+    сегодня. `start`/`end` — закреплённое окно вместо скользящего (дайджест
+    прошлой недели, weekly_digest, — пн–вс той недели).
 
     Окно скользящее, а не календарная неделя (пн-вс), — и это исправление, а не
     вкусовщина. Пока тренер считал с понедельника, в середине недели он видел по
     спине пять подходов там, где у человека на диаграмме стояло восемнадцать, и
     звал добрать объём группе, которая по его же экрану давно за верхней
     границей. Два разных ответа на один вопрос «сколько я сделал за неделю» —
-    это не нюанс методики, это бот, который спорит сам с собой. В воскресном
-    дайджесте (weekly_digest) окно совпадает с календарной неделей само.
+    это не нюанс методики, это бот, который спорит сам с собой. Дайджест недели
+    (weekly_digest) передаёт окно явно: он про прошлую неделю пн–вс целиком.
     """
-    today = await _user_today(user_id)
-    start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
-    counts = await db.weekly_volume_by_group(user_id, start.isoformat(), today.isoformat())
+    if start is None or end is None:
+        end = await _user_today(user_id)
+        start = end - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
+    counts = await db.weekly_volume_by_group(user_id, start.isoformat(), end.isoformat())
     groups = await db.list_muscle_groups(user_id)
     # Имена групп — на языке атлета: эти строки тренер называет ему в ответе
     # («по спине мало»), а в базе имя группы русское навсегда. Тот же порядок,
@@ -3971,8 +3992,8 @@ async def _weekly_volume(user_id: int) -> dict[str, Any]:
             "status": analytics.classify_weekly_volume(ungrouped),
         })
     return {
-        "window": f"{start.isoformat()}..{today.isoformat()}",
-        "window_days": analytics.VOLUME_WINDOW_DAYS,
+        "window": f"{start.isoformat()}..{end.isoformat()}",
+        "window_days": (end - start).days + 1,
         "target_sets_per_group": f"{analytics.WEEKLY_VOLUME_MIN}-{analytics.WEEKLY_VOLUME_MAX}",
         "groups": rows,
     }

@@ -216,7 +216,7 @@ def test_weekday_leader_needs_history_and_a_clear_lead():
     assert analytics.most_frequent_weekday(dates) == 5
 
 
-async def test_sunday_static_digest_after_one_workout_claims_no_best_day(
+async def test_static_digest_after_one_workout_claims_no_best_day(
     fresh_db, user_id, monkeypatch
 ):
     monkeypatch.setattr(config, "AI_WEEKLY_DIGEST_ENABLED", False)
@@ -227,7 +227,7 @@ async def test_sunday_static_digest_after_one_workout_claims_no_best_day(
         return "ПРИВЕТ АТЛЕТ! текст"
 
     monkeypatch.setattr(push_texts, "pick_text", pick_text)
-    sunday = _day(0, 6)
+    monday = _day(1, 0)
     workout_id = await _finished(fresh_db, user_id, _day(0, 5))
     group_id = (await fresh_db.list_muscle_groups(None, global_only=True))[0]["id"]
     ex = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
@@ -235,7 +235,7 @@ async def test_sunday_static_digest_after_one_workout_claims_no_best_day(
     await fresh_db.add_block_exercise(block, ex, 0)
     await fresh_db.append_set(block, ex, 0, 60.0, 8)
 
-    decision = await engagement.build_daily_push(user_id, sunday)
+    decision = await engagement.build_weekly_digest_push(user_id, monday)
     assert decision is not None and decision.category == push_texts.WEEKLY_DIGEST
     assert seen[push_texts.WEEKLY_DIGEST]["best_day"] is None
 
@@ -325,20 +325,51 @@ async def test_weekly_digest_of_the_first_week_says_so(fresh_db, user_id, monkey
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     client = _fake_client("ok")
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
-    sunday = _day(1, 6)
-    monkeypatch.setattr(timeutil, "user_today", lambda user: sunday)
+    # Дайджест — утром понедельника про прошлую неделю (_day(1, …)).
+    monday = _day(2, 0)
+    monkeypatch.setattr(timeutil, "user_today", lambda user: monday)
     await _finished(fresh_db, user_id, _day(1, 1))
 
     await ai_trainer.weekly_digest(user_id)
     note = i18n.t_in(lang, "ai.digest.first_week_note")
     summary = _user_content(client)
-    assert note in summary and "на прошлой: 0" not in summary
+    assert note in summary and "неделей раньше: 0" not in summary
     assert note not in _system_content(client)
 
     await _finished(fresh_db, user_id, _day(0, 3))
     await ai_trainer.weekly_digest(user_id)
     summary = _user_content(client)
-    assert note not in summary and "на прошлой: 1" in summary
+    assert note not in summary and "неделей раньше: 1" in summary
+
+
+async def test_monday_weekly_digest_describes_last_week_not_the_new_one(fresh_db, user_id, monkeypatch):
+    """Утром понедельника «эта неделя» пуста — разбор обязан быть про прошлую:
+    тренировки, тоннаж и объём по группам за её пн–вс, и модель знает, что
+    неделя уже кончилась."""
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    client = _fake_client("ok")
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: as_luna(client))
+    monday = _day(2, 0)
+    monkeypatch.setattr(timeutil, "user_today", lambda user: monday)
+    group_id = (await fresh_db.list_muscle_groups(None, global_only=True))[0]["id"]
+    ex = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    for day, weight in ((_day(0, 2), 40.0), (_day(1, 0), 100.0), (_day(1, 6), 100.0), (monday, 70.0)):
+        wid = await _finished(fresh_db, user_id, day, hour=7)
+        block = await fresh_db.create_block(wid, "single")
+        await fresh_db.add_block_exercise(block, ex, 0)
+        await fresh_db.append_set(block, ex, 0, weight, 10)
+
+    await ai_trainer.weekly_digest(user_id, week_start=_day(1, 0))
+    summary = _user_content(client)
+    assert f"Неделя {_day(1, 0).isoformat()} — {_day(1, 6).isoformat()}" in summary
+    assert "Тренировок за неделю: 2 (неделей раньше: 1)" in summary
+    assert "Суммарный тоннаж за неделю: 2000" in summary
+    assert "2 подходов" in summary  # объём группы — за пн–вс, без сегодняшней
+    assert "ПРОШЛОЙ недели" in _system_content(client)
+
+    # Без явной недели — та же, последняя законченная.
+    await ai_trainer.weekly_digest(user_id)
+    assert _user_content(client) == summary
 
 
 # ---------- «Новое звание: Новичок» на первой тренировке ----------

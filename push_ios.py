@@ -61,7 +61,7 @@ _PARAM_CLIP_LIMIT = 24
 # (push_texts.AI_WEEKLY): that push's Telegram body is a free-form model
 # completion, not a catalog string, and generating a *second*, short
 # model completion just for the iOS banner is out of scope here. The iOS
-# banner for that Sunday slot reuses the WEEKLY_DIGEST short copy instead —
+# banner for that Monday-morning slot reuses the WEEKLY_DIGEST short copy instead —
 # same event (the week's numbers are ready), same params (tonnage, workout
 # count) are already computed by engagement.py on that code path regardless
 # of whether the AI digest text ended up being used for Telegram.
@@ -279,7 +279,7 @@ def ios_route(
     Плато без упражнения (не должно случаться: engagement шлёт его только
     найдя упражнение) — None, а не график неизвестно чего.
 
-    `week` — понедельник недели у воскресного дайджеста: `{"screen":
+    `week` — понедельник прошлой недели у дайджеста понедельника: `{"screen":
     "dashboard", "week": "2026-09-28"}`. Имя экрана то же, что раньше, — старые
     сборки по-прежнему открывают вкладку «Тренировка»; у других категорий
     `week` не ставится.

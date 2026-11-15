@@ -102,7 +102,7 @@ async def test_workout_comment_uses_the_users_stored_language_not_the_context(
 async def test_weekly_digest_uses_the_users_stored_language_not_the_context(
     fresh_db, user_id, monkeypatch
 ):
-    """weekly_digest — воскресная рассылка движка (engagement.py), которая
+    """weekly_digest — утренняя рассылка понедельника (engagement.py), которая
     крутит цикл по многим telegram_id вообще без апдейта. Тот же инвариант,
     что и у comment_on_workout: язык — из базы, а не из контекста."""
     await fresh_db.set_user_lang(user_id, "en")

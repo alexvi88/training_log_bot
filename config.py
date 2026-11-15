@@ -235,6 +235,14 @@ DONATE_PRESETS_STARS: tuple[int, ...] = (50, 150, 500)
 # не разбудит: тихие часы в engagement стоят поверх этой настройки.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 
+# «Итоги недели» — свой час, утро понедельника по местному: дайджест про
+# прошлую неделю целиком (пн–вс), а не про неделю, которая ещё идёт. Раньше он
+# уходил в воскресенье в ENGAGEMENT_HOUR — до того, как атлет успевал сходить в
+# зал в последний день недели. Остальные пуши остаются в ENGAGEMENT_HOUR. Те же
+# правила, что у ENGAGEMENT_HOUR: час местный только при известном поясе, тихие
+# часы поверх (engagement.should_send_now, engagement.digest_due_now).
+WEEKLY_DIGEST_HOUR = int(os.getenv("WEEKLY_DIGEST_HOUR", "9"))
+
 # Пуш «Как тебе дневник?» (engagement.feedback_push_due) — только iOS, ведёт в
 # переписку с поддержкой. Первый — не раньше FEEDBACK_PUSH_DELAY_HOURS после
 # первой законченной тренировки: свежее впечатление, но не в ту же минуту, пока
@@ -251,8 +259,8 @@ FEEDBACK_PUSH_REPLY_WINDOW_DAYS = 7
 # не тихий час по местному. Новички после запуска живут по обычным правилам.
 FEEDBACK_PUSH_LAUNCH_UTC = dt.datetime(2026, 10, 15, 9, 0)
 
-# Use an AI-generated personalized weekly digest (Sundays) in place of the static
-# rotation text, when the AI trainer is configured. Falls back to static copy on
+# Use an AI-generated personalized weekly digest (Monday morning, about last
+# week) in place of the static rotation text, when the AI trainer is configured. Falls back to static copy on
 # any failure. Set =false to always use the static digest.
 AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower() == "true"
 
@@ -1016,7 +1024,7 @@ BEHAVIOUR_DIGEST_RETENTION_DAYS = int(os.getenv("BEHAVIOUR_DIGEST_RETENTION_DAYS
 # на диске, которые заметно дороже строк.
 AI_CONVERSATION_RETENTION_DAYS = int(os.getenv("AI_CONVERSATION_RETENTION_DAYS", "180"))
 
-# Сколько живёт воскресный разбор недели от тренера (db.weekly_digests) — текст,
+# Сколько живёт разбор прошлой недели от тренера (db.weekly_digests) — текст,
 # который уже ушёл пушем, сохранённый для экрана «Итог недели» в приложении.
 # Экран открывают из свежего пуша; три месяца — с запасом на «открыл через
 # пару недель», дальше разбор про давно прошедшую неделю никому не нужен.
