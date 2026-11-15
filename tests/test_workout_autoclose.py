@@ -74,11 +74,14 @@ async def test_reminds_once_after_idle_then_finishes_after_four_hours(fresh_db, 
         "SELECT event, platform FROM analytics_events WHERE user_id = ? AND event = 'workout_finished'", (uid,)
     )
     assert [tuple(r) for r in await cur.fetchall()] == [("workout_finished", "ios")]
-    cur = await db.conn().execute("SELECT category, title, body FROM inbox WHERE user_id = ?", (uid,))
+    cur = await db.conn().execute("SELECT category, title, body, route FROM inbox WHERE user_id = ?", (uid,))
     rows = await cur.fetchall()
     assert [r["category"] for r in rows] == [workout_autoclose.CATEGORY_AUTO_FINISHED]
     assert rows[0]["title"] == "Закрыл тренировку сам"
     assert "3 подхода" in rows[0]["body"]
+    # Тап ведёт в карточку закрытой тренировки, как из «Истории», а не на
+    # вкладку «Тренировка», где её уже нет.
+    assert json.loads(rows[0]["route"]) == {"screen": "workout_detail", "workout_id": workout_id}
 
 
 async def test_long_idle_finishes_without_reminder(fresh_db, sent):
