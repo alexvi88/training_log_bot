@@ -146,6 +146,12 @@ async def get_rank_ladder(request: Request) -> JSONResponse:
                 "ranks": [_rank_rung_json(rank) for rank in analytics.RANKS],
                 "current_level": hof.rank.level,
                 "per_week": round(hof.per_week, 2),
+                # Где атлет сейчас по двум накопительным осям — для полосок
+                # «сколько до следующего» под ступенью. Тоннаж в кг, как и
+                # пороги `min_tonnage_kg` (hof.tonnage_kg — в единицах атлета,
+                # несмотря на имя), тренировки — тот же счёт, что у rank_for.
+                "total_workouts": hof.total_workouts,
+                "tonnage_kg": round(formatting.to_kg(hof.tonnage_kg, hof.unit), 1),
             }
         )
 

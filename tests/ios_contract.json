@@ -3724,6 +3724,14 @@
     "perWeek": {
      "type": "Double",
      "optional": false
+    },
+    "totalWorkouts": {
+     "type": "Int",
+     "optional": true
+    },
+    "tonnageKg": {
+     "type": "Double",
+     "optional": true
     }
    }
   },
@@ -6090,5 +6098,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "6d0da9b3b36d41a9c3d2b79df2d54214e974ab92"
+ "_ios_commit": "842650cc4300c887574778c5b9d38a19ceb3102d"
 }
