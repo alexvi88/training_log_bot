@@ -76,16 +76,17 @@ async def test_build_newbie_push_respects_one_per_day_dedup(fresh_db, user_id):
     assert decision is None
 
 
-async def test_monday_streak_milestone_beats_the_skip_jab(fresh_db, user_id):
-    """Four consecutive training weeks, checked on the following Monday: the
-    celebration must win over the skip-5 jab that fires the same day."""
+async def test_tuesday_streak_milestone_beats_the_skip_jab(fresh_db, user_id):
+    """Four consecutive training weeks, checked on the following Tuesday (Monday
+    belongs to the weekly digest): the celebration must win over the skip jab
+    that fires the same day."""
     db = fresh_db
     for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):  # 4 weeks in a row
         await db.create_finished_workout(
             user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
         )
 
-    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 13))  # Monday, 5 days out
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 14))  # Tuesday, 6 days out
 
     assert decision is not None
     assert decision.category == push_texts.STREAK_MILESTONE
@@ -267,21 +268,42 @@ async def test_monday_evening_is_quiet_after_the_morning_digest(fresh_db, user_i
     assert await engagement.build_daily_push(user_id, MONDAY) is None
 
 
-async def test_digest_yields_to_the_monday_streak_milestone(fresh_db, user_id, monkeypatch):
-    """Рубеж серии бывает только по понедельникам. Дайджест его не съедает:
-    утром уступает, вечером уходит рубеж."""
+async def test_digest_always_wins_monday_and_the_streak_milestone_moves_to_tuesday(
+    fresh_db, user_id, monkeypatch
+):
+    """Владелец: «итоги всегда». Понедельник — дайджест, даже когда серия на
+    рубеже; рубеж приходит во вторник и считается на понедельник, так что
+    тренировка во вторник утром его не сдвигает и не съедает."""
     monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
     # Четыре недели подряд, по тренировке в среду: 24 июня … 15 июля, плюс суббота 18-го.
     for day in ("2026-06-24", "2026-07-01", "2026-07-08", "2026-07-15", "2026-07-18"):
         await _workout_with_set(fresh_db, user_id, day, 100.0)
-    assert await engagement.build_weekly_digest_push(user_id, MONDAY) is None
-    decision = await engagement.build_daily_push(user_id, MONDAY)
+    digest = await engagement.build_weekly_digest_push(user_id, MONDAY)
+    assert digest is not None and digest.category == push_texts.WEEKLY_DIGEST
+    await fresh_db.record_push(user_id, digest.category, digest.text, MONDAY.isoformat())
+    assert await engagement.build_daily_push(user_id, MONDAY) is None
+    tuesday = MONDAY + dt.timedelta(days=1)
+    await _workout_with_set(fresh_db, user_id, tuesday.isoformat(), 100.0)
+    decision = await engagement.build_daily_push(user_id, tuesday)
     assert decision is not None and decision.category == push_texts.STREAK_MILESTONE
+    # Через неделю, в следующий вторник, тот же рубеж второй раз не приходит.
+    assert engagement.streak_milestone_due(
+        [dt.date(2026, 6, 24), dt.date(2026, 7, 1), dt.date(2026, 7, 8), dt.date(2026, 7, 15),
+         dt.date(2026, 7, 18), tuesday], tuesday + dt.timedelta(days=7)
+    ) != 4
 
 
-async def test_digest_yields_to_a_skip_milestone(fresh_db, user_id, monkeypatch):
-    """«Неделя без зала» важнее «на прошлой неделе — 0 тренировок» — как и в
-    воскресной схеме, где пропуск стоял выше дайджеста."""
+async def test_no_digest_after_an_empty_week(fresh_db, user_id, monkeypatch):
+    """На прошлой неделе ни одной тренировки — «итогов» нет: «прошлая неделя
+    дала 0 тренировок» — не итог, хотя тоннаж за 30 дней есть."""
+    monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
+    await _workout_with_set(fresh_db, user_id, (MONDAY - dt.timedelta(days=10)).isoformat(), 100.0)
+    assert await engagement.build_weekly_digest_push(user_id, MONDAY) is None
+
+
+async def test_empty_week_leaves_monday_to_the_skip_milestone(fresh_db, user_id, monkeypatch):
+    """Неделя без зала: дайджеста нет (пустая неделя), понедельник достаётся
+    пропуску."""
     monkeypatch.setattr(engagement.config, "AI_WEEKLY_DIGEST_ENABLED", False)
     # 12 июля → 20 июля: семь целых пустых дней (сегодняшний не в счёте).
     await _workout_with_set(fresh_db, user_id, "2026-07-12", 100.0)
@@ -294,7 +316,7 @@ async def test_digest_yields_to_a_skip_milestone(fresh_db, user_id, monkeypatch)
 
     monkeypatch.setattr(push_texts, "pick_text", counting_pick)
     assert await engagement.build_weekly_digest_push(user_id, MONDAY) is None
-    # Утренний вопрос «уступить ли?» мешок ротации пропуска не трогает.
+    # Утренний слот мешок ротации пропуска не трогает.
     assert picked == []
     decision = await engagement.build_daily_push(user_id, MONDAY)
     assert decision is not None and decision.category == push_texts.SKIP_7
