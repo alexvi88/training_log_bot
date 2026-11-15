@@ -264,6 +264,12 @@ def test_review_prompt_event_keeps_reason_and_counts():
     ) == {}
 
 
+def test_rating_slide_events_keep_only_nth():
+    for event in ("rating_slide_shown", "rating_slide_tap"):
+        assert product_metrics.clean_props(event, {"nth": 2, "text": "что ввёл человек"}) == {"nth": 2}
+        assert product_metrics.clean_props(event, {"nth": "2"}) == {}
+
+
 def test_you_story_events_keep_source_enum_and_capped_activity():
     for event in ("you_story_open", "you_story_share"):
         assert product_metrics.clean_props(event, {"source": "menu", "text": "что ввёл человек"}) == {

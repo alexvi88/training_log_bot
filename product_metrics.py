@@ -174,6 +174,10 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # приложение» в настройках; workouts — законченных у нас тренировок, nth — какой
     # это запрос у аккаунта. Показала ли система окно, iOS не говорит.
     "review_prompt_requested": frozenset({"reason", "workouts", "nth"}),
+    # Слайд «Оцени дневник» в итогах (iOS FinishRateSlide): долистал / нажал
+    # «Оценить в App Store»; nth — который это показ у аккаунта.
+    "rating_slide_shown": frozenset({"nth"}),
+    "rating_slide_tap": frozenset({"nth"}),
     # Сервис для тренеров: тренер отправил код приглашения (action shared|copied).
     # Сама связка, назначение и комментарий видны и так — меняющими запросами
     # (`action` с шаблоном маршрута /coach*).
