@@ -289,16 +289,18 @@ async def record_unhandled_callback(callback: CallbackQuery) -> None:
     )
 
 
-async def record_ai_reply(user_id: int, text: str) -> None:
+async def record_ai_reply(user_id: int, text: str, *, source: str = SOURCE_TG) -> None:
     """Ответ тренера — в ту же ленту, рядом с вопросом, на который он отвечает.
 
     Пишется там же, где ответ ложится в постоянный лог диалога
-    (handlers/ai_trainer), а не из middleware: middleware видит входящие
-    события, а это исходящее.
+    (handlers/ai_trainer у бота, api_v1_ai._run_turn у приложения), а не из
+    middleware: middleware видит входящие события, а это исходящее. `source`
+    — чей клиент: приложение долго ответ не писало вовсе, и в `fly logs` и
+    `/activity` за «спросил тренера» из iOS ответа не было.
     """
     text = text.strip()
-    await db.log_user_event(user_id, KIND_AI_REPLY, text)
-    logger.info("%s", process_log_line(SOURCE_TG, user_id, text, KIND_AI_REPLY, "ok"))
+    await db.log_user_event(user_id, KIND_AI_REPLY, text, source=source)
+    logger.info("%s", process_log_line(source, user_id, text, KIND_AI_REPLY, "ok"))
 
 
 async def record_ai_failure(user_id: int, exc: BaseException) -> None:

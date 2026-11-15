@@ -259,6 +259,35 @@ async def test_ask_returns_model_answer_and_charges_quota(fresh_db, client_facto
 
 
 @pytest.mark.asyncio
+async def test_ask_answer_goes_to_activity_feed_and_process_log(fresh_db, client_factory, monkeypatch, caplog):
+    """Ответ тренера из приложения — в ленту /activity и строкой в лог процесса
+    рядом с «спросил тренера», как у бота (activity_log.record_ai_reply).
+    Раньше из iOS в `fly logs` был только вопрос."""
+    import logging
+
+    import activity_log
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "Добавляй по 2.5 кг, когда сделаешь 3×8."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+    with caplog.at_level(logging.INFO, logger="activity_log"):
+        resp = await client.post("/ai/ask", json={"question": "Как прогрессировать в жиме?"})
+    assert resp.status_code == 200, resp.text
+    cur = await fresh_db.conn().execute(
+        "SELECT content, source FROM user_events WHERE telegram_id = ? AND kind = ?",
+        (111, activity_log.KIND_AI_REPLY),
+    )
+    assert [tuple(r) for r in await cur.fetchall()] == [("Добавляй по 2.5 кг, когда сделаешь 3×8.", "ios")]
+    assert any(
+        "[ios] user=111 | Добавляй по 2.5 кг, когда сделаешь 3×8." in r.getMessage() for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_ask_answer_stays_markdown_with_headings(fresh_db, client_factory, monkeypatch):
     """Приложение рисует markdown-заголовки само: уровень rich-заголовка и <b>
     — только у Telegram-рендера (formatting), /v1 отдаёт ответ как есть."""
