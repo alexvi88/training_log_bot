@@ -126,7 +126,7 @@ async def _auto_finish(row: Any) -> int:
         return 0
     await db.delete_empty_blocks(workout_id)
     with lifecycle_events.using(lifecycle_events.PLATFORM_IOS):
-        if not await db.finish_workout(workout_id, note=workout["note"], finished_at=row["last_set_at"]):
+        if not await db.finish_workout(workout_id, note=workout["note"], finished_at=row["last_set_at"], auto=True):
             return 0
     await coach_notify.notify_client_workout_finished(user_id, workout_id)
     duration = await view_builder.workout_duration_seconds(await db.get_workout(workout_id))

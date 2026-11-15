@@ -30,7 +30,8 @@
   `workout_started` (`kind` live|backfill, `plan` yes|no), `set_logged`
   (`source` bot|app|lock_screen|watch, `workout` live|backfill|edit — по одному
   на подход), `workout_finished` (`kind`, `plan`, `sets` и `duration` —
-  корзины), вехи по разу на человека `first_set`, `first_workout_finished`,
+  корзины; `by=auto` — закрыл сервер, workout_autoclose, — у вехи тоже),
+  вехи по разу на человека `first_set`, `first_workout_finished`,
   `second_workout_finished` (импорт не в счёт), `coach_linked` (под атлетом),
   `ai_question` (`kind` text|photo|video|voice — на списании квоты, то есть на
   отвеченный вопрос), `video_review` (состоявшийся разбор видео), `import_done`
