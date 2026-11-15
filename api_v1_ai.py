@@ -176,6 +176,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, StreamingResponse
 from starlette.routing import Route
 
+import activity_log
 import ai_chat_log
 import ai_limits
 import ai_program_actions
@@ -602,6 +603,9 @@ async def _run_turn(
             user_id, source=ai_chat_log.SOURCE_APP, question=visible_question,
             answer=answer, wire=wire_messages, started_at=turn_started_at,
         )
+        # Ответ — в ленту /activity и в лог процесса рядом с «спросил
+        # тренера», как у бота. Раньше из приложения в логе был только вопрос.
+        await activity_log.record_ai_reply(user_id, answer, source=activity_log.SOURCE_IOS)
 
     return {
         "answer": answer,
