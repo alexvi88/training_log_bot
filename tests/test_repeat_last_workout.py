@@ -171,3 +171,34 @@ def test_main_menu_no_longer_carries_repeat_or_hall():
         cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
         assert "menu:repeat_last" not in cbs
         assert "menu:hall" not in cbs
+
+
+@pytest.mark.asyncio
+async def test_repeat_from_picker_survives_lost_tracker_address(fresh_db, user_id):
+    """Прод, 17.11: «Повторить» из пикера упало KeyError 'live_chat_id'.
+    Уход в меню посреди тренировки (`_clear_state_keep_workout`) сохраняет
+    каркас тренировки, но не адрес живого трекера, а кнопки пикера в чате
+    остаются живыми. Трекер должен прийти новым сообщением в личку атлета."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    row = await db.create_exercise(user_id, "Тяга", group_id)
+    older = await _finished_workout(db, user_id, [bench, row])
+
+    state = await _state(user_id)
+    await workout.start_workout(_make_callback(user_id, "menu:start_workout"), state)
+    await workout._clear_state_keep_workout(state)
+    await state.set_state(WorkoutFlow.picking_group)
+    data = await state.get_data()
+    assert "workout_id" in data and "live_chat_id" not in data
+
+    callback = _make_callback(user_id, f"pick:rep:use:{older}")
+    await workout.pick_repeat_use(callback, state)
+
+    data = await state.get_data()
+    assert await state.get_state() == WorkoutFlow.logging_set
+    assert data["open_exercises"] == [bench]
+    assert data["live_chat_id"] == user_id
+    sent = callback.bot.send_message.await_args.kwargs
+    assert sent["chat_id"] == user_id
+    callback.bot.delete_message.assert_not_awaited()

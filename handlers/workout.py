@@ -162,8 +162,8 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     so we delete and resend instead. chat_bottom is what tells the two apart.
     """
     data = await state.get_data()
-    chat_id = data["live_chat_id"]
-    message_id = data["live_message_id"]
+    chat_id = _live_chat_id(data, user["telegram_id"])
+    message_id = data.get("live_message_id")
     blocks = await view_builder.build_block_views(
         workout_id, user["e1rm_formula"], mark_golds=True
     )
@@ -179,7 +179,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
         # экранов-пикеров («выбери группу», «повторить тренировку» и т.п.),
         # и там заголовок был бы не про эту тренировку, а про сам выбор.
         text = f"{i18n.t('workout.current_workout_header')}\n\n{text}"
-    if chat_bottom.is_at_bottom(chat_id, message_id):
+    if message_id is not None and chat_bottom.is_at_bottom(chat_id, message_id):
         try:
             await bot.edit_message_text(
                 chat_id=chat_id, message_id=message_id, text=text,
@@ -190,10 +190,20 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
             # Nothing changed (e.g. a double tap) — the screen is already right.
             if "message is not modified" in str(e).lower():
                 return
-    with suppress(TelegramBadRequest):
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    if message_id is not None:
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
     sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
-    await state.update_data(live_message_id=sent.message_id)
+    await state.update_data(live_chat_id=chat_id, live_message_id=sent.message_id)
+
+
+def _live_chat_id(data: dict, telegram_id: int) -> int:
+    """Чат живого трекера. Адреса сообщения в FSM может не оказаться: уход в
+    меню посреди тренировки (`_clear_state_keep_workout`) сохраняет каркас, но
+    не адрес слота, а кнопки старого пикера в чате остаются живыми — тап по ним
+    падал KeyError на `live_chat_id`. Бот живёт в личке, а там id чата — это id
+    атлета, так что трекер просто приходит новым сообщением."""
+    return data.get("live_chat_id") or telegram_id
 
 
 def _sticky_photo_caption(ex) -> str:
@@ -4171,29 +4181,34 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         with_placeholder = full_text + "\n" + formatting.build_ai_comment_placeholder()
         if formatting.telegram_length(with_placeholder) <= formatting.MESSAGE_LIMIT:
             sent_text = with_placeholder
-    message_id = data["live_message_id"]
-    try:
-        sent = await bot.edit_message_text(
-            chat_id=data["live_chat_id"], message_id=message_id, text=sent_text,
-            parse_mode="HTML", reply_markup=card_kb,
-        )
-        if isinstance(sent, Message):
-            message_id = sent.message_id
-    except TelegramBadRequest:
+    chat_id = _live_chat_id(data, user_id)
+    message_id = data.get("live_message_id")
+    sent = None
+    if message_id is not None:
+        try:
+            sent = await bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=sent_text,
+                parse_mode="HTML", reply_markup=card_kb,
+            )
+            if isinstance(sent, Message):
+                message_id = sent.message_id
+        except TelegramBadRequest:
+            sent = None
+    if sent is None:
         sent = await bot.send_message(
-            chat_id=data["live_chat_id"], text=sent_text, parse_mode="HTML", reply_markup=card_kb
+            chat_id=chat_id, text=sent_text, parse_mode="HTML", reply_markup=card_kb
         )
         message_id = sent.message_id
 
     if needs_ai_comment:
         _spawn(
-            _attach_ai_comment(bot, data["live_chat_id"], message_id, user_id, workout_id, full_text)
+            _attach_ai_comment(bot, chat_id, message_id, user_id, workout_id, full_text)
         )
 
     # Слайды итогов — альбомом под карточкой, в фоне: рендер занимает секунды,
     # и завершение их не ждёт. Ошибка рендера или отправки только в лог.
     if config.FINISH_SLIDES_ENABLED:
-        _spawn(_send_finish_slides(bot, data["live_chat_id"], workout_id, user))
+        _spawn(_send_finish_slides(bot, chat_id, workout_id, user))
 
     await _clear_sticky_photo(bot, state)
     # Тренировка закрыта — каркас больше не нужен, но переписка с AI-тренером и
