@@ -128,9 +128,11 @@ async def test_ask_runs_the_models_sql_and_returns_its_answer(file_db, monkeypat
     ])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
-    answer = await admin_data_ask.ask(1, "сколько атлетов по языкам?")
+    answer, history = await admin_data_ask.ask(1, "сколько атлетов по языкам?")
 
     assert answer == "Атлетов 2: en — 1, ru — 1."
+    assert history[0] == {"role": "user", "content": "сколько атлетов по языкам?"}
+    assert history[-1]["content"] == answer
     first, second = client.requests
     assert first["tools"][0]["name"] == "run_sql"
     assert "CREATE TABLE" in first["input"][0]["content"]
@@ -147,7 +149,53 @@ async def test_ask_respects_the_money_hard_stop(file_db, monkeypatch):
 
     monkeypatch.setattr(admin_data_ask.ai_limits, "hard_stop_block", _blocked)
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: pytest.fail("model must not be called"))
-    assert "потолок" in await admin_data_ask.ask(1, "что угодно")
+    answer, history = await admin_data_ask.ask(1, "что угодно", [{"role": "user", "content": "x"}])
+    assert "потолок" in answer
+    assert history == [{"role": "user", "content": "x"}]
+
+
+async def test_follow_up_question_sees_the_previous_turn(file_db, monkeypatch):
+    await dbmod.get_or_create_user(11, "a", "ru")
+    client = ResponsesScript([
+        _call_body("SELECT count(*) FROM users"),
+        _text_body("Атлетов: 1."),
+        _text_body("Из них на iOS: 0."),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    _, history = await admin_data_ask.ask(1, "сколько атлетов?")
+    answer, history = await admin_data_ask.ask(1, "а на iOS?", history)
+
+    assert answer == "Из них на iOS: 0."
+    third = client.requests[2]["input"]
+    texts = [i.get("content") for i in third if i.get("role") in ("user", "assistant")]
+    assert texts[0] == "сколько атлетов?" and texts[-1] == "а на iOS?"
+    assert "Атлетов: 1." in json.dumps(third, ensure_ascii=False)
+    assert any(i.get("type") == "function_call_output" for i in third)
+
+
+def test_trim_drops_whole_old_questions(monkeypatch):
+    monkeypatch.setattr(admin_data_ask, "HISTORY_MAX_CHARS", 300)
+    history = []
+    for n in range(5):
+        history += [
+            {"role": "user", "content": f"вопрос {n}"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": f"c{n}"}]},
+            {"role": "tool", "tool_call_id": f"c{n}", "content": "x" * 60},
+            {"role": "assistant", "content": f"ответ {n}"},
+        ]
+    trimmed = admin_data_ask._trim_history(history)
+    assert trimmed[0]["role"] == "user"
+    assert trimmed[-1] == {"role": "assistant", "content": "ответ 4"}
+    assert len(trimmed) < len(history)
+
+
+async def test_round_cap_does_not_keep_dangling_calls(file_db, monkeypatch):
+    monkeypatch.setattr(admin_data_ask, "MAX_ROUNDS", 2)
+    client = ResponsesScript([_call_body("SELECT 1"), _call_body("SELECT 2")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    answer, history = await admin_data_ask.ask(1, "?", [])
+    assert "раунды" in answer and history == []
 
 
 def _message(user_id: int):
@@ -159,21 +207,55 @@ def _message(user_id: int):
     return message
 
 
-async def test_data_command_is_admin_only_and_needs_a_question(file_db, monkeypatch):
+async def _state():
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    return FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=1, user_id=1))
+
+
+async def test_data_command_opens_a_dialog_with_memory(file_db, monkeypatch):
+    from fsm import AdminFlow
+
     monkeypatch.setattr(config, "ADMIN_ID", 1)
-    ask = AsyncMock(return_value="42")
-    monkeypatch.setattr(admin_data_ask, "ask", ask)
+    seen = []
+
+    async def _ask(admin_id, question, history):
+        seen.append((question, list(history)))
+        return f"ответ на «{question}»", [*history, {"role": "user", "content": question},
+                                          {"role": "assistant", "content": "ok"}]
+
+    monkeypatch.setattr(admin_data_ask, "ask", _ask)
 
     stranger = _message(2)
-    await admin.cmd_data(stranger, SimpleNamespace(args="сколько?"))
+    state = await _state()
+    await admin.cmd_data(stranger, SimpleNamespace(args="сколько?"), state)
     stranger.answer.assert_not_awaited()
+    assert await state.get_state() is None
 
-    empty = _message(1)
-    await admin.cmd_data(empty, SimpleNamespace(args=None))
-    assert "/data" in empty.answer.await_args.args[0]
-    ask.assert_not_awaited()
+    opened = _message(1)
+    await admin.cmd_data(opened, SimpleNamespace(args=None), state)
+    assert await state.get_state() == AdminFlow.data_dialog.state
+    assert "Диалог по данным открыт" in opened.answer.await_args.args[0]
+    assert seen == []
 
-    msg = _message(1)
-    await admin.cmd_data(msg, SimpleNamespace(args="сколько атлетов?"))
-    ask.assert_awaited_once_with(1, "сколько атлетов?")
-    assert msg.answer.await_args.args[0] == "42"
+    first = _message(1)
+    first.text = "сколько атлетов?"
+    await admin.data_dialog_question(first, state)
+    second = _message(1)
+    second.text = "а на iOS?"
+    await admin.data_dialog_question(second, state)
+
+    assert seen[0] == ("сколько атлетов?", [])
+    assert seen[1][0] == "а на iOS?" and seen[1][1][0]["content"] == "сколько атлетов?"
+    assert second.answer.await_args.args[0] == "ответ на «а на iOS?»"
+
+    cb = MagicMock()
+    cb.from_user = SimpleNamespace(id=1)
+    cb.message = _message(1)
+    cb.answer = AsyncMock()
+    await admin.data_dialog_new(cb, state)
+    assert not (await state.get_data()).get("admin_data_history")
+    await admin.data_dialog_stop(cb, state)
+    assert await state.get_state() is None
