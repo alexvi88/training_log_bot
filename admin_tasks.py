@@ -542,10 +542,7 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
     # уже подтвердил бэкап, доставка в личку админа лишь дублирует его, а не
     # является единственным способом его получить, как было раньше.
     if backup_path and os.path.exists(backup_path):
-        await bot.send_document(
-            chat_id=config.ADMIN_ID,
-            document=FSInputFile(backup_path, filename=os.path.basename(backup_path)),
-        )
+        await _send_backup_document(bot, backup_path, os.path.basename(backup_path), on_disk=True)
     else:
         # Ротация на диске не удалась — тогда хотя бы личное сообщение
         # получает временную копию, чтобы день не остался вовсе без бэкапа.
@@ -555,10 +552,50 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
             os.remove(tmp_path)
         try:
             await db.backup_to_file(tmp_path)
-            await bot.send_document(chat_id=config.ADMIN_ID, document=FSInputFile(tmp_path, filename=backup_name))
+            await _send_backup_document(bot, tmp_path, backup_name, on_disk=False)
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+
+# Потолок Bot API на загрузку файла — 50 МБ (ответ «Request Entity Too
+# Large»). База его переросла 17.11.2026: отчёт приходил, а бэкап падал
+# исключением. Запас — на multipart-обёртку запроса.
+TELEGRAM_UPLOAD_LIMIT_BYTES = 49 * 1024 * 1024
+
+
+def _gzip_file(src: str, dst: str) -> None:
+    import gzip
+
+    with open(src, "rb") as f_in, gzip.open(dst, "wb", compresslevel=6) as f_out:
+        shutil.copyfileobj(f_in, f_out, 1024 * 1024)
+
+
+async def _send_backup_document(bot: Bot, path: str, filename: str, *, on_disk: bool) -> None:
+    """Бэкап в личку админа — сжатым: SQLite жмётся в разы. Не влез в лимит
+    Telegram и сжатым — строка вместо файла: копия на диске остаётся
+    (`_rotate_disk_backup`), а без неё (`on_disk=False`) — честно, что дня без
+    бэкапа в личке не избежать."""
+    gz_path = os.path.join(tempfile.gettempdir(), f"{filename}.gz")
+    try:
+        await asyncio.to_thread(_gzip_file, path, gz_path)
+        size = os.path.getsize(gz_path)
+        if size <= TELEGRAM_UPLOAD_LIMIT_BYTES:
+            await bot.send_document(
+                chat_id=config.ADMIN_ID, document=FSInputFile(gz_path, filename=f"{filename}.gz")
+            )
+            return
+        where = f"лежит на диске: {path}" if on_disk else "на диск тоже не лёг — проверь ротацию бэкапов"
+        await bot.send_message(
+            chat_id=config.ADMIN_ID,
+            text=(
+                f"💾 Бэкап {size / 1024 / 1024:.0f} МБ сжатым — больше лимита Telegram "
+                f"(50 МБ), в личку не отправил; {where}."
+            ),
+        )
+    finally:
+        with suppress(FileNotFoundError):
+            os.remove(gz_path)
 
 
 # ---------- утренний разбор поведения за вчера ------------------------------

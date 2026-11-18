@@ -482,3 +482,46 @@ async def test_retention_step_gives_up_after_retries(fresh_db, monkeypatch, capl
     assert await admin_tasks._run_retention_cleanup() is False
     assert len(calls) == admin_tasks.RETENTION_LOCK_RETRIES + 1
     assert any("user_events" in r.message for r in caplog.records if r.levelname == "ERROR")
+
+
+@pytest.mark.asyncio
+async def test_daily_report_sends_backup_gzipped(fresh_db, monkeypatch, tmp_path):
+    """Прод, 17.11.2026: база переросла лимит Bot API (50 МБ) — бэкап уходит
+    сжатым, а сжатый файл — валидный gzip исходника."""
+    import gzip
+
+    backup = tmp_path / "backup.db"
+    backup.write_bytes(b"SQLite format 3\x00" + b"\x00" * 200_000)
+    sent = {}
+
+    async def _doc(chat_id, document):
+        sent["name"] = document.filename
+        with gzip.open(document.path, "rb") as f:
+            sent["body"] = f.read()
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.send_document = AsyncMock(side_effect=_doc)
+    monkeypatch.setattr(config, "ADMIN_ID", 1)
+
+    await admin_tasks._send_daily_report(bot, backup_path=str(backup))
+
+    assert sent["name"] == "backup.db.gz"
+    assert sent["body"] == backup.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_daily_report_too_big_backup_becomes_a_line(fresh_db, monkeypatch, tmp_path):
+    backup = tmp_path / "backup.db"
+    backup.write_bytes(os.urandom(4096))
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.send_document = AsyncMock()
+    monkeypatch.setattr(config, "ADMIN_ID", 1)
+    monkeypatch.setattr(admin_tasks, "TELEGRAM_UPLOAD_LIMIT_BYTES", 100)
+
+    await admin_tasks._send_daily_report(bot, backup_path=str(backup))
+
+    bot.send_document.assert_not_awaited()
+    texts = [c.kwargs["text"] for c in bot.send_message.await_args_list]
+    assert any("больше лимита Telegram" in t and str(backup) in t for t in texts)
