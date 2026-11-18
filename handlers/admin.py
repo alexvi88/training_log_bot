@@ -1425,6 +1425,39 @@ async def cmd_metrics(message: Message, state: FSMContext):
         )
 
 
+# --- /data: вопрос по данным модели с доступом к базе (admin_data_ask) ------------
+
+_DATA_CHUNK = 4000
+
+
+@router.message(Command("data"))
+async def cmd_data(message: Message, command: CommandObject):
+    """Вопрос по данным — модель сама пишет SELECT по базе только на чтение и
+    отвечает цифрами. Пример: /data сколько новичков за неделю дошли до первой
+    тренировки и откуда пришли."""
+    if not _is_admin(message.from_user.id):
+        return
+    question = (command.args or "").strip()
+    if not question:
+        await message.answer(
+            "Напиши вопрос после команды, например:\n"
+            "/data сколько новичков за неделю дошли до первой тренировки, по источникам"
+        )
+        return
+    import admin_data_ask
+
+    status = await message.answer("Считаю по базе…")
+    try:
+        answer = await admin_data_ask.ask(message.from_user.id, question)
+    except Exception:
+        logger.exception("admin /data failed")
+        answer = "Модель не ответила — ошибка в логе. Повтори вопрос через минуту."
+    with suppress(TelegramAPIError):
+        await status.delete()
+    for start in range(0, len(answer), _DATA_CHUNK):
+        await message.answer(answer[start:start + _DATA_CHUNK])
+
+
 # --- /events_csv: сырые продуктовые события для разбора где угодно ----------------
 
 EVENTS_CSV_DEFAULT_DAYS = 30
