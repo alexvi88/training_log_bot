@@ -79,6 +79,7 @@ class AdminFlow(StatesGroup):
     broadcast_awaiting_message = State()
     broadcast_awaiting_message_en = State()
     broadcast_confirming = State()
+    data_dialog = State()  # /data: каждое сообщение — вопрос по данным базы
 
 
 class AITrainerFlow(StatesGroup):

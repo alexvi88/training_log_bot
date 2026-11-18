@@ -20,6 +20,7 @@ from aiogram.types import (
     FSInputFile,
     InaccessibleMessage,
     InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -1430,32 +1431,88 @@ async def cmd_metrics(message: Message, state: FSMContext):
 _DATA_CHUNK = 4000
 
 
+_DATA_HISTORY_KEY = "admin_data_history"
+
+
+def _data_dialog_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🧹 Новый разговор", callback_data="admin:data:new")
+    kb.button(text="✖️ Закончить", callback_data="admin:data:stop")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
 @router.message(Command("data"))
-async def cmd_data(message: Message, command: CommandObject):
-    """Вопрос по данным — модель сама пишет SELECT по базе только на чтение и
-    отвечает цифрами. Пример: /data сколько новичков за неделю дошли до первой
-    тренировки и откуда пришли."""
+async def cmd_data(message: Message, command: CommandObject, state: FSMContext):
+    """Диалог по данным: `/data` открывает его, дальше каждое сообщение —
+    вопрос модели, которая сама пишет SELECT по базе только на чтение и помнит
+    прошлые вопросы («а теперь то же по iOS»). `/data вопрос` — открыть и
+    сразу спросить. Закрывается кнопкой или другим разделом бота."""
     if not _is_admin(message.from_user.id):
         return
+    await state.set_state(AdminFlow.data_dialog)
     question = (command.args or "").strip()
     if not question:
+        has_history = bool((await state.get_data()).get(_DATA_HISTORY_KEY))
         await message.answer(
-            "Напиши вопрос после команды, например:\n"
-            "/data сколько новичков за неделю дошли до первой тренировки, по источникам"
+            "📊 Диалог по данным открыт"
+            + (" — помню прошлые вопросы." if has_history else ".")
+            + " Пиши вопрос обычным сообщением, например: сколько новичков за неделю дошли "
+            "до первой тренировки, по источникам.",
+            reply_markup=_data_dialog_keyboard(),
         )
         return
+    await _answer_data_question(message, state, question)
+
+
+@router.message(StateFilter(AdminFlow.data_dialog), F.text, ~F.text.startswith("/"))
+async def data_dialog_question(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await _answer_data_question(message, state, message.text.strip())
+
+
+async def _answer_data_question(message: Message, state: FSMContext, question: str) -> None:
     import admin_data_ask
 
+    history = (await state.get_data()).get(_DATA_HISTORY_KEY) or []
     status = await message.answer("Считаю по базе…")
     try:
-        answer = await admin_data_ask.ask(message.from_user.id, question)
+        answer, history = await admin_data_ask.ask(message.from_user.id, question, history)
     except Exception:
         logger.exception("admin /data failed")
         answer = "Модель не ответила — ошибка в логе. Повтори вопрос через минуту."
+    await state.update_data(**{_DATA_HISTORY_KEY: history})
     with suppress(TelegramAPIError):
         await status.delete()
-    for start in range(0, len(answer), _DATA_CHUNK):
-        await message.answer(answer[start:start + _DATA_CHUNK])
+    chunks = [answer[i:i + _DATA_CHUNK] for i in range(0, len(answer), _DATA_CHUNK)] or [answer]
+    for i, chunk in enumerate(chunks):
+        last = i == len(chunks) - 1
+        await message.answer(chunk, reply_markup=_data_dialog_keyboard() if last else None)
+
+
+@router.callback_query(F.data == "admin:data:new")
+async def data_dialog_new(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(AdminFlow.data_dialog)
+    await state.update_data(**{_DATA_HISTORY_KEY: None})
+    await callback.message.answer("🧹 Начали заново — прошлые вопросы забыл. Спрашивай.",
+                                  reply_markup=_data_dialog_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:data:stop")
+async def data_dialog_stop(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    if await state.get_state() == AdminFlow.data_dialog.state:
+        await state.set_state(None)
+    await state.update_data(**{_DATA_HISTORY_KEY: None})
+    await callback.message.answer("Диалог по данным закрыт. Открыть снова — /data.")
+    await callback.answer()
 
 
 # --- /events_csv: сырые продуктовые события для разбора где угодно ----------------

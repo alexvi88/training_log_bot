@@ -177,27 +177,50 @@ def _system_prompt(schema: str, own_ids: set[int]) -> str:
     )
 
 
-async def ask(admin_id: int, question: str) -> str:
-    """Ответ на вопрос по данным. Ошибки модели летят наверх — их ловит хендлер."""
+# Память диалога /data — сообщения без системного промпта (он собирается на
+# каждом вопросе заново и стоит стабильной шапкой). Переступила потолок —
+# старые вопросы уходят целиком, вместе с их запросами и ответами.
+HISTORY_MAX_CHARS = 120_000
+
+
+def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def size(msgs: list[dict[str, Any]]) -> int:
+        return len(json.dumps(msgs, ensure_ascii=False, default=str))
+
+    history = list(history)
+    while size(history) > HISTORY_MAX_CHARS:
+        starts = [i for i, m in enumerate(history) if m.get("role") == "user"]
+        if len(starts) < 2:
+            break
+        history = history[starts[1]:]
+    return history
+
+
+async def ask(
+    admin_id: int, question: str, history: Optional[list[dict[str, Any]]] = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Ответ на вопрос по данным и история диалога для следующего вопроса.
+    Ошибки модели летят наверх — их ловит хендлер."""
+    history = list(history or [])
     block = await ai_limits.hard_stop_block()
     if block is not None:
-        return "Суточный потолок по деньгам достигнут — модель сегодня молчит, и этот вопрос тоже."
+        return "Суточный потолок по деньгам достигнут — модель сегодня молчит, и этот вопрос тоже.", history
     path = await _db_path()
     schema = await asyncio.to_thread(schema_text, path)
     own_ids = await db.own_account_ids()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(schema, own_ids)},
-        {"role": "user", "content": question},
-    ]
+    turn: list[dict[str, Any]] = [*_trim_history(history), {"role": "user", "content": question}]
     backend = ai_trainer.luna_backend()
     for _ in range(MAX_ROUNDS):
+        messages = [{"role": "system", "content": _system_prompt(schema, own_ids)}, *turn]
         text, calls, items = await ai_trainer._responses_round(
             backend, messages, admin_id, None,
             include_tools=True, tools=[SQL_TOOL], cache_scope="admin-data",
         )
         if not calls:
-            return text.strip() or "Модель ответила пустотой — переформулируй вопрос."
-        messages.append({
+            answer = text.strip() or "Модель ответила пустотой — переформулируй вопрос."
+            turn.append({"role": "assistant", "content": answer, **ai_trainer._reasoning_fields(items)})
+            return answer, turn
+        turn.append({
             "role": "assistant", "content": text or None,
             "tool_calls": [
                 {"id": c.id, "type": "function",
@@ -216,5 +239,8 @@ async def ask(admin_id: int, question: str) -> str:
             else:
                 logger.info("admin /data SQL: %s", sql[:500])
                 result = await asyncio.to_thread(run_sql, path, sql)
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-    return "Не уложился в раунды запросов — сузь вопрос."
+            turn.append({"role": "tool", "tool_call_id": call.id, "content": result})
+    answer = "Не уложился в раунды запросов — сузь вопрос."
+    # Незакрытые вызовы в истории сломали бы следующий запрос — вопрос без
+    # ответа в память не кладём.
+    return answer, history
