@@ -139,3 +139,23 @@ def test_project_contact_email_is_on_pages():
     for page in legal_pages.ALL_PAGES:
         for lang in legal_pages.LANGS:
             assert "mailto:athletediary.app@gmail.com" in legal_pages.render(page, lang)
+
+
+@pytest.mark.parametrize("lang", legal_pages.LANGS)
+def test_titles_are_descriptive_and_carry_the_brand(lang):
+    """Bing, 19.11.2026: «page titles are too short» на /support — голое
+    «Support». Поддержка — свой описательный заголовок, остальные — с брендом."""
+    import re
+
+    import i18n
+
+    brand = i18n.t_in(lang, "seo.brand")
+    for page in legal_pages.ALL_PAGES:
+        if page == legal_pages.SUPPORT_PAGE:
+            continue  # свой заголовок, бренд в нём склоняется («Дневника атлета»)
+        html = legal_pages.render(page, lang)
+        title = re.search(r"<title>(.*?)</title>", html).group(1)
+        assert brand.replace("’", "&#x27;") in title or brand in title, (page, lang, title)
+        assert len(title) >= 25, (page, lang, title)
+    support = re.search(r"<title>(.*?)</title>", legal_pages.render("support", lang)).group(1)
+    assert len(support) >= 50, support

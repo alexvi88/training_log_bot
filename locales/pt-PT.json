@@ -6090,5 +6090,6 @@
   "api.error.year_invalid": "Esse ano não está no teu diário. Escolhe um ano em que treinaste.",
   "year.bot.failed": "Não consegui montar o teu ano — algo falhou do meu lado. Tenta /year outra vez daqui a um minuto.",
   "push.ios.year_review.title": "RESUMO DO ANO",
-  "push.ios.year_review.body": "OLÁ ATLETA! Contei o teu {year}: cada treino, cada recorde. Pus em cartões, dá uma vista de olhos."
+  "push.ios.year_review.body": "OLÁ ATLETA! Contei o teu {year}: cada treino, cada recorde. Pus em cartões, dá uma vista de olhos.",
+  "legal.support.title": "Suporte do Diário do Atleta: ajuda com a app, o bot e o treinador IA"
 }
