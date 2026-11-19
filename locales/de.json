@@ -6090,5 +6090,6 @@
   "api.error.year_invalid": "Dieses Jahr gibt es in deinem Tagebuch nicht. Wähl ein Jahr, in dem du trainiert hast.",
   "year.bot.failed": "Ich konnte dein Jahr nicht zusammenstellen — bei mir ist etwas kaputtgegangen. Versuch /year in einer Minute noch mal.",
   "push.ios.year_review.title": "JAHRESRÜCKBLICK",
-  "push.ios.year_review.body": "HEY ATHLET! Ich habe dein {year} durchgezählt — jedes Training, jeden Rekord. In Karten gepackt, schau rein."
+  "push.ios.year_review.body": "HEY ATHLET! Ich habe dein {year} durchgezählt — jedes Training, jeden Rekord. In Karten gepackt, schau rein.",
+  "legal.support.title": "Athleten-Tagebuch Support: Hilfe zu App, Bot und KI-Coach"
 }

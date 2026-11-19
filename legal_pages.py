@@ -106,6 +106,17 @@ def page_lang(request: Request) -> str:
     return i18n.lang_from_accept_language(header)
 
 
+def page_title(page: str, lang: str, heading: str) -> str:
+    """<title> страницы. Голый заголовок («Support», «Поддержка») поисковики
+    считают слишком коротким (Bing, 19.11.2026: «page titles are too short»):
+    у поддержки — свой описательный заголовок, у остальных — бренд после
+    заголовка, если его там ещё нет."""
+    if page == SUPPORT_PAGE:
+        return i18n.t_in(lang, "legal.support.title")
+    brand = i18n.t_in(lang, "seo.brand")
+    return heading if brand in heading else f"{heading} — {brand}"
+
+
 def render(page: str, lang: str) -> str:
     body = _fragment(page, lang)
     if CONTACT_EMAIL:
@@ -117,6 +128,7 @@ def render(page: str, lang: str) -> str:
         body = body.replace(_EMAIL_MARKER, snippet)
     match = _H1.search(body)
     title = re.sub(r"<[^>]+>", "", match.group(1)) if match else page
+    title = page_title(page, lang, title)
     return (
         f"<!doctype html><html lang={lang}><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width, initial-scale=1">'

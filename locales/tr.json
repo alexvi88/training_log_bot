@@ -6090,5 +6090,6 @@
   "api.error.year_invalid": "Bu yıl günlüğünde yok. Antrenman yaptığın bir yılı seç.",
   "year.bot.failed": "Yılını toparlayamadım — bende bir şey bozuldu. Bir dakika sonra /year'i tekrar dene.",
   "push.ios.year_review.title": "YILIN ÖZETİ",
-  "push.ios.year_review.body": "SELAM ATLET! {year} yılını saydım — her antrenman, her rekor. Kartlara koydum, bir bak."
+  "push.ios.year_review.body": "SELAM ATLET! {year} yılını saydım — her antrenman, her rekor. Kartlara koydum, bir bak.",
+  "legal.support.title": "Sporcu Günlüğü destek: uygulama, bot ve AI koç için yardım"
 }
