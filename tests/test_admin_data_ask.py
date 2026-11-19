@@ -259,3 +259,12 @@ async def test_data_command_opens_a_dialog_with_memory(file_db, monkeypatch):
     assert not (await state.get_data()).get("admin_data_history")
     await admin.data_dialog_stop(cb, state)
     assert await state.get_state() is None
+
+
+def test_system_prompt_carries_the_data_map():
+    """19.11: модель ответила «iOS-пуши не выделить» — iOS-пуши лежат в
+    analytics_events (push_sent/push_open), а pushes с channel NULL — не пуши."""
+    prompt = admin_data_ask._system_prompt("CREATE TABLE x (y)", {1})
+    assert "push_sent" in prompt and "push_open" in prompt
+    assert "channel IS NULL" in prompt
+    assert prompt.index("Карта данных") < prompt.index("Схема базы")

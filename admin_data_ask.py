@@ -155,6 +155,53 @@ async def _db_path() -> str:
     raise RuntimeError("main database path not found")
 
 
+# Карта данных — то, чего не видно из CREATE TABLE и на чём модель уже
+# ошиблась (19.11: «iOS-пуши по базе не выделить», хотя они в analytics_events).
+# Дописывай сюда, когда /data отвечает неверно из-за устройства данных.
+DATA_MAP = """\
+ПУШИ — два канала, лежат в РАЗНЫХ таблицах:
+- Telegram: строки pushes с channel = 'tg' (только реально ушедшие). Тап — pushes.tapped_at
+  (и событие analytics_events push_open с platform = 'tg') = первое нажатие кнопки под пушем.
+  Тап отслеживается только у пушей с tg_message_id IS NOT NULL — у старых строк его нет, поэтому
+  CTR Telegram считай только по ним (знаменатель — пуши с tg_message_id).
+- iOS: события analytics_events с event = 'push_sent' (по одному на устройство; props.ok — доставлен,
+  props.category — категория). Тап по баннеру — analytics_events event = 'push_open', platform = 'ios'
+  (props.category). CTR iOS = push_open(ios) / push_sent(ok).
+- pushes с channel IS NULL — НЕ пуш, а отметка дедупликации для атлета без Telegram (iOS-пуш ему
+  записан событием push_sent). В подсчёт отправленных пушей их не включай.
+- Категория пуша: pushes.category и props.category в событиях.
+
+ТРЕНИРОВКИ:
+- workouts.status: 'active' (идёт сейчас), 'backfill' (прошлая тренировка, которую вносят задним
+  числом, ещё не сохранена), 'finished' (закончена; started_at у внесённой задним числом — её день).
+  Выброшенные удаляются из базы. «Тренировка была» = status = 'finished'.
+- Перенесённая из Hevy/Strong/CSV история — (import_batch_id IS NOT NULL OR source = 'import').
+  Для вопросов «тренировался ли у нас» исключай её.
+- Подходы: sets → workout_blocks → workouts.
+
+АТЛЕТЫ:
+- users.telegram_id — id атлета везде (user_id в событиях = telegram_id). Нет Telegram (только
+  приложение) — telegram_linked = 0; ставил приложение — app_since IS NOT NULL.
+- Источник — users.source (метка ссылки), пригласивший — users.referrer_id; язык — users.lang.
+- Регистрация и платформа регистрации — событие analytics_events event = 'signup' (platform tg|ios).
+
+СОБЫТИЯ analytics_events: столбцы event, props (JSON — json_extract(props, '$.ключ')), platform
+('tg' | 'ios'), app_version, created_at. Жизненный цикл: signup, workout_started, set_logged,
+workout_finished, first_set, first_workout_finished, second_workout_finished, program_created,
+ai_question, import_done. Суточная сводка уже посчитанных метрик — daily_metrics (day, metric, value),
+например pushes_sent_ios, push_opens_ios, push_ctr_ios.
+
+СРОКИ: учёт начинался не с запуска продукта, а с появления каждой таблицы или события. Перед
+выводом «за всё время» проверь MIN(created_at)/MIN(sent_at) — и назови в ответе, с какой даты
+данные. Чистка: pushes — 90 дней (кроме релизных анонсов), analytics_events — 400, user_events — 30,
+cost_events — 90; workouts, sets, users, daily_metrics не чистятся. Для пушей старше 90 дней
+источник — daily_metrics (pushes_sent_*, push_opens_*). Свои аккаунты в daily_metrics уже исключены.
+
+Если результат выглядит как «этого в базе нет» — сначала проверь карту и другие таблицы, а не
+сдавайся: скорее всего, данные лежат в другом месте.
+"""
+
+
 def _system_prompt(schema: str, own_ids: set[int]) -> str:
     own = ", ".join(str(i) for i in sorted(own_ids)) or "нет"
     return (
@@ -173,6 +220,7 @@ def _system_prompt(schema: str, own_ids: set[int]) -> str:
         "- Ответ по-русски, коротко, обычным текстом без Markdown: сначала прямой ответ с "
         "цифрами, потом 1–3 строки, как считал (и чем ограничен результат). Если данных для "
         "ответа нет — так и скажи.\n\n"
+        f"Карта данных:\n{DATA_MAP}\n"
         f"Схема базы:\n{schema}"
     )
 
