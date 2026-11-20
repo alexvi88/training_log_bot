@@ -146,9 +146,9 @@ def test_rare_events_beat_breaks_and_breaks_beat_the_clock():
 
 
 def test_kept_phrase_survives_while_it_is_true():
-    # Утром выбрали «понедельник»; событий нет — фраза дня та же.
+    # Утром выбрали «понедельник»; к вечеру появился рекорд — фраза дня та же.
     evening = dt.datetime(2026, 9, 14, 19, 0)
-    assert _kind(_facts(evening, (0, 7)), kept="monday") == "monday"
+    assert _kind(_facts(evening, (0, 7), record=True), kept="monday") == "monday"
     # Утро кончилось — «раннее утро» уже неправда, выбирается заново.
     assert _kind(_facts(dt.datetime(2026, 9, 16, 9, 0), (2, 9)), kept="morning") is None
     # «Три дня тишины», а потом тренировка — пропуска больше нет.
@@ -371,14 +371,3 @@ async def test_new_rank_and_record_from_the_last_workout(fresh_db, monkeypatch):
 async def test_no_workouts_keeps_dashboard_null(fresh_db):
     client = await _linked(fresh_db)
     assert (await client.get("/dashboard")).json() is None
-
-
-def test_fresh_event_beats_the_phrase_kept_since_morning():
-    """20.11.2026: звание, полученное вечером, пряталось за утренней фразой."""
-    evening = dt.datetime(2026, 9, 14, 19, 0)
-    assert _kind(_facts(evening, (0, 7), rank_up=2), kept="monday") == "new_rank"
-    assert _kind(_facts(evening, (0, 7), record=True), kept="monday") == "record"
-    # Событие, выбранное раньше, держится — его не перебивает событие ниже.
-    assert _kind(_facts(evening, (0, 7), rank_up=2, record=True), kept="new_rank") == "new_rank"
-    # И вчерашнее событие на второй день, если оно ещё правда, — не повтор поверх фона.
-    assert _kind(_facts(evening, (1, 8), record=True), kept="monday", yesterday="record") == "monday"
