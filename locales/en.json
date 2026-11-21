@@ -1883,6 +1883,7 @@
   "ai.screen.video_too_heavy": "That file's heavy, I can't handle it — keep it under {mb} MB. Shoot it shorter or lighter.",
   "ai.screen.photo_too_big": "Photo's too big — keep it under {mb} MB.",
   "ai.screen.too_many_photos": "{max} photos max per question. Drop the extras and send again.",
+  "ai.screen.album_trimmed": "I'll look at the first {max} photos — that's my limit per question.",
   "ai.screen.video_ask_exercise": "Got the clip. What's the exercise?\n\nWrite the name as a reply or pick one of yours below. I'm asking before I look: guess wrong, and I'd be judging it by someone else's standard — worse than not analyzing it at all.",
   "ai.screen.video_lost": "Lost track of that clip, send it again",
   "ai.screen.voice_not_configured": "Voice input isn't set up yet, write your question as text.",
