@@ -560,6 +560,9 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegr
 -- имя файла в config.AI_CHAT_MEDIA_DIR, само фото или кадр-превью присланного
 -- видео (видео целиком не хранится — см. докстринг chat_attachments.py). NULL
 -- у обычных текстовых вопросов и у ходов, записанных до этой колонки.
+-- Несколько фото к одному вопросу (до api_v1_ai.MAX_PHOTOS_PER_QUESTION) —
+-- JSON-списком имён; одно — голым именем, как было. Читать только через
+-- chat_image_names, писать — через encode_chat_image_names.
 CREATE TABLE IF NOT EXISTS ai_conversation_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -4205,7 +4208,7 @@ async def wipe_user_account(telegram_id: int) -> None:
         "WHERE telegram_id = ? AND image_path IS NOT NULL",
         (telegram_id,),
     )
-    attachment_names = [row[0] for row in await cur.fetchall()]
+    attachment_names = [name for row in await cur.fetchall() for name in chat_image_names(row[0])]
     # И фото из переписки с поддержкой (support_messages.photo_path) — тот же
     # случай: файл на диске, в базе только имя.
     support_photo_names = await support_photo_names_for(telegram_id)
@@ -13757,6 +13760,32 @@ async def get_ai_conversation_wire_history(telegram_id: int) -> list[dict[str, A
     return rebuilt
 
 
+def chat_image_names(value: Optional[str]) -> list[str]:
+    """Имена файлов вложений хода из ai_conversation_turns.image_path — по
+    порядку. Одно фото (и все ходы до нескольких фото) лежит голым именем,
+    несколько — JSON-списком (см. encode_chat_image_names)."""
+    if not value:
+        return []
+    if value.startswith("["):
+        try:
+            names = json.loads(value)
+        except ValueError:
+            return []
+        return [n for n in names if isinstance(n, str) and n]
+    return [value]
+
+
+def encode_chat_image_names(names: list[str]) -> Optional[str]:
+    """Обратное chat_image_names: пусто — NULL, одно имя — как было, голой
+    строкой (старые клиенты и выгрузки видят ту же форму), больше — JSON."""
+    names = [n for n in names if n]
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    return json.dumps(names)
+
+
 async def get_ai_conversation_history(
     telegram_id: int, limit: int = MAX_AI_CONVERSATION_TURNS
 ) -> list[aiosqlite.Row]:
@@ -13787,7 +13816,7 @@ async def add_ai_conversation_turn(
     question: str,
     answer: str,
     wire_messages: list[dict[str, Any]],
-    image_path: Optional[str] = None,
+    image_path: Optional[str | list[str]] = None,
 ) -> int:
     """Записать ход (вернув его id — к нему привязываются кнопки отката, см.
     ai_undo_actions.turn_id) и тут же подрезать ТЕКУЩИЙ разговор до
@@ -13812,7 +13841,9 @@ async def add_ai_conversation_turn(
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 telegram_id, conversation_id, question, answer,
-                json.dumps(wire_messages, ensure_ascii=False), image_path, now_iso(),
+                json.dumps(wire_messages, ensure_ascii=False),
+                encode_chat_image_names([image_path] if isinstance(image_path, str) else image_path or []),
+                now_iso(),
             ),
         )
         turn_id = cur.lastrowid
@@ -13823,7 +13854,7 @@ async def add_ai_conversation_turn(
             "ORDER BY id DESC LIMIT ?) AND image_path IS NOT NULL",
             (telegram_id, conversation_id, telegram_id, conversation_id, MAX_AI_CONVERSATION_TURNS),
         )
-        evicted = [row["image_path"] for row in await cur.fetchall()]
+        evicted = [name for row in await cur.fetchall() for name in chat_image_names(row["image_path"])]
         await conn().execute(
             "DELETE FROM ai_conversation_turns "
             "WHERE telegram_id = ? AND conversation_id = ? AND id NOT IN ("
@@ -14137,7 +14168,7 @@ async def prune_old_ai_conversations(retention_days: int) -> int:
             await conn().commit()
             return 0
         ids = [row["id"] for row in rows]
-        attachments = [row["image_path"] for row in rows if row["image_path"]]
+        attachments = [name for row in rows for name in chat_image_names(row["image_path"])]
         await conn().execute(
             f"DELETE FROM ai_conversation_turns WHERE id IN ({','.join('?' * len(ids))})",
             tuple(ids),

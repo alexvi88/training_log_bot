@@ -1882,6 +1882,7 @@
   "ai.screen.video_too_long": "Esse vídeo é longo. Manda até {seconds} segundos — uma série chega-me.",
   "ai.screen.video_too_heavy": "Esse ficheiro é pesado, não dou conta — até {mb} MB. Grava mais curto ou mais leve.",
   "ai.screen.photo_too_big": "A foto é grande demais — até {mb} MB.",
+  "ai.screen.too_many_photos": "No máximo {max} fotos por pergunta. Tira as que sobram e envia outra vez.",
   "ai.screen.video_ask_exercise": "Recebi o vídeo. Qual é o exercício?\n\nEscreve o nome em resposta ou escolhe um dos teus em baixo. Pergunto antes de olhar: se eu adivinhar mal, vou julgar pelo padrão de outro exercício — pior do que não analisar.",
   "ai.screen.video_lost": "Perdi esse vídeo, manda-o outra vez",
   "ai.screen.voice_not_configured": "A entrada por voz ainda não está configurada, escreve a tua pergunta em texto.",
