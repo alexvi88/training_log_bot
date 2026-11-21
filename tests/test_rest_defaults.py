@@ -3,43 +3,18 @@
 from __future__ import annotations
 
 import httpx
-import pytest
 
 import api_v1
 import rest_defaults
 
 
-@pytest.mark.parametrize(
-    "identity, seconds",
-    [
-        ("Присед со штангой", 180),
-        ("Жим штанги лёжа", 180),
-        ("Становая тяга", 180),
-        ("Тяга штанги в наклоне", 180),
-        ("Жим штанги стоя", 180),
-        ("Жим гантелей лёжа", 120),
-        ("Тяга верхнего блока", 120),
-        ("Подтягивания", 120),
-        ("Гак-присед", 120),
-        ("Сгибание ног в тренажёре", 90),
-        ("Сведение рук в кроссовере", 90),
-        ("Подъём штанги на бицепс", 90),
-        ("Планка", 60),
-        ("Скручивания", 60),
-        ("Подъём ног в висе", 60),
-        ("Моё странное упражнение", 120),
-        (None, 120),
-    ],
-)
-def test_auto_rest_by_category(identity, seconds):
-    assert rest_defaults.auto_rest_seconds(identity) == seconds
-
-
-def test_every_catalog_exercise_gets_a_known_target():
+def test_auto_rest_is_three_minutes_for_everything():
     import seed_data
 
+    # Владелец: «скорее 3-3-3-3» — без деления на базу, изоляцию и пресс.
+    for identity in ("Присед со штангой", "Сгибание ног в тренажёре", "Планка", "Моё странное упражнение", None):
+        assert rest_defaults.auto_rest_seconds(identity) == 180
     for _group, name in seed_data.EXERCISE_TEMPLATES:
-        assert rest_defaults.auto_rest_seconds(name) in (60, 90, 120, 180), name
         assert rest_defaults.equipment_of(name) in rest_defaults.EQUIPMENT, name
 
 
@@ -50,7 +25,7 @@ def test_effective_order_override_then_user_default_then_auto():
     assert rest_defaults.effective_rest_seconds({**row, "rest_seconds": 200}, 75) == 200
     # Копия каталожного упражнения — как источник.
     copy = {"original_name": None, "media_from": "Планка", "rest_seconds": None}
-    assert rest_defaults.effective_rest_seconds(copy) == 60
+    assert rest_defaults.effective_rest_seconds(copy) == 180
 
 
 async def _client(fresh_db, lang="en"):
@@ -74,7 +49,7 @@ async def test_exercise_json_carries_rest_fields_everywhere(fresh_db):
     squat = await _squat(client)
     assert squat["rest_seconds"] == 180 and squat["rest_seconds_custom"] is False
     own = (await client.post("/exercises", json={"name": "Weird thing"})).json()
-    assert own["rest_seconds"] == 120 and own["rest_seconds_custom"] is False
+    assert own["rest_seconds"] == 180 and own["rest_seconds_custom"] is False
     for row in (await client.get("/exercises")).json():
         assert isinstance(row["rest_seconds"], int)
         assert isinstance(row["rest_seconds_custom"], bool)
