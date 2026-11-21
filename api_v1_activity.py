@@ -79,6 +79,8 @@ ACTION_PHRASES: dict[tuple[str, str], str] = {
     ("POST", "/workouts/{workout_id}/routines"): "сохранил тренировку днём программы",
     ("POST", "/workouts/{workout_id}/repeat"): "повторил тренировку",
     ("POST", "/exercises"): "создал упражнение",
+    ("POST", "/exercises/identify"): "спросил тренера, что за тренажёр на фото",
+    ("POST", "/exercises/identify/accept"): "взял упражнение, которое тренер узнал по фото",
     ("PATCH", "/exercises/{exercise_id}"): "изменил упражнение",
     ("POST", "/exercises/{exercise_id}/archive"): "убрал упражнение в архив",
     ("POST", "/exercises/{exercise_id}/unarchive"): "вернул упражнение из архива",

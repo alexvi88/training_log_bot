@@ -6095,5 +6095,18 @@
   "year.bot.failed": "No pude armar tu año — algo falló de mi lado. Prueba /year otra vez en un minuto.",
   "push.ios.year_review.title": "RESUMEN DEL AÑO",
   "push.ios.year_review.body": "¡HOLA ATLETA! Conté tu {year}: cada entreno, cada récord. Lo puse en tarjetas, échale un vistazo.",
-  "legal.support.title": "Soporte de Diario del Atleta: ayuda con la app, el bot y el coach IA"
+  "legal.support.title": "Soporte de Diario del Atleta: ayuda con la app, el bot y el coach IA",
+  "exercise_identify.none_title": "No distinguí la máquina. Sácale una foto entera, de lado.",
+  "exercise_identify.title_fallback": "Parece {name}.",
+  "exercise_identify.last_time": "La última vez: {set}.",
+  "exercise_identify.photo_required": "No llegó ninguna foto. Sácale una a la máquina y mándala.",
+  "exercise_identify.unknown_catalog": "No encuentro ese ejercicio en el catálogo. Vuelve a sacarle foto a la máquina o crea el tuyo.",
+  "exercise_identify.invalid_equipment": "No entendí el material. Elige barra, mancuerna, máquina, polea, peso corporal, pesa rusa u otro.",
+  "exercise_identify.invalid_group": "No encuentro ese grupo muscular. Elige uno de la lista, por ejemplo Pecho.",
+  "api.error.invalid_rest_seconds": "El descanso va de {min} a {max} segundos. Pon un número, por ejemplo 90.",
+  "exercise_identify.looking": "🤖 mirando qué máquina es…",
+  "exercise_identify.failed": "No pude leer la foto — no anoté nada. Mándala otra vez.",
+  "exercise_identify.btn_log_here": "▶ Anotar aquí",
+  "exercise_identify.btn_alt": "O: {name}",
+  "exercise_identify.gone": "Perdí esa foto — mándala otra vez."
 }

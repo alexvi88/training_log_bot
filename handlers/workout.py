@@ -36,6 +36,7 @@ import dashboard_data
 import db
 import exercise_alternatives
 import exercise_descriptions
+import exercise_identify
 import exercise_media
 import exercise_photos
 import finish_slides
@@ -2150,6 +2151,128 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     # страницы (pick:page:*), иначе вторая страница показала бы список группы.
     await state.update_data(pick_query=query, pick_page=0)
     await _picker_screen_search(message, state, user)
+
+
+# ---------- «Что это за тренажёр»: фото в подборе упражнения ----------
+#
+# Фото, присланное, пока человек выбирает упражнение, — вопрос тренеру «что это
+# за тренажёр» (exercise_identify.py, то же ядро, что POST /v1/exercises/identify).
+# Ответ — отдельным сообщением с кнопками: «Записать сюда» (своё или копия
+# каталога), «Создать «…»» (своё новое) и запасные варианты. Выбор идёт ровно
+# тем же путём, что тап по упражнению в списке (_on_exercise_chosen). Что
+# предложено, лежит в FSM (`identify_offer`): в callback_data кириллица не
+# влезает в 64 байта.
+
+_IDENTIFY_STATES = (WorkoutFlow.picking_group, WorkoutFlow.picking_exercise)
+
+
+def _identify_keyboard(identification) -> InlineKeyboardMarkup | None:
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    kb = InlineKeyboardBuilder()
+    exercise = identification.exercise
+    if identification.result == exercise_identify.RESULT_NEW:
+        kb.button(
+            text=i18n.t("workout.btn_create_named", name=formatting.shorten(exercise["name"], 28)),
+            callback_data="pick:idf:new",
+        )
+    elif exercise is not None:
+        kb.button(text=i18n.t("exercise_identify.btn_log_here"), callback_data="pick:idf:opt:0")
+    for i, alt in enumerate(identification.alternatives, start=1):
+        kb.button(
+            text=i18n.t("exercise_identify.btn_alt", name=formatting.shorten(alt["name"], 32)),
+            callback_data=f"pick:idf:opt:{i}",
+        )
+    kb.adjust(1)
+    return kb.as_markup() if list(kb.buttons) else None
+
+
+def _identify_offer(identification) -> dict:
+    """Что можно выбрать под ответом: [0] — главное, дальше — запасные."""
+    options = []
+    exercise = identification.exercise
+    if exercise is not None and identification.result != exercise_identify.RESULT_NEW:
+        options.append({"exercise_id": exercise["exercise_id"], "catalog_name": exercise["catalog_name"]})
+    else:
+        options.append(None)
+    options += [{"exercise_id": a["exercise_id"], "catalog_name": a["catalog_name"]} for a in identification.alternatives]
+    new = None
+    if identification.result == exercise_identify.RESULT_NEW:
+        new = {"name": exercise["name"], "muscle_group": exercise["muscle_group"], "equipment": exercise["equipment"]}
+    return {"options": options, "new": new}
+
+
+@router.message(StateFilter(*_IDENTIFY_STATES), F.photo)
+async def pick_exercise_by_photo(message: Message, state: FSMContext):
+    from handlers import ai_trainer as ai_trainer_handlers
+
+    user_id = message.from_user.id
+    if not ai_trainer.is_configured():
+        await message.reply(i18n.t("ai.screen.not_configured"))
+        return
+    # Та же бронь, что у чата тренера: один платный шаг на человека за раз.
+    if not ai_trainer_handlers._try_claim_busy(user_id):
+        await message.reply(i18n.t("ai.screen.busy"))
+        return
+    try:
+        data_url = await ai_trainer_handlers._download_photo_as_data_url(message)
+        if data_url is None:
+            await message.reply(
+                i18n.t("ai.screen.photo_too_big", mb=ai_trainer_handlers.MAX_IMAGE_BYTES // (1024 * 1024))
+            )
+            return
+        placeholder = await message.reply(i18n.t("exercise_identify.looking"))
+
+        async def warn(block) -> None:
+            with suppress(TelegramBadRequest):
+                await ai_limits.reply(message, block)
+
+        try:
+            identification = await exercise_identify.identify(user_id, data_url, on_block=warn)
+        except ai_trainer.LimitBlocked as exc:
+            await _delete_message(placeholder)
+            await ai_limits.reply(message, exc.block)
+            return
+        except Exception:
+            logger.exception("exercise identify failed in bot for user %s", user_id)
+            await _delete_message(placeholder)
+            await message.reply(i18n.t("exercise_identify.failed"))
+            return
+        await _delete_message(placeholder)
+        await state.update_data(identify_offer=_identify_offer(identification))
+        text = escape(identification.title)
+        if identification.tip:
+            text += "\n" + escape(identification.tip)
+        await message.reply(text, reply_markup=_identify_keyboard(identification))
+    finally:
+        ai_trainer_handlers._busy.discard(user_id)
+
+
+@router.callback_query(StateFilter(*_IDENTIFY_STATES), F.data.startswith("pick:idf:"))
+async def pick_identified_exercise(callback: CallbackQuery, state: FSMContext):
+    offer = (await state.get_data()).get("identify_offer") or {}
+    parts = callback.data.split(":")
+    try:
+        if parts[2] == "new" and offer.get("new"):
+            row, _ = await exercise_identify.accept(callback.from_user.id, **offer["new"])
+        elif parts[2] == "opt":
+            option = (offer.get("options") or [])[int(parts[3])]
+            if option is None:
+                raise IndexError
+            if option["exercise_id"] is not None:
+                row = await db.get_exercise(option["exercise_id"])
+                if row is None or row["user_id"] != callback.from_user.id:
+                    raise IndexError
+            else:
+                row, _ = await exercise_identify.accept(callback.from_user.id, catalog_name=option["catalog_name"])
+        else:
+            raise IndexError
+    except (IndexError, ValueError, exercise_identify.AcceptError):
+        await callback.answer(i18n.t("exercise_identify.gone"), show_alert=True)
+        return
+    await state.update_data(identify_offer=None)
+    await _delete_message(callback.message)
+    await _on_exercise_chosen(callback, state, row["id"])
 
 
 async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext):

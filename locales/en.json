@@ -6095,5 +6095,18 @@
   "year.bot.failed": "Couldn't put your year together — something broke on my side. Try /year again in a minute.",
   "push.ios.year_review.title": "YEAR IN REVIEW",
   "push.ios.year_review.body": "HEY ATHLETE! I counted up your {year} — every workout, every record. Put it into cards, take a look.",
-  "legal.support.title": "Athlete Diary support: help with the app, the bot and the AI coach"
+  "legal.support.title": "Athlete Diary support: help with the app, the bot and the AI coach",
+  "exercise_identify.none_title": "Couldn't make out the machine. Shoot the whole thing from the side.",
+  "exercise_identify.title_fallback": "Looks like {name}.",
+  "exercise_identify.last_time": "Last time: {set}.",
+  "exercise_identify.photo_required": "No photo came through. Snap the machine and send it.",
+  "exercise_identify.unknown_catalog": "Can't find that exercise in the catalog. Snap the machine again or add your own.",
+  "exercise_identify.invalid_equipment": "Didn't get the equipment. Pick barbell, dumbbell, machine, cable, bodyweight, kettlebell or other.",
+  "exercise_identify.invalid_group": "Can't find that muscle group. Pick one from the list, like Chest.",
+  "api.error.invalid_rest_seconds": "Rest goes from {min} to {max} seconds. Enter a number, like 90.",
+  "exercise_identify.looking": "🤖 checking what that machine is…",
+  "exercise_identify.failed": "Couldn't read the photo — nothing got logged. Send it again.",
+  "exercise_identify.btn_log_here": "▶ Log it here",
+  "exercise_identify.btn_alt": "Or: {name}",
+  "exercise_identify.gone": "Lost track of that photo — send it again."
 }

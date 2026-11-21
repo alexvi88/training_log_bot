@@ -22,6 +22,10 @@
   кнопки под пушем в Telegram (`record_tg_push_tap`: сообщение пуша узнаётся
   по `pushes.tg_message_id`, повторные нажатия под тем же пушем не в счёт;
   прочтение без нажатия сервер не видит и не считает);
+  `exercise_identified` (`result` catalog|mine|new|none) — тренер разобрал
+  фото тренажёра (exercise_identify.py, бот и `POST /v1/exercises/identify`),
+  `exercise_identify_accept` (`result` catalog|mine|new) — «Записать сюда»
+  по итогу: копия каталога, своё уже было или завелось новое;
 - события жизненного цикла пишет сама база, той же транзакцией, что и
   действие (`lifecycle_events.py`; клиент tg|ios — из входа: middleware бота
   и `api_v1_common.authed_user_id`), — поэтому одинаково для бота и приложения:
@@ -33,7 +37,7 @@
   корзины; `by=auto` — закрыл сервер, workout_autoclose, — у вехи тоже),
   вехи по разу на человека `first_set`, `first_workout_finished`,
   `second_workout_finished` (импорт не в счёт), `coach_linked` (под атлетом),
-  `ai_question` (`kind` text|photo|video|voice — на списании квоты, то есть на
+  `ai_question` (`kind` text|photo|video|voice|identify — на списании квоты, то есть на
   отвеченный вопрос), `video_review` (состоявшийся разбор видео), `import_done`
   (`source` hevy|strong|csv|notes, корзины `workouts`/`sets`; подходы импорта
   по одному не пишутся). Без контекста входа (фоновая задача, скрипт) не
@@ -188,6 +192,13 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # «Оценить в App Store»; nth — который это показ у аккаунта.
     "rating_slide_shown": frozenset({"nth"}),
     "rating_slide_tap": frozenset({"nth"}),
+    # «Узнать по фото» в подборе упражнения (iOS IdentifyExerciseSheet):
+    # открыл (source picker), что вернул сервер (result catalog|mine|new|none),
+    # что добавил (result catalog|mine|new|alternative). Само распознавание и
+    # принятие сервер пишет сам — exercise_identified / exercise_identify_accept.
+    "identify_open": frozenset({"source"}),
+    "identify_result": frozenset({"result"}),
+    "identify_add": frozenset({"result"}),
     # Переспрос уведомлений карточкой в ленте тренировки (iOS PushAskCard):
     # action shown|enable|settings|dismiss|result; у result — ответ системного
     # окна (granted|denied).
@@ -267,6 +278,9 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
     ("push_ask_card", "action"): frozenset({"shown", "enable", "settings", "dismiss", "result"}),
     ("push_ask_card", "result"): frozenset({"granted", "denied"}),
+    ("identify_open", "source"): frozenset({"picker"}),
+    ("identify_result", "result"): frozenset({"catalog", "mine", "new", "none"}),
+    ("identify_add", "result"): frozenset({"catalog", "mine", "new", "alternative"}),
     (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
     (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
     (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,

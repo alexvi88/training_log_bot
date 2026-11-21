@@ -278,6 +278,13 @@ def test_rating_slide_events_keep_only_nth():
         assert product_metrics.clean_props(event, {"nth": "2"}) == {}
 
 
+def test_identify_events_keep_only_known_values():
+    assert product_metrics.clean_props("identify_open", {"source": "picker", "text": "x"}) == {"source": "picker"}
+    assert product_metrics.clean_props("identify_result", {"result": "none"}) == {"result": "none"}
+    assert product_metrics.clean_props("identify_add", {"result": "alternative"}) == {"result": "alternative"}
+    assert product_metrics.clean_props("identify_add", {"result": "Гак-присед"}) == {}
+
+
 def test_you_story_events_keep_source_enum_and_capped_activity():
     for event in ("you_story_open", "you_story_share"):
         assert product_metrics.clean_props(event, {"source": "menu", "text": "что ввёл человек"}) == {

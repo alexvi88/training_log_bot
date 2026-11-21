@@ -31,6 +31,7 @@ import formatting
 import i18n
 import lifecycle_events
 import parser
+import rest_defaults
 import seed_data
 import timeutil
 
@@ -257,6 +258,12 @@ async def authed_user_id(request: Request) -> int:
     # Клиент для событий, которые пишет сама база (lifecycle_events): тот же
     # «один раз на весь обработчик», что и язык.
     lifecycle_events.enter(lifecycle_events.PLATFORM_IOS, request.headers.get("x-app-version"))
+    # Общая цель отдыха атлета — тем же «один раз на обработчик»: её читает
+    # каждый объект упражнения (exercise_json → rest_defaults.rest_json).
+    rest_defaults.set_user_default(
+        # `in` у sqlite3.Row ищет по значениям, а не по именам колонок.
+        user["rest_default_seconds"] if user is not None and "rest_default_seconds" in user.keys() else None  # noqa: SIM118
+    )
     return user_id
 
 
@@ -430,6 +437,24 @@ def _too_big(error: tuple[int, str, str]) -> ApiError:
     return ApiError(status, code, f"{code}: payload too large", human=text)
 
 
+def rest_seconds_field(body: dict[str, Any], key: str) -> Optional[int]:
+    """Цель отдыха из тела PATCH: целое секунд в границах
+    rest_defaults.MIN_REST_SECONDS..MAX_REST_SECONDS или null (снять). Иное —
+    400 `invalid_rest_seconds` с подсказкой тренера на языке атлета."""
+    value = body.get(key)
+    if value is None:
+        return None
+    if not rest_defaults.valid_seconds(value):
+        raise ApiError(
+            400, "invalid_rest_seconds",
+            f"{key} must be an integer between {rest_defaults.MIN_REST_SECONDS} "
+            f"and {rest_defaults.MAX_REST_SECONDS} or null",
+            key="api.error.invalid_rest_seconds",
+            min=rest_defaults.MIN_REST_SECONDS, max=rest_defaults.MAX_REST_SECONDS,
+        )
+    return value
+
+
 def reject_weight_on_reps_only(exercise, weight: float) -> None:
     """400 `weight_on_bodyweight_exercise` на вес ≠ 0 у упражнения «только
     повторы» (seed_data.is_reps_only). `message` — подсказка тренера на языке
@@ -477,6 +502,10 @@ def exercise_json(row) -> dict[str, Any]:
         # смысл сходить. True только когда файл на месте — фото, живущее пока
         # только ссылкой в Telegram, ручка /photo отдать не может.
         "has_photo": exercise_photos.path_for_exercise(row) is not None,
+        # Цель таймера отдыха (rest_defaults.py): своя у упражнения → общая
+        # атлета (/v1/settings `rest_default_seconds`) → авто по каталогу;
+        # `rest_seconds_custom` — стоит ли своя (PATCH /exercises/{id}).
+        **rest_defaults.rest_json(row),
     }
     # Число записанных подходов — только у строк списка GET /exercises
     # (db.list_user_exercises*), остальные выборки (поиск, архив, создание,

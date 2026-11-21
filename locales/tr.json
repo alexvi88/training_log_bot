@@ -6095,5 +6095,18 @@
   "year.bot.failed": "Yılını toparlayamadım — bende bir şey bozuldu. Bir dakika sonra /year'i tekrar dene.",
   "push.ios.year_review.title": "YILIN ÖZETİ",
   "push.ios.year_review.body": "SELAM ATLET! {year} yılını saydım — her antrenman, her rekor. Kartlara koydum, bir bak.",
-  "legal.support.title": "Sporcu Günlüğü destek: uygulama, bot ve AI koç için yardım"
+  "legal.support.title": "Sporcu Günlüğü destek: uygulama, bot ve AI koç için yardım",
+  "exercise_identify.none_title": "Makineyi seçemedim. Tamamını yandan çek.",
+  "exercise_identify.title_fallback": "Bu {name} gibi görünüyor.",
+  "exercise_identify.last_time": "Geçen sefer: {set}.",
+  "exercise_identify.photo_required": "Fotoğraf gelmedi. Makinenin fotoğrafını çekip gönder.",
+  "exercise_identify.unknown_catalog": "Bu egzersizi katalogda bulamadım. Makineyi tekrar çek ya da kendininkini ekle.",
+  "exercise_identify.invalid_equipment": "Ekipmanı anlamadım. Halter, dambıl, makine, kablo, vücut ağırlığı, kettlebell ya da diğer seç.",
+  "exercise_identify.invalid_group": "Bu kas grubunu bulamadım. Listeden birini seç, örneğin Göğüs.",
+  "api.error.invalid_rest_seconds": "Dinlenme {min} ile {max} saniye arası olur. Bir sayı yaz, örneğin 90.",
+  "exercise_identify.looking": "🤖 bu makine ne, bakıyorum…",
+  "exercise_identify.failed": "Fotoğrafı okuyamadım — hiçbir şey kaydetmedim. Tekrar gönder.",
+  "exercise_identify.btn_log_here": "▶ Buraya kaydet",
+  "exercise_identify.btn_alt": "Ya da: {name}",
+  "exercise_identify.gone": "O fotoğrafı kaybettim — tekrar gönder."
 }

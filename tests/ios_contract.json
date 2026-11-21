@@ -614,6 +614,15 @@
     }
    }
   },
+  "APIClient.acceptIdentifiedExercise().Response": {
+   "file": "TrainingLog/Networking/APIClient+Identify.swift",
+   "fields": {
+    "exercise": {
+     "type": "Exercise",
+     "optional": false
+    }
+   }
+  },
   "APIClient.historyCalendar().Response": {
    "file": "TrainingLog/Networking/APIClient+Parity.swift",
    "fields": {
@@ -2032,6 +2041,16 @@
      "type": "Bool",
      "optional": false,
      "default": true
+    },
+    "restSeconds": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "restSecondsCustom": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -2062,6 +2081,34 @@
     "description": {
      "type": "String",
      "optional": false
+    }
+   }
+  },
+  "ExerciseIdentification": {
+   "file": "TrainingLog/Networking/APIClient+Identify.swift",
+   "fields": {
+    "result": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "tip": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "exercise": {
+     "type": "IdentifiedExercise",
+     "optional": true,
+     "default": true
+    },
+    "alternatives": {
+     "type": "[IdentifiedAlternative]",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -2785,6 +2832,59 @@
     "equivalent": {
      "type": "String",
      "optional": true
+    }
+   }
+  },
+  "IdentifiedAlternative": {
+   "file": "TrainingLog/Networking/APIClient+Identify.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "catalogName": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    }
+   }
+  },
+  "IdentifiedExercise": {
+   "file": "TrainingLog/Networking/APIClient+Identify.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "catalogName": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "muscleGroup": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "equipment": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "imageUrl": {
+     "type": "String",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -4002,6 +4102,16 @@
     },
     "clientWorkoutPushesEnabled": {
      "type": "Bool",
+     "optional": true,
+     "default": true
+    },
+    "restAlert": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
+    },
+    "restDefaultSeconds": {
+     "type": "Int",
      "optional": true,
      "default": true
     }
@@ -5416,6 +5526,20 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.identifyExercise",
+   "method": "POST",
+   "path": "/exercises/identify",
+   "root": "ExerciseIdentification",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.acceptIdentifiedExercise",
+   "method": "POST",
+   "path": "/exercises/identify/accept",
+   "root": "APIClient.acceptIdentifiedExercise().Response",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.mergeExercises",
    "method": "POST",
    "path": "/exercises/merge",
@@ -5438,6 +5562,13 @@
   },
   {
    "swift": "APIClient.updateExercise",
+   "method": "PATCH",
+   "path": "/exercises/{}",
+   "root": "Exercise",
+   "nullable": false
+  },
+  {
+   "swift": "APIClient.updateExerciseRest",
    "method": "PATCH",
    "path": "/exercises/{}",
    "root": "Exercise",
@@ -6102,5 +6233,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "ba17e698fde6b0884b01b723d60c6112a46e219a"
+ "_ios_commit": "c425f8f06866229cd5b948227c18dc375dff246a"
 }
