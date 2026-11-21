@@ -130,7 +130,8 @@ async def test_growth_shows_app_funnel_by_step(fresh_db):
     text = acquisition.format_app_funnel(await fresh_db.app_funnel(30), 30)
     assert "слайд 1 «ПРИВЕТ АТЛЕТ!»: 2 (100%) (en 1, ru 1)" in text
     assert "слайд 3 «Не знаешь, что делать в зале?»: 1 (50%) (en 1)" in text
-    assert "вошёл: 1 (50%) (en 1)" in text
+    assert "вошёл с Apple: 1 (50%) (en 1)" in text
+    assert "вошли всего: 1</b> (50%) — с Apple 1, гостем 0" in text
     assert "слайд 2 «Рекорды…»: 0 (0%)" in text
     empty = acquisition.format_app_funnel([], 30)
     assert "не было" in empty
@@ -157,8 +158,12 @@ async def test_lock_screen_and_gender_steps_show_in_onboarding_order(fresh_db):
         await fresh_db.log_funnel_event(b, step, "en")
     text = acquisition.format_app_funnel(await fresh_db.app_funnel(30), 30)
     lines = text.splitlines()
+    # Шаги до входа — каждый своей строкой; срывы и гостевой путь рисуются
+    # своим блоком (test_signin_failures_and_guest_path_in_growth).
+    onboarding = [title for step, title in acquisition.APP_FUNNEL_STEPS
+                  if not step.startswith(("signin_failed", "guest_"))]
     order = [next(i for i, line in enumerate(lines) if line.lstrip().startswith(title.strip()))
-             for _, title in acquisition.APP_FUNNEL_STEPS]
+             for title in onboarding]
     assert order == sorted(order)
     assert "экран блокировки (только iOS 17+): 1 (50%) (ru 1)" in text
     assert "«Твой пол»: 2 (100%) (en 1, ru 1)" in text
@@ -174,3 +179,42 @@ async def test_old_app_steps_still_accepted(fresh_db):
     for step in ("onboarding_slide_1", "onboarding_slide_5", "signin_shown"):
         resp = await client.post("/funnel", json={"install_id": install, "step": step})
         assert resp.status_code == 200, resp.text
+
+
+async def test_new_signin_failure_and_guest_steps_accepted(fresh_db):
+    install = str(uuid.uuid4())
+    client = _client()
+    for step in ("signin_failed_server", "signin_failed_apple_1000", "signin_failed_apple_other",
+                 "signin_failed_token", "guest_tapped", "guest_ok", "guest_failed"):
+        resp = await client.post("/funnel", json={"install_id": install, "step": step})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"recorded": True}
+
+
+async def test_signin_failures_and_guest_path_in_growth(fresh_db):
+    import acquisition
+
+    installs = [str(uuid.uuid4()) for _ in range(6)]
+    for install in installs:
+        await fresh_db.log_funnel_event(install, "onboarding_slide_1", "ru")
+    await fresh_db.log_funnel_event(installs[0], "signin_ok", "ru")
+    await fresh_db.log_funnel_event(installs[1], "signin_failed", "ru")
+    await fresh_db.log_funnel_event(installs[2], "signin_failed_apple_1000", "en")
+    await fresh_db.log_funnel_event(installs[3], "signin_failed_server", "ru")
+    for install in installs[2:5]:
+        await fresh_db.log_funnel_event(install, "guest_tapped", "ru")
+    await fresh_db.log_funnel_event(installs[2], "guest_ok", "ru")
+    await fresh_db.log_funnel_event(installs[3], "guest_ok", "ru")
+    await fresh_db.log_funnel_event(installs[4], "guest_failed", "ru")
+
+    text = acquisition.format_app_funnel(await fresh_db.app_funnel(30), 30)
+
+    assert "вход с Apple сорвался: 3 (50%)" in text
+    assert "   ↳ без причины (старые сборки): 1 (17%) (ru 1)" in text
+    assert "   ↳ Apple 1000 (нет iCloud или сбой Apple): 1 (17%) (en 1)" in text
+    assert "   ↳ сервер не принял вход: 1 (17%) (ru 1)" in text
+    assert "   ↳ Apple не отдал токен: 0 (0%)" in text
+    assert "без аккаунта: нажали 3 → вошли гостем 2 (67%), сорвалось 1" in text
+    assert "вошли всего: 3</b> (50%) — с Apple 1, гостем 2" in text
+    # Гостевые шаги не дублируются общим списком.
+    assert "вошёл гостем:" not in text

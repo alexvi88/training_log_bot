@@ -61,7 +61,18 @@ STEPS = frozenset(
         "signin_shown",
         "signin_tapped",
         "signin_ok",
+        # Старые сборки шлют срыв без причины; новые — шаг с причиной ниже
+        # (у ручки нет свойств, причина — часть имени шага).
         "signin_failed",
+        "signin_failed_server",
+        "signin_failed_apple_1000",
+        "signin_failed_apple_other",
+        "signin_failed_token",
+        # «Начать без аккаунта» (POST /v1/auth/guest): нажал → гость заведён
+        # или не вышло.
+        "guest_tapped",
+        "guest_ok",
+        "guest_failed",
     }
 )
 
@@ -101,7 +112,7 @@ def _allow(ip: str, now: Optional[float] = None) -> bool:
     return True
 
 
-def _install_id(value: Any) -> str:
+def parse_install_id(value: Any) -> str:
     if not isinstance(value, str):
         raise ApiError(400, "bad_request", "install_id must be a UUID string")
     try:
@@ -129,7 +140,7 @@ async def log_funnel_step(request: Request) -> JSONResponse:
     lang = i18n.normalize(raw_lang) if isinstance(raw_lang, str) and raw_lang.strip() else None
     if lang:
         request.state.lang = lang
-    install_id = _install_id(body.get("install_id"))
+    install_id = parse_install_id(body.get("install_id"))
     step = body.get("step")
     if not isinstance(step, str) or step not in STEPS:
         raise ApiError(400, "bad_request", "unknown funnel step")

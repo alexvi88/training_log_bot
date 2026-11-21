@@ -23,9 +23,11 @@ import asyncio
 import datetime as dt
 import functools
 import html
+import json
 import logging
 import re
 import sqlite3
+import time
 from typing import Any, Optional
 
 from starlette.applications import Starlette
@@ -35,6 +37,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect, Request
 from starlette.routing import Route
 
+import account_deletion
 import achievement_sync
 import achievements
 import acquisition
@@ -179,6 +182,9 @@ async def _issue_token_response(user_id: int) -> JSONResponse:
             "user_id": user_id,
             "unit": user["unit"] if user else "kg",
             "lang": user["lang"] if user else "ru",
+            # Гостевой ли аккаунт («Начать без аккаунта», POST /auth/guest) —
+            # у каждого ответа входа, чтобы приложение не ходило за этим в /me.
+            "is_guest": bool(user["is_guest"]) if user else False,
         }
     )
 
@@ -252,6 +258,13 @@ async def auth_apple(request: Request) -> JSONResponse:
     `coach_<код>` — формат `?start=` бота (acquisition.app_signup_attribution).
     Только для НОВОГО аккаунта и один раз (db.set_user_source: первое касание
     побеждает); прочее значение молча игнорируется, вход не срывается.
+
+    Гость входит с Apple (заголовок `Authorization: Bearer <токен гостя>`, без
+    `link_code`) — см. _sign_in_guest_with_apple: новый Apple ID ложится на тот
+    же user_id, занятый — вход в существующий аккаунт (пустой гость сносится
+    молча, с данными — 409 `apple_account_exists`, пока не придёт
+    `"discard_guest": true`). Без заголовка, с токеном не гостя или с
+    протухшим токеном — всё как раньше.
     """
     body = await _json_body(request)
     _set_pre_auth_lang(body, request)
@@ -263,7 +276,11 @@ async def auth_apple(request: Request) -> JSONResponse:
     except apple_signin.AppleTokenError as exc:
         raise ApiError(401, "invalid_apple_token", str(exc)) from exc
 
-    user_id = await db.resolve_auth_identity("apple", identity.apple_user_id)
+    guest_id = None if body.get("link_code") else await _bearer_guest_id(request)
+    if guest_id is not None:
+        user_id = await _sign_in_guest_with_apple(guest_id, identity, body.get("discard_guest") is True)
+    else:
+        user_id = await db.resolve_auth_identity("apple", identity.apple_user_id)
     if user_id is None:
         link_code = body.get("link_code")
         if link_code and isinstance(link_code, str):
@@ -311,6 +328,161 @@ async def auth_apple(request: Request) -> JSONResponse:
             identity.apple_user_id, authorization_code.strip()
         )
 
+    return await _issue_token_response(user_id)
+
+
+async def _bearer_guest_id(request: Request) -> Optional[int]:
+    """id гостя из заголовка `Authorization`, если токен живой и аккаунт —
+    гость; иначе None (заголовка нет, токен протух или аккаунт не гость):
+    тогда /auth/apple идёт обычной дорогой, а не отвечает 401 — устаревший
+    токен на телефоне не повод сорвать вход."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    user_id = await db.resolve_api_token(auth[len("bearer "):].strip())
+    if user_id is None:
+        return None
+    user = await db.get_user(user_id)
+    if user is None or not user["is_guest"]:
+        return None
+    return user_id
+
+
+async def _sign_in_guest_with_apple(
+    guest_id: int, identity: apple_signin.AppleIdentity, discard_guest: bool
+) -> int:
+    """Гость нажал «Войти с Apple». Возвращает user_id, на который выдать токен.
+
+    - Apple ID ещё ничей — личность ложится на самого гостя
+      (db.attach_apple_to_guest), флаг гостя снимается, все записи остаются.
+    - Apple ID уже чей-то: гость без содержательных данных
+      (db.user_has_content_data) сносится молча, и человек входит в свой
+      аккаунт; гость с данными — 409 `apple_account_exists`, пока клиент не
+      переспросит человека и не пришлёт `discard_guest: true` — тогда гость
+      сносится (account_deletion.delete_account, как «Удалить аккаунт»).
+
+    Слияние гостя с существующим аккаунтом сознательно НЕ делается: у обоих
+    могут быть тренировки, программы, разговор с тренером, и молча склеить их
+    (или выбрать, чьё победит) значит испортить чей-то дневник. Человек
+    выбирает сам: остаться гостем или войти и потерять гостевые записи.
+    """
+    user_id = await db.resolve_auth_identity("apple", identity.apple_user_id)
+    if user_id is None:
+        if await db.attach_apple_to_guest(guest_id, identity.apple_user_id, identity.email):
+            return guest_id
+        # Параллельный запрос успел привязать этот Apple ID (или гость перестал
+        # быть гостем) — разбираемся как с занятым.
+        user_id = await db.resolve_auth_identity("apple", identity.apple_user_id)
+        if user_id is None:
+            raise ApiError(409, "apple_account_exists", "could not attach apple id to guest, retry")
+    if user_id == guest_id:
+        return guest_id
+    if not discard_guest and await db.user_has_content_data(guest_id):
+        raise ApiError(409, "apple_account_exists", "apple id belongs to another account; send discard_guest")
+    left = await account_deletion.delete_account(guest_id)
+    if left:
+        logger.warning("guest %s not fully wiped on apple sign-in: %s", guest_id, left)
+    return user_id
+
+
+# Гостевые аккаунты («Начать без аккаунта»): заведение ничем не подтверждено,
+# поэтому — грубые предохранители в памяти процесса, как у api_v1_funnel и
+# review_demo (рестарт переживать не обязаны): не больше GUEST_LIMIT_PER_IP с
+# адреса за GUEST_IP_WINDOW_SECONDS и не больше GUEST_LIMIT_TOTAL со всех
+# адресов за GUEST_TOTAL_WINDOW_SECONDS. Пять в сутки с адреса — несколько
+# телефонов за одним NAT оператора; общий потолок в час — с запасом в десятки
+# раз над живым потоком (сотни заходов на экран входа в месяц).
+GUEST_MAX_BODY_BYTES = 1024
+GUEST_LIMIT_PER_IP = 5
+GUEST_IP_WINDOW_SECONDS = 24 * 3600
+GUEST_LIMIT_TOTAL = 100
+GUEST_TOTAL_WINDOW_SECONDS = 3600
+
+_guest_hits: dict[str, list[float]] = {}
+_guest_total: list[float] = []
+_GUEST_PRUNE_AT = 1024
+
+
+def reset_guest_limits() -> None:
+    """Для тестов: счётчики живут в памяти процесса, а тесты — в одном процессе."""
+    _guest_hits.clear()
+    _guest_total.clear()
+
+
+def _guest_limit_hit(ip: str, now: Optional[float] = None) -> Optional[str]:
+    """None — можно заводить (и попытка уже засчитана); иначе какой потолок
+    упёрся: "ip" или "total"."""
+    now = time.monotonic() if now is None else now
+    ip_start = now - GUEST_IP_WINDOW_SECONDS
+    _guest_total[:] = [t for t in _guest_total if t > now - GUEST_TOTAL_WINDOW_SECONDS]
+    hits = [t for t in _guest_hits.get(ip, []) if t > ip_start]
+    _guest_hits[ip] = hits
+    if len(hits) >= GUEST_LIMIT_PER_IP:
+        return "ip"
+    if len(_guest_total) >= GUEST_LIMIT_TOTAL:
+        return "total"
+    hits.append(now)
+    _guest_total.append(now)
+    if len(_guest_hits) > _GUEST_PRUNE_AT:
+        for key in list(_guest_hits):
+            if not any(t > ip_start for t in _guest_hits[key]):
+                del _guest_hits[key]
+    return None
+
+
+async def auth_guest(request: Request) -> JSONResponse:
+    """«Начать без аккаунта»: завести гостевой app-only аккаунт и выдать токен.
+
+    Тело: {"install_id": "<UUID>", "lang"?: str, "source"?: str,
+    "tz_offset_minutes"?: int, "unit"?: "kg"|"lb"} — `lang`, `source`,
+    `tz_offset_minutes` и `unit` значат ровно то же, что у /auth/apple для
+    нового аккаунта. `install_id` (тот же UUID, что у воронки до входа)
+    обязателен как признак честного клиента, но нигде не хранится и с
+    аккаунтом не связывается: он не секрет, и искать по нему аккаунт нельзя —
+    каждый вызов заводит НОВОГО гостя.
+
+    Ответ — тот же, что у /auth/apple (_issue_token_response), с
+    `"is_guest": true`. Гость — обычный атлет: те же квоты (ai_limits), то же
+    «Удалить аккаунт»; войти с Apple позже — /auth/apple с его токеном.
+
+    Ошибки: 400 `bad_request` (тело больше GUEST_MAX_BODY_BYTES, не JSON,
+    install_id не UUID), 429 `guest_rate_limited` (потолок с адреса),
+    503 `guest_unavailable` (общий потолок в час).
+    """
+    request.state.lang = i18n.normalize(i18n.lang_from_accept_language(request.headers.get("accept-language")))
+    raw = await request.body()
+    if len(raw) > GUEST_MAX_BODY_BYTES:
+        raise ApiError(400, "bad_request", "guest body too large")
+    try:
+        body = json.loads(raw or b"null")
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", "invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise ApiError(400, "bad_request", "JSON object expected")
+    _set_pre_auth_lang(body, request)
+    api_v1_funnel.parse_install_id(body.get("install_id"))
+    hit = _guest_limit_hit(review_demo.client_ip(request))
+    if hit == "ip":
+        raise ApiError(429, "guest_rate_limited", "too many guest accounts from this address")
+    if hit == "total":
+        raise ApiError(
+            503, "guest_unavailable", "guest sign-up is paused, too many guest accounts this hour",
+            headers={"Retry-After": str(GUEST_TOTAL_WINDOW_SECONDS)},
+        )
+    # Ручка до входа — клиент и версию для события `signup` выставляем сами,
+    # как /auth/apple.
+    lifecycle_events.enter(lifecycle_events.PLATFORM_IOS, request.headers.get("x-app-version"))
+    attribution = acquisition.app_signup_attribution(body.get("source"))
+    new_user = await db.create_app_only_user(
+        language_code=_signup_language_code(body, request),
+        tz_offset=common.device_tz_offset_hours(body.get("tz_offset_minutes")),
+        unit=_signup_unit(body),
+        signup_source=attribution.source if attribution else None,
+        guest=True,
+    )
+    user_id = new_user["telegram_id"]
+    if attribution is not None:
+        await _apply_signup_attribution(user_id, attribution)
     return await _issue_token_response(user_id)
 
 
@@ -411,6 +583,10 @@ async def me(request: Request) -> JSONResponse:
             "unit": user["unit"],
             "lang": user["lang"],
             "telegram_linked": bool(user["telegram_linked"]),
+            # Гостевой аккаунт («Начать без аккаунта»): приложение зовёт
+            # войти с Apple, чтобы записи не пропали вместе с телефоном.
+            # Всегда bool, никогда null.
+            "is_guest": bool(user["is_guest"]),
             # Ссылка на приложение в App Store (config.APP_STORE_URL) — её
             # приложение кладёт рядом с t.me-ссылкой в приглашение и визитку,
             # чтобы друг с iPhone попал в App Store, а не только в бота.
@@ -2493,6 +2669,7 @@ routes = [
     Route("/app/config", app_config, methods=["GET"]),
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/auth/apple", auth_apple, methods=["POST"]),
+    Route("/auth/guest", auth_guest, methods=["POST"]),
     Route("/auth/password", auth_password, methods=["POST"]),
     Route("/auth/logout", auth_logout, methods=["POST"]),
     Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
