@@ -1883,6 +1883,7 @@
   "ai.screen.video_too_heavy": "Le fichier est trop lourd pour moi — reste sous {mb} Mo. Filme plus court ou plus léger.",
   "ai.screen.photo_too_big": "Photo trop lourde — reste sous {mb} Mo.",
   "ai.screen.too_many_photos": "{max} photos max par question. Retire celles en trop et renvoie.",
+  "ai.screen.album_trimmed": "Je regarde les {max} premières photos — c'est ma limite par question.",
   "ai.screen.video_ask_exercise": "J’ai la vidéo. C’est quel exercice ?\n\nÉcris le nom en réponse ou choisis un des tiens en dessous. Je demande avant de regarder : si je devine mal, je jugerais selon les critères d’un autre exercice — pire que de ne pas analyser du tout.",
   "ai.screen.video_lost": "J’ai perdu la trace de cette vidéo, renvoie-la",
   "ai.screen.voice_not_configured": "La saisie vocale n’est pas encore en place, écris ta question en texte.",

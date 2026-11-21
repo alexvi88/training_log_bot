@@ -202,7 +202,7 @@ import timeutil
 import video_analysis
 from api_v1_common import JSONResponse
 from handlers import ai_trainer as ai_trainer_handlers
-from handlers.ai_trainer import MAX_IMAGE_BYTES
+from handlers.ai_trainer import MAX_IMAGE_BYTES, MAX_PHOTOS_PER_QUESTION
 
 logger = logging.getLogger(__name__)
 
@@ -298,10 +298,6 @@ async def has_ai_consent(request: Request, user_id: int) -> bool:
 # один вопрос на десятки тысяч символов стоит как полноценный разговор и в
 # токенах, и в деньгах, а отвечать на него всё равно нечем осмысленным.
 MAX_QUESTION_LENGTH = 4000
-# Сколько фото можно приложить к одному вопросу тренеру (`image_data_urls`).
-# Каждое — отдельные image-токены у модели, поэтому потолок, а не «сколько
-# угодно»; три хватает на «спереди / сбоку / сзади».
-MAX_PHOTOS_PER_QUESTION = 3
 
 # Фото к вопросу тренеру: те же MIME, что реально бывают на телефоне (JPEG с
 # камеры/из галереи, PNG со скриншота, WebP из некоторых галерей). Бот такого

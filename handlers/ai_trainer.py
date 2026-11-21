@@ -119,6 +119,16 @@ _QUOTA_WARN_AT = 3
 # base64-раздутый мегабайтник в запросе к модели — это лишние входные токены.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
+# Сколько фото тренер смотрит за один вопрос — у бота (альбом) и у /v1/ai/ask
+# (`image_data_urls`) одно число. Каждое фото — свои image-токены у модели.
+MAX_PHOTOS_PER_QUESTION = 3
+
+# Альбом Telegram приходит отдельными сообщениями с общим media_group_id,
+# почти разом. Первое ждёт столько, собирая остальные, и задаёт один вопрос
+# со всеми фото; остальные только докладываются в его список.
+ALBUM_COLLECT_SECONDS = 1.0
+_albums: dict[tuple[int, str], list[Message]] = {}
+
 def _default_photo_question() -> str:
     """Вопрос по умолчанию, если пользователь прислал фото без подписи."""
     return i18n.t("ai.screen.default_photo_question")
@@ -2128,7 +2138,7 @@ async def _handle_question(
     state: FSMContext,
     question: str,
     history_question: str,
-    image_data_url: Optional[str] = None,
+    image_data_url: Optional[str | list[str]] = None,
     user_id: Optional[int] = None,
     video_context: Optional[str] = None,
     scenario: Optional[str] = None,
@@ -3070,12 +3080,25 @@ async def ai_question(message: Message, state: FSMContext):
 @router.message(AITrainerFlow.chatting, F.photo)
 async def ai_photo_question(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    # Альбом: второе и следующие фото докладываются к первому, который уже
+    # держит бронь и ждёт их, — а не отвечают «ещё думаю» и не теряются.
+    album_key = (user_id, message.media_group_id) if message.media_group_id else None
+    if album_key is not None and album_key in _albums:
+        _albums[album_key].append(message)
+        return
     # Claimed before the first await (the photo download below) — the previous
     # shape checked `_busy` here but only reserved it deep inside
     # _handle_question, leaving the whole download+dispatch window unguarded.
     if not _try_claim_busy(user_id):
         await message.reply(i18n.t("ai.screen.busy"))
         return
+    photos = [message]
+    if album_key is not None:
+        _albums[album_key] = photos
+        try:
+            await asyncio.sleep(ALBUM_COLLECT_SECONDS)
+        finally:
+            _albums.pop(album_key, None)
     try:
         # Фото и видео — в своём чате тренера, не в программе атлету.
         client = (await state.get_data()).get("ai_client")
@@ -3084,15 +3107,23 @@ async def ai_photo_question(message: Message, state: FSMContext):
                 i18n.t("api.error.coach_client_mode"), reply_markup=await ai_keyboard(user_id, client=client),
             )
             return
-        caption = (message.caption or "").strip()
+        # Подпись альбома Telegram вешает на одно из фото — берём первую.
+        caption = next((p.caption.strip() for p in photos if (p.caption or "").strip()), "")
         question = caption or _default_photo_question()
 
-        image_data_url = await _download_photo_as_data_url(message)
-        if image_data_url is None:
-            await message.reply(
-                i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024))
-            )
-            return
+        if len(photos) > MAX_PHOTOS_PER_QUESTION:
+            await message.reply(i18n.t("ai.screen.album_trimmed", max=MAX_PHOTOS_PER_QUESTION))
+            photos = photos[:MAX_PHOTOS_PER_QUESTION]
+        image_data_urls = []
+        for photo_message in photos:
+            data_url = await _download_photo_as_data_url(photo_message)
+            if data_url is None:
+                await message.reply(
+                    i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024))
+                )
+                return
+            image_data_urls.append(data_url)
+        image_data_url = image_data_urls[0] if len(image_data_urls) == 1 else image_data_urls
 
         history_question = (
             i18n.t("ai.screen.history_photo", caption=caption) if caption
