@@ -3433,6 +3433,11 @@
     "lang": {
      "type": "String",
      "optional": false
+    },
+    "isGuest": {
+     "type": "Bool",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -3554,6 +3559,11 @@
     },
     "inviteUrl": {
      "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "isGuest": {
+     "type": "Bool",
      "optional": true,
      "default": true
     }
@@ -3776,6 +3786,267 @@
      "type": "String",
      "optional": true,
      "default": true
+    }
+   }
+  },
+  "ProgressScore": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "status": {
+     "type": "String",
+     "optional": false
+    },
+    "score": {
+     "type": "Double",
+     "optional": true
+    },
+    "delta7D": {
+     "type": "Double",
+     "optional": true
+    },
+    "title": {
+     "type": "String",
+     "optional": true
+    },
+    "coachLine": {
+     "type": "String",
+     "optional": true
+    },
+    "parts": {
+     "type": "[ProgressScore.Part]",
+     "optional": true
+    },
+    "history": {
+     "type": "[ProgressScore.HistoryPoint]",
+     "optional": true
+    },
+    "best": {
+     "type": "ProgressScore.Best",
+     "optional": true
+    },
+    "periodDays": {
+     "type": "Int",
+     "optional": true
+    },
+    "lifts": {
+     "type": "[ProgressScore.Lift]",
+     "optional": true
+    },
+    "groups": {
+     "type": "[ProgressScore.Group]",
+     "optional": true
+    },
+    "weeks": {
+     "type": "[ProgressScore.Week]",
+     "optional": true
+    },
+    "deload": {
+     "type": "Bool",
+     "optional": true
+    },
+    "unit": {
+     "type": "String",
+     "optional": true
+    },
+    "progressionFrom": {
+     "type": "String",
+     "optional": true
+    },
+    "calibration": {
+     "type": "ProgressScore.Calibration",
+     "optional": true
+    },
+    "paused": {
+     "type": "ProgressScore.Paused",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Best": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "score": {
+     "type": "Double",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Calibration": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "readyOn": {
+     "type": "String",
+     "optional": true
+    },
+    "daysDone": {
+     "type": "Int",
+     "optional": true
+    },
+    "daysTotal": {
+     "type": "Int",
+     "optional": true
+    },
+    "workouts": {
+     "type": "Int",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Group": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "sets7D": {
+     "type": "Int",
+     "optional": true
+    },
+    "sets28D": {
+     "type": "Int",
+     "optional": true
+    },
+    "points": {
+     "type": "Double",
+     "optional": true
+    },
+    "neglected": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.HistoryPoint": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "date": {
+     "type": "String",
+     "optional": false
+    },
+    "score": {
+     "type": "Double",
+     "optional": true
+    },
+    "progression": {
+     "type": "Double",
+     "optional": true
+    },
+    "regularity": {
+     "type": "Double",
+     "optional": true
+    },
+    "volume": {
+     "type": "Double",
+     "optional": true
+    },
+    "balance": {
+     "type": "Double",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Lift": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": true
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "baselineE1Rm": {
+     "type": "Double",
+     "optional": true
+    },
+    "currentE1Rm": {
+     "type": "Double",
+     "optional": true
+    },
+    "changePct": {
+     "type": "Double",
+     "optional": true
+    },
+    "points": {
+     "type": "Double",
+     "optional": true
+    },
+    "rated": {
+     "type": "Bool",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Part": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "key": {
+     "type": "String",
+     "optional": false
+    },
+    "points": {
+     "type": "Double",
+     "optional": true
+    },
+    "max": {
+     "type": "Double",
+     "optional": true
+    },
+    "label": {
+     "type": "String",
+     "optional": true
+    },
+    "detail": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Paused": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "days": {
+     "type": "Int",
+     "optional": true
+    },
+    "lastScore": {
+     "type": "Double",
+     "optional": true
+    },
+    "lastDate": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "ProgressScore.Week": {
+   "file": "TrainingLog/Models/ProgressScoreModels.swift",
+   "fields": {
+    "start": {
+     "type": "String",
+     "optional": false
+    },
+    "end": {
+     "type": "String",
+     "optional": true
+    },
+    "workouts": {
+     "type": "Int",
+     "optional": true
+    },
+    "counted": {
+     "type": "Bool",
+     "optional": true
+    },
+    "deload": {
+     "type": "Bool",
+     "optional": true
     }
    }
   },
@@ -5274,6 +5545,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.authGuest",
+   "method": "POST",
+   "path": "/auth/guest",
+   "root": "LinkResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.link",
    "method": "POST",
    "path": "/auth/link",
@@ -5562,13 +5840,6 @@
   },
   {
    "swift": "APIClient.updateExercise",
-   "method": "PATCH",
-   "path": "/exercises/{}",
-   "root": "Exercise",
-   "nullable": false
-  },
-  {
-   "swift": "APIClient.updateExerciseRest",
    "method": "PATCH",
    "path": "/exercises/{}",
    "root": "Exercise",
@@ -5881,6 +6152,13 @@
    "path": "/programs/{}/next-day",
    "root": "Routine",
    "nullable": true
+  },
+  {
+   "swift": "APIClient.progressScore",
+   "method": "GET",
+   "path": "/progress/score",
+   "root": "ProgressScore",
+   "nullable": false
   },
   {
    "swift": "APIClient.setRoutineExerciseProgression",
@@ -6233,5 +6511,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "c425f8f06866229cd5b948227c18dc375dff246a"
+ "_ios_commit": "df464fb1ddc4e381c6c5167dcc2c808a15746790"
 }
