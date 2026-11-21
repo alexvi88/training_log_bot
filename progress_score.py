@@ -327,6 +327,11 @@ def metric_of(identity: Optional[str], bodyweight_load: Optional[str]) -> Option
     kind = seed_data.progression_kind(identity)
     if kind == "timed":
         return None
+    # «Подтягивания с весом», «Брусья с весом»: повторы с разным довеском не
+    # сравнить, а нагрузка подхода (вес тела + довесок, load_weight) есть —
+    # меряем e1RM, как штангу.
+    if seed_data.is_weighted_bodyweight(identity):
+        return METRIC_E1RM
     if kind in ("bodyweight", "no_load") or seed_data.is_reps_only(identity, bodyweight_load):
         return METRIC_REPS
     return METRIC_E1RM

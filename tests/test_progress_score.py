@@ -505,3 +505,16 @@ def test_calibrating_lever_says_keep_with_two_workouts_this_week():
     assert s.lever.kind == "calibrating_keep"
     s1 = score(_sets(2, 6))
     assert s1.lever.kind == "calibrating" and s1.lever.params["date"] == ago(2) + dt.timedelta(days=28)
+
+
+@pytest.mark.parametrize("identity, load, metric", [
+    ("Подтягивания с весом", "full", ps.METRIC_E1RM),
+    ("Отжимания на брусьях с весом", "full", ps.METRIC_E1RM),
+    ("Подтягивания", "full", ps.METRIC_REPS),
+    ("Отжимания на брусьях", "full", ps.METRIC_REPS),
+    ("Жим штанги лёжа", "none", ps.METRIC_E1RM),
+])
+def test_weighted_bodyweight_is_rated_by_e1rm(identity, load, metric):
+    """С довеском повторы не сравнить — меряем e1RM по нагрузке подхода
+    (вес тела + довесок); чистый свой вес — по повторам."""
+    assert ps.metric_of(identity, load) == metric
