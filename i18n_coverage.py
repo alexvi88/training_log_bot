@@ -247,6 +247,7 @@ LOCALIZED: list[str] = [
     "seo_calcs.py",
     "seo_template.py",
     "site_numbers.py",
+    "site_crowd.py",
     # Четвёртая часть сайта: замены упражнений, сплиты, «две группы за день»,
     # мышца × снаряд. Тексты — seo.* в каталоге, идентичности каталога — в
     # seo_catalog (NEVER_LOCALIZED ниже).

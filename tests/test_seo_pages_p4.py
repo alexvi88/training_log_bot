@@ -90,9 +90,9 @@ def test_wave_four_page_counts():
     assert kinds["split"] == len(seo_plans.SPLIT_PAGES) == 7 and kinds["splits"] == 1
     assert kinds["workout"] == 3 and kinds["apps"] == 1
     assert 20 <= kinds["muscle_equip"] <= 30
-    assert kinds["guide"] == 32 and kinds["term"] == 21 and kinds["pair"] == 54
+    assert kinds["guide"] == 32 and kinds["term"] == 0 and kinds["pair"] == 54
     assert {"531", "weekly-volume"} <= {p.arg for p in _pages("tool")}
-    assert {("total", "men"), ("total", "women")} <= {(p.arg, p.arg2) for p in _pages("strength_lift")}
+    assert {p.arg for p in _pages("strength_lift")} == {"bench-press", "squat", "deadlift", "total"}
     assert {"fitbod", "jefit"} <= {p.arg for p in _pages("alternatives")}
 
 
@@ -353,12 +353,15 @@ _LATIN_OK = {
     "routines", "JavaScript", "push-pull-legs", "Push-pull-legs", "deload", "Power", "Hypertrophy", "Upper", "Lower", "A", "B", "e", "Wilks", "IPF", "GL", "lb", "kg", "USAPL", "OpenPowerlifting", "Epley", "Brzycki", "A-B-A", "B-A-B",
     # Пятая волна (питание): авторы позиций ISSN и обзоров, BCAA, витамин D.
     "ISSN", "BCAA", "D", "Jäger", "Kreider", "Guest", "Aragon", "Helms", "Fitschen", "Iraki", "Mifflin", "et", "al",
+    # Словарь одной страницей: расшифровки e1RM и RPE и обозначения формулы
+    # тоннажа (F × N) из первых двенадцати терминов.
+    "estimated", "one-rep", "max", "rating", "of", "perceived", "exertion", "F", "N",
 }
 
 
 def test_russian_pages_of_wave_four_carry_no_stray_english():
     pages = _pages(*NEW_KINDS) + [p for p in _pages("guide") if p.arg in seo_library.GUIDES[10:]]
-    pages += [p for p in _pages("term") if p.arg in seo_library.GLOSSARY[12:]]
+    pages += _pages("glossary")
     pages += [p for p in _pages("tool") if p.arg in ("531", "weekly-volume", "protein", "calories")]
     stray = Counter()
     for page in pages:

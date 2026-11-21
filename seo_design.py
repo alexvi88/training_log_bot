@@ -414,7 +414,10 @@ blockquote { margin: var(--s4) 0; padding: var(--s3) var(--s4); border-left: 3px
 .term { padding: var(--s4) var(--s5); border-radius: var(--r); background: var(--glass); border: 1px solid var(--line); }
 .term h2 { font-size: 22px; margin: 0 0 6px; }
 .term h2 a { color: var(--fg); text-decoration: none; }
-.term p { margin: 0; color: var(--muted); }
+.term p { margin: 0 0 12px; }
+.term .definition { color: var(--fg); }
+.term .chips { margin-top: 8px; }
+.term + .term { margin-top: var(--s3); }
 ol.alts { list-style: none; padding: 0; margin: var(--s5) 0; display: grid; gap: var(--s3); }
 li.alt { margin: 0; padding: var(--s5); border-radius: var(--r); background: var(--glass); border: 1px solid var(--line); }
 li.alt.us { border-color: rgba(255,138,61,.55); background: linear-gradient(160deg, rgba(255,138,61,.14), rgba(255,236,220,.03) 60%); }

@@ -699,9 +699,9 @@ def test_program_pages_cover_the_whole_catalog():
 
 
 async def test_strength_pages_show_tables_and_lb_on_english_only():
-    responses = await _get_many(["/en/strength/bench-press/men", "/ru/strength/deadlift/women", "/en/strength"])
-    en = responses["/en/strength/bench-press/men"].text
-    ru = responses["/ru/strength/deadlift/women"].text
+    responses = await _get_many(["/en/strength/bench-press", "/ru/strength/deadlift", "/en/strength"])
+    en = responses["/en/strength/bench-press"].text
+    ru = responses["/ru/strength/deadlift"].text
     assert "In pounds" in en and "В фунтах" not in ru
     row = seo_tools.strength_table("bench", "m")[6]
     assert f"<tr><th scope=row>{row[0]:g}<span class=u>\u00a0kg</span></th>" in en
@@ -710,6 +710,11 @@ async def test_strength_pages_show_tables_and_lb_on_english_only():
     for html in (en, ru, responses["/en/strength"].text):
         assert seo_pages.STRENGTH_SOURCES[0] in html and seo_pages.STRENGTH_SOURCES[1] in html
     assert "This is my scale" in en
+    # Мужская и женская таблицы — на одной странице, разделами с якорем.
+    for html in (en, ru):
+        assert "id=men>" in html and "id=women>" in html
+    women = seo_tools.strength_table("bench", "f")[0]
+    assert f"<tr><th scope=row>{women[0]:g}<span class=u>\u00a0kg</span></th>" in en
 
 
 # ---------- калькуляторы ----------

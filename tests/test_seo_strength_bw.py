@@ -61,11 +61,12 @@ def test_competitor_median_comes_from_the_percentile_file():
 
 
 def test_lift_table_links_to_every_bodyweight_page_and_back():
-    lift = seo_pages.render(Page("strength_lift", "squat", "women"), "en")
-    for bw in sbw.BODYWEIGHTS["f"]:
-        assert f'href="/en/strength/squat/women/{bw}kg"' in lift
+    lift = seo_pages.render(Page("strength_lift", "squat"), "en")
+    for sex, url in (("f", "women"), ("m", "men")):
+        for bw in sbw.BODYWEIGHTS[sex]:
+            assert f'href="/en/strength/squat/{url}/{bw}kg"' in lift
     page = seo_pages.render(_page("squat", "women/60kg"), "en")
-    assert 'href="/en/strength/squat/women"' in page
+    assert 'href="/en/strength/squat"' in page
     assert 'href="/en/strength/bench-press/women/60kg"' in page
     assert 'href="/en/strength/squat/women/70kg"' in page
 

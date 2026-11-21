@@ -619,6 +619,25 @@ async def _state_athlete_profile(fresh_db, lang: str) -> list[_Walker]:
     return [w]
 
 
+async def _state_score(fresh_db, lang: str) -> list[_Walker]:
+    """Оценка тренировок с историей: десять недель по две тренировки. Один атлет
+    тренируется до сегодня (оценка есть — `best`), второй замолчал три недели
+    назад (`paused` с последней оценкой). Ни сценарий, ни остальные состояния
+    до этих веток GET /progress/score не доходят."""
+    walkers = []
+    today = timeutil.user_today(None)
+    for tg_id, stop in ((231, 0), (232, 21)):
+        w = await _login(fresh_db, lang, tg_id)
+        ex = await _fork(w, "Bench press")
+        for n in range(70 + stop, stop - 1, -3):
+            day = (today - dt.timedelta(days=n)).isoformat()
+            await _train(w, ex, [(60 + (70 + stop - n) / 4, 5)] * 3, date=day if n else None)
+        for days in (28, 90, 365):
+            await w.call("GET", f"/progress/score?days={days}", expect=200)
+        walkers.append(w)
+    return walkers
+
+
 EDGE_STATES = {
     "empty_history": _state_empty,
     "zero_weight_set": _state_zero_weight,
@@ -633,6 +652,7 @@ EDGE_STATES = {
     "import_file": _state_import,
     "long_history": _state_long_history,
     "offline_replay": _state_offline_replay,
+    "progress_score": _state_score,
 }
 
 

@@ -20,6 +20,7 @@ import os
 import seed_data
 import seo_catalog
 import seo_pages as sp
+import site_crowd
 
 Page = sp.Page
 
@@ -47,6 +48,11 @@ def query_name(identity: str, lang: str) -> str:
 
 def identity_of(url: str) -> str:
     return sp._identity_for_media_slug(sp._EXERCISE_BY_URL[url])
+
+
+def crowd_identities(url: str) -> list[str]:
+    """Упражнения, чьи цифры атлетов стоят на странице замен: сами замены."""
+    return list(seo_catalog.swaps(identity_of(url)))
 
 
 def has_page(url: str) -> bool:
@@ -272,6 +278,7 @@ def _render(lang: str, page: Page, request) -> str:
         + f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.why.h'))}</h2>{_reasons(source, alts, lang)}</section>"
         + f"<ol class=swaps>{''.join(_alt_item(source, a, i + 1, lang) for i, a in enumerate(alts))}</ol>"
         + f"<p class=muted>{sp._e(t('seo.swap.data_note'))}</p>"
+        + site_crowd.swaps_block(crowd_identities(url), lang)
         + sp._faq_html(lang, faq)
         + f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.diary.h'))}</h2><p>{t('seo.swap.diary_html', **params)}</p></section>"
         + sp._cta(lang, page.block, sp._e(t("seo.swap.cta")), request)
