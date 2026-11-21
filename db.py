@@ -914,6 +914,19 @@ CREATE TABLE IF NOT EXISTS site_events (
 CREATE INDEX IF NOT EXISTS idx_site_events_created ON site_events (created_at);
 CREATE INDEX IF NOT EXISTS idx_site_events_kind ON site_events (kind, created_at);
 
+-- Обезличенные цифры «что пишут в дневник наши атлеты» на страницах техники
+-- сайта (site_crowd.py): по строке на упражнение (идентичность каталога).
+-- payload — уже округлённые числа, которые показывает страница (JSON, ни
+-- одного id и ничего про отдельного человека: каждая цифра — минимум
+-- site_crowd.K_MIN_USERS атлетов); changed_on — день, когда показанное
+-- заметно изменилось, это и есть lastmod страницы. Хранится в базе, а не в
+-- памяти: иначе каждый деплой сдвигал бы дату у всех страниц.
+CREATE TABLE IF NOT EXISTS site_crowd_stats (
+    identity TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    changed_on TEXT NOT NULL
+);
+
 -- Продуктовая аналитика (analytics.py): события с постоянным машинным именем
 -- и свойствами — то, по чему строятся графики. Не user_events: там лента для
 -- чтения глазами (фраза, введённый текст), она меняется вместе с формулировками
@@ -11740,6 +11753,61 @@ async def site_week_numbers(since: str, exclude: set[int]) -> dict[str, float]:
     )
     sets, kg = await cur.fetchone()
     return {"workouts": workouts or 0, "athletes": athletes or 0, "sets": sets or 0, "kg": float(kg or 0)}
+
+
+async def site_crowd_sessions(since: str, exclude: set[int]) -> list[tuple]:
+    """Сырьё для обезличенных цифр сайта (site_crowd.py): по строке на
+    упражнение каталога в каждой закрытой тренировке с `since` (UTC ISO).
+
+    Строка: (user_id, workout_id, started_at, идентичность упражнения
+    (`exercises.original_name`), bodyweight_load, подходов в тренировке, вес
+    самого тяжёлого подхода в кг, повторы в нём, пол атлета, последний вес
+    тела атлета в кг или None). Свои аккаунты и демо — мимо (`exclude` плюс
+    все входы review_demo). Фунты переводятся в кг. Свои упражнения без
+    идентичности каталога не попадают: сравнивать их не с чем.
+
+    Перенесённая история (импорт) считается: это настоящие тренировки
+    атлета, а не опыт с нашим вводом. Наружу из этой функции ничего не
+    уходит — её читает только site_crowd, который режет всё ниже порога."""
+    marks = ", ".join("?" for _ in exclude) or "-1"
+    demo = "SELECT user_id FROM auth_identities WHERE provider = 'review_demo'"
+    to_kg = f"CASE WHEN u.unit = 'lb' THEN {1 / config.LB_PER_KG!r} ELSE 1 END"
+    cur = await conn().execute(
+        "SELECT w.user_id, w.id, w.started_at, e.original_name, MAX(e.bodyweight_load), COUNT(*), "
+        f"MAX(COALESCE(s.load_weight, s.weight) * {to_kg}), s.reps, u.gender, "
+        f"(SELECT bl.weight * {to_kg} FROM bodyweight_logs bl WHERE bl.telegram_id = w.user_id "
+        " ORDER BY bl.logged_at DESC LIMIT 1) "
+        "FROM sets s JOIN workout_blocks b ON b.id = s.block_id JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id JOIN users u ON u.telegram_id = w.user_id "
+        "WHERE w.status = 'finished' AND w.started_at >= ? AND s.reps > 0 "
+        "AND e.original_name IS NOT NULL AND e.original_name != '' "
+        f"AND w.user_id NOT IN ({marks}) AND w.user_id NOT IN ({demo}) "
+        # Голая колонка s.reps рядом с MAX() — SQLite берёт её из той же
+        # строки, где максимум: повторы именно самого тяжёлого подхода.
+        "GROUP BY w.user_id, w.id, e.original_name",
+        (since, *exclude),
+    )
+    return [tuple(row) for row in await cur.fetchall()]
+
+
+async def site_crowd_state() -> dict[str, tuple[str, str]]:
+    """Показанные цифры сайта: идентичность → (payload JSON, changed_on)."""
+    cur = await conn().execute("SELECT identity, payload, changed_on FROM site_crowd_stats")
+    return {row[0]: (row[1], row[2]) for row in await cur.fetchall()}
+
+
+async def save_site_crowd_state(rows: dict[str, tuple[str, str]]) -> None:
+    """Записать изменившиеся строки site_crowd_stats. Упавшее ниже порога
+    упражнение не удаляется, а получает payload «null» с датой: блок со
+    страницы ушёл — это тоже правка страницы, и её дата не должна откатиться."""
+    async with _write_lock:
+        for identity, (payload, changed_on) in rows.items():
+            await conn().execute(
+                "INSERT INTO site_crowd_stats (identity, payload, changed_on) VALUES (?, ?, ?) "
+                "ON CONFLICT(identity) DO UPDATE SET payload = excluded.payload, changed_on = excluded.changed_on",
+                (identity, payload, changed_on),
+            )
+        await conn().commit()
 
 
 async def count_new_users_between(since: str, until: str) -> int:

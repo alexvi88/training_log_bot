@@ -8,8 +8,9 @@
   (`seed_data.volume_split`: становая — пополам спине и задней цепи ног).
 - `/compare`, `/compare/<a>-vs-<b>` — упражнение против упражнения: таблица
   (мышцы, снаряд, сложность, когда что брать) и свой разбор у каждой пары.
-- `/glossary`, `/glossary/<термин>` — словарь зала со ссылками на
-  калькуляторы (DefinedTerm в JSON-LD).
+- `/glossary` — словарь зала одной страницей: у термина свой раздел с
+  якорем (`#rpe`) и ссылками на калькуляторы (DefinedTerm в JSON-LD);
+  старые `/glossary/<термин>` — 301 на якорь.
 - `/guides`, `/guides/<тема>` — статьи голосом тренера, со ссылками на
   исследования, где названо число (`GUIDE_SOURCES`).
 - `/alternatives/<hevy|strong>` — честный список «чем заменить»: мы первые,
@@ -381,15 +382,34 @@ ALT_SOURCES = {
 }
 
 ABOUT_LINKS = ("ai", "video", "telegram", "import_hevy", "tools", "guides")
+# «О проекте»: что это, кто делает, как делаются страницы, откуда цифры,
+# ошибки и правки, приватность, связь (ключи seo.about.s<n>.h / s<n>_html).
+# Ни имени, ни биографии, ни фото владельца — нигде на сайте и в JSON-LD:
+# автор и издатель — проект как Organization (seo_pages.organization_ld).
+ABOUT_SECTIONS = 7
 
 
 def pages() -> list[Page]:
     out = [Page("muscles")] + [Page("muscle", url) for url, _g, _t in MUSCLES]
     out += [Page("compare")] + [Page("pair", pair_slug(a, b)) for a, b in PAIRS]
-    out += [Page("glossary")] + [Page("term", term) for term in GLOSSARY]
+    # Термины — разделы одной страницы словаря, а не свои страницы (term_href).
+    out += [Page("glossary")]
     out += [Page("guides")] + [Page("guide", g) for g in GUIDES]
     out += [Page("apps", pair_slug(a, b)) for a, b in APP_PAIRS]
     return out
+
+
+# Словарь — одна страница: у каждого термина свой раздел с якорем
+# (`/glossary#rpe`), а не своя страница. Страницы терминов были по 200–300
+# слов, и Google (GSC, 17.11.2026) не взял в индекс ни одну, хотя текст у
+# каждой свой — соседние совпадают меньше чем на пятую часть. Закрыть их
+# noindex — выбросить этот текст; собрать в одну страницу — получить одну
+# плотную (около пяти тысяч слов) со всеми определениями. Старые адреса —
+# 301 на якорь (seo_pages.moved_pages).
+
+
+def term_href(term: str, lang: str) -> str:
+    return f"{sp.url_for(Page('glossary'), lang)}#{term}"
 
 
 def pair_slug(a: str, b: str) -> str:
@@ -439,7 +459,7 @@ def link_params(lang: str) -> dict[str, str]:
     for p in seed_data.WORKOUT_PROGRAMS:
         out[f"prog_{_ph(p['key'])}"] = u(Page("program", p["key"]))
     for term in GLOSSARY:
-        out[f"term_{_ph(term)}"] = u(Page("term", term))
+        out[f"term_{_ph(term)}"] = term_href(term, lang)
     for g in GUIDES:
         out[f"guide_{_ph(g)}"] = u(Page("guide", g))
     for url, _g, _t in MUSCLES:
@@ -455,7 +475,7 @@ def link_params(lang: str) -> dict[str, str]:
         out[f"wkt_{_ph(w)}"] = u(Page("workout", w))
     out["t531"] = u(Page("tool", "531"))
     out["vol"] = u(Page("tool", "weekly-volume"))
-    out["strength_total"] = u(Page("strength_lift", "total", "men"))
+    out["strength_total"] = u(Page("strength_lift", "total"))
     for app in sp.ALTERNATIVES:
         out[f"alt_{app}"] = u(Page("alternatives", app))
     for a, b in APP_PAIRS:
@@ -561,8 +581,6 @@ def page_h1(page: Page, lang: str) -> str:
     if k == "pair":
         a, b = pair_exercises(page.arg)
         return t("seo.pair.h1", a=_ex_name(a, lang), b=_second(_ex_name(b, lang), lang))
-    if k == "term":
-        return t(f"seo.term.{page.arg}.h1")
     if k == "guide":
         return t(f"seo.guide.{page.arg}.h1")
     if k == "alternatives":
@@ -846,52 +864,42 @@ def _term_ld(lang: str, request, term: str) -> dict:
     t = sp._t(lang)
     base = sp.base_url(request)
     return {
-        "@context": "https://schema.org", "@type": "DefinedTerm", "name": t(f"seo.term.{term}.name"),
-        "description": t(f"seo.term.{term}.short"), "url": base + sp.url_for(Page("term", term), lang),
+        "@type": "DefinedTerm", "name": t(f"seo.term.{term}.name"),
+        "description": t(f"seo.term.{term}.short"), "url": base + term_href(term, lang),
         "inDefinedTermSet": base + sp.url_for(Page("glossary"), lang), "inLanguage": sp.hreflang(lang),
     }
 
 
+def _term_section(lang: str, term: str, params: dict) -> str:
+    t = sp._t(lang)
+    return (
+        f"<section class='term reveal' id={term}><h2>{sp._e(t(f'seo.term.{term}.h1'))}</h2>"
+        f"<p class='lead definition'>{sp._e(t(f'seo.term.{term}.short'))}</p>"
+        f"{t(f'seo.term.{term}.body_html', **params)}"
+        + "<ul class=chips>" + "".join(f'<li><a href="{sp._e(href)}">{sp._e(label)}</a></li>'
+                                      for href, label in (_link_label(lang, n) for n in TERM_LINKS[term]))
+        + "</ul></section>"
+    )
+
+
 def _render_glossary(lang: str, page: Page, request) -> str:
     t = sp._t(lang)
-    items = "".join(
-        f'<div class="term reveal"><h2><a href="{sp.url_for(Page("term", term), lang)}">{sp._e(t(f"seo.term.{term}.name"))}</a></h2>'
-        f"<p>{sp._e(t(f'seo.term.{term}.short'))}</p></div>" for term in GLOSSARY)
+    params = link_params(lang)
+    toc = "".join(f'<li><a href="#{term}">{sp._e(t(f"seo.term.{term}.name"))}</a></li>' for term in GLOSSARY)
     title, description = t("seo.glossary.title"), t("seo.glossary.description")
     base = sp.base_url(request)
     ld = {"@context": "https://schema.org", "@type": "DefinedTermSet", "name": t("seo.glossary.h1"),
           "url": base + sp.url_for(page, lang), "inLanguage": sp.hreflang(lang),
           "hasDefinedTerm": [_term_ld(lang, request, term) for term in GLOSSARY]}
-    for term in ld["hasDefinedTerm"]:
-        term.pop("@context")
     body = (
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.library'))}</span>"
         f"<h1>{sp._e(t('seo.glossary.h1'))}</h1><p class=lead>{sp._e(t('seo.glossary.lead'))}</p>"
-        f"<div class=terms>{items}</div>"
+        f"<nav aria-label=\"{sp._e(t('seo.glossary.toc'))}\"><ul class=chips>{toc}</ul></nav>"
+        + "".join(_term_section(lang, term, params) for term in GLOSSARY)
         + sp._cta(lang, page.block, sp._e(t("seo.glossary.cta")), request)
     )
     return sp._layout(lang, page, request, title=title, description=description, body=body,
                       ld=[sp._webpage_ld(lang, page, request, title, description, "CollectionPage"), ld])
-
-
-def _render_term(lang: str, page: Page, request) -> str:
-    t = sp._t(lang)
-    term = page.arg
-    params = link_params(lang)
-    others = [x for x in GLOSSARY if x != term]
-    chips = "".join(f'<li><a href="{sp.url_for(Page("term", x), lang)}">{sp._e(t(f"seo.term.{x}.name"))}</a></li>' for x in others)
-    title, description = t(f"seo.term.{term}.title"), t(f"seo.term.{term}.short")
-    body = (
-        f"<span class=eyebrow>{sp._e(t('seo.eyebrow.glossary'))}</span>"
-        f"<h1>{sp._e(page_h1(page, lang))}</h1>"
-        f"<p class='lead definition'>{sp._e(t(f'seo.term.{term}.short'))}</p>"
-        f"<section class=reveal>{t(f'seo.term.{term}.body_html', **params)}</section>"
-        + _related(lang, TERM_LINKS[term])
-        + sp._cta(lang, page.block, sp._e(t("seo.glossary.cta")), request)
-        + f"<section><h2>{sp._e(t('seo.glossary.more.h'))}</h2><ul class=chips>{chips}</ul></section>"
-    )
-    return sp._layout(lang, page, request, title=title, description=description, body=body,
-                      ld=[sp._webpage_ld(lang, page, request, title, description), _term_ld(lang, request, term)])
 
 
 # ---------- гайды ----------
@@ -1106,9 +1114,11 @@ def _render_template(lang: str, page: Page, request) -> str:
 
 def _render_about(lang: str, page: Page, request) -> str:
     t = sp._t(lang)
-    params = dict(link_params(lang), developer=sp.DEVELOPER)
+    import site_crowd
+
+    params = dict(link_params(lang), k=site_crowd.K_MIN_USERS)
     sections = "".join(f"<section class='reveal sub'><h2>{sp._e(t(f'seo.about.s{i}.h'))}</h2>{t(f'seo.about.s{i}_html', **params)}</section>"
-                       for i in range(1, 6))
+                       for i in range(1, ABOUT_SECTIONS + 1))
     title, description = t("seo.about.title"), t("seo.about.description")
     body = (
         f"<span class=eyebrow>{sp._e(t('seo.eyebrow.about'))}</span>"
@@ -1133,7 +1143,7 @@ def renderers() -> dict:
 RENDERERS = {
     "muscles": _render_muscles, "muscle": _render_muscle,
     "compare": _render_compare, "pair": _render_pair,
-    "glossary": _render_glossary, "term": _render_term,
+    "glossary": _render_glossary,
     "guides": _render_guides, "guide": _render_guide,
     "alternatives": _render_alternatives, "template": _render_template, "about": _render_about,
     "apps": _render_apps,

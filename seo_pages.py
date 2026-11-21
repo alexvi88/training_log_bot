@@ -78,6 +78,7 @@ import seed_data
 import seo_design
 import seo_static
 import seo_tools
+import site_crowd
 import site_stats
 
 LANGS = ("ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr")
@@ -291,11 +292,14 @@ ALTERNATIVES = ("hevy", "strong", "fitbod", "jefit")
 FEATURES = ("ai-coach", "video-review", "telegram", "workout-log-app")
 TEMPLATES = ("workout-log",)
 # Нормативы: адрес → ключ упражнения в seo_tools.LIFT_SHARE и адрес техники.
+# Одна страница на упражнение, на ней обе таблицы — мужская и женская
+# (`#men`, `#women`). Раньше пол был отдельной страницей, и пары «мужчины» и
+# «женщины» совпадали текстом почти целиком (GSC, ноябрь 2026: «просканирована,
+# не проиндексирована»); старые адреса — 301 на якорь (`STRENGTH_SEXES`).
 STRENGTH_LIFTS = (("bench-press", "bench", "bench-press"), ("squat", "squat", "back-squat"),
                   ("deadlift", "deadlift", "deadlift"), ("total", "total", ""))
 STRENGTH_SEXES = (("men", "m"), ("women", "f"))
 _LIFT_BY_URL = {url: (key, ex) for url, key, ex in STRENGTH_LIFTS}
-_SEX_BY_URL = dict(STRENGTH_SEXES)
 
 # Метка у ссылки в бота — по разделу, не по странице: слаг acquisition режет
 # до 32 символов, а ссылка `t.me/<бот>?start=src_seo_<блок>` целиком должна
@@ -350,7 +354,6 @@ _BLOCKS = {
     "compare": "cmp",
     "pair": "cmp",
     "glossary": "gls",
-    "term": "gls",
     "guides": "guide",
     "guide": "guide",
     "tool:tonnage": "tonnage",
@@ -436,7 +439,7 @@ _PATH_FIXED = {
 }
 _PATH_PREFIX = {
     "import": "/import/", "tool": "/tools/", "program": "/programs/", "exercise": "/exercises/", "vs": "/vs/",
-    "alternatives": "/alternatives/", "muscle": "/muscles/", "pair": "/compare/", "term": "/glossary/",
+    "alternatives": "/alternatives/", "muscle": "/muscles/", "pair": "/compare/",
     "guide": "/guides/", "template": "/templates/", "split": "/splits/", "workout": "/workouts/", "apps": "/compare/",
 }
 # Метка блока зависит от аргумента (`vs:hevy`), а не только от раздела.
@@ -456,7 +459,9 @@ class Page:
             return ""
         if self.kind in FEATURES:
             return f"/{self.kind}"
-        if self.kind in ("strength_lift", "strength_bw"):
+        if self.kind == "strength_lift":
+            return f"/strength/{self.arg}"
+        if self.kind == "strength_bw":
             return f"/strength/{self.arg}/{self.arg2}"
         if self.kind == "exercise_alt":
             return f"/exercises/{self.arg}/alternatives"
@@ -489,7 +494,7 @@ def pages() -> list[Page]:
     result.append(Page("tools"))
     result += [Page("tool", t) for t in TOOLS]
     result.append(Page("strength"))
-    result += [Page("strength_lift", url, sex) for url, _k, _e in STRENGTH_LIFTS for sex, _s in STRENGTH_SEXES]
+    result += [Page("strength_lift", url) for url, _k, _e in STRENGTH_LIFTS]
     import seo_strength_bw
 
     result += seo_strength_bw.pages()
@@ -532,8 +537,15 @@ def pages() -> list[Page]:
 # «чем заменить» (exercise_alt) дали 39 из 61 клика и ~5.2k показов, пары и
 # «мышца × снаряд» — ещё ~1.5k. Закрыт только вес-тела-норматив (strength_bw):
 # ни одного показа.
+#
+# «Мышца × снаряд» (muscle_equip, `/muscles/<мышца>/<снаряд>`) — тоже вне
+# индекса (GSC, 17.11.2026: все в «просканирована, не проиндексирована»):
+# 24 страницы по 260–370 слов одним шаблоном — список карточек упражнений,
+# соседние страницы совпадают текстом на треть-половину. Людям они нужны
+# (ссылки со страниц мышц и замен остаются), поиску — нет: те же упражнения
+# он найдёт на странице мышцы.
 INDEXED_LANGS = ("ru", "en")
-THIN_KINDS = frozenset({"strength_bw"})
+THIN_KINDS = frozenset({"strength_bw", "muscle_equip"})
 
 
 # Страница вне индекса: `<meta name=robots>` в HTML и тот же X-Robots-Tag
@@ -739,7 +751,7 @@ def _nav_pages() -> tuple[tuple[Page, str], ...]:
 # Раздел шапки, к которому относится страница (подсветка и хлебные крошки).
 _SECTION = {
     "tools": "tools", "tool": "tools", "strength": "tools", "strength_lift": "tools", "strength_bw": "tools", "template": "tools",
-    "guides": "guides", "guide": "guides", "glossary": "guides", "term": "guides",
+    "guides": "guides", "guide": "guides", "glossary": "guides",
     "muscles": "muscles", "muscle": "muscles", "muscle_equip": "muscles",
     "exercises": "exercises", "exercise": "exercises", "exercise_alt": "exercises",
     "programs": "programs", "program": "programs", "splits": "programs", "split": "programs", "workout": "programs",
@@ -792,10 +804,7 @@ def _parents(page: Page) -> list[Page]:
     if k == "strength_lift":
         return [Page("tools"), Page("strength")]
     if k == "strength_bw":
-        import seo_strength_bw
-
-        _key, sex, _bw = seo_strength_bw.parts(page)
-        return [Page("tools"), Page("strength"), Page("strength_lift", page.arg, "men" if sex == "m" else "women")]
+        return [Page("tools"), Page("strength"), Page("strength_lift", page.arg)]
     if k == "exercise_alt":
         return [Page("exercises"), Page("exercise", page.arg)]
     if k == "muscle_equip":
@@ -803,7 +812,7 @@ def _parents(page: Page) -> list[Page]:
     if k in ("split", "workout"):
         return [Page("programs"), Page("splits")]
     single = {"program": "programs", "exercise": "exercises", "muscle": "muscles", "pair": "compare",
-              "vs": "compare", "alternatives": "compare", "term": "glossary", "guide": "guides", "splits": "programs",
+              "vs": "compare", "alternatives": "compare", "guide": "guides", "splits": "programs",
               "apps": "compare"}
     return [Page(single[k])] if k in single else []
 
@@ -860,9 +869,30 @@ SITE_UPDATED = "2026-10-30"
 
 
 def page_updated(page: Page) -> str:
+    """Дата правки страницы: своя дата раздела или общая дата сайта — и
+    позже неё день, когда заметно поменялись цифры атлетов на странице
+    (site_crowd: показанные числа хранятся, дата сдвигается только с ними)."""
     import seo_library
 
-    return seo_library.updated_for(page) or SITE_UPDATED
+    base = seo_library.updated_for(page) or SITE_UPDATED
+    crowd = site_crowd.changed_on(crowd_identities(page))
+    return max(base, crowd) if crowd else base
+
+
+# Разделы, на которых стоят цифры атлетов (site_crowd): маршрут такой
+# страницы и sitemap сначала дают кэшу пересчитаться (раз в сутки).
+CROWD_KINDS = frozenset({"exercise", "exercise_alt"})
+
+
+def crowd_identities(page: Page) -> list[str]:
+    """Упражнения, чьи цифры атлетов показывает страница."""
+    if page.kind == "exercise":
+        return [_identity_for_media_slug(_EXERCISE_BY_URL[page.arg])]
+    if page.kind == "exercise_alt":
+        import seo_swaps
+
+        return seo_swaps.crowd_identities(page.arg)
+    return []
 
 
 def human_date(iso: str, lang: str) -> str:
@@ -1139,7 +1169,7 @@ def page_h1(page: Page, lang: str) -> str:
         return t("seo.strength.h1")
     if page.kind == "strength_lift":
         key, _ex = _LIFT_BY_URL[page.arg]
-        return t(f"seo.strength.{key}.{page.arg2}.h1")
+        return t(f"seo.strength.{key}.h1")
     if page.kind == "programs":
         return t("seo.programs.h1")
     if page.kind == "program":
@@ -1461,8 +1491,8 @@ def _render_home(lang: str, page: Page, request) -> str:
         "screenshot": [base + src for src in page_images(page, lang)],
         "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
         "sameAs": same_as(),
-        "author": {"@type": "Person", "name": DEVELOPER},
-        "publisher": {"@id": base + ORG_ID},
+        "author": org_ref(lang, request),
+        "publisher": org_ref(lang, request),
     }
     site = {"@context": "https://schema.org", "@type": "WebSite", "name": t("seo.brand"),
             "url": base + url_for(page, lang), "inLanguage": hreflang(lang)}
@@ -1470,9 +1500,9 @@ def _render_home(lang: str, page: Page, request) -> str:
                    body=body, ld=[app, site, organization_ld(lang, request), _faq_ld(faq)])
 
 
-# Разработчик — так, как он назван в App Store; других контактов, кроме
-# страницы поддержки, сайт не публикует.
-DEVELOPER = "Aleksandr Vilman"
+# Автор и издатель всего сайта — проект как Organization. Ни имени
+# владельца, ни выдуманных авторов и рецензентов: на сайте и в JSON-LD нет ни
+# одного человека. Связь — только страница поддержки.
 ORG_ID = "/#org"
 
 
@@ -1480,13 +1510,23 @@ def same_as() -> list[str]:
     return [u for u in (config.app_store_url(), f"https://t.me/{bot_username()}") if u]
 
 
+def org_ref(lang: str, request) -> dict:
+    """Ссылка на Organization для author/publisher статей и страниц."""
+    base = base_url(request)
+    return {"@type": "Organization", "@id": base + ORG_ID, "name": i18n.t_in(lang, "seo.brand"),
+            "url": base + url_for(Page("home"), lang)}
+
+
 def organization_ld(lang: str, request) -> dict:
     base = base_url(request)
     return {
         "@context": "https://schema.org", "@type": "Organization", "@id": base + ORG_ID,
         "name": i18n.t_in(lang, "seo.brand"), "alternateName": i18n.t_in(lang, "bot.name"),
+        "description": i18n.t_in(lang, "seo.about.description"),
         "url": base + url_for(Page("home"), lang), "logo": base + seo_static.asset_url("icons/icon-512.png"),
-        "sameAs": same_as(), "founder": {"@type": "Person", "name": DEVELOPER},
+        "sameAs": same_as(),
+        "contactPoint": {"@type": "ContactPoint", "contactType": "customer support",
+                         "url": f"{base}/support?lang={lang}", "availableLanguage": [hreflang(code) for code in INDEXED_LANGS]},
     }
 
 
@@ -2060,11 +2100,10 @@ def _strength_tabs(lang: str, current: Page) -> str:
     t = _t(lang)
     links = []
     for url, key, _ex in STRENGTH_LIFTS:
-        for sex_url, _s in STRENGTH_SEXES:
-            p = Page("strength_lift", url, sex_url)
-            here = " aria-current=page" if p == current else ""
-            links.append(f'<a href="{url_for(p, lang)}"{here}>{_e(t(f"seo.strength.{key}.{sex_url}.tab"))}</a>')
-    return f"<nav class=tabs aria-label=\"{_e(t('seo.strength.tabs'))}\">{''.join(links)}</nav>"
+        p = Page("strength_lift", url)
+        here = " aria-current=page" if p == current else ""
+        links.append(f'<a href="{url_for(p, lang)}"{here}>{_e(t(f"seo.strength.lift.{key}"))}</a>')
+    return f"<nav class=tabs aria-label=\"{_e(t('seo.strength.tabs_lift'))}\">{''.join(links)}</nav>"
 
 
 def _strength_method(lang: str) -> str:
@@ -2084,8 +2123,8 @@ def _render_strength(lang: str, page: Page, request) -> str:
     t = _t(lang)
     form, result, script = _strength_tool(lang)
     cards = [
-        (url_for(Page("strength_lift", url, sex), lang), t(f"seo.strength.{key}.{sex}.tab"), t(f"seo.strength.{key}.card"))
-        for url, key, _ex in STRENGTH_LIFTS for sex, _s in STRENGTH_SEXES
+        (url_for(Page("strength_lift", url), lang), t(f"seo.strength.lift.{key}"), t(f"seo.strength.{key}.card"))
+        for url, key, _ex in STRENGTH_LIFTS
     ]
     title, description = t("seo.strength.title"), t("seo.strength.description")
     body = (
@@ -2106,23 +2145,28 @@ def _render_strength_lift(lang: str, page: Page, request) -> str:
 
     t = _t(lang)
     key, ex_url = _LIFT_BY_URL[page.arg]
-    sex = _SEX_BY_URL[page.arg2]
-    form, result, script = _strength_tool(lang, key, sex)
-    tables = f"<h3>{_e(t('seo.strength.in_kg'))}</h3>{_strength_table(lang, key, sex, 'kg')}"
-    if lang == "en":
-        tables += f"<h3 style=\"margin-top:24px\">{_e(t('seo.strength.in_lb'))}</h3>{_strength_table(lang, key, sex, 'lb')}"
+    form, result, script = _strength_tool(lang, key, "m")
+
+    def tables(sex: str, sex_url: str) -> str:
+        out = f"<h3>{_e(t('seo.strength.in_kg'))}</h3>{_strength_table(lang, key, sex, 'kg')}"
+        if lang == "en":
+            out += f"<h3 style=\"margin-top:24px\">{_e(t('seo.strength.in_lb'))}</h3>{_strength_table(lang, key, sex, 'lb')}"
+        return (f"<section class=reveal id={sex_url}><h2>{_e(t(f'seo.strength.table.{sex_url}.h'))}</h2>{out}"
+                + seo_strength_bw.bw_links(lang, page.arg, sex) + "</section>")
+
     lift_name = t(f"seo.strength.lift.{key}")
-    title = t(f"seo.strength.{key}.{page.arg2}.title")
-    description = t(f"seo.strength.{key}.{page.arg2}.description")
+    title = t(f"seo.strength.{key}.title")
+    description = t(f"seo.strength.{key}.description")
+    jump = (f'<p><a href="#men">{_e(t("seo.strength.table.men.h"))}</a> · '
+            f'<a href="#women">{_e(t("seo.strength.table.women.h"))}</a></p>')
     body = (
         f"<span class=eyebrow>{_e(t('seo.eyebrow.strength'))}</span>"
         f"<h1>{_e(page_h1(page, lang))}</h1><p class=lead>{_e(t('seo.strength.lift_lead', lift=lift_name))}</p>"
-        + _strength_tabs(lang, page)
+        + _strength_tabs(lang, page) + jump
         + f"<section class=reveal style=\"margin-top:24px\"><h2>{_e(t('seo.strength.tool.h'))}</h2><div class=tool>{form}{result}</div></section>"
-        + f"<section class=reveal><h2>{_e(t('seo.strength.table.h'))}</h2>{tables}"
-        f"<p class=muted>{_e(t('seo.strength.table_note'))}</p></section>"
+        + "".join(tables(sex, sex_url) for sex_url, sex in STRENGTH_SEXES)
+        + f"<p class=muted>{_e(t('seo.strength.table_note'))}</p>"
         + _strength_method(lang)
-        + seo_strength_bw.lift_page_links(lang, page.arg, sex)
         + (f'<p><a href="{url_for(Page("exercise", ex_url), lang)}">{_e(t("seo.strength.technique", lift=lift_name))} →</a></p>'
            if ex_url else "")
         + _cta(lang, page.block, _e(t("seo.strength.cta")), request)
@@ -2407,6 +2451,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         f"<section class=reveal><h2>{_e(t('seo.exercise.steps.h'))}</h2><ol class=steps>{steps}</ol></section>"
         f"<section class='mistakes reveal'><h2>{_e(t('seo.exercise.mistakes.h'))}</h2><ul>{mistakes}</ul></section>"
         + _muscles_worked(lang, page, identity)
+        + site_crowd.exercise_block(identity, lang)
         + seo_swaps.teaser(page.arg, lang)
         + in_programs
     )
@@ -2417,14 +2462,13 @@ def _render_exercise(lang: str, page: Page, request) -> str:
         + f'<p style="margin-top:32px"><a href="{url_for(Page("exercises"), lang)}">{_e(t("seo.exercise.all"))}</a></p>'
         + f"<p class=muted>{t('seo.exercise.credit_html')}</p>"
     )
-    home = base + url_for(Page("home"), lang)
     article = {
         "@context": "https://schema.org", "@type": "Article",
         "headline": name[:110], "description": lead, "inLanguage": hreflang(lang),
         "image": [base + _media_url(exercise_media.frame_name(slug, n)) for n in exercise_media.frame_numbers(slug)],
         "mainEntityOfPage": base + url_for(page, lang),
-        "author": {"@type": "Organization", "name": t("seo.brand"), "url": home},
-        "publisher": {"@type": "Organization", "name": t("seo.brand"), "url": home},
+        "author": org_ref(lang, request),
+        "publisher": org_ref(lang, request),
         "about": {"@type": "Thing", "name": name},
     }
     return _layout(lang, page, request, title=t("seo.exercise.title", name=name), description=lead, body=body,
@@ -2731,6 +2775,8 @@ def _page_route(page: Page, lang: str):
             import site_numbers
 
             await site_numbers.refresh()
+        if page.kind in CROWD_KINDS:
+            await site_crowd.refresh()
         html = render(page, lang, request)
         await _count("view", url_for(page, lang), lang, request)
         return _html(html, lang, index=indexable(page, lang))
@@ -2829,6 +2875,7 @@ async def root_route(request: Request) -> Response:
 
 
 async def sitemap_route(request: Request) -> Response:
+    await site_crowd.refresh()
     return Response(sitemap_xml(request), media_type="application/xml",
                     headers={"Cache-Control": "public, max-age=3600"})
 
@@ -2909,6 +2956,26 @@ def verification_file_name() -> Optional[str]:
     return name if re.fullmatch(r"google[0-9a-zA-Z]+\.html", name) else None
 
 
+def moved_pages() -> dict[str, str]:
+    """Старые адреса сайта → куда они переехали (301, тот же язык).
+
+    - `/strength/<упражнение>/<men|women>` → `/strength/<упражнение>#<пол>`:
+      пол — раздел общей страницы, а не своя страница.
+    - `/glossary/<термин>` → `/glossary#<термин>`: словарь — одна страница
+      (seo_library.term_href)."""
+    import seo_library
+
+    out: dict[str, str] = {}
+    for lang in LANGS:
+        seg = f"/{lang_segment(lang)}"
+        for url, _key, _ex in STRENGTH_LIFTS:
+            for sex_url, _s in STRENGTH_SEXES:
+                out[f"{seg}/strength/{url}/{sex_url}"] = f"{seg}/strength/{url}#{sex_url}"
+        for term in seo_library.GLOSSARY:
+            out[f"{seg}/glossary/{term}"] = seo_library.term_href(term, lang)
+    return out
+
+
 def _moved(target: str):
     async def route(request: Request) -> Response:
         return RedirectResponse(target, status_code=301, headers={"Cache-Control": "public, max-age=86400"})
@@ -2928,6 +2995,8 @@ def register_routes(server: Any) -> None:
             server.custom_route(f"/{lang_segment(lang)}/tools/{tool}", methods=["GET"])(_moved(f"/{lang_segment(lang)}{target}"))
         for tool, target in REMOVED_EMBEDS.items():
             server.custom_route(embed_url(tool, lang), methods=["GET"])(_moved(embed_url(target, lang)))
+    for old, target in moved_pages().items():
+        server.custom_route(old, methods=["GET"])(_moved(target))
     server.custom_route("/", methods=["GET"])(root_route)
     server.custom_route("/go/bot", methods=["GET"])(go_bot_route)
     server.custom_route("/go/appstore", methods=["GET"])(go_appstore_route)

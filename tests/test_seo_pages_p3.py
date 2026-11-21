@@ -182,7 +182,7 @@ async def test_template_page_and_downloads():
 
 
 async def test_library_pages_link_what_they_promise():
-    paths = [seo_pages.url_for(p, lang) for kind in ("pair", "muscle", "term", "guide") for p in _pages(kind)
+    paths = [seo_pages.url_for(p, lang) for kind in ("pair", "muscle", "glossary", "guide") for p in _pages(kind)
              for lang in ("ru", "en")]
     responses = await _get_many(paths)
     for page in _pages("pair"):
@@ -198,12 +198,15 @@ async def test_library_pages_link_what_they_promise():
             html = responses[seo_pages.url_for(page, lang)].text
             for url, _slug in seo_library.muscle_exercises(page.arg):
                 assert f'href="/{lang}/exercises/{url}"' in html
-    for page in _pages("term"):
-        for lang in ("ru", "en"):
-            html = responses[seo_pages.url_for(page, lang)].text
-            assert "DefinedTerm" in html
-            # Термин ведёт дальше — на калькулятор, гайд или другой термин.
-            assert re.search(rf'href="/{lang}/(tools|guides|glossary|programs|muscles)/', html)
+    for lang in ("ru", "en"):
+        html = responses[seo_pages.url_for(seo_pages.Page("glossary"), lang)].text
+        assert "DefinedTerm" in html
+        for term in seo_library.GLOSSARY:
+            # Каждый термин — раздел с якорем, и ведёт дальше — на
+            # калькулятор, гайд или другой термин.
+            section = re.search(rf"<section class='term reveal' id={re.escape(term)}>(.*?)</section>", html, re.S)
+            assert section, (lang, term)
+            assert re.search(rf'href="/{lang}/(tools|guides|glossary|programs|muscles|splits|exercises|strength)', section.group(1)), term
     for page in _pages("guide"):
         for lang in ("ru", "en"):
             html = responses[seo_pages.url_for(page, lang)].text
@@ -286,14 +289,22 @@ async def test_every_page_has_updated_date_and_date_modified():
 
 
 async def test_organization_and_app_say_who_builds_it(monkeypatch):
+    """Автор сайта — проект как Organization: ни одного человека (ни
+    владельца, ни выдуманных авторов) нигде в JSON-LD."""
     monkeypatch.setattr(config, "APP_STORE_URL", STORE)
-    responses = await _get_many(["/en", "/ru/about"])
+    responses = await _get_many(["/en", "/ru/about", "/en/exercises/bench-press", "/ru/guides/rest-between-sets"])
     for path in ("/en", "/ru/about"):
         org = next(b for b in _ld(responses[path].text) if b["@type"] == "Organization")
-        assert org["founder"] == {"@type": "Person", "name": "Aleksandr Vilman"}
+        assert "founder" not in org and org["@id"].endswith("/#org")
         assert STORE in org["sameAs"] and any(u.startswith("https://t.me/") for u in org["sameAs"])
+        assert org["contactPoint"]["url"].endswith("/support?lang=" + path[1:3])
     app = next(b for b in _ld(responses["/en"].text) if b["@type"] == "SoftwareApplication")
-    assert app["author"]["name"] == "Aleksandr Vilman" and app["publisher"]["@id"].endswith("/#org")
+    assert app["author"]["@id"].endswith("/#org") and app["publisher"]["@id"].endswith("/#org")
+    for path in ("/en/exercises/bench-press", "/ru/guides/rest-between-sets"):
+        article = next(b for b in _ld(responses[path].text) if b["@type"] == "Article")
+        assert article["author"]["@type"] == "Organization" and article["author"]["@id"].endswith("/#org")
+    for resp in responses.values():
+        assert '"Person"' not in resp.text
 
 
 async def test_llms_full_lists_every_page_in_both_languages():
@@ -302,7 +313,7 @@ async def test_llms_full_lists_every_page_in_both_languages():
     for page in seo_pages.pages():
         for lang in ("ru", "en"):
             assert f"({HOST}{seo_pages.url_for(page, lang)})" in resp.text
-    assert "Aleksandr Vilman" in resp.text
+    assert "Person" not in resp.text
     assert f"{HOST}/llms-full.txt" in (await _get("/llms.txt")).text
 
 
@@ -326,8 +337,8 @@ def _visible(html: str) -> str:
 
 
 async def test_site_puts_a_no_break_space_between_number_and_unit():
-    paths = ["/ru", "/en", "/ru/tools/1rm", "/en/strength/bench-press/men", "/ru/guides/progressive-overload",
-             "/en/guides/estimate-1rm-safely", "/ru/templates/workout-log", "/ru/glossary/tonnage"]
+    paths = ["/ru", "/en", "/ru/tools/1rm", "/en/strength/bench-press", "/ru/guides/progressive-overload",
+             "/en/guides/estimate-1rm-safely", "/ru/templates/workout-log", "/ru/glossary"]
     responses = await _get_many(paths)
     for path, resp in responses.items():
         text = _visible(resp.text)
@@ -593,7 +604,7 @@ async def test_site_responses_are_gzipped_and_api_is_not():
 
 
 async def test_etag_and_not_modified_for_pages_and_static():
-    for path in ("/en/glossary/rpe", "/site/coach.jpg", "/og/en/home.png", "/sitemap.xml"):
+    for path in ("/en/glossary", "/site/coach.jpg", "/og/en/home.png", "/sitemap.xml"):
         first = await _get(path)
         etag = first.headers["etag"]
         again = await _get(path, headers={"If-None-Match": etag})
@@ -620,7 +631,7 @@ async def test_images_have_sizes_and_lazy_loading():
 
 
 async def test_english_pages_of_phase_three_have_no_cyrillic():
-    kinds = ("muscle", "pair", "term", "guide", "alternatives", "template", "about", "muscles", "compare", "glossary",
+    kinds = ("muscle", "pair", "guide", "alternatives", "template", "about", "muscles", "compare", "glossary",
              "guides")
     paths = [seo_pages.url_for(p, "en") for p in seo_pages.pages() if p.kind in kinds]
     paths += [f"/en/tools/{t}" for t in ("tonnage", "rest-timer", "goal", "strength-percentile")]
@@ -656,5 +667,5 @@ def test_level_card_shows_the_weight_and_the_bodyweight():
     assert card("en", "l=2&lift=squat&w=225&r=5&bw=180&u=lb") == \
         "Squat: 225 lb × 5 at 180 lb bodyweight — Intermediate"
     assert card("en", "l=2&lift=squat") == "My squat standard — Intermediate"
-    page = seo_pages.render(seo_pages.Page("strength_lift", "squat", "men"), "en")
+    page = seo_pages.render(seo_pages.Page("strength_lift", "squat"), "en")
     assert "&w='+w+'&r='+r+'&bw='" in page

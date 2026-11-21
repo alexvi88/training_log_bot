@@ -138,7 +138,7 @@ def _links(lang: str, page: Page, key: str, sex: str, bw: int) -> str:
             for w in BODYWEIGHTS[sex] if w != bw]
     other = [(sp.url_for(Page("strength_bw", url, page.arg2), lang), sp._strip_emoji(page_h1(Page("strength_bw", url, page.arg2), lang)))
              for url, k in LIFTS if k != key]
-    lift_page = Page("strength_lift", page.arg, _URL_BY_SEX[sex])
+    lift_page = Page("strength_lift", page.arg)
     other.append((sp.url_for(lift_page, lang), sp._strip_emoji(sp.page_h1(lift_page, lang))))
     ex_url = sp._LIFT_BY_URL[page.arg][1]
     if ex_url:
@@ -178,15 +178,15 @@ def _render(lang: str, page: Page, request) -> str:
     return sp._layout(lang, page, request, title=title, description=description, body=body, wide=True, ld=ld)
 
 
-def lift_page_links(lang: str, lift_url: str, sex: str) -> str:
-    """Блок на общей таблице: ссылки на страницы отдельных весов."""
+def bw_links(lang: str, lift_url: str, sex: str) -> str:
+    """Ссылки с общей таблицы упражнения на страницы отдельных весов одного пола."""
     if lift_url not in _KEY_BY_URL:
         return ""
     t = sp._t(lang)
     items = "".join(
         f'<li><a href="{sp.url_for(Page("strength_bw", lift_url, arg2(sex, w)), lang)}">'
         f"{sp._e(t('seo.sbw.link_bw', w=bw_label(lang, w)))}</a></li>" for w in BODYWEIGHTS[sex])
-    return f"<section class='reveal sub'><h2>{sp._e(t('seo.sbw.by_bw.h'))}</h2><ul class=links>{items}</ul></section>"
+    return f"<h3>{sp._e(t('seo.sbw.by_bw.h'))}</h3><ul class=links>{items}</ul>"
 
 
 RENDERERS = {"strength_bw": _render}
