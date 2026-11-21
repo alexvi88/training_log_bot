@@ -295,7 +295,7 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("year_review_open", "source"): frozenset({"push", "profile", "import"}),
     ("year_review_share", "source"): frozenset({"push", "profile", "import"}),
     ("year_review_shared", "source"): frozenset({"push", "profile", "import"}),
-    ("progress_score_open", "source"): frozenset({"progress", "menu"}),
+    ("progress_score_open", "source"): frozenset({"menu", "workout", "tools"}),
     ("progress_score_part_open", "part"): frozenset({"progression", "regularity", "volume", "balance"}),
     ("guide_action", "action"): frozenset({
         "progress", "exercise_progress", "programs", "import", "video", "coach_question", "rest_timer",
