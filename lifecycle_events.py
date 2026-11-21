@@ -37,6 +37,9 @@ PLATFORM_IOS = "ios"
 # --- имена событий ---------------------------------------------------------------
 
 SIGNUP = "signup"
+# Свойство `guest` у `signup`: аккаунт заведён «без аккаунта» (POST
+# /v1/auth/guest). У остальных заведений свойства нет вовсе.
+SIGNUP_GUEST = "yes"
 PROGRAM_CREATED = "program_created"
 WORKOUT_STARTED = "workout_started"
 SET_LOGGED = "set_logged"

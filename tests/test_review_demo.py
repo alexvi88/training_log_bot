@@ -41,7 +41,8 @@ async def test_login_returns_token_in_link_response_shape_and_token_works(fresh_
     assert resp.status_code == 200, resp.text
     body = resp.json()
     # Та же форма, что у /auth/apple — LinkResponse в iOS декодирует её как есть.
-    assert set(body) == {"token", "user_id", "unit", "lang"}
+    assert set(body) == {"token", "user_id", "unit", "lang", "is_guest"}
+    assert body["is_guest"] is False
     assert body["user_id"] < 0  # app-only, синтетический id
     assert body["lang"] == "en"
     assert body["unit"] == "kg"

@@ -30,7 +30,7 @@
   действие (`lifecycle_events.py`; клиент tg|ios — из входа: middleware бота
   и `api_v1_common.authed_user_id`), — поэтому одинаково для бота и приложения:
   `signup` (`source` — метка deep link'а, если пришёл по ней; ios — app-only
-  аккаунт), `program_created` (`origin` ai|catalog|manual|coach|import|workout),
+  аккаунт; `guest=yes` — гостевой, «Начать без аккаунта», POST /v1/auth/guest), `program_created` (`origin` ai|catalog|manual|coach|import|workout),
   `workout_started` (`kind` live|backfill, `plan` yes|no), `set_logged`
   (`source` bot|app|lock_screen|watch, `workout` live|backfill|edit — по одному
   на подход), `workout_finished` (`kind`, `plan`, `sets` и `duration` —
