@@ -30,7 +30,7 @@
   действие (`lifecycle_events.py`; клиент tg|ios — из входа: middleware бота
   и `api_v1_common.authed_user_id`), — поэтому одинаково для бота и приложения:
   `signup` (`source` — метка deep link'а, если пришёл по ней; ios — app-only
-  аккаунт), `program_created` (`origin` ai|catalog|manual|coach|import|workout),
+  аккаунт; `guest=yes` — гостевой, «Начать без аккаунта», POST /v1/auth/guest), `program_created` (`origin` ai|catalog|manual|coach|import|workout),
   `workout_started` (`kind` live|backfill, `plan` yes|no), `set_logged`
   (`source` bot|app|lock_screen|watch, `workout` live|backfill|edit — по одному
   на подход), `workout_finished` (`kind`, `plan`, `sets` и `duration` —
@@ -258,6 +258,11 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     "year_review_open": frozenset({"source", "slides"}),
     "year_review_share": frozenset({"source"}),
     "year_review_shared": frozenset({"source", "activity"}),
+    # «Оценка» 0–10 (GET /v1/progress/score, progress_score.py): открыл экран
+    # (source progress — с экрана «Прогресс», menu — из «Меню») → раскрыл
+    # разбор одной части (part — её ключ). Сама оценка в событие не идёт.
+    "progress_score_open": frozenset({"source"}),
+    "progress_score_part_open": frozenset({"part"}),
 }
 
 # Свойства с закрытым набором значений: (событие, свойство) → что допустимо.
@@ -290,6 +295,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("year_review_open", "source"): frozenset({"push", "profile", "import"}),
     ("year_review_share", "source"): frozenset({"push", "profile", "import"}),
     ("year_review_shared", "source"): frozenset({"push", "profile", "import"}),
+    ("progress_score_open", "source"): frozenset({"menu", "workout", "tools"}),
+    ("progress_score_part_open", "part"): frozenset({"progression", "regularity", "volume", "balance"}),
     ("guide_action", "action"): frozenset({
         "progress", "exercise_progress", "programs", "import", "video", "coach_question", "rest_timer",
     }),

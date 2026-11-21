@@ -207,7 +207,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- вышел; rest_default_seconds — общая цель отдыха вместо авто-цели у
     -- упражнений без своей, NULL — авто по каждому упражнению.
     rest_alert INTEGER NOT NULL DEFAULT 1,
-    rest_default_seconds INTEGER
+    rest_default_seconds INTEGER,
+    -- Гостевой аккаунт приложения («Начать без аккаунта», POST /v1/auth/guest):
+    -- app-only аккаунт без единой личности — ни Apple ID, ни Telegram. 1 —
+    -- данные живут только под токеном этого телефона, пока человек не войдёт
+    -- с Apple (api_v1.auth_apple с токеном гостя снимает флаг на том же
+    -- user_id) или не привяжет Telegram (link_telegram_to_app_account).
+    is_guest INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -2088,6 +2094,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN rest_alert INTEGER NOT NULL DEFAULT 1")
     if "rest_default_seconds" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN rest_default_seconds INTEGER")
+    if "is_guest" not in user_cols:
+        # 0 всем существующим: гостевых аккаунтов до этой колонки не было —
+        # у каждого app-only аккаунта есть Apple ID или демо-вход.
+        await _conn.execute("ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -3491,6 +3501,7 @@ async def create_app_only_user(
     *,
     track_signup: bool = True,
     signup_source: Optional[str] = None,
+    guest: bool = False,
 ) -> aiosqlite.Row:
     """Завести аккаунт из приложения, без единого сообщения в Telegram — вход
     через Sign in with Apple, когда этот Apple ID ещё никому не известен и
@@ -3515,6 +3526,9 @@ async def create_app_only_user(
     которой приложение открыли до входа (acquisition.app_signup_attribution),
     едет в свойства `signup`, как у /start в боте; сам users.source пишет
     вызывающий через set_user_source.
+
+    `guest=True` — гостевой аккаунт («Начать без аккаунта», POST
+    /v1/auth/guest): users.is_guest = 1, у `signup` свойство `guest=yes`.
     """
     db = conn()
     unit = unit if unit in ("kg", "lb") else config.DEFAULT_UNIT
@@ -3523,9 +3537,9 @@ async def create_app_only_user(
         await db.execute(
             "INSERT INTO users "
             "(telegram_id, username, created_at, unit, e1rm_formula, tz_offset, lang, "
-            "telegram_linked, ai_comments_enabled) "
+            "telegram_linked, ai_comments_enabled, is_guest) "
             # ai_comments_enabled = 0 — по той же причине, что в get_or_create_user.
-            "VALUES (?, NULL, ?, ?, ?, ?, ?, 0, 0)",
+            "VALUES (?, NULL, ?, ?, ?, ?, ?, 0, 0, ?)",
             (
                 new_id,
                 now_iso(),
@@ -3533,12 +3547,18 @@ async def create_app_only_user(
                 config.DEFAULT_E1RM_FORMULA,
                 config.DEFAULT_TZ_OFFSET if tz_offset is None else int(tz_offset),
                 i18n.normalize(language_code),
+                1 if guest else 0,
             ),
         )
         if track_signup:
             source = lifecycle_events.signup_source(signup_source)
+            props: dict[str, str] = {}
+            if source:
+                props["source"] = source
+            if guest:
+                props["guest"] = lifecycle_events.SIGNUP_GUEST
             await _emit_event(
-                new_id, lifecycle_events.SIGNUP, {"source": source} if source else None,
+                new_id, lifecycle_events.SIGNUP, props or None,
                 platform=lifecycle_events.PLATFORM_IOS,
             )
         await db.commit()
@@ -3914,6 +3934,24 @@ def _growth_window(days: int, day: Optional[str] = None) -> tuple[str, Optional[
     return (_utc_now() - dt.timedelta(days=days)).isoformat(timespec="seconds"), None
 
 
+# Корзина источника в /growth. Пустой users.source — НЕ «метка не
+# разобралась» (`unknown` ставит только разбор payload'а, который был, но
+# кривой): у аккаунта из приложения источник пуст по замыслу
+# (acquisition.app_signup_attribution — пустое место ждёт позднего
+# POST /v1/me/referral), а у бота пустым он остаётся, только если человек
+# попал в базу не через /start (первый апдейт — не /start, и is_new у
+# cmd_start уже ложь). Это две разные истории, и смешивать их с `unknown`
+# значило раздувать «❓ Метка не разобралась» в разы. Аккаунт из приложения —
+# telegram_linked = 0: Telegram к нему так и не привязали (привязанный
+# получает источник бот-строки при слиянии). Ключи корзин — те же строки,
+# что acquisition.SOURCE_APP_NO_LABEL / SOURCE_BOT_NO_START: настоящей метки
+# с таким значением не бывает (без префикса payload схлопывается в unknown).
+_GROWTH_SOURCE_SQL = (
+    "COALESCE(u.source, CASE WHEN u.telegram_linked = 0 "
+    "THEN 'app_no_label' ELSE 'bot_no_start' END)"
+)
+
+
 async def acquisition_funnel(
     days: int = 30, alive_days: int = 7, *, day: Optional[str] = None
 ) -> list[aiosqlite.Row]:
@@ -3926,15 +3964,17 @@ async def acquisition_funnel(
     since, until = _growth_window(days, day)
     alive_since = (_utc_now() - dt.timedelta(days=alive_days)).isoformat(timespec="seconds")
     cur = await conn().execute(
-        "SELECT COALESCE(u.source, 'unknown') AS source, "
+        f"SELECT {_GROWTH_SOURCE_SQL} AS source, "
         "COUNT(*) AS users, "
         "COUNT(*) FILTER (WHERE f.finished >= 1) AS activated, "
         "COUNT(*) FILTER (WHERE f.finished >= 3) AS engaged, "
         "COUNT(*) FILTER (WHERE f.last_finished_at >= ?) AS alive "
         f"FROM users u LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
         "WHERE u.created_at >= ? AND (? IS NULL OR u.created_at < ?) "
-        "AND COALESCE(u.source, 'unknown') <> 'legacy' "
-        "GROUP BY source ORDER BY users DESC, source",
+        "AND COALESCE(u.source, '') <> 'legacy' "
+        # GROUP BY 1, а не по имени: «source» в GROUP BY SQLite связывает со
+        # столбцом u.source, а не с псевдонимом, и обе пустые корзины слиплись бы.
+        "GROUP BY 1 ORDER BY users DESC, 1",
         (alive_since, since, until, until),
     )
     return await cur.fetchall()
@@ -3966,7 +4006,7 @@ async def onboarding_funnel(days: int = 30, *, day: Optional[str] = None) -> lis
     """
     since, until = _growth_window(days, day)
     cur = await conn().execute(
-        "SELECT COALESCE(u.source, 'unknown') AS source, "
+        f"SELECT {_GROWTH_SOURCE_SQL} AS source, "
         "COUNT(*) AS users, "
         "COUNT(*) FILTER (WHERE st.user_id IS NOT NULL) AS started, "
         "COUNT(*) FILTER (WHERE ls.user_id IS NOT NULL) AS logged_set, "
@@ -3976,8 +4016,10 @@ async def onboarding_funnel(days: int = 30, *, day: Optional[str] = None) -> lis
         f"LEFT JOIN ({_LOGGED_SET_BY_USER}) ls ON ls.user_id = u.telegram_id "
         f"LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
         "WHERE u.created_at >= ? AND (? IS NULL OR u.created_at < ?) "
-        "AND COALESCE(u.source, 'unknown') <> 'legacy' "
-        "GROUP BY source ORDER BY users DESC, source",
+        "AND COALESCE(u.source, '') <> 'legacy' "
+        # GROUP BY 1, а не по имени: «source» в GROUP BY SQLite связывает со
+        # столбцом u.source, а не с псевдонимом, и обе пустые корзины слиплись бы.
+        "GROUP BY 1 ORDER BY users DESC, 1",
         (since, until, until),
     )
     return await cur.fetchall()
@@ -7381,6 +7423,72 @@ async def exercise_session_e1rms(
     return [(dt.date.fromisoformat(r["day"]), float(r["best"] or 0)) for r in await cur.fetchall()]
 
 
+def progress_score_sets_sql(tz_offset: int, formula: str = "epley") -> str:
+    """SQL подходов «Оценки» — параметры (user_id, start_date, end_date).
+    Отдельно от progress_score_sets, чтобы калибровочный скрипт
+    (scripts/progress_score_report.py) читал ровно то же по соединению только
+    для чтения."""
+    day = _local_day("w.started_at", tz_offset)
+    return (
+        f"SELECT w.id AS workout_id, {day} AS day, s.exercise_id, "
+        "       e.display_name, e.original_name, e.bodyweight_load, "
+        "       CASE WHEN g.user_id IS NULL THEN g.name END AS group_name, "
+        f"      {_e1rm_sql(formula)} AS e1rm "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "LEFT JOIN muscle_groups g ON g.id = e.primary_group_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0 "
+        f"AND {day} BETWEEN ? AND ? "
+        "ORDER BY w.started_at, s.id"
+    )
+
+
+def exercise_first_two_weeks_sql(tz_offset: int, formula: str = "epley") -> str:
+    """SQL первых двух недель каждого упражнения — параметр (user_id)."""
+    day = _local_day("w.started_at", tz_offset)
+    return (
+        "WITH x AS ("
+        f"  SELECT s.exercise_id AS ex, {day} AS d, {_e1rm_sql(formula)} AS e "
+        "  FROM sets s "
+        "  JOIN workout_blocks b ON b.id = s.block_id "
+        "  JOIN workouts w ON w.id = b.workout_id "
+        "  WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
+        "), f AS (SELECT ex, MIN(d) AS first_day FROM x GROUP BY ex) "
+        "SELECT f.ex, f.first_day, MAX(x.e) AS best, e.original_name, e.bodyweight_load FROM f "
+        "JOIN x ON x.ex = f.ex AND x.d <= date(f.first_day, '+13 days') "
+        "JOIN exercises e ON e.id = f.ex "
+        "GROUP BY f.ex"
+    )
+
+
+async def progress_score_sets(
+    user_id: int, start_date: str, end_date: str, formula: str = "epley", *, tz_offset: Optional[int] = None
+) -> list[aiosqlite.Row]:
+    """Подходы законченных тренировок окна [start_date, end_date] (местные дни) —
+    сырьё «Оценки» (progress_score). Строка на подход с повторами: местный
+    день, упражнение (имя на показ, идентичность каталога, режим своего веса),
+    группа — только встроенная (`group_name` NULL у своей группы атлета) и e1RM
+    по формуле атлета (_e1rm_sql, тот же расчёт, что у рекордов и прогресса).
+    Перенесённые тренировки входят: это история атлета, а не опыт с нашим вводом."""
+    sql = progress_score_sets_sql(await _tz_offset_of(user_id, tz_offset), formula)
+    cur = await conn().execute(sql, (user_id, start_date, end_date))
+    return await cur.fetchall()
+
+
+async def exercise_first_two_weeks_e1rm(
+    user_id: int, formula: str = "epley", *, tz_offset: Optional[int] = None
+) -> list[aiosqlite.Row]:
+    """Строка на упражнение: `ex`, `first_day` (местный день первого подхода),
+    `best` (лучший e1RM первых 14 дней его истории), `original_name` и
+    `bodyweight_load` — по всем законченным тренировкам. Запасная база «Оценки»
+    (progress_score), когда в окне 4–6 недель назад упражнения не было."""
+    sql = exercise_first_two_weeks_sql(await _tz_offset_of(user_id, tz_offset), formula)
+    cur = await conn().execute(sql, (user_id,))
+    return await cur.fetchall()
+
+
 async def exercise_e1rm_first_and_best(
     user_id: int,
     exercise_id: int,
@@ -9196,6 +9304,52 @@ async def link_auth_identity(
         await conn().commit()
 
 
+async def attach_apple_to_guest(
+    guest_id: int, provider_user_id: str, email: Optional[str] = None
+) -> bool:
+    """Гость («Начать без аккаунта») входит с Apple, и этот Apple ID ещё ничей:
+    личность ложится на ТОТ ЖЕ user_id, флаг гостя снимается — все записи
+    гостя остаются на месте. Одна транзакция: личность без снятого флага (или
+    наоборот) не остаётся ни при каком сбое.
+
+    False — привязать нельзя: `guest_id` уже не гость (или его нет), либо этот
+    Apple ID успели привязать к другому аккаунту параллельным запросом
+    (обычный INSERT, а не upsert, как у link_auth_identity: чужого владельца
+    здесь не переписываем никогда — вызывающий разберёт это как «Apple ID уже
+    занят»)."""
+    db = conn()
+    async with _write_lock:
+        try:
+            cur = await db.execute(
+                "UPDATE users SET is_guest = 0 WHERE telegram_id = ? AND is_guest = 1",
+                (guest_id,),
+            )
+            if not cur.rowcount:
+                await db.rollback()
+                return False
+            await db.execute(
+                "INSERT INTO auth_identities (user_id, provider, provider_user_id, email, created_at) "
+                "VALUES (?, 'apple', ?, ?, ?)",
+                (guest_id, provider_user_id, email, now_iso()),
+            )
+            await db.commit()
+            return True
+        except sqlite3.IntegrityError:
+            await db.rollback()
+            return False
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def user_has_content_data(telegram_id: int) -> bool:
+    """Есть ли у аккаунта содержательные данные (тренировка, своё упражнение,
+    вес, еда, программа, разговор с тренером, значок…) — тот же список, что
+    держит слияние аккаунтов (_MERGE_CONTENT_TABLES). Гость без них — пустой:
+    его можно снести молча, когда он входит в уже существующий Apple-аккаунт."""
+    return await _has_content_data(telegram_id)
+
+
 async def resolve_auth_identity(provider: str, provider_user_id: str) -> Optional[int]:
     """provider_user_id (Apple: "sub" из identity token) → user_id, если эта
     личность уже привязана к чьему-то аккаунту, иначе None — тогда клиент
@@ -9504,6 +9658,9 @@ async def link_telegram_to_app_account(
                         app_row["first_name"], telegram_id,
                     ),
                 )
+            # Гость, привязавший Telegram, больше не гость: у аккаунта есть
+            # личность, через которую в него можно вернуться.
+            await db.execute("UPDATE users SET is_guest = 0 WHERE telegram_id = ?", (telegram_id,))
             await db.commit()
             return "ok"
         except Exception:

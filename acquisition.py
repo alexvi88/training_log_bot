@@ -25,6 +25,12 @@ SOURCE_UNKNOWN = "unknown"  # payload был, но не разобрался
 # Те, кто уже был в боте до появления атрибуции. Стоит в базе с миграции, из
 # воронки исключается: считать их «органикой» — врать самим себе в отчёте.
 SOURCE_LEGACY = "legacy"
+# Корзины /growth для ПУСТОГО users.source — в базу не пишутся, их собирает
+# запрос (db._GROWTH_SOURCE_SQL). Аккаунт из приложения без метки ссылки —
+# норма (app_signup_attribution оставляет место позднему коду), а не
+# «не разобралась»; человек в боте без источника попал в базу не через /start.
+SOURCE_APP_NO_LABEL = "app_no_label"
+SOURCE_BOT_NO_START = "bot_no_start"
 
 REFERRAL_PREFIX = "ref_"
 CHANNEL_PREFIX = "src_"
@@ -209,6 +215,10 @@ def _source_title(source: str) -> str:
         return "🧑‍🏫 По коду тренера"
     if source == SOURCE_UNKNOWN:
         return "❓ Метка не разобралась"
+    if source == SOURCE_APP_NO_LABEL:
+        return "📱 Приложение, без метки"
+    if source == SOURCE_BOT_NO_START:
+        return "🤖 Бот, без /start"
     return f"📣 {source[len(CHANNEL_PREFIX):]}" if source.startswith(CHANNEL_PREFIX) else source
 
 
@@ -319,9 +329,25 @@ APP_FUNNEL_STEPS: tuple[tuple[str, str], ...] = (
     ("push_priming", "экран уведомлений"),
     ("signin_shown", "экран входа"),
     ("signin_tapped", "нажал «Войти с Apple»"),
-    ("signin_ok", "вошёл"),
-    ("signin_failed", "вход сорвался"),
+    ("signin_ok", "вошёл с Apple"),
+    # Срывы входа с Apple — по причине. `signin_failed` без причины шлют
+    # старые сборки; новые шлют один из шагов с причиной.
+    ("signin_failed", "без причины (старые сборки)"),
+    ("signin_failed_server", "сервер не принял вход"),
+    ("signin_failed_apple_1000", "Apple 1000 (нет iCloud или сбой Apple)"),
+    ("signin_failed_apple_other", "другая ошибка Apple"),
+    ("signin_failed_token", "Apple не отдал токен"),
+    # Гостевой путь — «Начать без аккаунта» (POST /v1/auth/guest).
+    ("guest_tapped", "нажал «Без аккаунта»"),
+    ("guest_ok", "вошёл гостем"),
+    ("guest_failed", "гостевой вход сорвался"),
 )
+# Шаги, которые format_app_funnel рисует своими строками, а не общим списком.
+_SIGNIN_FAILED_STEPS = (
+    "signin_failed", "signin_failed_server", "signin_failed_apple_1000",
+    "signin_failed_apple_other", "signin_failed_token",
+)
+_GUEST_STEPS = ("guest_tapped", "guest_ok", "guest_failed")
 
 
 def format_app_funnel(rows: Iterable[Any], days: int, day: Optional[str] = None) -> str:
@@ -335,13 +361,40 @@ def format_app_funnel(rows: Iterable[Any], days: int, day: Optional[str] = None)
     if not by_step:
         return f"{head}\n\nУстановок за этот срок не было."
     first = sum(by_step.get("onboarding_slide_1", {}).values())
-    lines = [head]
-    for step, title in APP_FUNNEL_STEPS:
+    titles = dict(APP_FUNNEL_STEPS)
+
+    def count(step: str) -> int:
+        return sum(by_step.get(step, {}).values())
+
+    def line(step: str, prefix: str = "") -> str:
         langs = by_step.get(step, {})
         total = sum(langs.values())
         split = ", ".join(f"{lang} {n}" for lang, n in sorted(langs.items()))
         tail = f" ({split})" if split else ""
-        lines.append(f"{title}: {total} ({_percent(total, first)}%){tail}")
+        return f"{prefix}{titles[step]}: {total} ({_percent(total, first)}%){tail}"
+
+    lines = [head]
+    for step, _ in APP_FUNNEL_STEPS:
+        if step in _SIGNIN_FAILED_STEPS or step in _GUEST_STEPS:
+            continue
+        lines.append(line(step))
+    # Срывы — одна строка итога и разбивка по причине под ней. Итог — сумма
+    # установок по шагам: одна установка, сорвавшаяся по двум причинам,
+    # считается дважды — честнее, чем прятать вторую причину.
+    failed = sum(count(step) for step in _SIGNIN_FAILED_STEPS)
+    lines.append(f"вход с Apple сорвался: {failed} ({_percent(failed, first)}%)")
+    lines += [line(step, "   ↳ ") for step in _SIGNIN_FAILED_STEPS]
+    tapped, guest_ok, guest_failed = (count(step) for step in _GUEST_STEPS)
+    lines.append(
+        f"без аккаунта: нажали {tapped} → вошли гостем {guest_ok} "
+        f"({_percent(guest_ok, tapped)}%), сорвалось {guest_failed}"
+    )
+    apple_ok = count("signin_ok")
+    signed_in = apple_ok + guest_ok
+    lines.append(
+        f"<b>вошли всего: {signed_in}</b> ({_percent(signed_in, first)}%) — "
+        f"с Apple {apple_ok}, гостем {guest_ok}"
+    )
     return "\n".join(lines)
 
 

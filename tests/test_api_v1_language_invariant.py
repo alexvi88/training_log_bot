@@ -570,6 +570,32 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
         "POST", "/auth/logout", headers={**headers, "Authorization": f"Bearer {apple.json()['token']}"},
         expect=200,
     )
+    # «Начать без аккаунта» (POST /auth/guest): кривой install_id — ошибка на
+    # языке тела; гость заведён — тот же ответ, что у /auth/apple, и /me
+    # гостя. Потом гость входит с Apple: Apple ID «new» уже занят аккаунтом
+    # выше — пустого гостя сервер сносит молча, гостя с тренировкой — 409 с
+    # текстом на его языке, пока не придёт discard_guest.
+    await anon_walker.call(
+        "POST", "/auth/guest", json={"install_id": "nope", "lang": lang}, headers=headers, expect=400,
+    )
+    guest_body = {"install_id": "8e7b0c9e-5b2a-4f4e-9d0a-2f1b8b2c3d4e", "lang": lang}
+    guest = await anon_walker.call("POST", "/auth/guest", json=guest_body, expect=200)
+    assert guest.json()["is_guest"] is True
+    guest_auth = {**headers, "Authorization": f"Bearer {guest.json()['token']}"}
+    assert (await anon_walker.call("GET", "/me", headers=guest_auth, expect=200)).json()["is_guest"] is True
+    await anon_walker.call(
+        "POST", "/auth/apple", json={"identity_token": "new", "lang": lang}, headers=guest_auth, expect=200,
+    )
+    busy_guest = await anon_walker.call("POST", "/auth/guest", json=guest_body, expect=200)
+    await fresh_db.create_workout(busy_guest.json()["user_id"])
+    busy_auth = {**headers, "Authorization": f"Bearer {busy_guest.json()['token']}"}
+    await anon_walker.call(
+        "POST", "/auth/apple", json={"identity_token": "new", "lang": lang}, headers=busy_auth, expect=409,
+    )
+    await anon_walker.call(
+        "POST", "/auth/apple", json={"identity_token": "new", "lang": lang, "discard_guest": True},
+        headers=busy_auth, expect=200,
+    )
     # Демо-вход App Review: без обоих секретов ручка — 404, поэтому включаем
     # и проверяем язык ошибки неверного пароля (успешный вход — тот же
     # _issue_token_response, что у /auth/apple выше).
@@ -857,6 +883,13 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert week["comic"] and len(week["comic"]["panels"]) == 4
     await w.call("GET", "/weekly-summary?week=2999-01-05", expect=400)
     await w.call("GET", "/weekly-summary?week=soon", expect=400)
+    # «Оценка» 0–10: подписи частей, разбор и реплика тренера — на языке
+    # атлета (у сценария тренировки этой недели и зимы — пауза и калибровка);
+    # ряд на 90 дней и неверный период — ошибка на его языке.
+    score = (await w.call("GET", "/progress/score", expect=200)).json()
+    assert len(score["parts"]) == 4 and score["coach_line"]
+    await w.call("GET", "/progress/score?days=90", expect=200)
+    await w.call("GET", "/progress/score?days=7", expect=400)
     # «Итоги года»: числа, «личность года» и подписи слайдов — на языке
     # атлета; картинка слайда — PNG (текст в ней держит test_year_review).
     year = (await w.call("GET", "/year-review", expect=200)).json()

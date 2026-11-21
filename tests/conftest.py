@@ -27,6 +27,18 @@ def _no_finish_slides(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_guest_limits():
+    """Потолки гостевых аккаунтов (POST /v1/auth/guest) — счётчики в памяти
+    процесса, а все тесты воркера ходят с одного адреса: без сброса шестой
+    тест с гостем получал бы 429 от чужих."""
+    import api_v1
+
+    api_v1.reset_guest_limits()
+    yield
+    api_v1.reset_guest_limits()
+
+
+@pytest.fixture(autouse=True)
 def _fresh_bot_username(monkeypatch):
     """handlers.sharing кэширует username бота на весь процесс — в проде он
     один, а в тестах у каждого свой подставной бот («testbot», «TrainLogBot»…).
@@ -35,6 +47,19 @@ def _fresh_bot_username(monkeypatch):
     from handlers import sharing
 
     monkeypatch.setattr(sharing, "_bot_username", None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_ai_busy():
+    """handlers.ai_trainer._busy — замок «тренер уже отвечает» на весь процесс.
+    Тест, который не дождался своего finally (фоновая задача альбома, брошенный
+    стрим), оставлял там user_id, и следующий тест того же воркера с тем же
+    пользователем падал на `_busy == set()` — красный CI на main через раз."""
+    from handlers import ai_trainer
+
+    ai_trainer._busy.clear()
+    yield
+    ai_trainer._busy.clear()
 
 
 @pytest_asyncio.fixture
