@@ -207,6 +207,36 @@ def test_alternatives_title_names_the_equipment_on_offer():
         assert "гантели" in ru.split("<title>", 1)[1].split("</title>", 1)[0]
 
 
+def test_russian_alternatives_pages_speak_the_search_query():
+    """По-русски ищут «чем заменить румынскую тягу» — в винительном и с
+    вопроса. Заголовок, H1 и вопросы — в той же форме; у каждой страницы
+    замен есть сверенная форма, без запасного «упражнение «…»»."""
+    acc = seo_swaps._ru_accusative()
+    pages = _pages("exercise_alt")
+    assert {seo_swaps.identity_of(p.arg) for p in pages} <= set(acc)
+    page = next(p for p in pages if seo_swaps.identity_of(p.arg) == "Румынская тяга")
+    ru = _html(page, "ru")
+    title = ru.split("<title>", 1)[1].split("</title>", 1)[0]
+    assert title.startswith("Чем заменить румынскую тягу:"), title
+    assert "<h1>Чем заменить румынскую тягу</h1>" in ru
+    assert "Чем заменить румынскую тягу дома, без снарядов?" in ru or "Чем заменить румынскую тягу с гантелями?" in ru
+    # Другие языки — имя как было.
+    assert seo_swaps.query_name("Румынская тяга", "en") == seed_data.localized_exercise_name("Румынская тяга", "en")
+    # Живые существа в названии — одушевлённый винительный.
+    assert acc["Мёртвый жук"] == "мёртвого жука"
+
+
+def test_machine_alternatives_answer_without_a_machine():
+    """«Чем заменить жим ногами, если нет тренажёра» — вопрос есть у
+    тренажёрных упражнений, ответ — замены без тренажёра."""
+    page = next(p for p in _pages("exercise_alt") if seo_catalog.equipment_of(seo_swaps.identity_of(p.arg)) == "machine"
+                and any(seo_catalog.equipment_of(a) != "machine" for a in seo_catalog.swaps(seo_swaps.identity_of(p.arg))))
+    ru = _html(page, "ru")
+    assert "если нет тренажёра?" in ru
+    barbell = next(p for p in _pages("exercise_alt") if seo_catalog.equipment_of(seo_swaps.identity_of(p.arg)) == "barbell")
+    assert "если нет тренажёра?" not in _html(barbell, "ru")
+
+
 def test_muscle_equipment_pages_have_enough_exercises_of_that_equipment():
     for page in _pages("muscle_equip"):
         names = seo_plans.equip_exercises(page.arg, page.arg2)

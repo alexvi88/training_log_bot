@@ -13,11 +13,36 @@
 
 from __future__ import annotations
 
+import functools
+import json
+import os
+
 import seed_data
 import seo_catalog
 import seo_pages as sp
 
 Page = sp.Page
+
+
+@functools.cache
+def _ru_accusative() -> dict[str, str]:
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales", "grammar", "ru_accusative.json")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def query_name(identity: str, lang: str) -> str:
+    """Имя упражнения в форме поискового запроса «чем заменить …».
+
+    По-русски ищут в винительном: «чем заменить румынскую тягу», а не
+    «Румынская тяга: чем заменить», — и Яндекс точное совпадение ставит выше.
+    Формы сверены руками (`locales/grammar/ru_accusative.json`, ключ —
+    идентичность). Нет формы — «упражнение «Имя»», грамматично при любом
+    роде. Другие языки — имя как есть."""
+    name = seed_data.localized_exercise_name(identity, lang)
+    if lang != "ru":
+        return name
+    return _ru_accusative().get(identity) or sp._t(lang)("seo.swap.name_quoted", name=name)
 
 
 def identity_of(url: str) -> str:
@@ -33,7 +58,7 @@ def pages() -> list[Page]:
 
 
 def page_h1(page: Page, lang: str) -> str:
-    return sp._t(lang)("seo.swap.h1", name=seed_data.localized_exercise_name(identity_of(page.arg), lang))
+    return sp._t(lang)("seo.swap.h1", name=query_name(identity_of(page.arg), lang))
 
 
 def _muscle_label(identity: str, lang: str) -> str:
@@ -149,7 +174,7 @@ def _by_equipment(alts: list[str]) -> list[tuple[str, list[tuple[int, str]]]]:
     return [(eq, groups[eq]) for eq in _EQUIP_ORDER if eq in groups]
 
 
-def _equipment_block(name: str, alts: list[str], lang: str) -> str:
+def _equipment_block(alts: list[str], lang: str) -> str:
     """Замены по снаряду, ссылками на пункты списка ниже. Запросы вида
     «machine chest press alternative», «… alternative machine», «чем
     заменить тягу верхнего блока дома» — человек ищет замену под снаряд,
@@ -163,7 +188,7 @@ def _equipment_block(name: str, alts: list[str], lang: str) -> str:
     )
     if not rows:
         return ""
-    return (f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.eq.h', name=name))}</h2>"
+    return (f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.eq.h', equip=_equipment_phrase(alts, lang)))}</h2>"
             f"<ul class=reasons>{rows}</ul></section>")
 
 
@@ -184,14 +209,21 @@ def _answer(name: str, alts: list[str], lang: str) -> str:
     return sp._t(lang)("seo.swap.answer", name=name, list=_names(alts[:3], lang))
 
 
-def _faq(name: str, alts: list[str], lang: str) -> list[tuple[str, str]]:
+def _faq(source: str, name: str, alts: list[str], lang: str) -> list[tuple[str, str]]:
     """Вопросы с ответами из тех же данных: «чем заменить», и по снаряду —
-    так спрашивают в поиске («… alternative machine», «… дома»)."""
+    так спрашивают в поиске («… alternative machine», «… дома», «… если нет
+    тренажёра»). `name` — в форме запроса (`query_name`)."""
     t = sp._t(lang)
     items = [(t("seo.swap.faq.main.q", name=name), sp._e(t("seo.swap.faq.main.a", list=_names(alts, lang))))]
     for eq, group in _by_equipment(alts):
         items.append((t(f"seo.swap.faq.{eq}.q", name=name),
                       sp._e(t("seo.swap.faq.eq.a", list=_names([a for _n, a in group], lang)))))
+    if seo_catalog.equipment_of(source) == "machine":
+        free = [a for a in alts if seo_catalog.equipment_of(a) in seo_catalog.EQUIPMENT
+                and seo_catalog.equipment_of(a) != "machine"]
+        if free:
+            items.append((t("seo.swap.faq.no_machine.q", name=name),
+                          sp._e(t("seo.swap.faq.eq.a", list=_names(free, lang)))))
     return items
 
 
@@ -227,15 +259,16 @@ def _render(lang: str, page: Page, request) -> str:
         if (m, eq) in seo_plans.equip_pages():
             related.append((sp.url_for(Page("muscle_equip", m, eq), lang), t(f"seo.me.{eq}.h1", muscle=seo_plans.muscle_word(m, lang))))
     phrase = _equipment_phrase(alts, lang)
-    faq = _faq(name, alts, lang)
-    title = (t("seo.swap.title_equip", name=name, n=len(alts), equip=phrase) if phrase
-             else t("seo.swap.title", name=name, n=len(alts)))
-    description = t("seo.swap.description", name=name, n=len(alts), list=", ".join(names[:3]))
+    asked = query_name(source, lang)
+    faq = _faq(source, asked, alts, lang)
+    title = (t("seo.swap.title_equip", name=asked, n=len(alts), equip=phrase) if phrase
+             else t("seo.swap.title", name=asked, n=len(alts)))
+    description = t("seo.swap.description", name=asked, n=len(alts), list=", ".join(names[:3]))
     body = (
         f"<span class=eyebrow>{sp._e(sp._group_for(source, lang))}</span>"
         f"<h1>{sp._e(page_h1(page, lang))}</h1>"
         f"<p class=lead><b>{sp._e(_answer(name, alts, lang))}</b> {sp._e(t('seo.swap.lead', name=_lc(name, lang), n=len(alts)))}</p>"
-        + _equipment_block(name, alts, lang)
+        + _equipment_block(alts, lang)
         + f"<section class='prose reveal sub'><h2>{sp._e(t('seo.swap.why.h'))}</h2>{_reasons(source, alts, lang)}</section>"
         + f"<ol class=swaps>{''.join(_alt_item(source, a, i + 1, lang) for i, a in enumerate(alts))}</ol>"
         + f"<p class=muted>{sp._e(t('seo.swap.data_note'))}</p>"
@@ -258,8 +291,7 @@ def aside_link(url: str, lang: str) -> list[tuple[str, str]]:
     """Ссылка со страницы техники — если у неё есть страница замен."""
     if not has_page(url):
         return []
-    name = seed_data.localized_exercise_name(identity_of(url), lang)
-    return [(sp.url_for(Page("exercise_alt", url), lang), sp._t(lang)("seo.swap.h1", name=name))]
+    return [(sp.url_for(Page("exercise_alt", url), lang), sp._t(lang)("seo.swap.h1", name=query_name(identity_of(url), lang)))]
 
 
 def teaser(url: str, lang: str) -> str:

@@ -565,6 +565,7 @@ def _card(identity: str, lang: str) -> str:
 
 def _render_muscle_equip(lang: str, page: Page, request) -> str:
     import seo_library
+    import seo_swaps
 
     t = sp._t(lang)
     muscle, equip = page.arg, page.arg2
@@ -579,7 +580,7 @@ def _render_muscle_equip(lang: str, page: Page, request) -> str:
     links = [(sp.url_for(Page("muscle_equip", muscle, e), lang), t(f"seo.me.{e}.h1", muscle=word)) for e in others]
     links.append((sp.url_for(Page("muscle", muscle), lang), t("seo.muscle.h1", name=seo_library.muscle_name(muscle, lang))))
     swap_links = [(sp.url_for(Page("exercise_alt", seo_catalog.page_url(n)), lang),
-                   t("seo.swap.h1", name=seed_data.localized_exercise_name(n, lang)))
+                   t("seo.swap.h1", name=seo_swaps.query_name(n, lang)))
                   for n in names if seo_catalog.page_url(n) and Page("exercise_alt", seo_catalog.page_url(n)) in _swap_pages()][:4]
     title = t(f"seo.me.{equip}.title", muscle=word, n=len(names))
     description = t(f"seo.me.{equip}.description", muscle=word, n=len(names), first=", ".join(shown[:3]))
