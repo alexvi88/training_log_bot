@@ -1,38 +1,55 @@
-"""«Оценка» прогресса 0–10 — скользящая, на любой день D (без календарных недель).
+"""«Оценка» прогресса 0–10 на любой день D: календарные недели и скользящие окна силы.
 
-Формула утверждена владельцем; все окна отсчитываются назад от D — местного дня
-атлета. Данные — законченные тренировки (перенесённая история — тоже данные) и
-подходы с повторами; e1RM — по формуле атлета (db._e1rm_sql).
+Формула утверждена владельцем; D — местный день атлета. Данные — законченные
+тренировки (перенесённая история — тоже данные) и подходы с повторами; e1RM —
+по формуле атлета (db._e1rm_sql).
 
 **Точка отсчёта.** `start_day` — первая тренировка после последнего перерыва
 (BREAK_DAYS дней подряд без тренировок) или первая вообще. Всё, что раньше
-неё, не считается нигде: ни блоки регулярности и объёма, ни группы баланса, ни
+неё, не считается нигде: ни недели регулярности и объёма, ни группы объёма, ни
 база прогрессии (вернуться слабее — не «падать»). Новичок и вернувшийся
 считаются одинаково, разная только калибровка.
 
-1. **Прогрессия (4).** Для каждого упражнения с весом (не «своим весом без
-   отягощения», не на время, не без нагрузки — seed_data.progression_kind и
-   is_reps_only): текущее = лучший e1RM за [D-13, D] (нужна хоть одна
+**Недели** регулярности и объёма — календарные, понедельник–воскресенье, по
+местному дню. Берутся четыре последние законченные недели и текущая,
+незаконченная: текущая идёт в счёт, только если не опускает итог — считаются
+оба набора, (текущая + три законченные) и (четыре законченные), и остаётся
+лучший по регулярности и объёму вместе (ничья — с текущей). Так у атлета с
+ровными двумя тренировками в неделю оценка не скачет изо дня в день: скользящие
+7-дневные блоки то ловили, то теряли тренировку на краю.
+
+1. **Прогрессия (5).** Для каждого упражнения с весом (seed_data.progression_kind
+   и is_reps_only): текущее = лучший e1RM за [D-13, D] (нужна хоть одна
    тренировка там), база = лучший за [D-41, D-28] (не раньше start_day).
    Упражнения там не было — лучший из первых 14 дней его истории от
    start_day, но только если первый такой подход был не позже D-28; иначе
-   упражнение не оценивается. Изменение в процентах → баллы упражнения
-   непрерывно: |Δ| ≤ 1% — шум, 0.5; иначе 0.5 + Δ/10 в пределах [0, 1]
-   (+5% → 1, −5% → 0). Базовое движение (seed_data.movement_pattern у
-   идентичности каталога) весит 2, изоляция и своё упражнение — 1. Баллы =
-   4 × взвешенное среднее. Лёгкая техническая тренировка лучшего за 14 дней не
-   опускает.
-2. **Регулярность (3).** Четыре блока по 7 дней назад от D; доля блока =
-   min(тренировок, 2)/2, баллы = 3 × среднее по блокам с start_day и позже.
-3. **Объём (2).** Группы, тренированные за [D-27, D] (встроенные, без
-   «Другое»); доля блока = среднее по ним min(подходов в блоке, 6)/6 — больше
-   подходов никогда не снижает. Баллы = 2 × среднее долей блоков (с start_day).
-   Блок-разгрузка (подходов меньше 60% медианы остальных блоков и верхний e1RM
-   ниже медианы их верхних) из среднего выпадает; выпали бы все — берём все.
-4. **Баланс (1).** Группы за [D-41, D]; «заброшенная» — ни подхода ни в
-   [D-6, D], ни в [D-13, D-7]. Баллы = 1 − заброшенных/групп (1.0 без групп).
+   упражнение не оценивается. Изменение Δ% → баллы упражнения по
+   кусочно-линейной шкале без полосы шума: Δ ≤ −3% → 0; до 0 — 0.3 + 0.1·Δ;
+   выше 0 — 0.3 + 0.14·Δ; +5% и больше → 1 (lift_points). Упражнения своим
+   весом и без нагрузки («bodyweight», «no_load», свои «только повторы»)
+   меряются той же шкалой по лучшим повторам в одном подходе; на время — не
+   оцениваются. Полоса «стоит» (±NOISE_PCT, у повторов ±REPS_NOISE_PCT) — только
+   для слов тренера. Базовое движение (seed_data.movement_pattern
+   у идентичности каталога) весит 2, изоляция и своё упражнение — 1. Баллы =
+   5 × взвешенное среднее. Окна скользящие: это максимумы, а не счёт, и от
+   края окна они не дёргаются. Лёгкая техническая тренировка лучшего за 14
+   дней не опускает.
+2. **Регулярность (3).** Доля недели = min(тренировок, 2)/2, баллы = 3 ×
+   среднее по неделям с start_day и позже.
+3. **Объём (2).** Группы, тренированные за [D-41, D] (встроенные, без
+   «Другое»); доля недели = среднее по ним min(подходов в неделе, 6)/6 —
+   больше подходов никогда не снижает, а брошенная группа идёт в счёт нулём
+   (бывший «баланс» сложен сюда: одна брошенная группа не штрафуется дважды).
+   Баллы = 2 × среднее долей недель (с start_day). Неделя-разгрузка (подходов
+   меньше 60% медианы остальных недель и верхний e1RM ниже медианы их верхних)
+   из среднего выпадает; выпали бы все — берём все. «Заброшенная» группа
+   (`neglected`: была за 6 недель, ни подхода за [D-13, D]) — только подсветка
+   и реплика тренера.
 
-Оценка = сумма имеющихся частей / сумма их максимумов × 10, до десятых.
+Оценка = сумма частей / сумма их максимумов × 10, до десятых. Прогрессии ещё
+нет — она идёт в итог баллом «без изменений» (NEUTRAL_LIFT_POINTS = 0.3 на
+упражнение, 1.5 из 5): аккуратный новичок видит 6.5, а не 10, и рост потом
+оценку поднимает, а не «роняет».
 
 Статусы дня:
 - "empty" — тренировок нет вовсе;
@@ -41,8 +58,8 @@
 - "calibrating" — с start_day прошло меньше 28 дней у новичка (14 — у
   вернувшегося): части считаются, итога нет;
 - "partial" — прогрессии ещё нет (у новичка она открывается не раньше
-  NEWCOMER_PROGRESSION_DAYS дней истории), итог — по остальным частям;
-- "ok" — все четыре части.
+  NEWCOMER_PROGRESSION_DAYS дней истории) или нет групп для объёма;
+- "ok" — все части.
 
 Модуль — чистые функции над строками `SetRow` и днями тренировок: формула
 проверяется таблицей случаев без базы, `collect` только достаёт строки. Текстов
@@ -61,23 +78,36 @@ from typing import Any, Iterable, Optional
 import formatting
 import seed_data
 
-PART_KEYS = ("progression", "regularity", "volume", "balance")
-POINTS = {"progression": 4.0, "regularity": 3.0, "volume": 2.0, "balance": 1.0}
+PART_KEYS = ("progression", "regularity", "volume")
+POINTS = {"progression": 5.0, "regularity": 3.0, "volume": 2.0}
 
 CURRENT_DAYS = 14
 BASELINE_FROM, BASELINE_TO = 41, 28  # база — дни [D-41, D-28]
 FALLBACK_MIN_AGE = 28                 # первый подход не позже D-28
 FIRST_DAYS = 14                       # «первые 14 дней истории» (так же в db)
-NOISE_PCT = 1.0
+# Шкала баллов упражнения по изменению Δ% (кусочно-линейная, без полосы шума):
+# Δ ≤ −3% → 0; −3% < Δ ≤ 0 → 0.3 + 0.1·Δ; 0 < Δ < +5% → 0.3 + 0.14·Δ; Δ ≥ +5% → 1.
+ZERO_PCT = -3.0                       # падение на 3% и больше — ноль
+FLAT_POINTS = 0.3                     # без изменений
+DOWN_SLOPE = 0.1                      # балла за процент падения
+UP_SLOPE = 0.14                       # балла за процент роста
 FULL_PCT = 5.0                        # +5% за окно — полный балл упражнения
+# Полоса «стоит на месте» — только для слов тренера (стоит / растёт / проседает),
+# в баллы не входит. Повторы грубые: ±1 повтор из 20 — ещё «стоит».
+NOISE_PCT = 1.0
+REPS_NOISE_PCT = 5.0
 COMPOUND_WEIGHT = 2.0
 ISOLATION_WEIGHT = 1.0
+# Прогрессии ещё нет — в итог она идёт баллом «без изменений» на упражнение
+# (0.3 × 5 = 1.5 из 5).
+NEUTRAL_LIFT_POINTS = FLAT_POINTS
 
-BLOCKS = 4
+BLOCKS = 4                            # недель в счёте
 TARGET_WORKOUTS = 2                   # две тренировки в неделю — максимум
 VOLUME_TARGET_SETS = 6
 DELOAD_SETS_SHARE = 0.6
-BALANCE_DAYS = 42
+GROUP_DAYS = 42                       # группы объёма — тренированные за 6 недель
+NEGLECT_DAYS = 14                     # ни подхода столько дней — группа заброшена
 
 BREAK_DAYS = 21                       # столько дней подряд без тренировок — перерыв
 PAUSE_DAYS = 14                       # последняя тренировка так давно — пауза
@@ -89,14 +119,18 @@ NEWCOMER_PROGRESSION_DAYS = 42
 # прогрессии, D-41) — с запасом.
 LOOKBACK_DAYS = 75
 HISTORY_DAYS = 28
+HISTORY_STEP = 7
 PERIODS = (28, 90, 365)
 # Недостача меньше этого — подсказывать нечего.
 LEVER_MIN_POINTS = 0.2
 
-_SKIP_KINDS = frozenset({"bodyweight", "no_load", "timed"})
+# Чем меряется прогрессия упражнения: e1RM или лучшие повторы в подходе;
+# None — не оценивается (на время).
+METRIC_E1RM = "e1rm"
+METRIC_REPS = "reps"
 
-# (день первого подхода, лучший e1RM первых 14 дней, упражнение с весом)
-FirstWeeks = dict[int, tuple[dt.date, float, bool]]
+# (день первого подхода, лучшее значение меры первых 14 дней, мера или None)
+FirstWeeks = dict[int, tuple[dt.date, float, Optional[str]]]
 
 
 @dataclass(frozen=True)
@@ -109,31 +143,52 @@ class SetRow:
     #: Встроенная группа (русская идентичность), None — своя или «Другое».
     group: Optional[str]
     e1rm: float
-    #: Упражнение с весом — участвует в прогрессии.
-    weighted: bool = True
+    #: Мера прогрессии упражнения (METRIC_E1RM / METRIC_REPS), None — не оценивается.
+    metric: Optional[str] = METRIC_E1RM
+    reps: int = 0
+
+    @property
+    def weighted(self) -> bool:
+        return self.metric == METRIC_E1RM
+
+    @property
+    def value(self) -> float:
+        return self.e1rm if self.metric == METRIC_E1RM else float(self.reps)
 
 
 @dataclass(frozen=True)
 class LiftScore:
     exercise_id: int
     name: str
+    #: База и текущее — в мере упражнения (e1RM или повторы).
     baseline: Optional[float]
     current: float
     change_pct: Optional[float]
     points: Optional[float]
     weight: float
+    metric: str = METRIC_E1RM
 
     @property
     def rated(self) -> bool:
         return self.points is not None
 
+    @property
+    def by_reps(self) -> bool:
+        return self.metric == METRIC_REPS
+
+    @property
+    def noise_pct(self) -> float:
+        return REPS_NOISE_PCT if self.by_reps else NOISE_PCT
+
 
 @dataclass(frozen=True)
 class GroupScore:
     group: str
+    #: Подходов на текущей календарной неделе (до D).
     sets_7d: int
+    #: Подходов за недели в счёте.
     sets_28d: int
-    #: Доля объёма 0..1; None — группа не тренировалась за 28 дней (только баланс).
+    #: Доля объёма 0..1; None — недель в счёте нет.
     points: Optional[float]
     neglected: bool
 
@@ -143,10 +198,12 @@ class WeekBlock:
     start: dt.date
     end: dt.date
     workouts: int
-    #: Блок с start_day и позже — входит в регулярность и объём.
+    #: Неделя с start_day и позже — входит в регулярность и объём.
     counted: bool
     #: Разгрузка — выпала из объёма.
     deload: bool = False
+    #: Текущая (незаконченная) календарная неделя.
+    current: bool = False
 
 
 @dataclass(frozen=True)
@@ -188,10 +245,13 @@ class DayScore:
     parts: list[Part]
     lifts: list[LiftScore] = field(default_factory=list)
     groups: list[GroupScore] = field(default_factory=list)
+    #: Недели в счёте, свежая первой (текущая — только если вошла в счёт).
     weeks: list[WeekBlock] = field(default_factory=list)
     phase: Optional[Phase] = None
     progression_from: Optional[dt.date] = None
     lever: Optional[Lever] = None
+    #: Текущая календарная неделя — для реплики «на этой неделе», в счёте она или нет.
+    this_week: Optional[WeekBlock] = None
     # Заполняет report() для статуса "paused".
     last_score: Optional[float] = None
     last_score_date: Optional[dt.date] = None
@@ -201,7 +261,8 @@ class DayScore:
 
     @property
     def deload(self) -> bool:
-        return bool(self.weeks) and self.weeks[0].deload
+        """Текущая неделя в счёте и она — разгрузка."""
+        return bool(self.weeks) and self.weeks[0].current and self.weeks[0].deload
 
     @property
     def calibration_days(self) -> int:
@@ -239,10 +300,14 @@ def phase_at(workout_days: list[dt.date], d: dt.date) -> Optional[Phase]:
 
 
 def lift_points(change_pct: float) -> float:
-    """Баллы упражнения 0..1 за изменение e1RM в процентах."""
-    if abs(change_pct) <= NOISE_PCT:
-        return 0.5
-    return min(1.0, max(0.0, 0.5 + change_pct / (2 * FULL_PCT)))
+    """Баллы упражнения 0..1 за изменение меры (e1RM или повторов) в процентах."""
+    if change_pct <= ZERO_PCT:
+        return 0.0
+    if change_pct <= 0:
+        return FLAT_POINTS + DOWN_SLOPE * change_pct
+    if change_pct >= FULL_PCT:
+        return 1.0
+    return FLAT_POINTS + UP_SLOPE * change_pct
 
 
 def _catalog_identities() -> frozenset[str]:
@@ -256,28 +321,42 @@ def lift_weight(identity: Optional[str], group: Optional[str]) -> float:
     return ISOLATION_WEIGHT
 
 
+def metric_of(identity: Optional[str], bodyweight_load: Optional[str]) -> Optional[str]:
+    """Чем меряется прогрессия упражнения: e1RM у упражнений с весом, лучшие
+    повторы — у своего веса и без нагрузки, None — на время."""
+    kind = seed_data.progression_kind(identity)
+    if kind == "timed":
+        return None
+    # «Подтягивания с весом», «Брусья с весом»: повторы с разным довеском не
+    # сравнить, а нагрузка подхода (вес тела + довесок, load_weight) есть —
+    # меряем e1RM, как штангу.
+    if seed_data.is_weighted_bodyweight(identity):
+        return METRIC_E1RM
+    if kind in ("bodyweight", "no_load") or seed_data.is_reps_only(identity, bodyweight_load):
+        return METRIC_REPS
+    return METRIC_E1RM
+
+
 def is_weighted(identity: Optional[str], bodyweight_load: Optional[str]) -> bool:
-    """Участвует ли упражнение в прогрессии: вес есть и e1RM что-то значит."""
-    if seed_data.progression_kind(identity) in _SKIP_KINDS:
-        return False
-    return not seed_data.is_reps_only(identity, bodyweight_load)
+    """Меряется ли упражнение по e1RM (вес есть и e1RM что-то значит)."""
+    return metric_of(identity, bodyweight_load) == METRIC_E1RM
 
 
 def first_weeks_from_rows(rows: Iterable[SetRow], start: dt.date) -> FirstWeeks:
     """Первые 14 дней каждого упражнения начиная со `start` — по строкам
     (после возвращения: база прогрессии — только то, что после перерыва)."""
     first: dict[int, dt.date] = {}
-    weighted: dict[int, bool] = {}
+    metric: dict[int, Optional[str]] = {}
     rows = [r for r in rows if r.day >= start]
     for r in rows:
         if r.exercise_id not in first or r.day < first[r.exercise_id]:
             first[r.exercise_id] = r.day
-        weighted[r.exercise_id] = r.weighted
+        metric[r.exercise_id] = r.metric
     best: dict[int, float] = {}
     for r in rows:
         if r.day <= first[r.exercise_id] + dt.timedelta(days=FIRST_DAYS - 1):
-            best[r.exercise_id] = max(best.get(r.exercise_id, 0.0), r.e1rm)
-    return {ex: (day, best.get(ex, 0.0), weighted[ex]) for ex, day in first.items()}
+            best[r.exercise_id] = max(best.get(r.exercise_id, 0.0), r.value)
+    return {ex: (day, best.get(ex, 0.0), metric[ex]) for ex, day in first.items()}
 
 
 def _in(day: dt.date, lo: dt.date, hi: dt.date) -> bool:
@@ -299,13 +378,13 @@ def progression(
     base: dict[int, float] = {}
     meta: dict[int, SetRow] = {}
     for r in rows:
-        if not r.weighted or r.e1rm <= 0 or r.day > d:
+        if r.metric is None or r.value <= 0 or r.day > d:
             continue
         if r.day >= cur_lo:
-            current[r.exercise_id] = max(current.get(r.exercise_id, 0.0), r.e1rm)
+            current[r.exercise_id] = max(current.get(r.exercise_id, 0.0), r.value)
             meta[r.exercise_id] = r
         elif _in(r.day, base_lo, base_hi):
-            base[r.exercise_id] = max(base.get(r.exercise_id, 0.0), r.e1rm)
+            base[r.exercise_id] = max(base.get(r.exercise_id, 0.0), r.value)
     lifts = []
     for ex, cur in current.items():
         m = meta[ex]
@@ -317,9 +396,9 @@ def progression(
         weight = lift_weight(m.identity, m.group)
         if baseline:
             change = (cur / baseline - 1) * 100
-            lifts.append(LiftScore(ex, m.name, baseline, cur, change, lift_points(change), weight))
+            lifts.append(LiftScore(ex, m.name, baseline, cur, change, lift_points(change), weight, m.metric))
         else:
-            lifts.append(LiftScore(ex, m.name, None, cur, None, None, weight))
+            lifts.append(LiftScore(ex, m.name, None, cur, None, None, weight, m.metric))
     rated = sorted((lift for lift in lifts if lift.rated), key=lambda lift: (lift.points, lift.name))
     unrated = sorted((lift for lift in lifts if not lift.rated), key=lambda lift: lift.name)
     if not rated:
@@ -328,19 +407,39 @@ def progression(
     return POINTS["progression"] * mean, rated + unrated
 
 
+def week_monday(day: dt.date) -> dt.date:
+    return day - dt.timedelta(days=day.weekday())
+
+
 def blocks(d: dt.date) -> list[tuple[dt.date, dt.date]]:
-    """Четыре 7-дневных блока назад от D, свежий первым."""
-    return [(d - dt.timedelta(days=7 * k + 6), d - dt.timedelta(days=7 * k)) for k in range(BLOCKS)]
+    """Текущая календарная неделя D и четыре законченные перед ней
+    (понедельник–воскресенье), свежая первой."""
+    mon = week_monday(d)
+    return [
+        (mon - dt.timedelta(days=7 * k), mon - dt.timedelta(days=7 * k - 6)) for k in range(BLOCKS + 1)
+    ]
 
 
 def week_blocks(workout_days: list[dt.date], start: Optional[dt.date], d: dt.date) -> list[WeekBlock]:
+    """Пять недель (текущая первой); тренировки текущей — только до D."""
     return [
         WeekBlock(
-            lo, hi, bisect.bisect_right(workout_days, hi) - bisect.bisect_left(workout_days, lo),
+            lo, hi,
+            bisect.bisect_right(workout_days, min(hi, d)) - bisect.bisect_left(workout_days, lo),
             counted=start is not None and hi >= start,
+            current=k == 0,
         )
-        for lo, hi in blocks(d)
+        for k, (lo, hi) in enumerate(blocks(d))
     ]
+
+
+def week_options(weeks: list[WeekBlock]) -> list[list[WeekBlock]]:
+    """Наборы недель на выбор: (текущая + три законченные) и, если в них есть
+    неделя в счёте, (четыре законченные)."""
+    options = [weeks[:BLOCKS]]
+    if any(w.counted for w in weeks[1:]):
+        options.append(weeks[1:BLOCKS + 1])
+    return options
 
 
 def regularity(weeks: list[WeekBlock]) -> float:
@@ -354,8 +453,8 @@ def _counted_group(group: Optional[str]) -> bool:
 
 
 def deload_blocks(totals: list[int], tops: list[float]) -> list[bool]:
-    """Какие блоки — разгрузка: подходов меньше 60% медианы остальных и верхний
-    e1RM ниже медианы их верхних. Пустой блок — пропуск, а не разгрузка."""
+    """Какие недели — разгрузка: подходов меньше 60% медианы остальных и верхний
+    e1RM ниже медианы их верхних. Пустая неделя — пропуск, а не разгрузка."""
     out = []
     for i, (total, top) in enumerate(zip(totals, tops, strict=True)):
         others_t = totals[:i] + totals[i + 1:]
@@ -368,14 +467,20 @@ def deload_blocks(totals: list[int], tops: list[float]) -> list[bool]:
     return out
 
 
-def volume_and_balance(
+def volume(
     rows: list[SetRow], weeks: list[WeekBlock], d: dt.date
-) -> tuple[Optional[float], float, list[WeekBlock], list[GroupScore]]:
-    """Объём (по блокам с отсчёта, без разгрузок), баланс, блоки с пометкой
-    разгрузки и разбор по группам. `rows` — уже без подходов до start_day."""
-    rows = [r for r in rows if _counted_group(r.group)]
-    groups28 = {r.group for r in rows if _in(r.day, d - dt.timedelta(days=27), d)}
-    groups42 = {r.group for r in rows if _in(r.day, d - dt.timedelta(days=BALANCE_DAYS - 1), d)}
+) -> tuple[Optional[float], list[WeekBlock], list[GroupScore]]:
+    """Объём (по неделям с отсчёта, без разгрузок), недели с пометкой разгрузки
+    и разбор по группам. Группы — тренированные за GROUP_DAYS дней: брошенная
+    идёт в счёт нулём. `rows` — уже без подходов до start_day и после D."""
+    rows = [r for r in rows if _counted_group(r.group) and r.day <= d]
+    groups = {r.group for r in rows if _in(r.day, d - dt.timedelta(days=GROUP_DAYS - 1), d)}
+    recent = {r.group for r in rows if _in(r.day, d - dt.timedelta(days=NEGLECT_DAYS - 1), d)}
+    mon = week_monday(d)
+    this_week: dict[str, int] = {}
+    for r in rows:
+        if _in(r.day, mon, d):
+            this_week[r.group] = this_week.get(r.group, 0) + 1
     per_block: list[dict[str, int]] = []
     totals: list[int] = []
     tops: list[float] = []
@@ -391,35 +496,32 @@ def volume_and_balance(
     flags = deload_blocks([totals[i] for i in idx], [tops[i] for i in idx])
     deload = {i for i, flag in zip(idx, flags, strict=True) if flag}
     weeks = [
-        WeekBlock(w.start, w.end, w.workouts, w.counted, i in deload) for i, w in enumerate(weeks)
+        WeekBlock(w.start, w.end, w.workouts, w.counted, i in deload, w.current) for i, w in enumerate(weeks)
     ]
     used = [i for i in idx if i not in deload] or idx
     shares: dict[str, float] = {}
     if used:
-        for g in groups28:
+        for g in groups:
             shares[g] = sum(
                 min(per_block[i].get(g, 0), VOLUME_TARGET_SETS) / VOLUME_TARGET_SETS for i in used
             ) / len(used)
-    volume = POINTS["volume"] * sum(shares.values()) / len(shares) if shares else None
-    week, prev = per_block[0], per_block[1]
-    neglected = {g for g in groups42 if not week.get(g) and not prev.get(g)}
-    balance = 1.0 - len(neglected) / len(groups42) if groups42 else 1.0
+    vol = POINTS["volume"] * sum(shares.values()) / len(shares) if shares else None
     order = {name: i for i, (name, *_rest) in enumerate(seed_data.MUSCLE_GROUP_PRESETS)}
-    groups = [
-        GroupScore(g, week.get(g, 0), sum(b.get(g, 0) for b in per_block), shares.get(g), g in neglected)
-        for g in sorted(groups42, key=lambda g: (order.get(g, 99), g))
+    out = [
+        GroupScore(g, this_week.get(g, 0), sum(b.get(g, 0) for b in per_block), shares.get(g), g not in recent)
+        for g in sorted(groups, key=lambda g: (order.get(g, 99), g))
     ]
-    return volume, POINTS["balance"] * balance, weeks, groups
+    return vol, weeks, out
 
 
 def progression_from(first_weeks: FirstWeeks, phase: Phase, d: dt.date) -> Optional[dt.date]:
-    """Ближайший день, когда хоть одно упражнение с весом получит базу: его
+    """Ближайший день, когда хоть одно оцениваемое упражнение получит базу: его
     первый подход с отсчёта + 28 дней (у новичка — не раньше 42 дней истории).
     None — такого дня впереди нет."""
     floor = None if phase.returned else phase.start_day + dt.timedelta(days=NEWCOMER_PROGRESSION_DAYS)
     out = []
-    for first_day, _best, weighted in first_weeks.values():
-        if not weighted or first_day < phase.start_day:
+    for first_day, _best, metric in first_weeks.values():
+        if metric is None or first_day < phase.start_day:
             continue
         day = first_day + dt.timedelta(days=FALLBACK_MIN_AGE)
         if floor is not None:
@@ -433,6 +535,7 @@ def progression_from(first_weeks: FirstWeeks, phase: Phase, d: dt.date) -> Optio
 
 
 def _lever(s: DayScore, unit: str) -> Optional[Lever]:
+    """Рычаг дня; None — всё по плану (реплика-похвала)."""
     if s.status == "empty":
         return Lever("empty")
     if s.status == "paused":
@@ -442,7 +545,7 @@ def _lever(s: DayScore, unit: str) -> Optional[Lever]:
     if s.status == "calibrating":
         if s.phase.returned:
             return Lever("comeback", {"date": s.ready_on})
-        if s.weeks[0].workouts >= TARGET_WORKOUTS:
+        if s.this_week.workouts >= TARGET_WORKOUTS:
             return Lever("calibrating_keep", {"date": s.ready_on})
         return Lever("calibrating", {"date": s.ready_on})
     lever = _part_lever(s, unit)
@@ -462,38 +565,44 @@ def _part_lever(s: DayScore, unit: str) -> Optional[Lever]:
         return None
     if key == "progression":
         weakest = next(lift for lift in s.lifts if lift.rated)
-        step = formatting.format_weight({"kg": 2.5, "lb": 5.0}.get(unit, 2.5))
         change = weakest.change_pct or 0.0
         pct = formatting.format_weight(round(abs(change), 1))
-        if abs(change) <= NOISE_PCT:
+        if weakest.by_reps:
+            if abs(change) <= weakest.noise_pct:
+                return Lever("lift_flat_reps", {"exercise": weakest.name})
+            if change > 0:
+                return Lever("lift_up_reps", {"exercise": weakest.name, "pct": pct})
+            return Lever("lift_down_reps", {"exercise": weakest.name, "pct": pct})
+        step = formatting.format_weight({"kg": 2.5, "lb": 5.0}.get(unit, 2.5))
+        if abs(change) <= weakest.noise_pct:
             return Lever("lift_flat", {"exercise": weakest.name, "step": step})
         if change > 0:
             return Lever("lift_up", {"exercise": weakest.name, "pct": pct, "step": step})
         return Lever("lift_down", {"exercise": weakest.name, "pct": pct})
     if key == "regularity":
-        done = s.weeks[0].workouts
+        done = s.this_week.workouts
         if done == 0:
             return Lever("regularity_none")
         if done < TARGET_WORKOUTS:
             return Lever("regularity_one")
         return Lever("regularity_keep")
-    if key == "volume":
-        short = [g for g in s.groups if g.points is not None and g.sets_7d < VOLUME_TARGET_SETS]
-        if not short:
-            return Lever("volume_keep")
-        g = min(short, key=lambda g: g.sets_7d)
-        need = VOLUME_TARGET_SETS - g.sets_7d
-        if g.sets_7d == 0:
-            return Lever("volume_zero", {"group": g.group, "need": need})
-        return Lever("volume_more", {"group": g.group, "sets": g.sets_7d, "need": need})
-    neglected = [g for g in s.groups if g.neglected]
-    return Lever("balance", {"group": neglected[0].group}) if neglected else None
+    short = [g for g in s.groups if g.points is not None and g.sets_7d < VOLUME_TARGET_SETS]
+    if not short:
+        return Lever("volume_keep")
+    g = min(short, key=lambda g: (g.sets_7d, not g.neglected))
+    if g.neglected:
+        return Lever("balance", {"group": g.group})
+    need = VOLUME_TARGET_SETS - g.sets_7d
+    if g.sets_7d == 0:
+        return Lever("volume_zero", {"group": g.group, "need": need})
+    return Lever("volume_more", {"group": g.group, "sets": g.sets_7d, "need": need})
 
 
 def _blank(d: dt.date, status: str, workout_days: list[dt.date], phase: Optional[Phase]) -> DayScore:
+    weeks = week_blocks(workout_days, None, d)
     return DayScore(
         d, status, None, [Part(k, None) for k in PART_KEYS],
-        weeks=week_blocks(workout_days, None, d), phase=phase,
+        weeks=weeks[:BLOCKS], phase=phase, this_week=weeks[0],
     )
 
 
@@ -533,42 +642,59 @@ def _score_active(
         first_weeks = first_weeks_from_rows(rows, start)
     allowed = phase.returned or history >= NEWCOMER_PROGRESSION_DAYS
     prog, lifts = progression(window, first_weeks, d, start, allowed=allowed)
-    weeks = week_blocks(workout_days, start, d)
-    reg = regularity(weeks)
-    vol, bal, weeks, groups = volume_and_balance(window, weeks, d)
+    all_weeks = week_blocks(workout_days, start, d)
+    best: Optional[tuple[float, float, Optional[float], list[WeekBlock], list[GroupScore]]] = None
+    for option in week_options(all_weeks):
+        reg = regularity(option)
+        vol, weeks, groups = volume(window, option, d)
+        total = reg + (vol or 0.0)
+        if best is None or total > best[0] + 1e-9:
+            best = (total, reg, vol, weeks, groups)
+    _total, reg, vol, weeks, groups = best
     rated = [lift for lift in lifts if lift.rated]
     counted = [w for w in weeks if w.counted]
     parts = [
-        Part("progression", prog, {"up": sum(1 for lift in rated if lift.change_pct > NOISE_PCT),
+        Part("progression", prog, {"up": sum(1 for lift in rated if lift.change_pct > lift.noise_pct),
                                    "n": len(rated)}),
         Part("regularity", reg, {"full": sum(1 for w in counted if w.workouts >= TARGET_WORKOUTS),
+                                 "half": sum(1 for w in counted if 0 < w.workouts < TARGET_WORKOUTS),
                                  "n": len(counted)}),
         Part("volume", vol, {"full": sum(1 for g in groups if g.points == 1.0),
                              "n": sum(1 for g in groups if g.points is not None),
-                             "deload": bool(weeks[0].deload)}),
-        Part("balance", bal, {"neglected": sum(1 for g in groups if g.neglected), "groups": len(groups)}),
+                             "deload": bool(weeks[0].current and weeks[0].deload)}),
     ]
-    s = DayScore(d, "ok", None, parts, lifts, groups, weeks, phase)
+    s = DayScore(d, "ok", None, parts, lifts, groups, weeks, phase, this_week=all_weeks[0])
     if prog is None:
         s.progression_from = progression_from(first_weeks, phase, d)
     if history < s.calibration_days:
         s.status = "calibrating"
         return s
-    have = [p for p in parts if p.points is not None]
-    s.score = round(sum(p.points for p in have) / sum(p.max for p in have) * 10, 1)
-    s.status = "ok" if len(have) == len(parts) else "partial"
+    s.score = total_score(parts)
+    s.status = "ok" if all(p.points is not None for p in parts) else "partial"
     return s
+
+
+def total_score(parts: list[Part]) -> float:
+    """Сумма частей / сумма максимумов × 10. Прогрессии нет — она идёт
+    баллом «без изменений», а не выпадает из знаменателя: иначе аккуратный
+    новичок видел бы 10 и «падал», когда рост посчитан."""
+    got = sum(p.points for p in parts if p.points is not None)
+    top = sum(p.max for p in parts if p.points is not None)
+    prog = next(p for p in parts if p.key == "progression")
+    if prog.points is None:
+        got += prog.max * NEUTRAL_LIFT_POINTS
+        top += prog.max
+    return round(got / top * 10, 1)
 
 
 # --- ряд и отчёт ---------------------------------------------------------------
 
 
 def history_days(d: dt.date, period_days: int) -> list[dt.date]:
-    """Дни ряда, старые сначала: на 28 дней — каждый день, на дольше — каждый
-    седьмой назад от D (13 точек на 90 дней, 53 на 365)."""
-    step = 1 if period_days <= HISTORY_DAYS else 7
-    n = (period_days - 1) // step + 1
-    return [d - dt.timedelta(days=step * i) for i in range(n - 1, -1, -1)]
+    """Дни ряда, старые сначала: каждый седьмой назад от D на любом периоде
+    (5 точек на 28 дней, 13 на 90, 53 на 365) — дневные точки только шум."""
+    n = period_days // HISTORY_STEP + 1
+    return [d - dt.timedelta(days=HISTORY_STEP * i) for i in range(n - 1, -1, -1)]
 
 
 @dataclass
@@ -656,21 +782,20 @@ def rows_from_db(raw: Iterable[Any]) -> list[SetRow]:
             identity=r["original_name"],
             group=r["group_name"],
             e1rm=float(r["e1rm"] or 0),
-            weighted=is_weighted(r["original_name"], r["bodyweight_load"]),
+            metric=metric_of(r["original_name"], r["bodyweight_load"]),
+            reps=int(r["reps"] or 0),
         )
         for r in raw
     ]
 
 
 def first_weeks_from_db(raw: Iterable[Any]) -> FirstWeeks:
-    return {
-        r["ex"]: (
-            dt.date.fromisoformat(r["first_day"]),
-            float(r["best"] or 0),
-            is_weighted(r["original_name"], r["bodyweight_load"]),
-        )
-        for r in raw
-    }
+    out: FirstWeeks = {}
+    for r in raw:
+        metric = metric_of(r["original_name"], r["bodyweight_load"])
+        best = r["best_reps"] if metric == METRIC_REPS else r["best"]
+        out[r["ex"]] = (dt.date.fromisoformat(r["first_day"]), float(best or 0), metric)
+    return out
 
 
 async def collect(user_id: int, user: Any, d: dt.date, period_days: int = HISTORY_DAYS) -> ScoreReport:

@@ -7430,7 +7430,7 @@ def progress_score_sets_sql(tz_offset: int, formula: str = "epley") -> str:
     для чтения."""
     day = _local_day("w.started_at", tz_offset)
     return (
-        f"SELECT w.id AS workout_id, {day} AS day, s.exercise_id, "
+        f"SELECT w.id AS workout_id, {day} AS day, s.exercise_id, s.reps, "
         "       e.display_name, e.original_name, e.bodyweight_load, "
         "       CASE WHEN g.user_id IS NULL THEN g.name END AS group_name, "
         f"      {_e1rm_sql(formula)} AS e1rm "
@@ -7450,13 +7450,14 @@ def exercise_first_two_weeks_sql(tz_offset: int, formula: str = "epley") -> str:
     day = _local_day("w.started_at", tz_offset)
     return (
         "WITH x AS ("
-        f"  SELECT s.exercise_id AS ex, {day} AS d, {_e1rm_sql(formula)} AS e "
+        f"  SELECT s.exercise_id AS ex, {day} AS d, {_e1rm_sql(formula)} AS e, s.reps AS r "
         "  FROM sets s "
         "  JOIN workout_blocks b ON b.id = s.block_id "
         "  JOIN workouts w ON w.id = b.workout_id "
         "  WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
         "), f AS (SELECT ex, MIN(d) AS first_day FROM x GROUP BY ex) "
-        "SELECT f.ex, f.first_day, MAX(x.e) AS best, e.original_name, e.bodyweight_load FROM f "
+        "SELECT f.ex, f.first_day, MAX(x.e) AS best, MAX(x.r) AS best_reps, "
+        "       e.original_name, e.bodyweight_load FROM f "
         "JOIN x ON x.ex = f.ex AND x.d <= date(f.first_day, '+13 days') "
         "JOIN exercises e ON e.id = f.ex "
         "GROUP BY f.ex"
@@ -7468,7 +7469,7 @@ async def progress_score_sets(
 ) -> list[aiosqlite.Row]:
     """Подходы законченных тренировок окна [start_date, end_date] (местные дни) —
     сырьё «Оценки» (progress_score). Строка на подход с повторами: местный
-    день, упражнение (имя на показ, идентичность каталога, режим своего веса),
+    день, повторы, упражнение (имя на показ, идентичность каталога, режим своего веса),
     группа — только встроенная (`group_name` NULL у своей группы атлета) и e1RM
     по формуле атлета (_e1rm_sql, тот же расчёт, что у рекордов и прогресса).
     Перенесённые тренировки входят: это история атлета, а не опыт с нашим вводом."""
@@ -7481,7 +7482,8 @@ async def exercise_first_two_weeks_e1rm(
     user_id: int, formula: str = "epley", *, tz_offset: Optional[int] = None
 ) -> list[aiosqlite.Row]:
     """Строка на упражнение: `ex`, `first_day` (местный день первого подхода),
-    `best` (лучший e1RM первых 14 дней его истории), `original_name` и
+    `best` (лучший e1RM первых 14 дней его истории), `best_reps` (лучшие
+    повторы в подходе за те же дни — база упражнений своим весом), `original_name` и
     `bodyweight_load` — по всем законченным тренировкам. Запасная база «Оценки»
     (progress_score), когда в окне 4–6 недель назад упражнения не было."""
     sql = exercise_first_two_weeks_sql(await _tz_offset_of(user_id, tz_offset), formula)

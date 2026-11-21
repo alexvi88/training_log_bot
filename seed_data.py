@@ -245,6 +245,11 @@ def is_reps_only(original_name: str | None, bodyweight_load: str | None) -> bool
     return _fold_identity(original_name or "") not in _WEIGHTED_BW_FOLDED
 
 
+def is_weighted_bodyweight(original_name: str | None) -> bool:
+    """Вариант своего веса с довеском из каталога («Подтягивания с весом»)."""
+    return _fold_identity(original_name or "") in _WEIGHTED_BW_FOLDED
+
+
 def exercise_is_reps_only(row) -> bool:
     """`is_reps_only` над строкой exercises (sqlite3.Row или dict)."""
     if row is None:

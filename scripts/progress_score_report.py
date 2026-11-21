@@ -4,9 +4,11 @@
 демо-аккаунты — config.limit_preview_ids и входы review_demo — выкидывает),
 считает каждому оценку тем же кодом, что GET /v1/progress/score, и печатает:
 статусы на сегодня, разброс оценки (децили и гистограмма), средние баллы
-частей по всем дням окна и разброс изменения e1RM у оценённых упражнений —
-по нему крутится порог «+5% за окно — полный балл» (progress_score.FULL_PCT)
-и полоса шума (NOISE_PCT). Только числа, без имён и id.
+частей по точкам ряда окна (точка — раз в неделю) и разброс изменения меры
+(e1RM, у своего веса — повторов) у оценённых упражнений — по нему крутится
+шкала баллов (progress_score.lift_points: ноль на ZERO_PCT, полный балл на
+FULL_PCT) и полоса «стоит» в словах тренера (NOISE_PCT). Только числа, без
+имён и id.
 
 База открывается `mode=ro` — скрипт ничего не пишет:
 
@@ -112,12 +114,12 @@ def main(path: str, days: int) -> None:
     for key, values in parts.items():
         if values:
             print(f"  {key:12} среднее {statistics.mean(values):.2f} из {progress_score.POINTS[key]:.0f}"
-                  f"  (дней с частью: {len(values)})")
+                  f"  (точек с частью: {len(values)})")
     if changes:
         noise = sum(1 for c in changes if abs(c) <= progress_score.NOISE_PCT) / len(changes)
         full = sum(1 for c in changes if c >= progress_score.FULL_PCT) / len(changes)
-        print(f"изменение e1RM у оценённых упражнений ({len(changes)}): "
-              f"медиана {statistics.median(changes):+.1f}%, в шуме ±{progress_score.NOISE_PCT:g}% — {noise:.0%}, "
+        print(f"изменение меры у оценённых упражнений ({len(changes)}): "
+              f"медиана {statistics.median(changes):+.1f}%, «стоит» ±{progress_score.NOISE_PCT:g}% — {noise:.0%}, "
               f"≥{progress_score.FULL_PCT:g}% — {full:.0%}")
         deciles = _pct(changes, 10)
         if deciles:
