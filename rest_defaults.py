@@ -9,15 +9,13 @@
    (PATCH /v1/exercises/{id}, `null` — снять);
 2. общая цель атлета — `users.rest_default_seconds` (PATCH /v1/settings): она
    заменяет авто-цель у всех упражнений без своей;
-3. авто-цель по данным каталога (`auto_rest_seconds`), без всякой модели:
+3. авто-цель (`auto_rest_seconds`) — 3:00 у любого упражнения. Деление по
+   типам (база со штангой 3:00, база 2:00, изоляция 1:30, пресс 1:00)
+   владелец отменил: «странно, скорее 3-3-3-3».
 
-   - тяжёлое базовое со штангой (присед, тяги, жимы — есть паттерн движения
-     `seed_data.movement_pattern`, снаряд — штанга) — 180 с;
-   - прочее базовое — 120 с;
-   - изоляция — 90 с;
-   - пресс своим весом, удержание на время, движение без нагрузки — 60 с;
-   - своё упражнение не из каталога — 120 с: что это за движение, мы не знаем,
-     и середина вилки ошибается меньше всего.
+Приложение без своей цели и без общей цель не ставит вовсе — таймер просто
+считает вверх, как до цели; авто-число в ответе для него — подсказка, с чего
+начать в листе «Отдых».
 
 Всё ключуется русской идентичностью шаблона (`original_name`, у копии —
 `media_from`), а не показом: переименованное упражнение остаётся тем же
@@ -41,11 +39,8 @@ import seed_data
 MIN_REST_SECONDS = 15
 MAX_REST_SECONDS = 900
 
-HEAVY_BARBELL_COMPOUND = 180
-COMPOUND = 120
-ISOLATION = 90
-LIGHT = 60
-UNKNOWN = 120
+# Авто-цель отдыха — одна на все упражнения.
+AUTO_REST_SECONDS = 180
 
 # Снаряд упражнения в машинных токенах (`equipment` у распознавания по фото).
 EQUIPMENT = ("barbell", "dumbbell", "machine", "cable", "bodyweight", "kettlebell", "other")
@@ -103,23 +98,9 @@ def equipment_of(identity: str) -> Optional[str]:
     return equipment or "other"
 
 
-@lru_cache(maxsize=None)
 def auto_rest_seconds(identity: Optional[str]) -> int:
-    """Авто-цель отдыха по идентичности шаблона (см. докстринг модуля)."""
-    if not is_catalog_identity(identity):
-        return UNKNOWN
-    group = catalog_group(identity)
-    kind = seed_data.progression_kind(identity)
-    equipment = equipment_of(identity)
-    if kind in ("no_load", "timed"):
-        return LIGHT
-    if group == seed_data.ABS_GROUP_NAME and equipment == "bodyweight":
-        return LIGHT
-    if seed_data.movement_pattern(identity, group) is None:
-        return ISOLATION
-    if equipment == "barbell":
-        return HEAVY_BARBELL_COMPOUND
-    return COMPOUND
+    """Авто-цель отдыха — одна на все упражнения (см. докстринг модуля)."""
+    return AUTO_REST_SECONDS
 
 
 def _row_value(row: Any, key: str) -> Any:
