@@ -1730,9 +1730,11 @@ def client_lift_verdict(changes: list[LiftChange], has_record: bool) -> Optional
 
 # ---------- «Сила за N недель»: общий рост по всем движениям ----------
 
-#: Сколько первых и последних тренировок окна сравнивается медианой: одна
-#: удачная или разбитая тренировка не двигает итог.
-STRENGTH_EDGE_SESSIONS = 3
+#: Края окна, дни: лучший e1RM последних двух недель против лучшего первых
+#: двух. Лучший, а не последний и не медиана: лёгкая тренировка на технику
+#: (110×3 у жимущего 140) — не спад силы, и тянуть итог вниз не должна
+#: (владелец, 21.11.2026: «лучшее за последние 2 недели»).
+STRENGTH_EDGE_DAYS = 14
 #: Потолок веса одного движения: десять подходов жима из двадцати за окно не
 #: делают итог «ростом жима».
 STRENGTH_MAX_WEIGHT = 0.25
@@ -1750,27 +1752,39 @@ class StrengthIndex:
     down: int
 
 
-def lift_change_pct(session_e1rms: list[float]) -> Optional[float]:
-    """Рост одного движения за окно, проценты: медиана последних тренировок
-    против медианы первых (по STRENGTH_EDGE_SESSIONS, на короткой истории —
-    по половине, чтобы края не перекрывались). None — меньше двух тренировок
-    или нет веса в начале (вес тела без отягощения)."""
-    n = len(session_e1rms)
-    k = min(STRENGTH_EDGE_SESSIONS, n // 2)
-    if k < 1:
+def lift_change_pct(sessions: list[tuple[dt.date, float]]) -> Optional[float]:
+    """Рост одного движения за окно, проценты: лучший e1RM за последние
+    STRENGTH_EDGE_DAYS дней (от последней тренировки) против лучшего за первые
+    STRENGTH_EDGE_DAYS дней (от первой). `sessions` — (местный день, лучший
+    e1RM тренировки) по времени.
+
+    Края перекрылись бы (тренировки укладываются меньше чем в четыре недели) —
+    делим тренировки пополам: лучшая первой половины против лучшей второй.
+    None — меньше двух тренировок или нет веса в начале (вес тела без
+    отягощения)."""
+    n = len(sessions)
+    if n < 2:
         return None
-    first = statistics.median(session_e1rms[:k])
-    last = statistics.median(session_e1rms[-k:])
+    first_day, last_day = sessions[0][0], sessions[-1][0]
+    edge = dt.timedelta(days=STRENGTH_EDGE_DAYS - 1)
+    if last_day - edge > first_day + edge:
+        head = [e for day, e in sessions if day <= first_day + edge]
+        tail = [e for day, e in sessions if day >= last_day - edge]
+    else:
+        half = n // 2
+        head = [e for _day, e in sessions[:half]]
+        tail = [e for _day, e in sessions[n - half:]]
+    first, last = max(head), max(tail)
     if first <= 0:
         return None
     return (last / first - 1) * 100
 
 
-def strength_index(lifts: Iterable[tuple[list[float], int]]) -> Optional[StrengthIndex]:
+def strength_index(lifts: Iterable[tuple[list[tuple[dt.date, float]], int]]) -> Optional[StrengthIndex]:
     """Общий рост силы по ВСЕМ движениям окна, а не по выросшим.
 
-    `lifts` — (лучший e1RM каждой тренировки по порядку, рабочих подходов в
-    окне) на движение. Вес движения — его доля подходов, но не больше
+    `lifts` — ((день, лучший e1RM) каждой тренировки по порядку, рабочих
+    подходов в окне) на движение. Вес движения — его доля подходов, но не больше
     STRENGTH_MAX_WEIGHT, затем веса нормируются: что человек делает больше,
     то и весит больше, но одно движение не решает за всех. Просевшие входят
     со своим минусом — среднее по одним выросшим врало бы вверх."""
