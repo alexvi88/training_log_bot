@@ -7348,15 +7348,15 @@ async def exercise_session_e1rms(
     *,
     tz_offset: Optional[int] = None,
     exclude_workout_ids: Iterable[int] = (),
-) -> list[float]:
-    """Лучший e1RM каждой законченной тренировки с упражнением в окне (местные
-    дни, включительно), по времени — ряд для «Силы за N недель»
-    (analytics.strength_index): там сравниваются медианы первых и последних
-    тренировок окна, а не два максимума."""
+) -> list[tuple[dt.date, float]]:
+    """(местный день, лучший e1RM) каждой законченной тренировки с упражнением
+    в окне (включительно), по времени — ряд для «Силы за N недель»
+    (analytics.strength_index): там сравниваются лучшие первых и последних
+    двух недель окна."""
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     without, without_params = _without_workouts(exclude_workout_ids)
     cur = await conn().execute(
-        f"SELECT MAX({_e1rm_sql(formula)}) AS best "
+        f"SELECT MAX({_e1rm_sql(formula)}) AS best, MIN({day}) AS day "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
@@ -7365,7 +7365,7 @@ async def exercise_session_e1rms(
         "GROUP BY w.id ORDER BY MIN(w.started_at), w.id",
         (user_id, exercise_id, start_date, end_date, *without_params),
     )
-    return [float(r["best"] or 0) for r in await cur.fetchall()]
+    return [(dt.date.fromisoformat(r["day"]), float(r["best"] or 0)) for r in await cur.fetchall()]
 
 
 async def exercise_e1rm_first_and_best(
