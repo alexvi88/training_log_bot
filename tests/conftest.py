@@ -49,6 +49,19 @@ def _fresh_bot_username(monkeypatch):
     monkeypatch.setattr(sharing, "_bot_username", None)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_ai_busy():
+    """handlers.ai_trainer._busy — замок «тренер уже отвечает» на весь процесс.
+    Тест, который не дождался своего finally (фоновая задача альбома, брошенный
+    стрим), оставлял там user_id, и следующий тест того же воркера с тем же
+    пользователем падал на `_busy == set()` — красный CI на main через раз."""
+    from handlers import ai_trainer
+
+    ai_trainer._busy.clear()
+    yield
+    ai_trainer._busy.clear()
+
+
 @pytest_asyncio.fixture
 async def fresh_db():
     """A throwaway in-memory DB, fully migrated/seeded like the real one."""

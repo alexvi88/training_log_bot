@@ -511,19 +511,34 @@ def pages() -> list[Page]:
     return result
 
 
-# Что сайт отдаёт в индекс: все восемь языков. С 28.10 по 05.11 в индексе были
-# только ru/en: машинные переводы (25.10) совпали день в день с обвалом показов,
-# и их закрыли noindex,follow. Но Google продолжал вести людей на es/pt/pt-PT/de/
-# fr/tr (логи сайта 03.11 — живые заходы с Android), а Bing отметил нехватку
-# бюджета обхода: тысячи страниц без индекса съедали обход впустую. Поэтому
-# языки снова открыты, в sitemap и hreflang (владелец, 05.11.2026).
+# Что сайт отдаёт в индекс: только ru и en. Остальные шесть языков (es, pt,
+# pt-PT, de, fr, tr) открыты людям и ссылкам из приложения — те же адреса,
+# без 404 и редиректов, — но с noindex,follow (мета и X-Robots-Tag), без
+# sitemap и без hreflang-ссылок на них со страниц ru/en.
+#
+# Почему (GSC, ноябрь 2026): с 20–23.10 sitemap вырос с ~463 до 3712 адресов —
+# сайт перешёл с двух языков на восемь машинными переводами. Ровно с тех дат
+# «Обнаружена, не проиндексирована» — 2847, «Просканирована, не
+# проиндексирована» — 801, а в индексе вместо ~900 страниц осталось 146:
+# молодой домен вчетверо раздулся копиями, и Google переоценил весь сайт как
+# малоценный. История: 28.10–05.11 здесь уже стояли ru/en, 05.11 владелец
+# открыл все восемь (Google вёл людей на es/pt/…, Bing жаловался на бюджет
+# обхода) — GSC за ноябрь показал, что это не окупилось.
+#
+# Вернуть язык в индекс — дописать его код сюда, одна строка; sitemap,
+# hreflang, мета robots и X-Robots-Tag берут список отсюда.
 #
 # «Узкие» страницы закрывать нельзя вслепую: по выгрузке GSC за 16–24.10
 # «чем заменить» (exercise_alt) дали 39 из 61 клика и ~5.2k показов, пары и
 # «мышца × снаряд» — ещё ~1.5k. Закрыт только вес-тела-норматив (strength_bw):
 # ни одного показа.
-INDEXED_LANGS = LANGS
+INDEXED_LANGS = ("ru", "en")
 THIN_KINDS = frozenset({"strength_bw"})
+
+
+# Страница вне индекса: `<meta name=robots>` в HTML и тот же X-Robots-Tag
+# заголовком (`_page_route`) — робот видит запрет, не разбирая HTML.
+NOINDEX = "noindex, follow"
 
 
 def indexable(page: Page, lang: str) -> bool:
@@ -749,11 +764,15 @@ def _nav_links(lang: str, current: Page) -> str:
 def _lang_links(lang: str, page: Page) -> str:
     """Та же страница на каждом языке сайта — пункты переключателя языка.
     Подписи — автонимы, у ссылки hreflang и lang своего языка; текущий язык
-    отмечен aria-current."""
+    отмечен aria-current. Со страницы в индексе ссылка на язык вне индекса
+    (INDEXED_LANGS) — rel=nofollow: люди переходят, а вес и обход не
+    утекают на noindex-копии."""
     items = []
+    from_indexed = indexable(page, lang)
     for code in LANGS:
         here = " aria-current=true" if code == lang else ""
-        items.append(f'<li><a href="{url_for(page, code)}" hreflang={hreflang(code)} lang={hreflang(code)}{here}>'
+        rel = " rel=nofollow" if from_indexed and code not in INDEXED_LANGS else ""
+        items.append(f'<li><a href="{url_for(page, code)}" hreflang={hreflang(code)} lang={hreflang(code)}{rel}{here}>'
                      f"{_e(AUTONYMS[code])}</a></li>")
     return "<ul>" + "".join(items) + "</ul>"
 
@@ -907,7 +926,7 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         f'<link rel=canonical href="{_e(canonical)}">',
     ]
     if not indexable(page, lang):
-        head.append("<meta name=robots content=\"noindex,follow\">")
+        head.append(f'<meta name=robots content="{NOINDEX}">')
     if page.kind not in THIN_KINDS:
         # hreflang связывает только версии, которые идут в индекс.
         for code in INDEXED_LANGS:
@@ -2401,7 +2420,7 @@ def _render_exercise(lang: str, page: Page, request) -> str:
     home = base + url_for(Page("home"), lang)
     article = {
         "@context": "https://schema.org", "@type": "Article",
-        "headline": t("seo.exercise.title", name=name)[:110], "description": lead, "inLanguage": hreflang(lang),
+        "headline": name[:110], "description": lead, "inLanguage": hreflang(lang),
         "image": [base + _media_url(exercise_media.frame_name(slug, n)) for n in exercise_media.frame_numbers(slug)],
         "mainEntityOfPage": base + url_for(page, lang),
         "author": {"@type": "Organization", "name": t("seo.brand"), "url": home},
@@ -2670,11 +2689,14 @@ _SECURITY = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-ori
 _NO_FRAME = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
 
 
-def _html(content: str, lang: str) -> HTMLResponse:
-    return HTMLResponse(content, headers={
+def _html(content: str, lang: str, *, index: bool = True) -> HTMLResponse:
+    headers = {
         "Cache-Control": "public, max-age=3600", "Content-Language": hreflang(lang), "Vary": "User-Agent",
         **_SECURITY, **_NO_FRAME,
-    })
+    }
+    if not index:
+        headers["X-Robots-Tag"] = NOINDEX
+    return HTMLResponse(content, headers=headers)
 
 
 async def _count(kind: str, page_key: str, lang: Optional[str], request: Request, target: Optional[str] = None) -> None:
@@ -2711,7 +2733,7 @@ def _page_route(page: Page, lang: str):
             await site_numbers.refresh()
         html = render(page, lang, request)
         await _count("view", url_for(page, lang), lang, request)
-        return _html(html, lang)
+        return _html(html, lang, index=indexable(page, lang))
 
     return route
 
