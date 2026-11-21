@@ -887,7 +887,7 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     # атлета (у сценария тренировки этой недели и зимы — пауза и калибровка);
     # ряд на 90 дней и неверный период — ошибка на его языке.
     score = (await w.call("GET", "/progress/score", expect=200)).json()
-    assert len(score["parts"]) == 4 and score["coach_line"]
+    assert len(score["parts"]) == 3 and score["coach_line"] and score["widget_line"]
     await w.call("GET", "/progress/score?days=90", expect=200)
     await w.call("GET", "/progress/score?days=7", expect=400)
     # «Итоги года»: числа, «личность года» и подписи слайдов — на языке

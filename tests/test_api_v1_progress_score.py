@@ -13,7 +13,9 @@ import httpx
 import pytest
 
 import api_v1
+import api_v1_progress_score
 import db
+import progress_score
 import timeutil
 
 pytestmark = pytest.mark.asyncio
@@ -70,7 +72,7 @@ async def _seed_history(user_id: int) -> None:
 
 
 def _texts(body) -> list[str]:
-    out = [body["title"], body["coach_line"]]
+    out = [body["title"], body["coach_line"], body["widget_line"]]
     out += [p["label"] for p in body["parts"]] + [p["detail"] for p in body["parts"]]
     out += [lift["name"] for lift in body["lifts"]] + [g["name"] for g in body["groups"]]
     return out
@@ -86,10 +88,10 @@ async def test_shape_and_language(fresh_db, client_factory, lang):
     assert body["status"] == "ok"
     assert 0 <= body["score"] <= 10
     assert body["unit"] == "kg" and body["period_days"] == 28
-    assert [p["key"] for p in body["parts"]] == ["progression", "regularity", "volume", "balance"]
-    assert [p["max"] for p in body["parts"]] == [4, 3, 2, 1]
-    assert len(body["history"]) == 28
-    assert set(body["history"][0]) == {"date", "score", "progression", "regularity", "volume", "balance"}
+    assert [p["key"] for p in body["parts"]] == ["progression", "regularity", "volume"]
+    assert [p["max"] for p in body["parts"]] == [5, 3, 2]
+    assert len(body["history"]) == 5  # точка в неделю
+    assert set(body["history"][0]) == {"date", "score", "progression", "regularity", "volume"}
     assert body["history"][-1]["score"] == body["score"]
     assert body["best"]["score"] >= body["score"]
     assert isinstance(body["delta_7d"], float)
@@ -98,8 +100,10 @@ async def test_shape_and_language(fresh_db, client_factory, lang):
     lifts = {lift["exercise_id"]: lift for lift in body["lifts"]}
     assert len(lifts) == 2 and all(lift["rated"] for lift in lifts.values())
     # Присед стоит (шум) — он слабее растущего жима и идёт первым.
-    assert body["lifts"][0]["change_pct"] == 0.0 and body["lifts"][0]["points"] == 0.5
+    assert body["lifts"][0]["change_pct"] == 0.0 and body["lifts"][0]["points"] == 0.3
     assert body["lifts"][1]["change_pct"] > 1
+    assert all(lift["baseline_reps"] is None and lift["current_reps"] is None for lift in body["lifts"])
+    assert body["widget_line"]
     assert {g["name"] for g in body["groups"]} == ({"Грудь", "Ноги"} if lang == "ru" else {"Chest", "Legs"})
     texts = _texts(body)
     if lang == "en":
@@ -115,9 +119,10 @@ async def test_empty_account(fresh_db, client_factory):
     body = (await client.get("/progress/score")).json()
     assert body["status"] == "empty" and body["score"] is None and body["delta_7d"] is None
     assert body["coach_line"] == "Сделай тренировку — посчитаю оценку."
+    assert body["widget_line"] == "Сделай первую тренировку"
     assert all(p["points"] is None and p["detail"] == "" for p in body["parts"])
     assert body["lifts"] == [] and body["groups"] == [] and body["best"] is None
-    assert len(body["history"]) == 28 and all(h["score"] is None for h in body["history"])
+    assert len(body["history"]) == 5 and all(h["score"] is None for h in body["history"])
 
 
 async def test_newcomer_calibrating(fresh_db, client_factory):
@@ -136,7 +141,7 @@ async def test_newcomer_calibrating(fresh_db, client_factory):
     assert not CYRILLIC.search(body["coach_line"])
 
 
-@pytest.mark.parametrize("days, points", [("90", 13), ("365", 53)])
+@pytest.mark.parametrize("days, points", [("28", 5), ("90", 13), ("365", 53)])
 async def test_longer_periods(fresh_db, client_factory, days, points):
     client = await _client(fresh_db, client_factory, 111, "ru")
     await _seed_history(111)
@@ -144,7 +149,8 @@ async def test_longer_periods(fresh_db, client_factory, days, points):
     assert body["period_days"] == int(days) and len(body["history"]) == points
     dates = [dt.date.fromisoformat(h["date"]) for h in body["history"]]
     assert all((b - a).days == 7 for a, b in zip(dates, dates[1:], strict=False))
-    assert body["history"][0]["score"] is None  # до первой тренировки оценки нет
+    if days != "28":
+        assert body["history"][0]["score"] is None  # до первой тренировки оценки нет
 
 
 @pytest.mark.parametrize("days", ["7", "soon", "0"])
@@ -176,3 +182,93 @@ async def test_calibration_script_reads_a_file_db(tmp_path, capsys):
     assert "атлетов с тренировкой за 28 дн.: 1" in out
     assert "статусы сегодня: ok 1" in out
     assert "4242" not in out
+
+
+# --- реплики и подписи ----------------------------------------------------------
+
+
+async def _seed_steady(user_id: int, lifts: list[tuple[int, float, int, int]], weeks: int = 10,
+                       weekdays: tuple[int, ...] = (0, 3), skip: tuple[int, ...] = ()) -> dt.date:
+    """Тренировки по `weekdays` календарной недели за `weeks` недель; `skip` —
+    номера недель назад (0 — текущая), в которых только одна тренировка."""
+    today = timeutil.user_today(await db.get_user(user_id))
+    monday = today - dt.timedelta(days=today.weekday())
+    for n in range(weeks * 7, -1, -1):
+        day = today - dt.timedelta(days=n)
+        week_back = (monday - (day - dt.timedelta(days=day.weekday()))).days // 7
+        if day.weekday() in weekdays and not (week_back in skip and day.weekday() != weekdays[0]):
+            await _workout(user_id, day, lifts)
+    return today
+
+
+async def test_all_good_coach_and_widget_lines(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    bench = await db.fork_exercise_from_template(111, await _template_id("Жим штанги лёжа"))
+    today = timeutil.user_today(await db.get_user(111))
+    # Жим растёт на +6% за окно, две тренировки в неделю, по 6 подходов: всё по плану.
+    for n in range(70, -1, -1):
+        day = today - dt.timedelta(days=n)
+        if day.weekday() in (0, 3) or n == 0:
+            await _workout(111, day, [(bench, 100 + (70 - n) / 5, 5, 6)])
+    body = (await client.get("/progress/score")).json()
+    assert body["status"] == "ok" and body["score"] == 10.0, body
+    assert body["coach_line"] == "Всё по плану — так и держи."
+    assert body["widget_line"] == "Всё по плану"
+
+
+async def test_widget_line_never_names_a_lift(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    await _seed_history(111)
+    body = (await client.get("/progress/score")).json()
+    names = [lift["name"] for lift in body["lifts"]] + [g["name"] for g in body["groups"]]
+    assert body["coach_line"] and body["widget_line"]
+    assert not any(name in body["widget_line"] for name in names)
+    assert any(name in body["coach_line"] for name in names)  # а реплика экрана — называет
+
+
+@pytest.mark.parametrize("lang", ["ru", "en", "es", "pt", "pt-PT", "de", "fr", "tr"])
+def test_widget_lines_are_short_and_cover_every_lever(lang):
+    import i18n
+    with i18n.use_lang(lang):
+        for kind in api_v1_progress_score._WIDGET_KEY:
+            lever = progress_score.Lever(kind) if kind else None
+            line = api_v1_progress_score.widget_line(lever)
+            assert line and len(line) <= (34 if lang in ("ru", "en") else 40), (lang, kind, line)
+
+
+async def test_regularity_detail_matches_half_credit(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    bench = await db.fork_exercise_from_template(111, await _template_id("Жим штанги лёжа"))
+    # Неделю назад — одна тренировка вместо двух: половина балла, и подпись это говорит.
+    await _seed_steady(111, [(bench, 100, 5, 6)], skip=(1,))
+    body = (await client.get("/progress/score")).json()
+    reg = next(p for p in body["parts"] if p["key"] == "regularity")
+    assert reg["points"] == 2.6  # 3 × (1 + 0.5 + 1 + 1) / 4
+    assert reg["detail"] == "две тренировки и больше — 3 из 4 недель, в одной — одна"
+
+
+async def test_pullups_only_athlete_is_rated_by_reps(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory, 111, "en")
+    pullups = await db.fork_exercise_from_template(111, await _template_id("Подтягивания"))
+    today = timeutil.user_today(await db.get_user(111))
+    for n in range(63, -1, -1):
+        day = today - dt.timedelta(days=n)
+        if day.weekday() in (0, 3):
+            await _workout(111, day, [(pullups, 0, 8 + (63 - n) // 14, 4)])
+    body = (await client.get("/progress/score")).json()
+    assert body["status"] == "ok"
+    lift = body["lifts"][0]
+    assert lift["rated"] and lift["baseline_e1rm"] is None and lift["current_e1rm"] is None
+    assert isinstance(lift["baseline_reps"], int) and lift["current_reps"] > lift["baseline_reps"]
+    prog = body["parts"][0]
+    assert prog["points"] is not None and prog["detail"] == "you're progressing in 1 of 1 lift"
+
+
+async def test_progression_none_detail_is_about_workouts(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    plank = await db.fork_exercise_from_template(111, await _template_id("Планка"))
+    await _seed_steady(111, [(plank, 0, 60, 3)], weeks=8)
+    body = (await client.get("/progress/score")).json()
+    prog = body["parts"][0]
+    assert prog["points"] is None
+    assert prog["detail"] == "посчитаю, когда наберётся месяц тренировок"
