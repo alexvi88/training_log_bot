@@ -192,6 +192,13 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # «Оценить в App Store»; nth — который это показ у аккаунта.
     "rating_slide_shown": frozenset({"nth"}),
     "rating_slide_tap": frozenset({"nth"}),
+    # «Узнать по фото» в подборе упражнения (iOS IdentifyExerciseSheet):
+    # открыл (source picker), что вернул сервер (result catalog|mine|new|none),
+    # что добавил (result catalog|mine|new|alternative). Само распознавание и
+    # принятие сервер пишет сам — exercise_identified / exercise_identify_accept.
+    "identify_open": frozenset({"source"}),
+    "identify_result": frozenset({"result"}),
+    "identify_add": frozenset({"result"}),
     # Переспрос уведомлений карточкой в ленте тренировки (iOS PushAskCard):
     # action shown|enable|settings|dismiss|result; у result — ответ системного
     # окна (granted|denied).
@@ -271,6 +278,9 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
     ("push_ask_card", "action"): frozenset({"shown", "enable", "settings", "dismiss", "result"}),
     ("push_ask_card", "result"): frozenset({"granted", "denied"}),
+    ("identify_open", "source"): frozenset({"picker"}),
+    ("identify_result", "result"): frozenset({"catalog", "mine", "new", "none"}),
+    ("identify_add", "result"): frozenset({"catalog", "mine", "new", "alternative"}),
     (INVITE_OPEN_EVENT, "source"): INVITE_SOURCES,
     (INVITE_SHARE_EVENT, "source"): INVITE_SOURCES,
     (INVITE_COPY_EVENT, "source"): INVITE_SOURCES,
