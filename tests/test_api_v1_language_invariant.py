@@ -47,6 +47,7 @@ import api_v1
 import api_v1_feedback
 import coach_service
 import config
+import exercise_identify
 import i18n
 import seo_library as guides_catalog
 import text_import
@@ -78,7 +79,19 @@ RU_ALLOWED_LATIN = {
 # `ExerciseTemplateSummary.originalName`, чтобы узнать свою копию шаблона). Не
 # показывается как текст — клиент показывает display_name/name. По-русски
 # навсегда, на любом языке аккаунта.
-EN_IDENTITY_KEYS = {"original_name"}
+#
+# `catalog_name` у «Что это за тренажёр» (POST /exercises/identify) — та же
+# идентичность: по ней приложение зовёт /exercises/identify/accept.
+EN_IDENTITY_KEYS = {"original_name", "catalog_name"}
+
+# Машинные значения по путям одного маршрута — там, где то же имя ключа в
+# других ответах несёт человеческий текст (`equipment` у программ каталога —
+# подписи снаряда), и вычеркнуть ключ целиком значило бы ослепить проверку.
+MACHINE_PATHS: dict[str, frozenset[str]] = {
+    # Итог распознавания и снаряд — перечисления (catalog|mine|new|none,
+    # barbell|dumbbell|…); подписи к ним рисует приложение.
+    "POST /exercises/identify": frozenset({".result", ".exercise.equipment"}),
+}
 
 # Машинные поля: коды, ключи, даты, url, токены, перечисления. В них не бывает
 # человеческого текста, и в русском прогоне латиница там законна ("finished",
@@ -225,6 +238,7 @@ def _string_leaves(value: Any, key: str | None = None, path: str = ""):
 def language_violations(
     payload: Any, lang: str, data_paths: frozenset[str] = frozenset(), data_lang: str | None = None,
     mixed_paths: frozenset[str] = frozenset(), ru_latin_paths: frozenset[str] = frozenset(),
+    machine_paths: frozenset[str] = frozenset(),
 ) -> list[str]:
     """`data_paths` — поля, которые принадлежат другому человеку и проверяются
     его языком `data_lang` (см. CLIENT_DATA_PATHS); `mixed_paths` — при
@@ -235,6 +249,8 @@ def language_violations(
         if key in MACHINE_KEYS:
             continue
         shape = _shape(path)
+        if shape in machine_paths:
+            continue
         if data_lang is not None and shape in mixed_paths:
             continue
         lang = data_lang if data_lang is not None and shape in data_paths else default_lang
@@ -318,7 +334,7 @@ class _Walker:
         mixed = MIXED_PATHS.get(route, frozenset()) if self.data_lang is not None else frozenset()
         for v in language_violations(
             body, self.lang, self.data_paths.get(route, frozenset()), self.data_lang, mixed,
-            RU_LATIN_TEXT_PATHS.get(route, frozenset()),
+            RU_LATIN_TEXT_PATHS.get(route, frozenset()), MACHINE_PATHS.get(route, frozenset()),
         ):
             self.violations.append(f"{method} {path} [{resp.status_code}]: {v}")
         return resp
@@ -365,10 +381,12 @@ MODEL_TEXT = {
     # (`mentions`) проходят ту же проверку языка, что и сам текст.
     "en": {"answer": "Solid work on the Barbell Bench Press — add Dumbbell Bench Press, keep adding weight.", "question": "How many days a week can you train?",
            "program": "Full body", "day": "Day 1", "program_description": "A simple full-body base.",
-           "food": "Rice", "verdict": "Mostly myth.", "comment": "Strong session."},
+           "food": "Rice", "verdict": "Mostly myth.", "comment": "Strong session.",
+           "identify_title": "That's a bench press station.", "identify_tip": "Pinch your shoulder blades."},
     "ru": {"answer": "Жим штанги лёжа идёт хорошо — добавь жим гантелей лёжа и прибавляй вес.", "question": "Сколько дней в неделю можешь тренироваться?",
            "program": "Фуллбоди", "day": "День 1", "program_description": "Простая база на всё тело.",
-           "food": "Рис", "verdict": "Скорее миф.", "comment": "Сильная тренировка."},
+           "food": "Рис", "verdict": "Скорее миф.", "comment": "Сильная тренировка.",
+           "identify_title": "Это скамья для жима.", "identify_tip": "Лопатки сведи, стопы упри в пол."},
 }
 
 # Остальные языки (es, pt, de, fr, tr) проверяются по правилу английского —
@@ -471,6 +489,17 @@ def _install_fakes(monkeypatch, tmp_path, lang: str) -> dict[str, Any]:
         return model["comment"]
 
     monkeypatch.setattr(ai_trainer, "comment_on_workout", fake_comment)
+
+    async def fake_identify_verdict(user_id, image_data_url, own_names, *, on_block=None):
+        # Распознавание тренажёра (exercise_identify): идентичность каталога
+        # приходит русской по замыслу, текст тренера — на языке атлета.
+        return {
+            "unclear": False, "catalog_name": "Жим штанги лёжа", "own_name": None,
+            "alternatives": ["Жим гантелей лёжа"], "new_name": None, "new_group": None,
+            "equipment": "barbell", "title": model["identify_title"], "tip": model["identify_tip"],
+        }
+
+    monkeypatch.setattr(exercise_identify, "_model_verdict", fake_identify_verdict)
 
     async def fake_coach_summary(coach_id, messages):
         captured["langs"].append(i18n.get_lang())
@@ -591,6 +620,10 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("PATCH", "/settings", json={"gender": None}, expect=200)
     await w.call("PATCH", "/settings", json={"client_workout_pushes_enabled": False}, expect=200)
     await w.call("PATCH", "/settings", json={"client_workout_pushes_enabled": True}, expect=200)
+    # Таймер отдыха: сигнал и общая цель; цель вне 15–900 — текст на языке атлета.
+    await w.call("PATCH", "/settings", json={"rest_alert": False, "rest_default_seconds": 90}, expect=200)
+    await w.call("PATCH", "/settings", json={"rest_default_seconds": 5}, expect=400)
+    await w.call("PATCH", "/settings", json={"rest_alert": True, "rest_default_seconds": None}, expect=200)
     await w.call("GET", "/profile", expect=200)
     await w.call("POST", "/push/register", json={"device_token": "abc"}, expect=201)
     await w.call("DELETE", "/push/register", expect=200)
@@ -665,6 +698,29 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("POST", f"/exercise-templates/{template_id}/copy", json={"name": " "}, expect=400)
     await w.call("POST", "/exercise-templates/999999/copy", json={"name": text["exercise"] + " 5"}, expect=404)
     await w.call("GET", "/exercises/999999/media", expect=404)
+    # Цель таймера отдыха у упражнения: своя, снять, кривое число — текст на
+    # языке атлета.
+    await w.call("PATCH", f"/exercises/{forked_id}", json={"rest_seconds": 120}, expect=200)
+    await w.call("PATCH", f"/exercises/{forked_id}", json={"rest_seconds": None}, expect=200)
+    await w.call("PATCH", f"/exercises/{forked_id}", json={"rest_seconds": 5}, expect=400)
+    # «Что это за тренажёр»: фото → упражнение (модель подменена), отказы по
+    # фото и «Записать сюда» — копия каталога, своё новое, кривые тела.
+    await w.call("POST", "/exercises/identify",
+                 json={"image_data_url": f"data:image/png;base64,{PNG_1PX}"}, expect=200)
+    await w.call("POST", "/exercises/identify",
+                 json={"image_data_url": "data:image/gif;base64,R0lGODlh"}, expect=415)
+    await w.call("POST", "/exercises/identify", json={}, expect=400)
+    await w.call("POST", "/exercises/identify/accept", json={"catalog_name": "Гак-присед"}, expect=200)
+    await w.call("POST", "/exercises/identify/accept", json={
+        "name": text["exercise"] + " 6", "muscle_group": groups[0]["name"], "equipment": "machine",
+    }, expect=200)
+    await w.call("POST", "/exercises/identify/accept", json={
+        "name": text["exercise"] + " 7", "muscle_group": groups[0]["name"], "equipment": "rocket",
+    }, expect=400)
+    await w.call("POST", "/exercises/identify/accept", json={
+        "name": text["exercise"] + " 7", "muscle_group": "?", "equipment": "machine",
+    }, expect=400)
+    await w.call("POST", "/exercises/identify/accept", json={"catalog_name": "?"}, expect=400)
 
     # --- тренировка ---
     wid = (await w.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]

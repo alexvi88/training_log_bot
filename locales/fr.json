@@ -6095,5 +6095,18 @@
   "year.bot.failed": "Je n'ai pas pu assembler ton année — quelque chose a cassé de mon côté. Réessaie /year dans une minute.",
   "push.ios.year_review.title": "BILAN DE L'ANNÉE",
   "push.ios.year_review.body": "SALUT ATHLÈTE ! J'ai fait le compte de ton {year} : chaque séance, chaque record. C'est en cartes, jette un œil.",
-  "legal.support.title": "Support du Journal d’athlète : aide pour l’app, le bot et le coach IA"
+  "legal.support.title": "Support du Journal d’athlète : aide pour l’app, le bot et le coach IA",
+  "exercise_identify.none_title": "Je n’arrive pas à reconnaître la machine. Prends-la en entier, de profil.",
+  "exercise_identify.title_fallback": "On dirait {name}.",
+  "exercise_identify.last_time": "La dernière fois : {set}.",
+  "exercise_identify.photo_required": "Aucune photo n’est arrivée. Prends la machine en photo et envoie-la.",
+  "exercise_identify.unknown_catalog": "Je ne trouve pas cet exercice dans le catalogue. Reprends la machine en photo ou crée le tien.",
+  "exercise_identify.invalid_equipment": "Je n’ai pas compris le matériel. Choisis barre, haltère, machine, poulie, poids du corps, kettlebell ou autre.",
+  "exercise_identify.invalid_group": "Je ne trouve pas ce groupe musculaire. Choisis-en un dans la liste, par exemple Pectoraux.",
+  "api.error.invalid_rest_seconds": "Le repos va de {min} à {max} secondes. Mets un nombre, par exemple 90.",
+  "exercise_identify.looking": "🤖 je regarde quelle machine c’est…",
+  "exercise_identify.failed": "Je n’ai pas pu lire la photo — je n’ai rien noté. Renvoie-la.",
+  "exercise_identify.btn_log_here": "▶ Noter ici",
+  "exercise_identify.btn_alt": "Ou : {name}",
+  "exercise_identify.gone": "J’ai perdu cette photo — renvoie-la."
 }

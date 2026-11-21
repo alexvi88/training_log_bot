@@ -54,6 +54,9 @@ _BOOL_FIELDS = (
     # (coach_notify.deliver_client_workout). Отдаётся всем: у атлета без
     # клиентов ни на что не влияет, приложение показывает строку тренеру.
     "client_workout_pushes_enabled",
+    # Сигнал конца отдыха в приложении (локальное уведомление и вибрация,
+    # rest_defaults.py). Включён по умолчанию.
+    "rest_alert",
 )
 
 # `show_extra_stats` и `e1rm_formula` из этого списка ушли: тумблеров больше
@@ -115,6 +118,10 @@ def _settings_json(user) -> dict[str, Any]:
         # в боте; по нему тренер выбирает род в обращении и нормы, приложение
         # рисует фигуру «ТЫ». null никто не угадывает.
         "gender": _gender(user),
+        # Общая цель таймера отдыха, секунды; null — авто по каждому упражнению
+        # (rest_defaults.py). Своя цель упражнения (`rest_seconds` в PATCH
+        # /exercises/{id}) её перебивает.
+        "rest_default_seconds": user["rest_default_seconds"],
     }
 
 
@@ -363,6 +370,11 @@ async def update_settings(request: Request) -> JSONResponse:
                 400, "invalid_gender", "gender must be \"male\", \"female\" or null"
             )
 
+    # Общая цель таймера отдыха: секунды в границах rest_defaults или null —
+    # авто по каждому упражнению. Ключ отсутствует — не трогаем.
+    set_rest_default = "rest_default_seconds" in body
+    new_rest_default = common.rest_seconds_field(body, "rest_default_seconds") if set_rest_default else None
+
     # Односторонний флаг: `true` ставит, `false` молча игнорируем (повтор
     # старого запроса или гонка двух телефонов не должны его снимать).
     new_lock_screen_used: Optional[bool] = None
@@ -413,6 +425,8 @@ async def update_settings(request: Request) -> JSONResponse:
         plain_updates["ai_consent_at"] = None
     if new_lock_screen_used is True and not user["lock_screen_used"]:
         plain_updates["lock_screen_used"] = 1
+    if set_rest_default:
+        plain_updates["rest_default_seconds"] = new_rest_default
     if plain_updates:
         await db.update_user(user_id, **plain_updates)
     if set_gender and new_gender != user["gender"]:

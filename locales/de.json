@@ -6095,5 +6095,18 @@
   "year.bot.failed": "Ich konnte dein Jahr nicht zusammenstellen — bei mir ist etwas kaputtgegangen. Versuch /year in einer Minute noch mal.",
   "push.ios.year_review.title": "JAHRESRÜCKBLICK",
   "push.ios.year_review.body": "HEY ATHLET! Ich habe dein {year} durchgezählt — jedes Training, jeden Rekord. In Karten gepackt, schau rein.",
-  "legal.support.title": "Athleten-Tagebuch Support: Hilfe zu App, Bot und KI-Coach"
+  "legal.support.title": "Athleten-Tagebuch Support: Hilfe zu App, Bot und KI-Coach",
+  "exercise_identify.none_title": "Ich erkenne das Gerät nicht. Fotografier es ganz, von der Seite.",
+  "exercise_identify.title_fallback": "Sieht nach {name} aus.",
+  "exercise_identify.last_time": "Letztes Mal: {set}.",
+  "exercise_identify.photo_required": "Kein Foto angekommen. Fotografier das Gerät und schick’s mir.",
+  "exercise_identify.unknown_catalog": "Die Übung finde ich nicht im Katalog. Fotografier das Gerät nochmal oder leg deine eigene an.",
+  "exercise_identify.invalid_equipment": "Das Equipment hab ich nicht verstanden. Wähl Langhantel, Kurzhantel, Maschine, Kabelzug, Körpergewicht, Kettlebell oder Sonstiges.",
+  "exercise_identify.invalid_group": "Die Muskelgruppe finde ich nicht. Wähl eine aus der Liste, zum Beispiel Brust.",
+  "api.error.invalid_rest_seconds": "Die Pause geht von {min} bis {max} Sekunden. Gib eine Zahl ein, zum Beispiel 90.",
+  "exercise_identify.looking": "🤖 schaue, was für ein Gerät das ist…",
+  "exercise_identify.failed": "Ich konnte das Foto nicht lesen — nichts eingetragen. Schick’s nochmal.",
+  "exercise_identify.btn_log_here": "▶ Hier eintragen",
+  "exercise_identify.btn_alt": "Oder: {name}",
+  "exercise_identify.gone": "Das Foto hab ich verloren — schick’s nochmal."
 }

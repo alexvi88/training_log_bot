@@ -6096,5 +6096,18 @@
   "year.bot.failed": "Не смог собрать твой год — что-то сломалось у меня. Попробуй /year ещё раз через минуту.",
   "push.ios.year_review.title": "ИТОГИ ГОДА",
   "push.ios.year_review.body": "ПРИВЕТ АТЛЕТ! Пересчитал твой {year} — каждую тренировку и каждый рекорд. Собрал в карточки, смотри.",
-  "legal.support.title": "Поддержка Дневника атлета: помощь с приложением, ботом и AI-тренером"
+  "legal.support.title": "Поддержка Дневника атлета: помощь с приложением, ботом и AI-тренером",
+  "exercise_identify.none_title": "Не разобрал тренажёр. Сними его целиком, сбоку.",
+  "exercise_identify.title_fallback": "Похоже на «{name}».",
+  "exercise_identify.last_time": "В прошлый раз — {set}.",
+  "exercise_identify.photo_required": "Фото не пришло. Сними тренажёр и пришли снимок.",
+  "exercise_identify.unknown_catalog": "Такого упражнения в каталоге не нашёл. Сфотографируй тренажёр ещё раз или заведи своё.",
+  "exercise_identify.invalid_equipment": "Не понял снаряд. Выбери: штанга, гантели, тренажёр, блок, свой вес, гиря или другое.",
+  "exercise_identify.invalid_group": "Не нашёл такую группу мышц. Выбери из списка, например «Грудь».",
+  "api.error.invalid_rest_seconds": "Отдых ставлю от {min} до {max} секунд. Напиши число, например 90.",
+  "exercise_identify.looking": "🤖 смотрю, что за тренажёр…",
+  "exercise_identify.failed": "Не смог разобрать фото — ничего не записал. Пришли его ещё раз.",
+  "exercise_identify.btn_log_here": "▶ Записать сюда",
+  "exercise_identify.btn_alt": "Или: {name}",
+  "exercise_identify.gone": "Потерял это фото — пришли его ещё раз."
 }

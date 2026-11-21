@@ -22,6 +22,10 @@
   кнопки под пушем в Telegram (`record_tg_push_tap`: сообщение пуша узнаётся
   по `pushes.tg_message_id`, повторные нажатия под тем же пушем не в счёт;
   прочтение без нажатия сервер не видит и не считает);
+  `exercise_identified` (`result` catalog|mine|new|none) — тренер разобрал
+  фото тренажёра (exercise_identify.py, бот и `POST /v1/exercises/identify`),
+  `exercise_identify_accept` (`result` catalog|mine|new) — «Записать сюда»
+  по итогу: копия каталога, своё уже было или завелось новое;
 - события жизненного цикла пишет сама база, той же транзакцией, что и
   действие (`lifecycle_events.py`; клиент tg|ios — из входа: middleware бота
   и `api_v1_common.authed_user_id`), — поэтому одинаково для бота и приложения:
@@ -33,7 +37,7 @@
   корзины; `by=auto` — закрыл сервер, workout_autoclose, — у вехи тоже),
   вехи по разу на человека `first_set`, `first_workout_finished`,
   `second_workout_finished` (импорт не в счёт), `coach_linked` (под атлетом),
-  `ai_question` (`kind` text|photo|video|voice — на списании квоты, то есть на
+  `ai_question` (`kind` text|photo|video|voice|identify — на списании квоты, то есть на
   отвеченный вопрос), `video_review` (состоявшийся разбор видео), `import_done`
   (`source` hevy|strong|csv|notes, корзины `workouts`/`sets`; подходы импорта
   по одному не пишутся). Без контекста входа (фоновая задача, скрипт) не

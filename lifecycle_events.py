@@ -83,7 +83,9 @@ PROGRAM_ORIGINS = {
 OTHER = "other"
 
 IMPORT_SOURCES = frozenset({"hevy", "strong", "csv", "notes"})
-AI_QUESTION_KINDS = frozenset({"text", "photo", "video", "voice"})
+# identify — фото тренажёра «что это за упражнение» (exercise_identify.py):
+# тот же вопрос тренеру по квоте, своей формой ответа.
+AI_QUESTION_KINDS = frozenset({"text", "photo", "video", "voice", "identify"})
 
 # --- контекст --------------------------------------------------------------------
 

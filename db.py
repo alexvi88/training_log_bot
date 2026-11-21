@@ -201,7 +201,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- milestone). 0 — ни одной. Колонкой, а не строкой в `pushes`: те чистятся
     -- через admin_tasks.PUSH_RETENTION_DAYS, а «каждая веха — один раз»
     -- должно пережить и чистку, и год до последней вехи.
-    you_video_milestone INTEGER NOT NULL DEFAULT 0
+    you_video_milestone INTEGER NOT NULL DEFAULT 0,
+    -- Таймер отдыха в приложении (rest_defaults.py, PATCH /v1/settings):
+    -- rest_alert — сигнал (локальное уведомление и вибрация), когда отдых
+    -- вышел; rest_default_seconds — общая цель отдыха вместо авто-цели у
+    -- упражнений без своей, NULL — авто по каждому упражнению.
+    rest_alert INTEGER NOT NULL DEFAULT 1,
+    rest_default_seconds INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -254,6 +260,9 @@ CREATE TABLE IF NOT EXISTS exercises (
     -- и импорт никогда не склеили её с источником; а картинки техники при
     -- этом остаются те же. Читает ТОЛЬКО exercise_media.media_key.
     media_from TEXT,
+    -- Своя цель отдыха атлета у этого упражнения, секунды (PATCH
+    -- /v1/exercises/{id}); NULL — общая цель атлета или авто (rest_defaults.py).
+    rest_seconds INTEGER,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
@@ -1842,6 +1851,9 @@ async def _migrate_schema() -> None:
     if "media_from" not in exercise_cols:
         # Заполнять нечем: копий до этой колонки не было.
         await _conn.execute("ALTER TABLE exercises ADD COLUMN media_from TEXT")
+    if "rest_seconds" not in exercise_cols:
+        # NULL всем: своей цели отдыха ещё никто не ставил (rest_defaults.py).
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN rest_seconds INTEGER")
 
     if "bodyweight_load" not in exercise_cols:
         await _conn.execute(
@@ -2057,6 +2069,12 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN you_video_milestone INTEGER NOT NULL DEFAULT 0"
         )
+    if "rest_alert" not in user_cols:
+        # Сигнал конца отдыха включён у всех: таймер с целью без сигнала —
+        # тот же счётчик вверх, что был.
+        await _conn.execute("ALTER TABLE users ADD COLUMN rest_alert INTEGER NOT NULL DEFAULT 1")
+    if "rest_default_seconds" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN rest_default_seconds INTEGER")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -5222,7 +5240,7 @@ async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[
     (_insert_copy).
 
     Переносится: группа, снаряд, одна рука, насадка, режим веса тела,
-    описание, заметки и своё фото (файл копируется, ссылка Telegram — та же:
+    своя цель отдыха, описание, заметки и своё фото (файл копируется, ссылка Telegram — та же:
     это та же картинка). Своих настроек «диапазон повторов/цель» у упражнения
     нет — диапазон живёт в `users`, цель — в дне программы (`routine_exercises`),
     а членство в программах не копируется.
@@ -5253,6 +5271,9 @@ async def copy_exercise(user_id: int, exercise_id: int, new_name: str) -> tuple[
     photo_name = exercise_photos.duplicate(exercise_photos.stored_name(source), new_id)
     if photo_name is not None:
         await set_exercise_photo_path(new_id, photo_name)
+    # Своя цель отдыха — настройка движения, как снаряд: едет в копию.
+    if source["rest_seconds"] is not None:
+        await set_exercise_rest_seconds(new_id, source["rest_seconds"])
     return COPY_OK, new_id
 
 
@@ -14522,6 +14543,14 @@ async def _reload_active_bodyweight_sets(user_id: int) -> None:
                 row["id"],
             ),
         )
+
+
+async def set_exercise_rest_seconds(exercise_id: int, seconds: Optional[int]) -> None:
+    """Своя цель отдыха у упражнения (секунды) или None — снова общая/авто
+    (rest_defaults.effective_rest_seconds). Границы проверяет вызывающий."""
+    async with _write_lock:
+        await conn().execute("UPDATE exercises SET rest_seconds = ? WHERE id = ?", (seconds, exercise_id))
+        await conn().commit()
 
 
 async def is_catalog_exercise(exercise) -> bool:

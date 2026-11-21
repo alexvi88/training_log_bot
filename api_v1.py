@@ -57,6 +57,7 @@ import api_v1_games
 import api_v1_guides
 import api_v1_hall_of_fame
 import api_v1_history
+import api_v1_identify
 import api_v1_import
 import api_v1_inbox
 import api_v1_mcp
@@ -718,11 +719,16 @@ def _bodyweight_flag(body: dict[str, Any]) -> bool:
 async def update_exercise(request: Request) -> JSONResponse:
     """PATCH — частичное обновление, как /settings: только присланные поля
     меняются. То же самое меню бота (handlers/exercises.py), только без
-    диалога — переименование, смена группы мышц и описание техники."""
+    диалога — переименование, смена группы мышц и описание техники; плюс
+    своя цель таймера отдыха `rest_seconds` (секунды или null — снять)."""
     user_id = await _authed_user_id(request)
     exercise_id = int(request.path_params["exercise_id"])
     await _owned_exercise(exercise_id, user_id)
     body = await _json_body(request)
+    # Цель отдыха проверяется до первой записи: кривое число — 400, и имя с
+    # группой из того же тела не меняются.
+    set_rest = "rest_seconds" in body
+    rest_seconds = common.rest_seconds_field(body, "rest_seconds") if set_rest else None
 
     if "name" in body:
         name = _exercise_name(body)
@@ -757,6 +763,11 @@ async def update_exercise(request: Request) -> JSONResponse:
                     400, "bodyweight_not_editable", "catalog exercise bodyweight mode is fixed"
                 )
             await db.set_exercise_bodyweight(exercise_id, bodyweight)
+
+    if set_rest:
+        # Своя цель таймера отдыха; null — снова общая атлета или авто
+        # (rest_defaults.py).
+        await db.set_exercise_rest_seconds(exercise_id, rest_seconds)
 
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row))
@@ -2558,6 +2569,7 @@ routes += (
     + api_v1_hall_of_fame.routes
     + api_v1_history.routes
     + api_v1_templates.routes
+    + api_v1_identify.routes
     + api_v1_diagnostics.routes
     + api_v1_events.routes
     + api_v1_coach.routes
