@@ -233,7 +233,11 @@ def test_widget_lines_are_short_and_cover_every_lever(lang):
         for kind in api_v1_progress_score._WIDGET_KEY:
             lever = progress_score.Lever(kind) if kind else None
             line = api_v1_progress_score.widget_line(lever)
-            assert line and len(line) <= (34 if lang in ("ru", "en") else 40), (lang, kind, line)
+            # Вторая строка виджета-плитки на «Меню» держит ~26 знаков
+            # кириллицы на ширине iPhone, дальше — «…» («Рост в силе
+            # посчитаю п…» на снимке прохода 22 ноября). Запас — до 24;
+            # остальным языкам — на пятую часть длиннее (TONE_OF_VOICE).
+            assert line and len(line) <= (24 if lang in ("ru", "en") else 28), (lang, kind, line)
 
 
 async def test_regularity_detail_matches_half_credit(fresh_db, client_factory):
