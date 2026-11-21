@@ -1882,6 +1882,7 @@
   "ai.screen.video_too_long": "Bu klip uzun. En fazla {seconds} saniye gönder — tek set bana yeter.",
   "ai.screen.video_too_heavy": "Bu dosya ağır, kaldıramıyorum — {mb} MB altında tut. Daha kısa ya da daha hafif çek.",
   "ai.screen.photo_too_big": "Fotoğraf çok büyük — {mb} MB altında tut.",
+  "ai.screen.too_many_photos": "Bir soruya en fazla {max} fotoğraf. Fazlalarını çıkar ve tekrar gönder.",
   "ai.screen.video_ask_exercise": "Klibi aldım. Hangi egzersiz?\n\nAdını cevap olarak yaz ya da aşağıdan kendi egzersizlerinden birini seç. Bakmadan önce soruyorum: yanlış tahmin edersem başka bir egzersizin ölçüsüyle değerlendiririm — bu hiç incelememekten daha kötü.",
   "ai.screen.video_lost": "O klibin izini kaybettim, tekrar gönder",
   "ai.screen.voice_not_configured": "Sesli giriş henüz kurulu değil, sorunu metin olarak yaz.",

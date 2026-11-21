@@ -1882,6 +1882,7 @@
   "ai.screen.video_too_long": "Der Clip ist lang. Schick bis zu {seconds} Sekunden — ein Satz reicht mir.",
   "ai.screen.video_too_heavy": "Die Datei ist zu schwer, die schaff ich nicht — bleib unter {mb} MB. Film kürzer oder in geringerer Qualität.",
   "ai.screen.photo_too_big": "Foto zu groß — bleib unter {mb} MB.",
+  "ai.screen.too_many_photos": "Höchstens {max} Fotos pro Frage. Nimm die übrigen raus und schick nochmal.",
   "ai.screen.video_ask_exercise": "Clip ist da. Welche Übung ist das?\n\nSchreib den Namen als Antwort oder wähl unten eine von deinen. Ich frag, bevor ich hinschaue: Rate ich falsch, würde ich sie nach fremden Maßstäben beurteilen — schlimmer als gar keine Analyse.",
   "ai.screen.video_lost": "Den Clip hab ich verloren, schick ihn nochmal",
   "ai.screen.voice_not_configured": "Spracheingabe ist noch nicht eingerichtet, schreib deine Frage als Text.",

@@ -6473,7 +6473,7 @@ async def ask(
     user_id: int,
     question: str,
     history: list[dict[str, Any]],
-    image_data_url: Optional[str] = None,
+    image_data_url: Optional[str | list[str]] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
@@ -6510,7 +6510,8 @@ async def ask(
     запрос ДОПИСЫВАЕТ, а не переписывает.
 
     image_data_url — опционально, фото, которое пользователь прислал вместе с этим
-    вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
+    вопросом (data: URL, base64), или список таких (приложение шлёт до трёх фото
+    к одному вопросу). Передаётся только в текущий ход; в history фото
     не попадают — модель не сможет пересмотреть их позже, только вспомнить по тексту.
 
     video_context — опционально, наблюдения по присланному видео (см.
@@ -6657,12 +6658,13 @@ PHOTO_GONE_NOTE = (
 )
 
 
-def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
-    if not image_data_url:
+def _plain_user_content(question: str, image_data_url: Optional[str | list[str]]) -> Any:
+    urls = [image_data_url] if isinstance(image_data_url, str) else list(image_data_url or [])
+    if not urls:
         return question
     return [
         {"type": "text", "text": question},
-        {"type": "image_url", "image_url": {"url": image_data_url}},
+        *({"type": "image_url", "image_url": {"url": url}} for url in urls),
     ]
 
 
@@ -7118,7 +7120,7 @@ async def _ask_plain(
     user_id: int,
     question: str,
     history: list[dict[str, Any]],
-    image_data_url: Optional[str] = None,
+    image_data_url: Optional[str | list[str]] = None,
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,

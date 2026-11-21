@@ -1295,6 +1295,95 @@ async def test_ask_with_photo_saves_it_and_history_links_to_it(
 
 
 @pytest.mark.asyncio
+async def test_ask_with_three_photos_sends_all_and_history_serves_each(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    """До трёх фото к одному вопросу: все уходят модели одним ходом, все лежат
+    на диске, история отдаёт их по порядку, а `image_url` — первое, как раньше."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    payloads = [b"\xff\xd8-front", b"\xff\xd8-side", b"\xff\xd8-back"]
+    data_urls = [_image_data_url(payload=p) for p in payloads]
+    seen = {}
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        seen["images"] = kwargs["image_data_url"]
+        return "Спина ровная."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"question": "Как осанка?", "image_data_urls": data_urls})
+    assert resp.status_code == 200, resp.text
+    assert seen["images"] == data_urls
+    assert len(list(chat_media_dir.glob("u111_*.jpg"))) == 3
+
+    user_message = next(m for m in (await client.get("/ai/history")).json()["messages"] if m["role"] == "user")
+    turn_id = user_message["image_url"].split("/")[3]
+    assert user_message["image_urls"] == [
+        f"/ai/history/{turn_id}/image", f"/ai/history/{turn_id}/image/1", f"/ai/history/{turn_id}/image/2",
+    ]
+    for url, payload in zip(user_message["image_urls"], payloads, strict=True):
+        image_resp = await client.get(url)
+        assert image_resp.status_code == 200
+        assert image_resp.content == payload
+    assert (await client.get(f"/ai/history/{turn_id}/image/3")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_single_photo_in_list_keeps_the_old_shape(fresh_db, client_factory, monkeypatch, chat_media_dir):
+    """Одно фото списком — тот же вызов модели (строкой) и одно имя в базе."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    data_url = _image_data_url()
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        assert kwargs["image_data_url"] == data_url
+        return "Ок."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/ai/ask", json={"image_data_urls": [data_url]})
+    assert resp.status_code == 200, resp.text
+    cur = await fresh_db.conn().execute("SELECT image_path FROM ai_conversation_turns")
+    (image_path,) = await cur.fetchone()
+    assert not image_path.startswith("[")
+
+
+@pytest.mark.asyncio
+async def test_ask_rejects_more_than_three_photos(fresh_db, client_factory, monkeypatch, chat_media_dir):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"image_data_urls": [_image_data_url()] * 4})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "too_many_photos"
+    assert "3" in resp.json()["message"]
+    assert list(chat_media_dir.glob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_ask_rejects_both_photo_fields(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    data_url = _image_data_url()
+
+    resp = await client.post("/ai/ask", json={"image_data_url": data_url, "image_data_urls": [data_url]})
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_evicted_turn_with_several_photos_removes_every_file(fresh_db, chat_media_dir, monkeypatch):
+    """Вытесненный ход с несколькими фото сносит с диска все, а не первое."""
+    import chat_attachments
+
+    await fresh_db.get_or_create_user(111, "a", language_code="ru")
+    names = [chat_attachments.save_photo(111, b"x%d" % i, "jpg") for i in range(3)]
+    await fresh_db.add_ai_conversation_turn(111, "q", "a", [], image_path=names)
+    monkeypatch.setattr(fresh_db, "MAX_AI_CONVERSATION_TURNS", 1)
+    await fresh_db.add_ai_conversation_turn(111, "q2", "a2", [])
+    assert list(chat_media_dir.glob("*")) == []
+
+
+@pytest.mark.asyncio
 async def test_history_image_requires_auth(fresh_db, client_factory, monkeypatch, chat_media_dir):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 

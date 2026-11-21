@@ -274,6 +274,7 @@ SKIPPED: dict[str, str] = {
     "GET /media/guides/{name:path}": "раздаёт обложку гайда (не JSON, текста нет)",
     "GET /exercises/{exercise_id:int}/photo": "раздаёт байты фото (не JSON, текста нет)",
     "GET /ai/history/{turn_id:int}/image": "раздаёт байты картинки чата (не JSON)",
+    "GET /ai/history/{turn_id:int}/image/{index:int}": "раздаёт байты второго-третьего фото хода (не JSON)",
     "GET /support/photos/{message_id:int}": "раздаёт байты фото из поддержки (не JSON)",
 }
 

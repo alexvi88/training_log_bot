@@ -130,6 +130,10 @@
     "imageUrl": {
      "type": "String",
      "optional": true
+    },
+    "imageUrls": {
+     "type": "[String]",
+     "optional": true
     }
    }
   },
@@ -6098,5 +6102,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "1653fb44ab3d827bf1ca80e60e7dd7b821948b69"
+ "_ios_commit": "ba17e698fde6b0884b01b723d60c6112a46e219a"
 }

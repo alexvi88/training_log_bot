@@ -17,7 +17,8 @@
   что вызывает бот (handlers/ai_trainer.py, `_handle_question`): он и так
   принимает голые `user_id`/`question`/`history` без объекта телеграм-сообщения
   — aiogram в ai_trainer.py не импортируется вовсе, — так что рефакторинг
-  самого ai_trainer.py не понадобился. Необязательный `image_data_url` в теле —
+  самого ai_trainer.py не понадобился. Необязательный `image_data_url` в теле
+  (или `image_data_urls` — до MAX_PHOTOS_PER_QUESTION фото к одному вопросу) —
   тот же приём, что фото-вопрос в боте (`ai_photo_question`): `question` можно
   не присылать вовсе (как пустую подпись к фото), тогда уходит тот же
   дефолтный вопрос, что и в боте (`ai.screen.default_photo_question`).
@@ -297,6 +298,10 @@ async def has_ai_consent(request: Request, user_id: int) -> bool:
 # один вопрос на десятки тысяч символов стоит как полноценный разговор и в
 # токенах, и в деньгах, а отвечать на него всё равно нечем осмысленным.
 MAX_QUESTION_LENGTH = 4000
+# Сколько фото можно приложить к одному вопросу тренеру (`image_data_urls`).
+# Каждое — отдельные image-токены у модели, поэтому потолок, а не «сколько
+# угодно»; три хватает на «спереди / сбоку / сзади».
+MAX_PHOTOS_PER_QUESTION = 3
 
 # Фото к вопросу тренеру: те же MIME, что реально бывают на телефоне (JPEG с
 # камеры/из галереи, PNG со скриншота, WebP из некоторых галерей). Бот такого
@@ -449,9 +454,9 @@ async def _run_turn(
     question: str,
     history: list,
     *,
-    image_data_url: Optional[str] = None,
+    image_data_url: Optional[str | list[str]] = None,
     video_context: Optional[str] = None,
-    saved_image_path: Optional[str] = None,
+    saved_image_path: Optional[str | list[str]] = None,
     shown_question: Optional[str] = None,
     on_chunk: Optional[Any] = None,
     on_status: Optional[Any] = None,
@@ -891,6 +896,26 @@ async def _turn_response(
     }
 
 
+def _image_data_urls(body: dict[str, Any]) -> list[str]:
+    """Фото к вопросу: старое поле `image_data_url` (одно) или
+    `image_data_urls` — до MAX_PHOTOS_PER_QUESTION штук. Оба сразу — ошибка
+    клиента, а не повод молча выбрать одно."""
+    single = common.optional_str(body, "image_data_url")
+    many = body.get("image_data_urls")
+    if many is None:
+        return [single] if single is not None else []
+    if single is not None:
+        raise ApiError(400, "bad_request", "send image_data_url or image_data_urls, not both")
+    if not isinstance(many, list) or not all(isinstance(url, str) and url for url in many):
+        raise ApiError(400, "bad_request", "image_data_urls must be a list of non-empty strings")
+    if len(many) > MAX_PHOTOS_PER_QUESTION:
+        raise ApiError(
+            400, "too_many_photos", f"at most {MAX_PHOTOS_PER_QUESTION} photos per question",
+            key="ai.screen.too_many_photos", max=MAX_PHOTOS_PER_QUESTION,
+        )
+    return list(many)
+
+
 def _validate_image_data_url(data_url: str, *, too_big_message: str) -> tuple[bytes, str]:
     """Проверить формат и настоящий размер фото-вложения (см.
     common.decode_data_url и докстринг api_v1_voice.py — тот же приём: JSON +
@@ -975,7 +1000,8 @@ async def ask_question(request: Request) -> JSONResponse:
     вызов модели — внутри `ask()` бывает несколько раундов tool-calls) — тот
     же, что у бота: `config.AI_TOTAL_ANSWER_SECONDS`.
 
-    `image_data_url` — необязательное фото к вопросу, тот же сценарий, что
+    `image_data_url` — необязательное фото к вопросу (или `image_data_urls` —
+    до MAX_PHOTOS_PER_QUESTION фото), тот же сценарий, что
     `ai_photo_question` в боте («что это за тренажёр», «посмотри на мою
     технику»). При фото без текста `question` можно не присылать вовсе —
     как пустая подпись к фото в Telegram, — тогда уходит тот же дефолтный
@@ -987,7 +1013,7 @@ async def ask_question(request: Request) -> JSONResponse:
         raise ApiError(503, "not_configured", "ai trainer is not configured")
 
     body = await common.json_body(request)
-    image_data_url = common.optional_str(body, "image_data_url")
+    image_data_urls = _image_data_urls(body)
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else "ru"
 
@@ -1006,15 +1032,16 @@ async def ask_question(request: Request) -> JSONResponse:
     # никто не знает по имени (сносит его только except ниже, до которого 400
     # не доходил). Само сохранение — в `_ask_turn`.
     with i18n.use_lang(lang):
-        raw_image: Optional[tuple[bytes, str]] = None
-        if image_data_url is not None:
-            raw_image = _validate_image_data_url(
-                image_data_url,
+        raw_images = [
+            _validate_image_data_url(
+                data_url,
                 too_big_message=i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024)),
             )
+            for data_url in image_data_urls
+        ]
         question = common.optional_str(body, "question") or ""
         if not question:
-            if image_data_url is None:
+            if not image_data_urls:
                 raise ApiError(400, "bad_request", "question must not be empty", key="api.error.text_empty")
             # Фото без подписи — ровно как ai_photo_question в боте.
             question = i18n.t("ai.screen.default_photo_question")
@@ -1042,7 +1069,7 @@ async def ask_question(request: Request) -> JSONResponse:
     # своей репликой в ленте — «Составь программу для …».
     subject = await _chat_subject(user_id)
     if subject is not None:
-        if image_data_url is not None:
+        if image_data_urls:
             raise _client_mode_refusal()
         if coach_program_ai.is_seed(question):
             with i18n.use_lang(lang):
@@ -1066,7 +1093,7 @@ async def ask_question(request: Request) -> JSONResponse:
         # Бронь снимаем при ЛЮБОМ исходе до старта стрима: упавшая проверка
         # иначе держала бы `_busy` до перезапуска процесса.
         try:
-            fresh_start = await _is_fresh_start(user_id, question, image_data_url, subject)
+            fresh_start = await _is_fresh_start(user_id, question, image_data_urls, subject)
             block = None if fresh_start else await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
         except BaseException:
             _busy.discard(user_id)
@@ -1077,13 +1104,13 @@ async def ask_question(request: Request) -> JSONResponse:
         return _stream_turn(
             user_id, lang,
             lambda on_chunk, on_status: _ask_turn(
-                user_id, lang, question, image_data_url, raw_image, shown_question, on_chunk=on_chunk,
+                user_id, lang, question, image_data_urls, raw_images, shown_question, on_chunk=on_chunk,
                 on_status=on_status, subject=subject,
             ),
         )
     try:
         return JSONResponse(await _ask_turn(
-            user_id, lang, question, image_data_url, raw_image, shown_question, subject=subject,
+            user_id, lang, question, image_data_urls, raw_images, shown_question, subject=subject,
         ))
     finally:
         _busy.discard(user_id)
@@ -1196,8 +1223,8 @@ async def _ask_turn(
     user_id: int,
     lang: str,
     question: str,
-    image_data_url: Optional[str],
-    raw_image: Optional[tuple[bytes, str]],
+    image_data_urls: list[str],
+    raw_images: list[tuple[bytes, str]],
     shown_question: Optional[str],
     *,
     on_chunk: Optional[Any] = None,
@@ -1207,11 +1234,11 @@ async def _ask_turn(
     """Ход /ai/ask после всех проверок тела и брони — общий у обычного ответа и
     у стрима. Бронь `_busy` снимает вызывающий: у стрима ход живёт дольше
     обработчика, и снимать её надо там, где ход действительно кончился."""
-    saved_image_path: Optional[str] = None
+    saved_image_paths: list[str] = []
     try:
-        if raw_image is not None:
+        for raw_image in raw_images:
             try:
-                saved_image_path = chat_attachments.save_photo(user_id, *raw_image)
+                saved_image_paths.append(chat_attachments.save_photo(user_id, *raw_image))
             except Exception:
                 logger.exception("chat photo save failed for user %s", user_id)
         # Последний сохранённый wire-снимок разговора этого пользователя — то
@@ -1219,14 +1246,14 @@ async def _ask_turn(
         # (см. db.ai_conversation_turns и докстринг модуля). Пусто у нового
         # разговора или сразу после DELETE /ai/history.
         history = await db.get_ai_conversation_wire_history(user_id)
-        if await _is_fresh_start(user_id, question, image_data_url, subject):
+        if await _is_fresh_start(user_id, question, image_data_urls, subject):
             return await _fresh_start_response(
                 user_id, lang, question, history, shown_question=shown_question,
                 for_client=subject is not None,
             )
         turn = await _run_turn(
             user_id, question, history,
-            image_data_url=image_data_url, saved_image_path=saved_image_path,
+            image_data_url=_one_or_many(image_data_urls), saved_image_path=_one_or_many(saved_image_paths),
             shown_question=shown_question, on_chunk=on_chunk, on_status=on_status, subject=subject,
         )
         return await _turn_response(user_id, turn, goal=question, subject=subject)
@@ -1235,18 +1262,26 @@ async def _ask_turn(
         # db.add_ai_conversation_turn дело не дошло, и файл на диске никто
         # не будет знать по имени: сносим сами, иначе это утечка на каждый
         # неудачный фото-вопрос.
-        if saved_image_path is not None:
-            chat_attachments.delete(saved_image_path)
+        for name in saved_image_paths:
+            chat_attachments.delete(name)
         raise
 
 
+def _one_or_many(items: list[str]) -> Optional[str | list[str]]:
+    """Одно фото — голой строкой, как до нескольких фото (тот же вызов
+    ai_trainer.ask и та же запись в истории), больше — списком, ноль — None."""
+    if not items:
+        return None
+    return items[0] if len(items) == 1 else list(items)
+
+
 async def _is_fresh_start(
-    user_id: int, question: str, image_data_url: Optional[str],
+    user_id: int, question: str, image_data_urls: list[str],
     subject: Optional[coach_program_ai.ClientChat],
 ) -> bool:
     """«Составь программу» с чистого листа — путь без модели (см.
     `_fresh_start_response`). У программы атлету чистый лист — его дневник."""
-    if image_data_url is not None:
+    if image_data_urls:
         return False
     if subject is not None:
         return coach_program_ai.is_seed(question) and await coach_program_ai.is_fresh(subject.client_id)
@@ -1861,8 +1896,14 @@ def _history_messages(turns: list[Any]) -> list[dict[str, Any]]:
             "role": "user", "text": ai_setup_flow.visible_user_text(row["question"]),
             "created_at": row["created_at"],
         }
-        if row["image_path"]:
+        names = db.chat_image_names(row["image_path"])
+        if names:
+            # `image_url` — первое фото, как до нескольких фото (старые сборки
+            # приложения читают только его); `image_urls` — все по порядку.
             user_message["image_url"] = f"/ai/history/{row['id']}/image"
+            user_message["image_urls"] = [user_message["image_url"]] + [
+                f"/ai/history/{row['id']}/image/{index}" for index in range(1, len(names))
+            ]
         messages.append(user_message)
         messages.append({"role": "assistant", "text": row["answer"], "created_at": row["created_at"]})
     return messages
@@ -1880,10 +1921,14 @@ async def get_history_image(request: Request) -> Any:
     отсутствующий вовсе."""
     user_id = await common.authed_user_id(request)
     turn_id = int(request.path_params["turn_id"])
+    # `/image` — первое фото хода, `/image/{index}` — остальные (до
+    # MAX_PHOTOS_PER_QUESTION фото к вопросу, см. `image_urls` в истории).
+    index = int(request.path_params.get("index", 0))
     turn = await db.get_ai_conversation_turn(user_id, turn_id)
-    if turn is None or not turn["image_path"]:
+    names = db.chat_image_names(turn["image_path"]) if turn is not None else []
+    if not 0 <= index < len(names):
         raise ApiError(404, "not_found", "no image for this turn")
-    path = chat_attachments.path_for(turn["image_path"])
+    path = chat_attachments.path_for(names[index])
     if path is None:
         raise ApiError(404, "not_found", "no image for this turn")
 
@@ -2164,5 +2209,6 @@ routes = [
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
     Route("/ai/history/{turn_id:int}/image", get_history_image, methods=["GET"]),
+    Route("/ai/history/{turn_id:int}/image/{index:int}", get_history_image, methods=["GET"]),
     Route("/ai/thinking", get_thinking, methods=["GET"]),
 ]
