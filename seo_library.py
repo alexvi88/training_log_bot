@@ -806,7 +806,7 @@ def _render_pair(lang: str, page: Page, request) -> str:
     )
     base = sp.base_url(request)
     article = {
-        "@context": "https://schema.org", "@type": "Article", "headline": title[:110], "description": description,
+        "@context": "https://schema.org", "@type": "Article", "headline": page_h1(page, lang)[:110], "description": description,
         "inLanguage": sp.hreflang(lang), "mainEntityOfPage": base + sp.url_for(page, lang),
         "image": [base + sp._media_url(exercise_media.frame_name(sp._EXERCISE_BY_URL[u], 1)) for u in (a, b)],
         "author": {"@id": base + sp.ORG_ID, "@type": "Organization", "name": t("seo.brand")},

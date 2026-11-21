@@ -95,13 +95,45 @@ async def test_every_page_kind_renders_in_every_language_with_indexed_hreflang_s
                 expected = [(seo_pages.hreflang(c), HOST + seo_pages.url_for(page, c)) for c in seo_pages.INDEXED_LANGS]
                 expected.append(("x-default", HOST + seo_pages.url_for(page, "en")))
             assert alternates == expected, url
-            noindex = '<meta name=robots content="noindex,follow">' in html
+            noindex = '<meta name=robots content="noindex, follow">' in html
             assert noindex == (not seo_pages.indexable(page, lang)), url
+            # Тот же запрет — заголовком; у страницы в индексе заголовка нет.
+            assert resp.headers.get("x-robots-tag") == (None if seo_pages.indexable(page, lang) else "noindex, follow"), url
             assert f'<meta property="og:locale" content="{seo_pages.OG_LOCALES[lang]}">' in html
             assert f'href="/site.webmanifest?lang={seo_pages.lang_segment(lang)}"' in html
             if lang != "ru":
                 rest = html.replace("Русский", "")
                 assert not _CYRILLIC.search(rest), (url, _CYRILLIC.findall(rest)[:10])
+
+
+async def test_only_ru_and_en_are_indexed_other_languages_stay_open():
+    """GSC, ноябрь 2026: восемь языков вчетверо раздули sitemap, в индексе
+    осталось 146 страниц. В поиск идут только ru и en; остальные языки
+    открываются (200, без редиректа), но закрыты noindex,follow и не
+    упоминаются ни в sitemap, ни в hreflang, ни в llms.txt."""
+    assert seo_pages.INDEXED_LANGS == ("ru", "en")
+    closed = [c for c in seo_pages.LANGS if c not in seo_pages.INDEXED_LANGS]
+    assert closed == ["es", "pt", "pt-PT", "de", "fr", "tr"]
+    page = seo_pages.Page("tool", "1rm")
+    paths = [seo_pages.url_for(page, c) for c in seo_pages.LANGS] + ["/sitemap.xml", "/llms.txt", "/llms-full.txt"]
+    responses = await _get_many(paths)
+    for code in seo_pages.LANGS:
+        resp = responses[seo_pages.url_for(page, code)]
+        assert resp.status_code == 200, code
+        hreflangs = re.findall(r"<link rel=alternate hreflang=([^ ]+) ", resp.text)
+        assert hreflangs == ["ru", "en", "x-default"], code
+        if code in closed:
+            assert resp.headers["x-robots-tag"] == "noindex, follow", code
+            assert '<meta name=robots content="noindex, follow">' in resp.text, code
+        else:
+            assert "x-robots-tag" not in resp.headers, code
+            assert "<meta name=robots" not in resp.text, code
+    for path in ("/sitemap.xml", "/llms.txt", "/llms-full.txt"):
+        text = responses[path].text
+        for code in closed:
+            seg = seo_pages.lang_segment(code)
+            assert f"{HOST}/{seg}/" not in text and f'{HOST}/{seg}"' not in text, (path, code)
+            assert f'hreflang="{seo_pages.hreflang(code)}"' not in text, (path, code)
 
 
 async def test_switcher_lists_all_languages_in_header_and_footer():
@@ -119,12 +151,18 @@ async def test_switcher_lists_all_languages_in_header_and_footer():
         footer_langs = re.search(r"<nav class=foot-langs[^>]*>(.*?)</nav>", foot, re.S)
         assert footer_langs, lang
         for block in (switcher.group(2), footer_langs.group(1)):
-            links = re.findall(r'<a href="([^"]+)" hreflang=([^ ]+) lang=([^ >]+)( aria-current=true)?>([^<]+)</a>', block)
-            assert [(href, code, name) for href, code, _l, _c, name in links] == [
+            links = re.findall(
+                r'<a href="([^"]+)" hreflang=([^ ]+) lang=([^ >]+)( rel=nofollow)?( aria-current=true)?>([^<]+)</a>', block)
+            assert [(href, code, name) for href, code, _l, _r, _c, name in links] == [
                 (seo_pages.url_for(page, c), seo_pages.hreflang(c), seo_pages.AUTONYMS[c]) for c in seo_pages.LANGS]
-            assert all(code == lng for _h, code, lng, _c, _n in links)
+            assert all(code == lng for _h, code, lng, _r, _c, _n in links)
             # Текущий язык отмечен, и только он.
-            assert [name for _h, _code, _l, current, name in links if current] == [seo_pages.AUTONYMS[lang]]
+            assert [name for _h, _code, _l, _r, current, name in links if current] == [seo_pages.AUTONYMS[lang]]
+            # Со страницы в индексе (ru/en) языки вне индекса — nofollow;
+            # между noindex-копиями — обычные ссылки.
+            nofollow = [seo_pages.AUTONYMS[c] for c in seo_pages.LANGS
+                        if lang in seo_pages.INDEXED_LANGS and c not in seo_pages.INDEXED_LANGS]
+            assert [name for _h, _code, _l, rel, _c, name in links if rel] == nofollow
         assert "seo.footer.other_lang" not in html
 
 
