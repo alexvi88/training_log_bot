@@ -8,6 +8,9 @@ Hevy» или «калькулятор 1ПМ», — поиск (и поиск в
 `/go/appstore?f=<блок>`: там клик считается (site_stats) и уходит
 редиректом на `t.me/<бот>?start=src_seo_<блок>` (acquisition.py) или в App
 Store — так `/growth` видит и клики, и тех, кто дошёл до первой тренировки.
+Какой поисковик привёл, знает только браузер: скрипт страницы
+(`site_stats.ENGINE_JS`) дописывает к кнопкам `&e=<буква>`, и метка бота
+становится `src_seo_<блок>_<буква>` (`bot_payload`, `seo_source_parts`).
 
 Язык — в пути, сегментом из строчных букв: `/ru/...`, `/en/...`, `/es/`,
 `/pt/` (бразильский), `/pt-pt/`, `/de/`, `/fr/`, `/tr/` — `lang_segment` и
@@ -373,6 +376,30 @@ _BLOCKS = {
 LLMS_BLOCK = "llms"
 _KNOWN_BLOCKS = frozenset(_BLOCKS.values()) | {LLMS_BLOCK}
 
+# Метка с поисковиком — `src_seo_<блок>_<буква>` (site_stats.SEARCH_ENGINES).
+# Хвост `_g` съедает два символа из тех же 48, и блокам длиннее семи букв
+# ссылка с ним не влезает: у них в метке с буквой стоит короткий синоним.
+# Только там — старые метки без буквы и счётчик кликов (`f=`) не меняются,
+# а `seo_source_parts` возвращает синоним к блоку, так что /growth
+# складывает их в одну строку. Синонимы не меняются: они живут в users.source.
+_ENGINE_BLOCK_ALIASES = {
+    "imp_hevy": "imp_hvy",
+    "imp_strng": "imp_str",
+    "vs_strng": "vs_str",
+    "vs_fitbod": "vs_fbod",
+    "vs_jefit": "vs_jft",
+    "alt_hevy": "alt_hvy",
+    "alt_strng": "alt_str",
+    "alt_fbod": "alt_fbd",
+    "alt_jfit": "alt_jft",
+    "t531_log": "t531lg",
+    "cmp_apps": "cmpapps",
+    "goal_log": "goal_lg",
+    "prot_log": "prot_lg",
+    "kcal_log": "kcal_lg",
+}
+_BLOCK_BY_ALIAS = {alias: block for block, alias in _ENGINE_BLOCK_ALIASES.items()}
+
 # Сколько смысловых блоков у статьи-страницы (ключи seo.<id>.s<n>.h / .p_html).
 _ARTICLE_SECTIONS = {"ai-coach": 4, "video-review": 4, "telegram": 9, "workout-log-app": 7}
 
@@ -585,12 +612,32 @@ def bot_username() -> str:
     return sharing._bot_username or config.BOT_USERNAME
 
 
-def bot_payload(block: str) -> str:
+def bot_payload(block: str, engine: Optional[str] = None) -> str:
+    """`src_seo_<блок>`; с буквой поисковика — `src_seo_<блок>_<буква>`.
+    Буква не из site_stats.SEARCH_ENGINES — как без неё."""
+    if site_stats.valid_engine(engine):
+        return f"{BOT_TAG_PREFIX}{_ENGINE_BLOCK_ALIASES.get(block, block)}_{engine}"
     return f"{BOT_TAG_PREFIX}{block}"
 
 
-def bot_link(block: str) -> str:
-    return f"https://t.me/{bot_username()}?start={bot_payload(block)}"
+def bot_link(block: str, engine: Optional[str] = None) -> str:
+    return f"https://t.me/{bot_username()}?start={bot_payload(block, engine)}"
+
+
+def seo_source_parts(source: str) -> Optional[tuple[str, Optional[str]]]:
+    """`users.source` метки сайта → (блок, буква поисковика или None).
+    None — это не метка сайта. Старая метка без буквы — (блок, None)."""
+    if not source.startswith(BOT_TAG_PREFIX):
+        return None
+    rest = source[len(BOT_TAG_PREFIX):]
+    head, sep, letter = rest.rpartition("_")
+    if sep and site_stats.valid_engine(letter) and (head in _KNOWN_BLOCKS or head in _BLOCK_BY_ALIAS):
+        return _BLOCK_BY_ALIAS.get(head, head), letter
+    return rest, None
+
+
+def _with_engine(href: str, engine: Optional[str]) -> str:
+    return f"{href}&e={engine}" if site_stats.valid_engine(engine) else href
 
 
 def go_url(target: str, block: str) -> str:
@@ -1022,7 +1069,7 @@ def _layout(lang: str, page: Page, request: Optional[Request], *, title: str, de
         inner = f"<div class=prose>{_crumbs_html(lang, page)}{body}</div>"
     cls = "" if page.kind == "home" else " class=page"
     return ("".join(head) + f"<body{cls}>{header}<main id=main><div class=wrap>{inner}</div></main>"
-            f"{_footer(lang, page, request)}<script>{_PAGE_JS}</script>"
+            f"{_footer(lang, page, request)}<script>{_PAGE_JS}{site_stats.ENGINE_JS}</script>"
             f"{site_stats.beacon_script(url_for(page, lang))}</body></html>")
 
 
@@ -2743,11 +2790,12 @@ def _html(content: str, lang: str, *, index: bool = True) -> HTMLResponse:
     return HTMLResponse(content, headers=headers)
 
 
-async def _count(kind: str, page_key: str, lang: Optional[str], request: Request, target: Optional[str] = None) -> None:
+async def _count(kind: str, page_key: str, lang: Optional[str], request: Request, target: Optional[str] = None,
+                 engine: Optional[str] = None) -> None:
     await site_stats.record(
         kind, page_key, lang, user_agent=request.headers.get("user-agent"), referer=request.headers.get("referer"),
         own_hosts=_own_hosts(request), utm=request.query_params.get("utm_source"), target=target,
-        headers=request.headers,
+        headers=request.headers, engine=engine,
     )
 
 
@@ -2814,10 +2862,16 @@ def _block_arg(request: Request) -> str:
     return block if block in _KNOWN_BLOCKS else _BLOCKS["home"]
 
 
+def _engine_arg(request: Request) -> Optional[str]:
+    """Буква поисковика из `?e=` (site_stats.ENGINE_JS); чужое — None."""
+    return site_stats.valid_engine(request.query_params.get("e"))
+
+
 async def go_bot_route(request: Request) -> Response:
     block = _block_arg(request)
-    await _count("click", _click_page(request, block), None, request, target="bot")
-    return RedirectResponse(bot_link(block), status_code=302, headers={"Cache-Control": "no-store", **_SECURITY})
+    engine = _engine_arg(request)
+    await _count("click", _click_page(request, block), None, request, target="bot", engine=engine)
+    return RedirectResponse(bot_link(block, engine), status_code=302, headers={"Cache-Control": "no-store", **_SECURITY})
 
 
 async def go_diary_route(request: Request) -> Response:
@@ -2834,20 +2888,21 @@ async def go_diary_route(request: Request) -> Response:
 ANDROID_GATE_PARAM = "android"
 
 
-def render_android_gate(lang: str, block: str) -> str:
+def render_android_gate(lang: str, block: str, engine: Optional[str] = None) -> str:
     """Страница вместо App Store для Android: приложения там нет, и прямой
     редирект на apps.apple.com был тупиком — по логам сайта половина кликов
     «App Store» из поиска приходила именно с Android. Главная кнопка — бот
     (тот же блок `f=`, клик считается как обычный клик в бот), App Store —
-    строкой ниже, без повторного счёта."""
+    строкой ниже, без повторного счёта. Буква поисковика (`e=`) едет дальше
+    в обе ссылки."""
     import coach_invite_page
 
     t = _t(lang)
     title = t("seo.android_gate.title")
-    store_href = f"{go_url('appstore', block)}&{ANDROID_GATE_PARAM}=1"
+    store_href = _with_engine(f"{go_url('appstore', block)}&{ANDROID_GATE_PARAM}=1", engine)
     body = (
         f"<h1>{_e(title)}</h1><p>{_e(t('seo.android_gate.lead'))}</p>"
-        f'<a class="btn primary" href="{_e(go_url("bot", block))}">{_e(t("seo.cta.bot"))}</a>'
+        f'<a class="btn primary" href="{_e(_with_engine(go_url("bot", block), engine))}">{_e(t("seo.cta.bot"))}</a>'
         f'<p class=muted>{t("seo.android_gate.store_html", href=_e(store_href))}</p>'
     )
     return coach_invite_page._page(lang, title, body)
@@ -2855,15 +2910,16 @@ def render_android_gate(lang: str, block: str) -> str:
 
 async def go_appstore_route(request: Request) -> Response:
     block = _block_arg(request)
+    engine = _engine_arg(request)
     store = config.app_store_url()
     if not store:
-        return RedirectResponse(go_url("bot", block), status_code=302, headers={"Cache-Control": "no-store"})
+        return RedirectResponse(_with_engine(go_url("bot", block), engine), status_code=302, headers={"Cache-Control": "no-store"})
     gate_passed = request.query_params.get(ANDROID_GATE_PARAM) == "1"
     if not gate_passed:
-        await _count("click", _click_page(request, block), None, request, target="appstore")
+        await _count("click", _click_page(request, block), None, request, target="appstore", engine=engine)
     if device_of(request) == "android" and not gate_passed:
         lang = lang_of_path(urlsplit(request.headers.get("referer") or "").path) or legal_pages.page_lang(request)
-        return HTMLResponse(render_android_gate(lang, block), headers={
+        return HTMLResponse(render_android_gate(lang, block, engine), headers={
             "Cache-Control": "no-store", "Vary": "User-Agent, Accept-Language", "Content-Language": lang, **_SECURITY,
         })
     return RedirectResponse(app_store_link(block) or store, status_code=302, headers={"Cache-Control": "no-store", **_SECURITY})
