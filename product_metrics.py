@@ -262,6 +262,8 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # (source progress — с экрана «Прогресс», menu — из «Меню») → раскрыл
     # разбор одной части (part — её ключ). Сама оценка в событие не идёт.
     "progress_score_open": frozenset({"source"}),
+    "progress_score_share": frozenset({"source"}),
+    "progress_score_shared": frozenset({"source", "activity"}),
     "progress_score_part_open": frozenset({"part"}),
 }
 
@@ -296,6 +298,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("year_review_share", "source"): frozenset({"push", "profile", "import"}),
     ("year_review_shared", "source"): frozenset({"push", "profile", "import"}),
     ("progress_score_open", "source"): frozenset({"menu", "workout", "tools"}),
+    ("progress_score_share", "source"): frozenset({"menu", "workout", "tools"}),
+    ("progress_score_shared", "source"): frozenset({"menu", "workout", "tools"}),
     ("progress_score_part_open", "part"): frozenset({"progression", "regularity", "volume", "balance"}),
     ("guide_action", "action"): frozenset({
         "progress", "exercise_progress", "programs", "import", "video", "coach_question", "rest_timer",
