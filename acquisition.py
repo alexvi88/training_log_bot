@@ -34,6 +34,8 @@ SOURCE_BOT_NO_START = "bot_no_start"
 
 REFERRAL_PREFIX = "ref_"
 CHANNEL_PREFIX = "src_"
+# Метки кнопок сайта (seo_pages.BOT_TAG_PREFIX): `src_seo_<блок>[_<буква поисковика>]`.
+SEO_SOURCE_PREFIX = f"{CHANNEL_PREFIX}seo_"
 # Приглашение тренера: `?start=coach_<код>` (handlers/coach.py). Тот же
 # «пришёл по приглашению живого человека», что и ref_, но своей строкой в
 # воронке: так видно, сколько людей приводит сервис для тренеров. Автора
@@ -219,6 +221,15 @@ def _source_title(source: str) -> str:
         return "📱 Приложение, без метки"
     if source == SOURCE_BOT_NO_START:
         return "🤖 Бот, без /start"
+    if source.startswith(SEO_SOURCE_PREFIX):
+        # Метка сайта с буквой поисковика (seo_pages.bot_payload):
+        # «🌐 Сайт · ex · Google». Старая, без буквы, — как раньше, «📣 seo_ex».
+        import seo_pages
+        import site_stats
+
+        parts = seo_pages.seo_source_parts(source)
+        if parts and parts[1]:
+            return f"🌐 Сайт · {parts[0]} · {site_stats.engine_label(parts[1])}"
     return f"📣 {source[len(CHANNEL_PREFIX):]}" if source.startswith(CHANNEL_PREFIX) else source
 
 

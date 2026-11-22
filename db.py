@@ -12867,6 +12867,11 @@ async def site_stats(days: int = 30, *, day: Optional[str] = None, top: int = 10
             f"AND crawler IN ('other', 'unknown', 'suspect') AND {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT 8")],
         "clicks": {r[0]: r[1] for r in await rows(
             f"SELECT target, COUNT(*) n FROM site_events WHERE kind = 'click' AND device <> 'bot' AND {window} GROUP BY target")},
+        # Источник клика: `engine:<буква>` — поисковик, с которого начался
+        # визит (site_stats.ENGINE_JS); у старых кликов — наш же домен.
+        "click_referrers": [(r[0], r[1]) for r in await rows(
+            f"SELECT referrer, COUNT(*) n FROM site_events WHERE kind = 'click' AND device <> 'bot' AND {window} "
+            "GROUP BY referrer ORDER BY n DESC, referrer")],
         "embeds": (await rows(f"SELECT COUNT(*) FROM site_events WHERE kind = 'embed' AND device <> 'bot' AND {window}"))[0][0],
         # Предзагрузки из выдачи (site_stats.PREFETCH_KIND) — не люди; по источнику.
         "prefetches": [(r[0], r[1]) for r in await rows(

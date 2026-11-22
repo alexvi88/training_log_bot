@@ -38,6 +38,16 @@ Accept-Language или Sec-Fetch-Mode — их шлёт любой живой б
 Accept-Language «компьютер» пишется роботом `suspect` (`is_scripted`) и
 людьми, кликами и «без подтверждения» не считается.
 
+**Какой поисковик привёл.** Клик по кнопке (`/go/*`) приходит с Referer
+нашей же страницы, поэтому поисковик знает только браузер: скрипт страницы
+(`ENGINE_JS`) на первой странице визита по `document.referrer` запоминает
+во вкладке (sessionStorage) одну букву из `SEARCH_ENGINES` и дописывает её
+`&e=<буква>` ко всем ссылкам `/go/bot|appstore|diary`. Первое значение за
+сессию — главное: переход по своим страницам его не перезаписывает. Ни
+cookies, ни идентификатора — только буква. Сервер кладёт её в строку клика
+полем `referrer` (`engine:<буква>`: у клика там всё равно наш же сайт) и в
+метку бота хвостом (`src_seo_<блок>_<буква>`, seo_pages.bot_payload).
+
 Роботы (Googlebot, bingbot, GPTBot, OAI-SearchBot, PerplexityBot, ClaudeBot…)
 считаются отдельно: обход — это не посетитель, но видеть, ходит ли к нам
 поиск ChatGPT, полезно.
@@ -316,6 +326,59 @@ def referrer_name(referer: Optional[str], own_hosts: tuple[str, ...] = ()) -> st
     return host if _HOST_RE.match(host) else "other"
 
 
+# Буква поисковика, с которого начался визит (ENGINE_JS) → подпись в /growth.
+# Порядок — порядок вывода. Буквы не меняются: они живут в users.source.
+SEARCH_ENGINES: dict[str, str] = {
+    "g": "Google",
+    "y": "Яндекс",
+    "b": "Bing",
+    "d": "DuckDuckGo",
+    "o": "другой сайт",
+    "n": "без источника",
+}
+# Клик без буквы (старая страница, без JS, пришёл не с первой страницы
+# сессии) — поисковик неизвестен.
+ENGINE_UNKNOWN = "?"
+ENGINE_UNKNOWN_LABEL = "поисковик неизвестен"
+ENGINE_REFERRER_PREFIX = "engine:"
+
+
+def valid_engine(value: Optional[str]) -> Optional[str]:
+    """Буква из `?e=` — только из SEARCH_ENGINES; всё прочее — как без неё."""
+    return value if value in SEARCH_ENGINES else None
+
+
+def engine_of_referrer(referrer: Optional[str]) -> str:
+    """Буква поисковика из поля referrer строки клика; без неё — ENGINE_UNKNOWN."""
+    ref = referrer or ""
+    letter = ref[len(ENGINE_REFERRER_PREFIX):] if ref.startswith(ENGINE_REFERRER_PREFIX) else ""
+    return letter if letter in SEARCH_ENGINES else ENGINE_UNKNOWN
+
+
+def engine_label(letter: str) -> str:
+    return SEARCH_ENGINES.get(letter, ENGINE_UNKNOWN_LABEL)
+
+
+# Скрипт страницы: буква поисковика на сессию вкладки и `&e=` у кнопок /go/*.
+# Ссылки, которые страница дорисует потом (кнопка под результатом
+# калькулятора), правятся в момент нажатия — слушатель на документе.
+ENGINE_JS = (
+    "(function(){try{var d=document,K='se',c=null;try{c=sessionStorage.getItem(K)}catch(e){}"
+    "if(!/^[gybdon]$/.test(c||'')){c=null;var r=d.referrer,h='';"
+    "try{h=r?new URL(r).hostname.toLowerCase().replace(/^www\\./,''):''}catch(e){h='?'}"
+    "if(!r)c='n';else if(h!==location.hostname.toLowerCase().replace(/^www\\./,''))"
+    "c=/(^|\\.)google\\.[a-z.]+$/.test(h)?'g':/(^|\\.)(yandex\\.[a-z.]+|ya\\.ru)$/.test(h)?'y'"
+    ":/(^|\\.)bing\\.com$/.test(h)?'b':/(^|\\.)duckduckgo\\.com$/.test(h)?'d':'o';"
+    "if(c){try{sessionStorage.setItem(K,c)}catch(e){}}}"
+    "if(!c)return;"
+    "function fix(a){var u=a.getAttribute('href')||'';"
+    "if(/^\\/go\\/(bot|appstore|diary)\\?/.test(u)&&!/[?&]e=/.test(u))a.setAttribute('href',u+'&e='+c)}"
+    "var L=d.querySelectorAll('a[href^=\"/go/\"]');for(var i=0;i<L.length;i++)fix(L[i]);"
+    "d.addEventListener('click',function(v){var a=v.target&&v.target.closest&&v.target.closest('a[href^=\"/go/\"]');"
+    "if(a)fix(a)},true);}catch(e){}})();"
+)
+
+
 def clean_utm(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -347,15 +410,20 @@ def _log_level(crawler: Optional[str], family: Optional[str]):
 
 async def record(kind: str, page: str, lang: Optional[str], *, user_agent: Optional[str],
                  referer: Optional[str], own_hosts: tuple[str, ...] = (), utm: Optional[str] = None,
-                 target: Optional[str] = None, headers: Any = None) -> tuple[str, Optional[str], str]:
+                 target: Optional[str] = None, headers: Any = None,
+                 engine: Optional[str] = None) -> tuple[str, Optional[str], str]:
     """Пишет событие и строку в лог; возвращает (устройство, робот, источник).
 
     `headers` — заголовки запроса страницы: по ним «компьютер», похожий на
-    автомат, попадает в лог с сырым UA (в базу — только семейство)."""
+    автомат, попадает в лог с сырым UA (в базу — только семейство).
+    `engine` — буква поисковика у клика (`?e=`, ENGINE_JS): ложится в
+    источник как `engine:<буква>` вместо нашего же домена из Referer."""
     if kind == "view" and is_prefetch(headers):
         kind = PREFETCH_KIND
     device, crawler = classify_ua(user_agent)
     source = referrer_name(referer, own_hosts)
+    if valid_engine(engine):
+        source = f"{ENGINE_REFERRER_PREFIX}{engine}"
     utm_clean = clean_utm(utm)
     family = ua_family(user_agent)
     suspect = looks_automated(headers) if device == "desktop" else None
@@ -518,11 +586,61 @@ def format_growth_block(stats: dict[str, Any], period: str, seo_signups: list[An
             lines.append(
                 "AI открыл страницу по вопросу человека: " + ", ".join(f"{escape(str(c))} {n}" for c, n in on_demand)
             )
+    click_engines = _engine_totals((engine_of_referrer(r), n) for r, n in stats.get("click_referrers") or [])
+    if any(letter != ENGINE_UNKNOWN for letter, _ in click_engines):
+        lines.append("Клики по поисковику: " + _engine_list(click_engines))
     if seo_signups:
         users = sum(r["users"] for r in seo_signups)
         activated = sum(r["activated"] for r in seo_signups)
-        detail = ", ".join(f"{escape(r['source'].removeprefix('src_seo_'))} {r['users']}" for r in seo_signups)
+        detail = ", ".join(_signup_group(block, engines) for block, engines in group_seo_signups(seo_signups))
         lines.append(f"Пришли в бота по ссылкам сайта: {users}, из них первую тренировку закрыли {activated} ({detail})")
+        by_engine = _engine_totals(
+            (engine, n) for _block, engines in group_seo_signups(seo_signups) for engine, n in engines.items())
+        if any(letter != ENGINE_UNKNOWN for letter, _ in by_engine):
+            lines.append("Пришли по поисковику: " + _engine_list(by_engine))
+            lines.append("Буквы: " + ", ".join(f"{k} — {v}" for k, v in SEARCH_ENGINES.items())
+                         + f", {ENGINE_UNKNOWN} — {ENGINE_UNKNOWN_LABEL} (метка до разметки поисковика)")
     else:
         lines.append("Пришли в бота по ссылкам сайта: 0")
     return "\n".join(lines)
+
+
+def _engine_order(letter: str) -> int:
+    order = list(SEARCH_ENGINES)
+    return order.index(letter) if letter in SEARCH_ENGINES else len(order)
+
+
+def _engine_totals(pairs: Any) -> list[tuple[str, int]]:
+    totals: dict[str, int] = {}
+    for letter, n in pairs:
+        totals[letter] = totals.get(letter, 0) + n
+    return sorted(totals.items(), key=lambda item: (-item[1], _engine_order(item[0])))
+
+
+def _engine_list(totals: list[tuple[str, int]]) -> str:
+    return ", ".join(f"{engine_label(letter)} {n}" for letter, n in totals)
+
+
+def group_seo_signups(seo_signups: list[Any]) -> list[tuple[str, dict[str, int]]]:
+    """Приходы по меткам src_seo_* → [(блок, {буква: людей})], больше людей —
+    выше. Метка без буквы поисковика (до разметки) — под ENGINE_UNKNOWN."""
+    import seo_pages
+
+    groups: dict[str, dict[str, int]] = {}
+    for row in seo_signups:
+        block, engine = seo_pages.seo_source_parts(str(row["source"])) or (str(row["source"]), None)
+        bucket = groups.setdefault(block, {})
+        letter = engine or ENGINE_UNKNOWN
+        bucket[letter] = bucket.get(letter, 0) + row["users"]
+    return sorted(groups.items(), key=lambda item: (-sum(item[1].values()), item[0]))
+
+
+def _signup_group(block: str, engines: dict[str, int]) -> str:
+    """«ex 3 (g 2, y 1)»; только старые метки без буквы — «ex 3», как раньше."""
+    from html import escape
+
+    total = sum(engines.values())
+    if set(engines) == {ENGINE_UNKNOWN}:
+        return f"{escape(block)} {total}"
+    parts = sorted(engines.items(), key=lambda item: (-item[1], _engine_order(item[0])))
+    return f"{escape(block)} {total} (" + ", ".join(f"{letter} {n}" for letter, n in parts) + ")"
