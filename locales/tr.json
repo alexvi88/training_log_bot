@@ -6103,7 +6103,7 @@
   "progress_score.detail.progression_from": "güç artışını {date} itibarıyla sayacağım",
   "progress_score.detail.progression_none": "bir aylık antrenman geçmişin olunca sayacağım",
   "progress_score.detail.regularity": "{n, plural, one{# haftanın} other{# haftanın}} {full} tanesinde 2+ antrenman",
-  "progress_score.detail.volume": "{n, plural, one{# kas grubunun} other{# kas grubunun}} {full} tanesinde her hafta 6 set",
+  "progress_score.detail.volume": "{n, plural, one{# kas grubunun} other{# kas grubunun}} {full} tanesinde her hafta 6+ set",
   "progress_score.detail.volume_deload": "bu hafta deload — hacme saymıyorum",
   "progress_score.detail.volume_none": "henüz kas grubuna göre set yok",
   "progress_score.coach.empty": "Bir antrenman yap, puanını hesaplayayım.",
@@ -6144,5 +6144,6 @@
   "progress_score.widget.volume_keep": "Hacim tam — böyle devam",
   "progress_score.widget.balance": "Bir grubu bıraktın",
   "progress_score.widget.all_good": "Her şey plana göre",
-  "api.error.bad_score_days": "Bir dönem seç: 28, 90 ya da 365 gün."
+  "api.error.bad_score_days": "Bir dönem seç: 28, 90 ya da 365 gün.",
+  "api.error.bad_score_as_of": "O haftayı açamıyorum. Son bir yıldan, bugünden sonra olmayan bir gün seç."
 }

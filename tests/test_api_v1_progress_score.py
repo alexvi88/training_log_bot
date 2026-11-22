@@ -91,7 +91,7 @@ async def test_shape_and_language(fresh_db, client_factory, lang):
     assert [p["key"] for p in body["parts"]] == ["progression", "regularity", "volume"]
     assert [p["max"] for p in body["parts"]] == [5, 3, 2]
     assert len(body["history"]) == 5  # точка в неделю
-    assert set(body["history"][0]) == {"date", "score", "progression", "regularity", "volume"}
+    assert set(body["history"][0]) == {"date", "score", "delta_7d", "progression", "regularity", "volume"}
     assert body["history"][-1]["score"] == body["score"]
     assert body["best"]["score"] >= body["score"]
     assert isinstance(body["delta_7d"], float)
@@ -105,6 +105,7 @@ async def test_shape_and_language(fresh_db, client_factory, lang):
     assert all(lift["baseline_reps"] is None and lift["current_reps"] is None for lift in body["lifts"])
     assert body["widget_line"]
     assert {g["name"] for g in body["groups"]} == ({"Грудь", "Ноги"} if lang == "ru" else {"Chest", "Legs"})
+    _assert_groups_match_volume(body)
     texts = _texts(body)
     if lang == "en":
         assert not any(CYRILLIC.search(t) for t in texts), texts
@@ -112,6 +113,25 @@ async def test_shape_and_language(fresh_db, client_factory, lang):
     else:
         assert body["title"] == "ОЦЕНКА"
         assert all(CYRILLIC.search(t) for t in texts if t), texts
+
+
+def _assert_groups_match_volume(body) -> None:
+    """Карточка объёма рисует ровно то, что в балле: среднее за неделю — по
+    неделям в счёте без разгрузок, подходы по неделям — в порядке `weeks`."""
+    used = [i for i, w in enumerate(body["weeks"]) if w["counted"] and not w["deload"]]
+    shares = []
+    for g in body["groups"]:
+        assert isinstance(g["sets_per_week"], float)
+        assert len(g["week_sets"]) == len(body["weeks"]) and all(isinstance(n, int) for n in g["week_sets"])
+        assert sum(g["week_sets"]) == g["sets_28d"]
+        assert g["sets_per_week"] == round(sum(g["week_sets"][i] for i in used) / len(used), 1)
+        shares.append(sum(min(g["week_sets"][i], 6) / 6 for i in used) / len(used))
+    volume = next(p for p in body["parts"] if p["key"] == "volume")
+    assert volume["points"] == round(2 * sum(shares) / len(shares), 1)
+    # Подпись считает группы с полным баллом: от 6 подходов в каждой из этих недель.
+    full = sum(1 for g in body["groups"] if all(g["week_sets"][i] >= 6 for i in used))
+    if not body["deload"]:
+        assert f" {full} " in volume["detail"], volume["detail"]
 
 
 async def test_empty_account(fresh_db, client_factory):
@@ -159,6 +179,63 @@ async def test_bad_period_is_human_400(fresh_db, client_factory, days):
     resp = await client.get(f"/progress/score?days={days}")
     assert resp.status_code == 400
     assert resp.json()["message"] == "Период выбирай из трёх: 28, 90 или 365 дней."
+
+
+async def test_history_delta_is_against_a_week_before_each_point(fresh_db, client_factory):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    await _seed_history(111)
+    long = (await client.get("/progress/score?days=90")).json()["history"]
+    by_date = {h["date"]: h for h in long}
+    for prev, point in zip(long, long[1:], strict=False):
+        if prev["score"] is None or point["score"] is None:
+            assert point["delta_7d"] is None
+        else:
+            assert point["delta_7d"] == round(point["score"] - prev["score"], 1)
+    assert long[0]["delta_7d"] is None  # неделей раньше тренировок не было
+    # Самая старая точка короткого ряда тоже знает свою прошлую неделю.
+    short = (await client.get("/progress/score")).json()
+    for point in short["history"]:
+        assert point["delta_7d"] == by_date[point["date"]]["delta_7d"]
+    assert short["history"][-1]["delta_7d"] == short["delta_7d"]
+
+
+async def test_as_of_is_the_report_of_that_day(fresh_db, client_factory, monkeypatch):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    await _seed_history(111)
+    now = (await client.get("/progress/score?days=90")).json()
+    loads = []
+    real = db.progress_score_sets
+
+    async def counted(*args, **kwargs):
+        loads.append(args)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(db, "progress_score_sets", counted)
+    point = now["history"][-3]
+    week = (await client.get(f"/progress/score?as_of={point['date']}")).json()
+    assert len(loads) == 1  # одна загрузка подходов, как без as_of
+    assert week["score"] == point["score"] and week["delta_7d"] == point["delta_7d"]
+    assert week["history"][-1]["date"] == point["date"] and len(week["history"]) == 5
+    assert week["weeks"][0]["end"] >= point["date"] >= week["weeks"][0]["start"]
+    assert (await client.get(f"/progress/score?as_of={point['date']}&days=90")).json()["period_days"] == 90
+    # До первой тренировки — не ошибка, а пустая оценка.
+    first = dt.date.fromisoformat(now["history"][0]["date"])
+    empty = (await client.get(f"/progress/score?as_of={first.isoformat()}")).json()
+    assert empty["status"] == "empty" and empty["score"] is None
+
+
+@pytest.mark.parametrize("shift, raw", [(1, None), (366, None), (None, "soon"), (None, "2026-1-1")])
+async def test_bad_as_of_is_human_400(fresh_db, client_factory, shift, raw):
+    client = await _client(fresh_db, client_factory, 111, "ru")
+    today = timeutil.user_today(await db.get_user(111))
+    if shift == 1:
+        raw = (today + dt.timedelta(days=1)).isoformat()
+    elif shift:
+        raw = (today - dt.timedelta(days=shift)).isoformat()
+    resp = await client.get(f"/progress/score?as_of={raw}")
+    assert resp.status_code == 400
+    assert resp.json()["message"] == "Эту неделю не открою: выбери день за последний год, не позже сегодня."
+    assert (await client.get(f"/progress/score?as_of={(today - dt.timedelta(days=365)).isoformat()}")).status_code == 200
 
 
 async def test_calibration_script_reads_a_file_db(tmp_path, capsys):

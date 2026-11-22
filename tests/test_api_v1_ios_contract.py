@@ -634,6 +634,10 @@ async def _state_score(fresh_db, lang: str) -> list[_Walker]:
             await _train(w, ex, [(60 + (70 + stop - n) / 4, 5)] * 3, date=day if n else None)
         for days in (28, 90, 365):
             await w.call("GET", f"/progress/score?days={days}", expect=200)
+        # Неделя, выбранная на графике (`?as_of=`), — тот же ответ на тот день.
+        for weeks_back in (1, 4):
+            as_of = (today - dt.timedelta(days=7 * weeks_back)).isoformat()
+            await w.call("GET", f"/progress/score?as_of={as_of}", expect=200)
         walkers.append(w)
     return walkers
 

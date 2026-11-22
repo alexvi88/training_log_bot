@@ -6103,7 +6103,7 @@
   "progress_score.detail.progression_from": "je compte la force à partir du {date}",
   "progress_score.detail.progression_none": "je la compte dès que tu as un mois de séances",
   "progress_score.detail.regularity": "2+ séances : {full} sur {n, plural, one{# semaine} other{# semaines}}",
-  "progress_score.detail.volume": "6 séries chaque semaine : {full} sur {n, plural, one{# groupe musculaire} other{# groupes musculaires}}",
+  "progress_score.detail.volume": "6+ séries chaque semaine : {full} sur {n, plural, one{# groupe musculaire} other{# groupes musculaires}}",
   "progress_score.detail.volume_deload": "décharge cette semaine — je ne la compte pas dans le volume",
   "progress_score.detail.volume_none": "pas encore de séries par groupe musculaire",
   "progress_score.coach.empty": "Fais une séance et je calcule ta note.",
@@ -6144,5 +6144,6 @@
   "progress_score.widget.volume_keep": "Volume complet — continue",
   "progress_score.widget.balance": "Tu as lâché un groupe",
   "progress_score.widget.all_good": "Tout suit le plan",
-  "api.error.bad_score_days": "Choisis une période : 28, 90 ou 365 jours."
+  "api.error.bad_score_days": "Choisis une période : 28, 90 ou 365 jours.",
+  "api.error.bad_score_as_of": "Je ne peux pas ouvrir cette semaine. Choisis un jour de l’année écoulée, pas après aujourd’hui."
 }

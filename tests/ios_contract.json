@@ -3812,6 +3812,10 @@
      "type": "String",
      "optional": true
     },
+    "widgetLine": {
+     "type": "String",
+     "optional": true
+    },
     "parts": {
      "type": "[ProgressScore.Part]",
      "optional": true
@@ -3918,6 +3922,14 @@
     "neglected": {
      "type": "Bool",
      "optional": true
+    },
+    "setsPerWeek": {
+     "type": "Double",
+     "optional": true
+    },
+    "weekSets": {
+     "type": "[Int]",
+     "optional": true
     }
    }
   },
@@ -3947,6 +3959,11 @@
     "balance": {
      "type": "Double",
      "optional": true
+    },
+    "delta7D": {
+     "type": "Double",
+     "optional": true,
+     "default": true
     }
    }
   },
@@ -6511,5 +6528,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "df464fb1ddc4e381c6c5167dcc2c808a15746790"
+ "_ios_commit": "9b1f8d690120ea9739abb4b81590033aeac639b7"
 }

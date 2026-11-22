@@ -890,6 +890,13 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     assert len(score["parts"]) == 3 and score["coach_line"] and score["widget_line"]
     await w.call("GET", "/progress/score?days=90", expect=200)
     await w.call("GET", "/progress/score?days=7", expect=400)
+    # Неделя, выбранная на графике: отчёт на тот день; будущее, слишком давнее
+    # и не дата — ошибка на языке атлета.
+    as_of = score["history"][0]["date"]
+    week = (await w.call("GET", f"/progress/score?as_of={as_of}", expect=200)).json()
+    assert week["history"][-1]["date"] == as_of
+    await w.call("GET", "/progress/score?as_of=2999-01-01", expect=400)
+    await w.call("GET", "/progress/score?as_of=soon", expect=400)
     # «Итоги года»: числа, «личность года» и подписи слайдов — на языке
     # атлета; картинка слайда — PNG (текст в ней держит test_year_review).
     year = (await w.call("GET", "/year-review", expect=200)).json()

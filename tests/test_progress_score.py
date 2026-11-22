@@ -268,6 +268,28 @@ def test_volume_is_mean_of_week_shares_over_groups():
     assert vol == pytest.approx(2 * (0.625 + 0.875) / 2)
     chest = next(g for g in groups if g.group == "Грудь")
     assert (chest.sets_7d, chest.sets_28d) == (0, 15)  # на текущей неделе подходов нет
+    # Полоса карточки — среднее за те же недели, что и балл; по неделям — свежая первой.
+    assert chest.week_sets == (6, 3, 6, 0) and chest.sets_per_week == pytest.approx(15 / 4)
+
+
+def test_sets_per_week_uses_the_weeks_of_the_score():
+    # Разгрузка выпадает из среднего, как и из балла; в week_sets она остаётся.
+    rows = _sets(8, 3, e1rm=80) + _sets(15, 10) + _sets(22, 9) + _sets(29, 8)
+    _vol, weeks, groups = ps.volume(rows, _done_weeks(rows), D)
+    assert [w.deload for w in weeks] == [True, False, False, False]
+    (chest,) = groups
+    assert chest.week_sets == (3, 10, 9, 8) and chest.sets_per_week == pytest.approx(9.0)
+
+
+def test_sets_per_week_skips_weeks_before_the_start():
+    # Новичок: в счёте две недели — среднее по ним, а не по четырём.
+    rows = _sets(9, 6) + _sets(2, 3)
+    weeks = ps.week_blocks(days_of(rows), ago(9), D)[:4]
+    _vol, weeks, groups = ps.volume(rows, weeks, D)
+    assert [w.counted for w in weeks] == [True, True, False, False]
+    (chest,) = groups
+    assert chest.week_sets == (3, 6, 0, 0) and chest.sets_per_week == pytest.approx(4.5)
+    assert chest.points == pytest.approx((0.5 + 1) / 2)
 
 
 def test_dropped_group_counts_in_volume_as_zero():
