@@ -6103,7 +6103,7 @@
   "progress_score.detail.progression_from": "Kraftzuwachs rechne ich ab {date}",
   "progress_score.detail.progression_none": "rechne ich, sobald du einen Monat Training hast",
   "progress_score.detail.regularity": "2+ Trainings in {full} von {n, plural, one{# Woche} other{# Wochen}}",
-  "progress_score.detail.volume": "6 Sätze jede Woche in {full} von {n, plural, one{# Muskelgruppe} other{# Muskelgruppen}}",
+  "progress_score.detail.volume": "6+ Sätze jede Woche in {full} von {n, plural, one{# Muskelgruppe} other{# Muskelgruppen}}",
   "progress_score.detail.volume_deload": "Deload diese Woche — zähle ich nicht ins Volumen",
   "progress_score.detail.volume_none": "noch keine Sätze nach Muskelgruppen",
   "progress_score.coach.empty": "Mach ein Training, dann rechne ich deine Bewertung.",
@@ -6144,5 +6144,6 @@
   "progress_score.widget.volume_keep": "Volumen voll — bleib dran",
   "progress_score.widget.balance": "Eine Gruppe liegt brach",
   "progress_score.widget.all_good": "Alles nach Plan",
-  "api.error.bad_score_days": "Wähl einen Zeitraum: 28, 90 oder 365 Tage."
+  "api.error.bad_score_days": "Wähl einen Zeitraum: 28, 90 oder 365 Tage.",
+  "api.error.bad_score_as_of": "Diese Woche kann ich nicht öffnen. Wähl einen Tag aus dem letzten Jahr, nicht nach heute."
 }

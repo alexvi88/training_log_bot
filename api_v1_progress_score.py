@@ -7,7 +7,12 @@ JSON, подписи частей и реплика тренера. Тексты
 (веса в базе уже лежат в них, users.unit).
 
 `?days=` — длина ряда `history`: 28 (по умолчанию), 90 или 365; точка — на
-каждый седьмой день назад от сегодня (5, 13 и 53 точек).
+каждый седьмой день назад от сегодня (5, 13 и 53 точек), у каждой —
+`delta_7d` к оценке за 7 дней до неё.
+
+`?as_of=YYYY-MM-DD` — весь отчёт так, будто сегодня этот день (неделя,
+выбранная на графике приложения): та же функция с D = as_of, ряд — назад от
+него, одна загрузка подходов, как без него.
 
 `coach_line` — реплика тренера для экрана оценки (может назвать упражнение и
 группу), `widget_line` — короткая строка для виджета на вкладках «Меню» и
@@ -116,8 +121,8 @@ def coach_line(lever: Optional[progress_score.Lever], unit: str, today: dt.date)
     return i18n.t(f"progress_score.coach.{lever.kind}", **params)
 
 
-def _history_point(h: progress_score.DayScore) -> dict[str, Any]:
-    point: dict[str, Any] = {"date": h.day.isoformat(), "score": h.score}
+def _history_point(h: progress_score.DayScore, delta: Optional[float]) -> dict[str, Any]:
+    point: dict[str, Any] = {"date": h.day.isoformat(), "score": h.score, "delta_7d": delta}
     for p in h.parts:
         point[p.key] = _r(p.points)
     return point
@@ -159,7 +164,7 @@ def report_json(rep: progress_score.ScoreReport, unit: str) -> dict[str, Any]:
             }
             for p in s.parts
         ],
-        "history": [_history_point(h) for h in rep.history],
+        "history": [_history_point(h, delta) for h, delta in zip(rep.history, rep.history_deltas, strict=True)],
         "best": {"date": best.day.isoformat(), "score": best.score} if best else None,
         "period_days": rep.period_days,
         "lifts": [
@@ -182,6 +187,10 @@ def report_json(rep: progress_score.ScoreReport, unit: str) -> dict[str, Any]:
                 "name": _group_name(g.group),
                 "sets_7d": g.sets_7d,
                 "sets_28d": g.sets_28d,
+                # Карточка объёма рисует это: среднее за неделю по тем же
+                # неделям, что и балл, и подходы по неделям `weeks` (по порядку).
+                "sets_per_week": round(g.sets_per_week, 1),
+                "week_sets": list(g.week_sets),
                 "points": _r(g.points, 2),
                 "neglected": g.neglected,
             }
@@ -205,6 +214,27 @@ def report_json(rep: progress_score.ScoreReport, unit: str) -> dict[str, Any]:
     }
 
 
+# Как далеко назад можно открыть оценку недели (`?as_of=`): длина самого
+# длинного ряда.
+AS_OF_MAX_DAYS = max(progress_score.PERIODS)
+
+
+def _as_of(raw: str, today: dt.date) -> dt.date:
+    """День, на который считать отчёт целиком (`?as_of=YYYY-MM-DD`, неделя,
+    выбранная на графике): не в будущем и не старше AS_OF_MAX_DAYS. День до
+    первой тренировки — не ошибка: отчёт честно скажет `empty`/`calibrating`."""
+    try:
+        day = dt.date.fromisoformat(raw)
+    except ValueError:
+        day = None
+    if day is None or len(raw) != 10 or day > today or (today - day).days > AS_OF_MAX_DAYS:
+        raise ApiError(
+            400, "bad_score_as_of", f"as_of must be a date within the last {AS_OF_MAX_DAYS} days",
+            key="api.error.bad_score_as_of",
+        )
+    return day
+
+
 async def get_progress_score(request: Request) -> JSONResponse:
     """Оценка на сегодня (местный день атлета), её разбор и ряд за `?days=`."""
     user_id, user = await authed_user(request)
@@ -215,6 +245,9 @@ async def get_progress_score(request: Request) -> JSONResponse:
             raise ApiError(400, "bad_score_days", "days must be 28, 90 or 365", key="api.error.bad_score_days")
         period = int(raw)
     today = timeutil.user_today(user)
+    as_of = request.query_params.get("as_of")
+    if as_of is not None:
+        today = _as_of(as_of, today)
     rep = await progress_score.collect(user_id, user, today, period)
     return JSONResponse(report_json(rep, user["unit"]))
 

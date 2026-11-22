@@ -186,11 +186,18 @@ class GroupScore:
     group: str
     #: Подходов на текущей календарной неделе (до D).
     sets_7d: int
-    #: Подходов за недели в счёте.
+    #: Подходов за все четыре недели набора (с разгрузкой).
     sets_28d: int
     #: Доля объёма 0..1; None — недель в счёте нет.
     points: Optional[float]
     neglected: bool
+    #: Подходов в среднем за неделю — по тем же неделям, что и балл (в счёте,
+    #: без разгрузок). Это и рисует карточка объёма: число и балл не расходятся.
+    sets_per_week: float = 0.0
+    #: Подходы по каждой из недель набора, свежая первой (как `weeks`), —
+    #: и разгрузки, и недели вне счёта тоже: что из них идёт в балл, говорят
+    #: флаги недель.
+    week_sets: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -508,7 +515,11 @@ def volume(
     vol = POINTS["volume"] * sum(shares.values()) / len(shares) if shares else None
     order = {name: i for i, (name, *_rest) in enumerate(seed_data.MUSCLE_GROUP_PRESETS)}
     out = [
-        GroupScore(g, this_week.get(g, 0), sum(b.get(g, 0) for b in per_block), shares.get(g), g not in recent)
+        GroupScore(
+            g, this_week.get(g, 0), sum(b.get(g, 0) for b in per_block), shares.get(g), g not in recent,
+            sets_per_week=sum(per_block[i].get(g, 0) for i in used) / len(used) if used else 0.0,
+            week_sets=tuple(b.get(g, 0) for b in per_block),
+        )
         for g in sorted(groups, key=lambda g: (order.get(g, 99), g))
     ]
     return vol, weeks, out
@@ -703,6 +714,10 @@ class ScoreReport:
     week_ago: DayScore
     history: list[DayScore]
     period_days: int
+    #: Оценка точки ряда минус оценка за 7 дней до неё — по точке на каждую
+    #: из `history`; у самой старой считается лишний день перед рядом.
+    #: None — неделей раньше оценки не было (калибровка, до первой тренировки).
+    history_deltas: list[Optional[float]] = field(default_factory=list)
 
     @property
     def delta_7d(self) -> Optional[float]:
@@ -721,7 +736,8 @@ def needed_from(workout_days: list[dt.date], d: dt.date, period_days: int) -> dt
     """С какого дня грузить подходы, чтобы посчитать ряд за `period_days`:
     окно LOOKBACK_DAYS у самого раннего дня ряда, начало возвращения (база
     прогрессии после перерыва) и последняя оценка перед паузой."""
-    first_day = history_days(d, period_days)[0]
+    # Неделя перед рядом — для изменения у самой старой точки.
+    first_day = history_days(d, period_days)[0] - dt.timedelta(days=HISTORY_STEP)
     out = first_day - dt.timedelta(days=LOOKBACK_DAYS)
     for day in (first_day, d):
         phase = phase_at(workout_days, day)
@@ -766,7 +782,14 @@ def report(
             today.last_score, today.last_score_date = last.score, last.day
     today.lever = _lever(today, unit)
     week_ago = next((h for h in history if h.day == d - dt.timedelta(days=7)), None) or at(d - dt.timedelta(days=7))
-    return ScoreReport(today, week_ago, history, period_days)
+    # Ряд идёт шагом в 7 дней: неделя назад — предыдущая точка, а у самой
+    # старой — один лишний день перед рядом.
+    before = [at(history[0].day - dt.timedelta(days=HISTORY_STEP)), *history[:-1]]
+    deltas = [
+        None if h.score is None or b.score is None else round(h.score - b.score, 1)
+        for h, b in zip(history, before, strict=True)
+    ]
+    return ScoreReport(today, week_ago, history, period_days, deltas)
 
 
 # --- база ---------------------------------------------------------------------
