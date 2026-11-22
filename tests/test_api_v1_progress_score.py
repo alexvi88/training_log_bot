@@ -216,7 +216,14 @@ async def test_as_of_is_the_report_of_that_day(fresh_db, client_factory, monkeyp
     assert len(loads) == 1  # одна загрузка подходов, как без as_of
     assert week["score"] == point["score"] and week["delta_7d"] == point["delta_7d"]
     assert week["history"][-1]["date"] == point["date"] and len(week["history"]) == 5
-    assert week["weeks"][0]["end"] >= point["date"] >= week["weeks"][0]["start"]
+    # Свежая неделя отчёта — та, что содержит день as_of, или (если 4 полные
+    # недели посчитались лучше) последняя завершённая перед ним: в любом
+    # случае не позже as_of и не раньше чем за неделю до него. Раньше тест
+    # требовал первое и падал по дням недели, когда выигрывали полные недели.
+    picked = dt.date.fromisoformat(point["date"])
+    newest_start = dt.date.fromisoformat(week["weeks"][0]["start"])
+    newest_end = dt.date.fromisoformat(week["weeks"][0]["end"])
+    assert newest_start <= picked and (picked - newest_end).days < 7
     assert (await client.get(f"/progress/score?as_of={point['date']}&days=90")).json()["period_days"] == 90
     # До первой тренировки — не ошибка, а пустая оценка.
     first = dt.date.fromisoformat(now["history"][0]["date"])
