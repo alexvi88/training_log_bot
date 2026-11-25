@@ -1873,6 +1873,11 @@ async def _migrate_schema() -> None:
     if "rest_seconds" not in exercise_cols:
         # NULL всем: своей цели отдыха ещё никто не ставил (rest_defaults.py).
         await _conn.execute("ALTER TABLE exercises ADD COLUMN rest_seconds INTEGER")
+    if "dup_suggest" not in exercise_cols:
+        # Ответ модели «на что из каталога похоже это своё упражнение»
+        # (exercise_duplicates.py) — JSON с именем, под которое спрашивали.
+        # NULL всем: никого ещё не спрашивали.
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN dup_suggest TEXT")
 
     if "bodyweight_load" not in exercise_cols:
         await _conn.execute(
@@ -4958,6 +4963,14 @@ async def find_exercise_by_original_name(user_id: int, original_name: str) -> Op
         if r["original_name"] and _fold_exercise_name(r["original_name"]) == needle:
             return r
     return None
+
+
+async def set_exercise_dup_suggest(exercise_id: int, payload: Optional[str]) -> None:
+    """Кэш подсказки дубля (exercise_duplicates.py) — строкой JSON, как есть.
+    Своя колонка упражнения: удаляется вместе с ним и с аккаунтом."""
+    async with _write_lock:
+        await conn().execute("UPDATE exercises SET dup_suggest = ? WHERE id = ?", (payload, exercise_id))
+        await conn().commit()
 
 
 async def list_active_exercises_with_identity(user_id: int) -> list[aiosqlite.Row]:

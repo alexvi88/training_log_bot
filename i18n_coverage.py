@@ -203,6 +203,7 @@ LOCALIZED: list[str] = [
     # ai_trainer._with_language_tail), тексты тренера — i18n.t, имена
     # упражнений и групп — seed_data.localized_* под use_lang(users.lang).
     "exercise_identify.py",
+    "exercise_duplicates.py",
     "api_v1_identify.py",
     # Мини-игры между подходами (iOS): правила и подписи — games.py, HTTP —
     # api_v1_games.py. Названия и описания значков, «Атлет #NNNN» и тексты
