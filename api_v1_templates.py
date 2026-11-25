@@ -30,6 +30,7 @@ import api_v1_media
 import db
 import exercise_alternatives
 import exercise_descriptions
+import exercise_duplicates
 import exercise_media
 import exercise_muscles
 import i18n
@@ -177,6 +178,32 @@ async def get_exercise_alternatives(request: Request) -> JSONResponse:
         return JSONResponse(await exercise_alternatives.for_exercise(user_id, exercise, lang))
 
 
+async def get_exercise_catalog_duplicates(request: Request) -> JSONResponse:
+    """«Похоже, это дубль»: шаблоны каталога, которыми, вероятно, и является
+    это своё упражнение (`exercise_duplicates.candidates_json`) — не больше
+    трёх, вероятные первыми, `confidence` — sure|maybe. Приложение показывает
+    их наверху листа «Объединить» и подсказкой на карточке (только sure);
+    выбор — POST /exercise-templates/{id}/add и POST /exercises/merge.
+
+    Копия каталога и шаблон, чья копия у атлета уже есть, — пустой список.
+    Платный шаг внутри (модель, когда резолвер не уверен) отказов не
+    показывает: квота, деньги, сбой или нет согласия на AI — те же
+    подсказки резолвера."""
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    exercise = await db.get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != user_id:
+        raise ApiError(404, "not_found", "exercise not found")
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None and user["lang"] else i18n.DEFAULT_LANG
+    # Модель — фоновый шаг, которого человек не заказывал: без согласия на
+    # передачу данных AI её не зовём, молча (common.ai_consent_given).
+    use_model = common.ai_consent_given(request, user)
+    with i18n.use_lang(lang):
+        candidates = await exercise_duplicates.candidates_json(user_id, exercise, lang, use_model=use_model)
+    return JSONResponse({"candidates": candidates})
+
+
 # ---------- форк в свою копию ----------
 
 async def add_exercise_template(request: Request) -> JSONResponse:
@@ -199,4 +226,7 @@ routes = [
     Route("/exercise-templates/{template_id:int}", get_exercise_template, methods=["GET"]),
     Route("/exercise-templates/{template_id:int}/add", add_exercise_template, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/alternatives", get_exercise_alternatives, methods=["GET"]),
+    Route(
+        "/exercises/{exercise_id:int}/catalog-duplicates", get_exercise_catalog_duplicates, methods=["GET"],
+    ),
 ]

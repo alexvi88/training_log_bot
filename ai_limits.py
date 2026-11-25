@@ -52,6 +52,10 @@ KIND_SEARCH_GLOBAL = "search_global"
 KIND_VIDEO = "video"
 KIND_VOICE = "voice"
 KIND_IMPORT = "import"
+# «Похоже, это дубль» (exercise_duplicates.py): модель сверяет своё упражнение
+# с коротким списком каталога, когда бесплатный резолвер не уверен. Отказ
+# молчит — атлет получает подсказки резолвера, ошибки не видит.
+KIND_MERGE_SUGGEST = "merge_suggest"
 # Не вид лимита для check(): счётчик провальных разборов видео (после ответа
 # провайдера), по нему check(KIND_VIDEO) отказывает с отдельным текстом.
 KIND_VIDEO_FAIL = "video_fail"
@@ -64,12 +68,13 @@ _EXTRAS = (KIND_SEARCH, KIND_SEARCH_GLOBAL, KIND_VIDEO)
 
 # Виды, которые SOFT не выключает (голос — способ логировать подходы, импорт —
 # разовый переезд), но HARD-стоп по деньгам держит так же, как вопрос.
-_HARD_ONLY = (KIND_QUESTION, KIND_VOICE, KIND_IMPORT)
+_HARD_ONLY = (KIND_QUESTION, KIND_VOICE, KIND_IMPORT, KIND_MERGE_SUGGEST)
 
 # Счётчики этих видов живут в общей таблице db.ai_usage (по виду в ключе).
 _GENERIC_USAGE = {
     KIND_VOICE: lambda: config.AI_VOICE_DAILY_LIMIT,
     KIND_IMPORT: lambda: config.AI_IMPORT_DAILY_LIMIT,
+    KIND_MERGE_SUGGEST: lambda: config.AI_MERGE_SUGGEST_DAILY_LIMIT,
 }
 
 

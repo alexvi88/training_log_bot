@@ -959,6 +959,52 @@
     }
    }
   },
+  "CatalogDuplicateCandidate": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "templateId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "originalName": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "group": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "groupId": {
+     "type": "Int",
+     "optional": true,
+     "default": true
+    },
+    "thumb": {
+     "type": "String",
+     "optional": true,
+     "default": true
+    },
+    "confidence": {
+     "type": "String",
+     "optional": false
+    }
+   }
+  },
+  "CatalogDuplicatesResponse": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "candidates": {
+     "type": "[CatalogDuplicateCandidate]",
+     "optional": false
+    }
+   }
+  },
   "CatalogExercise": {
    "file": "TrainingLog/Models/ParityModels.swift",
    "fields": {
@@ -5877,6 +5923,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.exerciseCatalogDuplicates",
+   "method": "GET",
+   "path": "/exercises/{}/catalog-duplicates",
+   "root": "CatalogDuplicatesResponse",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.copyExercise",
    "method": "POST",
    "path": "/exercises/{}/copy",
@@ -6528,5 +6581,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "9b1f8d690120ea9739abb4b81590033aeac639b7"
+ "_ios_commit": "fe0f1c3adfdfde141ec43e68c06a33c4062fc0a4"
 }

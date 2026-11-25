@@ -47,12 +47,17 @@ import api_v1
 import api_v1_feedback
 import coach_service
 import config
+import exercise_duplicates
 import exercise_identify
 import i18n
 import seo_library as guides_catalog
 import text_import
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _no_model_picks(*_args, **_kwargs):
+    return None
 
 CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 LATIN_WORD = re.compile(r"[A-Za-z]{2,}")
@@ -91,6 +96,9 @@ MACHINE_PATHS: dict[str, frozenset[str]] = {
     # Итог распознавания и снаряд — перечисления (catalog|mine|new|none,
     # barbell|dumbbell|…); подписи к ним рисует приложение.
     "POST /exercises/identify": frozenset({".result", ".exercise.equipment"}),
+    # «Похоже, это дубль»: уверенность — перечисление sure|maybe, подпись
+    # («Похоже, это дубль») рисует приложение.
+    "GET /exercises/{exercise_id:int}/catalog-duplicates": frozenset({".candidates[].confidence"}),
 }
 
 # Машинные поля: коды, ключи, даты, url, токены, перечисления. В них не бывает
@@ -701,6 +709,14 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/exercises/{forked_id}/media", expect=200)
     await w.call("GET", f"/exercises/{squat_id}/alternatives", expect=200)
     await w.call("GET", f"/exercises/{own_id}/alternatives", expect=200)
+    # «Похоже, это дубль»: у своего упражнения — шаблоны каталога (имена и
+    # группы на языке атлета), у копии каталога — пусто, чужое — 404. Модель
+    # не зовём: английское «Cable crunch» резолвер узнаёт сам, русское без неё
+    # получает подсказки резолвера.
+    monkeypatch.setattr(exercise_duplicates, "model_picks", _no_model_picks)
+    await w.call("GET", f"/exercises/{own_id}/catalog-duplicates", expect=200)
+    await w.call("GET", f"/exercises/{forked_id}/catalog-duplicates", expect=200)
+    await w.call("GET", "/exercises/999999/catalog-duplicates", expect=404)
     await w.call("POST", f"/exercises/{own_id}/photo",
                  json={"image_data_url": f"data:image/png;base64,{PNG_1PX}"}, expect=201)
     await w.call("DELETE", f"/exercises/{own_id}/photo", expect=200)
