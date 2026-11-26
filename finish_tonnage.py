@@ -8,8 +8,8 @@
 **Какой период.** По умолчанию — эта тренировка. Если она перевела тоннаж
 календарного месяца через новый предмет (самый тяжёлый подходящий предмет
 сменился или его стало больше) — месяц. Если тоннаж за всё время перешёл веху
-(`LIFETIME_MILESTONES_KG`: горбач, танк, синий кит, статуя Свободы, дальше
-каждые +225т) — всё время, это главнее всего. Месяц и всё время считаются
+(`lifetime_milestones_up_to`: горбач, пассажирский самолёт, синий кит, космическая
+станция, дальше каждые +420т) — всё время, это главнее всего. Месяц и всё время считаются
 только по записанному у нас (`db.tonnage_totals_before`, без импорта), у
 занесения задним числом их нет вовсе — его вносят не по порядку.
 
@@ -36,8 +36,9 @@ MIN_KG = 150.0
 # Предмет тренировки — из тех, что помещаются от 1 до стольких раз: больше
 # десяти спрайтов на слайде уже не пересчитать глазами.
 MAX_COUNT = 10
-LIBERTY_KG = 225000.0
-# Вехи всего времени: каждый предмет от 30т, дальше — каждые +225т.
+STATION_KG = 420000.0
+# Вехи всего времени: каждый предмет от 30т, дальше — каждые +420т после
+# космической станции.
 _FIXED_MILESTONES = tuple(w for _e, w, _id in formatting._TONNAGE_OBJECTS if w >= 30000)
 
 
@@ -45,8 +46,8 @@ def lifetime_milestones_up_to(total_kg: float) -> list[float]:
     """Вехи всего времени не выше `total_kg` (по возрастанию)."""
     out = [float(m) for m in _FIXED_MILESTONES if m <= total_kg]
     k = 2
-    while LIBERTY_KG * k <= total_kg:
-        out.append(LIBERTY_KG * k)
+    while STATION_KG * k <= total_kg:
+        out.append(STATION_KG * k)
         k += 1
     return out
 
@@ -109,12 +110,12 @@ def _object_weight(obj_id: str) -> float:
 
 
 def next_target(total_kg: float) -> Optional[tuple[str, int]]:
-    """Следующая цель: первый предмет тяжелее тоннажа; выше статуи Свободы —
-    на одну статую больше."""
+    """Следующая цель: первый предмет тяжелее тоннажа; выше космической
+    станции — на одну станцию больше."""
     for obj_id, w in _objects():
         if w > total_kg:
             return obj_id, 1
-    return "statue_of_liberty", int(total_kg // LIBERTY_KG) + 1
+    return "space_station", int(total_kg // STATION_KG) + 1
 
 
 def slide_json(

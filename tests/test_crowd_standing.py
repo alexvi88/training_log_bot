@@ -112,8 +112,13 @@ def test_custom_names_and_timed_are_not_bucketed():
 
 def test_tonnage_milestones():
     assert finish_tonnage.crossed_lifetime(29000, 31000)
-    assert not finish_tonnage.crossed_lifetime(31000, 50000)
-    assert finish_tonnage.crossed_lifetime(440000, 452000)  # каждые +225т после статуи
+    assert not finish_tonnage.crossed_lifetime(42000, 140000)
+    assert finish_tonnage.crossed_lifetime(35000, 42000)  # пассажирский самолёт, 41т
+    assert finish_tonnage.crossed_lifetime(410000, 421000)  # космическая станция, 420т
+    assert not finish_tonnage.crossed_lifetime(421000, 800000)  # до двух станций ещё далеко
+    assert finish_tonnage.crossed_lifetime(830000, 845000)  # каждые +420т после станции
+    assert finish_tonnage.crossed_lifetime(1250000, 1270000)  # три станции
+    assert finish_tonnage.next_target(500000) == ("space_station", 2)
     assert finish_tonnage.crossed_month(13000, 25000)  # 1 автобус → 2 автобуса
     assert not finish_tonnage.crossed_month(0, 25000)  # первая тренировка месяца — это и есть тренировка
     assert not finish_tonnage.crossed_month(9000, 11000)  # всё ещё один тираннозавр
@@ -124,7 +129,8 @@ def test_tonnage_milestones():
 
 def test_every_object_id_has_a_name_in_every_language():
     ids = {obj for obj, _w in finish_tonnage._objects()}
-    assert {"trex", "humpback", "tank", "blue_whale", "statue_of_liberty", "saint_bernard", "bus"} <= ids
+    assert not ids & {"tank", "statue_of_liberty"}  # предметы вне политики
+    assert {"trex", "humpback", "airliner", "blue_whale", "space_station", "saint_bernard", "bus"} <= ids
     for lang in LANGS:
         for obj in ids:
             for n in (1, 2, 5):
@@ -331,7 +337,7 @@ async def test_tonnage_lifetime_milestone_wins(fresh_db):
     obj = (await _finish(client, fresh_db, ex, 200, 10))["rewards"]["tonnage_object"]
     assert obj["period"] == "lifetime" and obj["id"] == "humpback" and obj["count"] == 1
     assert obj["eyebrow"] == "ЗА ВСЁ ВРЕМЯ ТЫ ПОДНЯЛ" and obj["scale_text"] == "1 КИТ-ГОРБАЧ = 30Т"
-    assert obj["next_title"] == "Следующая цель — танк, 60т"
+    assert obj["next_title"] == "Следующая цель — пассажирский самолёт, 41т"
     assert obj["caption"].startswith("3 тренировки")
 
 

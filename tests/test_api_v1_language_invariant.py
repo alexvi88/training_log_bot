@@ -99,7 +99,7 @@ MACHINE_PATHS: dict[str, frozenset[str]] = {
     # «Похоже, это дубль»: уверенность — перечисление sure|maybe, подпись
     # («Похоже, это дубль») рисует приложение.
     "GET /exercises/{exercise_id:int}/catalog-duplicates": frozenset({".candidates[].confidence"}),
-    # Слайд тоннажа: id предмета (humpback, statue_of_liberty…) — по нему
+    # Слайд тоннажа: id предмета (humpback, space_station…) — по нему
     # приложение рисует спрайт; название — в title/scale_text.
     "POST /workouts/{workout_id:int}/finish": frozenset({".rewards.tonnage_object.id"}),
 }
