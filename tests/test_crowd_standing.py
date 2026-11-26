@@ -174,7 +174,7 @@ async def test_below_median_label_and_threshold(fresh_db):
     body = (await client.get(f"/exercises/{ex}/standing")).json()
     assert body["available"] and not body["above_median"] and body["top"] is None
     assert body["stronger_than"] is None and "%" not in body["label"]
-    assert body["label"].startswith("до середины зала +") and body["label"].endswith("кг")
+    assert body["label"].startswith("до середины +") and body["label"].endswith("кг")
     assert body["hint"]
 
 

@@ -321,7 +321,7 @@ Swift поле есть и не `null`, тип совпадает. Так лов
 `engagement.days_since_activity`): старые даты из Hevy — не «давно не
 тренировался» на следующий день после переезда.
 
-## Место в зале
+## Среди атлетов (место в зале)
 
 «Топ-35% в жиме» — `crowd_standing.py` (ручки `GET /v1/standing`,
 `GET /v1/exercises/{id}/standing`, `api_v1_standing.py`; после рекорда —
