@@ -15,7 +15,8 @@
 - Ничего про отдельного человека: сначала у каждого атлета берётся его
   типичное значение (медиана по его тренировкам — так один фанат с сотней
   тренировок весит как один человек), потом по атлетам — медиана и
-  25-й–75-й процентили. Числа округлены, атлетов — «20+», «50+»…
+  25-й–75-й процентили. Числа округлены; сколько атлетов за цифрой,
+  страница не говорит вовсе (решение владельца) — только порог K.
 
 **Считается раз в сутки, не на запрос.** Страница берёт посчитанное
 (`cached`); пересчёт — `refresh` из маршрута страницы и sitemap, не чаще
@@ -307,15 +308,16 @@ def exercise_block(identity: str, lang: str) -> str:
     facts = "".join(f"<dt>{sp._e(k)}</dt><dd>{v}</dd>" for k, v in rows)
     return (
         f"<section class='crowd reveal' id=crowd><h2>{sp._e(t('seo.crowd.h'))}</h2>"
-        f"<p>{sp._e(t('seo.crowd.lead', athletes=stats['athletes'], k=K_MIN_USERS))}</p>"
+        f"<p>{sp._e(t('seo.crowd.lead', k=K_MIN_USERS))}</p>"
         + (f"<dl class=facts>{facts}</dl>" if facts else "")
         + f"<p class=muted>{sp._e(t('seo.crowd.note'))}</p></section>"
     )
 
 
 def swaps_block(identities: list[str], lang: str) -> str:
-    """Блок на «чем заменить»: сколько атлетов пишут каждую из замен на
-    странице — только те, за которыми ≥ K. Ни одной — пустая строка."""
+    """Блок на «чем заменить»: какие из замен на странице пишут атлеты — только
+    те, за которыми ≥ K, самые частые первыми, без числа. Ни одной — пустая
+    строка."""
     import seed_data
     import seo_pages as sp
 
@@ -324,9 +326,9 @@ def swaps_block(identities: list[str], lang: str) -> str:
         return ""
     t = sp._t(lang)
     known.sort(key=lambda item: (-item[1], identities.index(item[0])))
-    items = "".join(
-        f"<li><span>{sp._e(seed_data.localized_exercise_name(i, lang))}</span> "
-        f"<span class=muted>{sp._e(t('seo.crowd.athletes', count=n))}</span></li>" for i, n in known)
+    # Порядок — по числу атлетов, а само число не показываем (решение
+    # владельца: аудитория пока маленькая, сколько нас — не публикуем).
+    items = "".join(f"<li><span>{sp._e(seed_data.localized_exercise_name(i, lang))}</span></li>" for i, _n in known)
     return (f"<section class='crowd reveal' id=crowd><h2>{sp._e(t('seo.crowd.swaps.h'))}</h2>"
             f"<p>{sp._e(t('seo.crowd.swaps.lead', k=K_MIN_USERS))}</p><ul class=links>{items}</ul>"
             f"<p class=muted>{sp._e(t('seo.crowd.swaps.note'))}</p></section>")

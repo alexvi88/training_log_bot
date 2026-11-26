@@ -236,6 +236,12 @@ CLIENT_EVENTS: dict[str, frozenset[str]] = {
     # нажал «Поделиться» (ShareLink, итога листа iOS не отдаёт) или
     # «Скопировать». source menu|achievements — «Меню → Ещё → Пригласить» или
     # «Достижения». Ссылку и кому ушло — не пишем: только тап.
+    # «Место в зале» (GET /v1/standing, /v1/exercises/{id}/standing): открыл —
+    # source menu|exercise|finish (меню, карточка упражнения, слайд рекорда в
+    # итогах), нажал «Поделиться» — тот же source. Процент и упражнение не
+    # пишем: только тап.
+    "standing_open": frozenset({"source"}),
+    "standing_share": frozenset({"source"}),
     INVITE_OPEN_EVENT: frozenset({"source"}),
     INVITE_SHARE_EVENT: frozenset({"source"}),
     INVITE_COPY_EVENT: frozenset({"source"}),
@@ -281,6 +287,8 @@ PROP_VALUES: dict[tuple[str, str], frozenset[str]] = {
     ("you_video_open", "source"): frozenset({"menu", "finish", "push"}),
     ("you_video_shared", "source"): frozenset({"menu", "finish", "push"}),
     ("game_open", "source"): frozenset({"rest", "menu_arcade", "achievements"}),
+    ("standing_open", "source"): frozenset({"menu", "exercise", "finish"}),
+    ("standing_share", "source"): frozenset({"menu", "exercise", "finish"}),
     ("game_open", "game"): frozenset({"catch", "weigh", "sort", "runner"}),
     ("review_prompt_requested", "reason"): frozenset({"record", "rank", "finish", "settings"}),
     ("push_ask_card", "action"): frozenset({"shown", "enable", "settings", "dismiss", "result"}),

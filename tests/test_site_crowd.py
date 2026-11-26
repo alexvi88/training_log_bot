@@ -119,8 +119,10 @@ async def test_at_k_the_block_shows_rounded_aggregates_only(fresh_db):
     assert stats["reps"] == [8, 8, 8] and stats["sets"] == 3 and stats["every_days"] == 4
     ru = seo_pages.render(seo_pages.Page("exercise", BENCH), "ru")
     en = seo_pages.render(seo_pages.Page("exercise", BENCH), "en")
-    assert "id=crowd" in ru and "20+ атлетов" in ru and "Мужчины" in ru and "Женщины" not in ru
-    assert "20+ athletes" in en and f"{med:g}<span class=u> kg</span>" in en and " lb</span>" in en
+    assert "id=crowd" in ru and "Мужчины" in ru and "Женщины" not in ru
+    assert f"{med:g}<span class=u> kg</span>" in en and " lb</span>" in en
+    # Сколько атлетов за цифрами, страница не говорит (решение владельца).
+    assert "20+" not in ru and "20+" not in en and "athletes logged" not in en
     # Ни одного id в показанном и в сохранённом.
     saved = await fresh_db.site_crowd_state()
     assert set(saved) == {identity}
@@ -152,6 +154,7 @@ async def test_alternatives_page_lists_only_swaps_above_k(fresh_db):
     block = html.split("id=crowd>", 1)[1].split("</section>", 1)[0]
     assert seed_data.localized_exercise_name(alts[0], "en") in block
     assert seed_data.localized_exercise_name(alts[1], "en") not in block
+    assert "+ athlete" not in block and str(site_crowd.K_MIN_USERS) + "+" not in block
 
 
 # ---------- честный lastmod ----------

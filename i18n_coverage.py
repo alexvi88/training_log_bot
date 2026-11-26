@@ -321,6 +321,11 @@ LOCALIZED: list[str] = [
     # api_v1_progress_score через progress_score.* по языку запроса.
     "progress_score.py",
     "api_v1_progress_score.py",
+    # «Место в зале» и слайд тоннажа в итогах: тексты — standing.* и
+    # tonnage.slide.* по языку запроса.
+    "crowd_standing.py",
+    "api_v1_standing.py",
+    "finish_tonnage.py",
     # «Неделя комиксом» (поле comic итога недели): подписи и метки кадров —
     # weekly.comic.* через i18n.t, сцены — машинные значения.
     "weekly_comic.py",

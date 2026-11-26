@@ -62,6 +62,17 @@ def _fresh_ai_busy():
     ai_trainer._busy.clear()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_crowd_standing():
+    """Корзины «Места в зале» (crowd_standing) живут в памяти процесса — у
+    каждого теста своя база, и чужие корзины не должны в неё протекать."""
+    import crowd_standing
+
+    crowd_standing.reset()
+    yield
+    crowd_standing.reset()
+
+
 @pytest_asyncio.fixture
 async def fresh_db():
     """A throwaway in-memory DB, fully migrated/seeded like the real one."""

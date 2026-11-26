@@ -99,6 +99,9 @@ MACHINE_PATHS: dict[str, frozenset[str]] = {
     # «Похоже, это дубль»: уверенность — перечисление sure|maybe, подпись
     # («Похоже, это дубль») рисует приложение.
     "GET /exercises/{exercise_id:int}/catalog-duplicates": frozenset({".candidates[].confidence"}),
+    # Слайд тоннажа: id предмета (humpback, statue_of_liberty…) — по нему
+    # приложение рисует спрайт; название — в title/scale_text.
+    "POST /workouts/{workout_id:int}/finish": frozenset({".rewards.tonnage_object.id"}),
 }
 
 # Машинные поля: коды, ключи, даты, url, токены, перечисления. В них не бывает
@@ -147,6 +150,8 @@ MACHINE_KEYS = {
     # «Гайды» (/guides): ряд «Меню» и статьи полки — списки адресов статей
     # (slug), подписи к ним — в самих гайдах и в title полки.
     "menu", "slugs",
+    # «Место в зале»: база сравнения abs|rel — перечисление.
+    "basis",
 }
 
 # Сочетания, которые в русском тексте продукта законны целиком (жаргон зала,
@@ -764,6 +769,15 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     }, expect=400)
     await w.call("POST", "/exercises/identify/accept", json={"catalog_name": "?"}, expect=400)
 
+    # «Место в зале»: толпа атлетов с той же идентичностью, что у копии
+    # каталога, — тексты доступного места (процент, подсказка, ось, когорта)
+    # проходят ту же проверку языка, что и «мало данных».
+    from standing_crowd import crowd as _standing_crowd
+
+    forked_identity = (await fresh_db.get_exercise(forked_id))["original_name"]
+    await _standing_crowd(fresh_db, forked_identity, [60.0 + 3 * i for i in range(config.STANDING_MIN_ATHLETES + 5)],
+                          start=90000)
+
     # --- тренировка ---
     wid = (await w.call("POST", "/workouts/active", json={}, expect=(200, 201))).json()["id"]
     await w.call("POST", "/workouts/active", json={}, expect=(200, 201, 409))
@@ -829,6 +843,17 @@ async def _scenario(fresh_db, monkeypatch, tmp_path, lang: str) -> _Walker:
     await w.call("GET", f"/exercises/{forked_id}/superset-partners?workout_id={wid}", expect=200)
     await w.call("GET", f"/exercises/next-suggestions?last_finished_id={forked_id}", expect=200)
     await w.call("POST", f"/workouts/{wid}/finish", json={}, expect=200)
+    standing = (await w.call("GET", f"/exercises/{forked_id}/standing", expect=200)).json()
+    assert standing["available"], standing
+    await w.call("GET", f"/exercises/{forked_id}/standing?basis=rel", expect=200)
+    await w.call("GET", f"/exercises/{own_id}/standing", expect=200)
+    await w.call("GET", f"/exercises/{squat_id}/standing", expect=200)
+    await w.call("GET", f"/exercises/{forked_id}/standing?basis=nope", expect=400)
+    await w.call("GET", "/exercises/999999/standing", expect=404)
+    overview = (await w.call("GET", "/standing", expect=200)).json()
+    assert overview["intro"] and overview["items"]
+    await w.call("GET", "/standing?basis=rel", expect=200)
+    await w.call("GET", "/standing?basis=nope", expect=400)
     # На день раньше второй тренировки ниже: сравнение «(+Δ к дате)» в её итогах
     # появляется, только если прошлая начата строго раньше. Обе заводятся в одну
     # секунду, и без явной даты тест проходил эту ветку через раз.

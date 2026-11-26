@@ -4637,6 +4637,122 @@
     }
    }
   },
+  "Standing": {
+   "file": "TrainingLog/Models/StandingModels.swift",
+   "fields": {
+    "available": {
+     "type": "Bool",
+     "optional": true,
+     "lenient": true
+    },
+    "reason": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "metric": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "basis": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "aboveMedian": {
+     "type": "Bool",
+     "optional": true,
+     "lenient": true
+    },
+    "top": {
+     "type": "Int",
+     "optional": true,
+     "lenient": true
+    },
+    "strongerThan": {
+     "type": "Int",
+     "optional": true,
+     "lenient": true
+    },
+    "label": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "valueText": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "cohortText": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "hint": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "histogram": {
+     "type": "[Double]",
+     "optional": true,
+     "lenient": true
+    },
+    "youBin": {
+     "type": "Int",
+     "optional": true,
+     "lenient": true
+    },
+    "axisMin": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "axisMedian": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "axisMax": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    }
+   },
+   "custom_init": true
+  },
+  "StandingList": {
+   "file": "TrainingLog/Models/StandingModels.swift",
+   "fields": {
+    "basis": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "intro": {
+     "type": "String",
+     "optional": true,
+     "lenient": true
+    },
+    "items": {
+     "type": "[Standing]",
+     "optional": true,
+     "lenient": true
+    }
+   },
+   "custom_init": true
+  },
   "SuggestedExercise": {
    "file": "TrainingLog/Models/Models.swift",
    "fields": {
@@ -5237,8 +5353,19 @@
     "milestone": {
      "type": "String",
      "optional": true
+    },
+    "standing": {
+     "type": "WorkoutRewards.StandingMoment",
+     "optional": true,
+     "lenient": true
+    },
+    "tonnageObject": {
+     "type": "WorkoutRewards.TonnageObject",
+     "optional": true,
+     "lenient": true
     }
-   }
+   },
+   "custom_init": true
   },
   "WorkoutRewards.Achievement": {
    "file": "TrainingLog/Models/ParityModels.swift",
@@ -5269,6 +5396,92 @@
      "optional": false
     },
     "emoji": {
+     "type": "String",
+     "optional": true
+    }
+   }
+  },
+  "WorkoutRewards.StandingMoment": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "exerciseId": {
+     "type": "Int",
+     "optional": false
+    },
+    "name": {
+     "type": "String",
+     "optional": false
+    },
+    "top": {
+     "type": "Int",
+     "optional": false
+    },
+    "strongerThan": {
+     "type": "Int",
+     "optional": false
+    },
+    "gained": {
+     "type": "Int",
+     "optional": true
+    },
+    "eyebrow": {
+     "type": "String",
+     "optional": false
+    },
+    "headline": {
+     "type": "String",
+     "optional": false
+    },
+    "hint": {
+     "type": "String",
+     "optional": true
+    },
+    "footnote": {
+     "type": "String",
+     "optional": false
+    },
+    "crowdIndex": {
+     "type": "Int",
+     "optional": false
+    }
+   }
+  },
+  "WorkoutRewards.TonnageObject": {
+   "file": "TrainingLog/Models/ParityModels.swift",
+   "fields": {
+    "id": {
+     "type": "String",
+     "optional": false
+    },
+    "count": {
+     "type": "Int",
+     "optional": false
+    },
+    "period": {
+     "type": "String",
+     "optional": false
+    },
+    "eyebrow": {
+     "type": "String",
+     "optional": false
+    },
+    "tonnageText": {
+     "type": "String",
+     "optional": false
+    },
+    "title": {
+     "type": "String",
+     "optional": false
+    },
+    "scaleText": {
+     "type": "String",
+     "optional": false
+    },
+    "caption": {
+     "type": "String",
+     "optional": true
+    },
+    "nextTitle": {
      "type": "String",
      "optional": true
     }
@@ -5965,6 +6178,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.exerciseStanding",
+   "method": "GET",
+   "path": "/exercises/{}/standing",
+   "root": "Standing",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.supersetPartners",
    "method": "GET",
    "path": "/exercises/{}/superset-partners",
@@ -6364,6 +6584,13 @@
    "nullable": false
   },
   {
+   "swift": "APIClient.standingList",
+   "method": "GET",
+   "path": "/standing",
+   "root": "StandingList",
+   "nullable": false
+  },
+  {
    "swift": "APIClient.supportMessages",
    "method": "GET",
    "path": "/support/messages",
@@ -6581,5 +6808,5 @@
    "nullable": true
   }
  ],
- "_ios_commit": "fe0f1c3adfdfde141ec43e68c06a33c4062fc0a4"
+ "_ios_commit": "e10e67f85a4922d49a1844c7eca14beafd0bf3a2"
 }

@@ -1100,6 +1100,12 @@ GAMES_ANON_SALT = os.getenv("GAMES_ANON_SALT", "training-log-games-anon-v1")
 # её SQL-зеркало db._e1rm_sql).
 E1RM_MAX_REPS = 12
 
+# «Место в зале» (crowd_standing.py): минимум разных атлетов в корзине
+# (упражнение × когорта × база), чтобы показать атлету его процент. То же
+# число, что у обезличенных цифр сайта (site_crowd.K_MIN_USERS). Наружу
+# число не называется — ни порог, ни размер корзины.
+STANDING_MIN_ATHLETES = int(os.getenv("STANDING_MIN_ATHLETES", "20"))
+
 
 # --- MCP: доступ к своим данным из внешних AI-клиентов (Claude и т.п.) ------
 #

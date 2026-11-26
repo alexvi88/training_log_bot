@@ -69,6 +69,7 @@ import api_v1_programs
 import api_v1_progress
 import api_v1_progress_score
 import api_v1_sharing
+import api_v1_standing
 import api_v1_support
 import api_v1_templates
 import api_v1_voice
@@ -77,8 +78,10 @@ import api_v1_year
 import apple_signin
 import coach_notify
 import config
+import crowd_standing
 import dashboard_data
 import db
+import finish_tonnage
 import formatting
 import history_search_data
 import i18n
@@ -1983,7 +1986,8 @@ def _plain(text: Optional[str]) -> Optional[str]:
 
 
 async def _finish_rewards_json(
-    workout, user, new_codes: list[str], was_backfill: bool, announce_rank: bool = True
+    workout, user, new_codes: list[str], was_backfill: bool, announce_rank: bool = True,
+    celebrate_periods: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Итоги только что завершённой тренировки — то же, что бот собирает на
     карточке завершения (handlers.workout._finalize_workout).
@@ -2009,6 +2013,10 @@ async def _finish_rewards_json(
     """
     blocks = await view_builder.build_block_views(workout["id"], user["e1rm_formula"])
     tonnage = sum(block.load_tonnage for block in blocks)
+    # Вехи месяца и всего времени на слайде тоннажа — не у занесения задним
+    # числом (`celebrate_periods`, по умолчанию — как милестоун).
+    if celebrate_periods is None:
+        celebrate_periods = not was_backfill
     with i18n.use_lang(user["lang"]):
         milestone = None
         if not was_backfill:
@@ -2054,7 +2062,26 @@ async def _finish_rewards_json(
                 }
             ),
             "milestone": milestone,
+            # Слайд тоннажа (finish_tonnage) и «Место в зале» после рекорда
+            # (crowd_standing): новые ключи, старые сборки их не читают
+            # (WorkoutRewards декодирует только свои поля). Сбой любого из
+            # них не должен ронять итог тренировки, которая уже закрыта.
+            "tonnage_object": await _safe_reward(
+                finish_tonnage.tonnage_object_json(
+                    workout, user, tonnage, sum(len(block.sets) for block in blocks), len(blocks),
+                    celebrate_periods=celebrate_periods,
+                )
+            ),
+            "standing": await _safe_reward(crowd_standing.finish_standing_json(workout, user)),
         }
+
+
+async def _safe_reward(coro) -> Any:
+    try:
+        return await coro
+    except Exception:  # noqa: BLE001 — итог без слайда лучше, чем 500 на закрытой тренировке
+        logger.warning("finish reward failed", exc_info=True)
+        return None
 
 
 async def finish_workout(request: Request) -> JSONResponse:
@@ -2197,8 +2224,12 @@ async def _finish_replay_response(workout, user_id: int) -> JSONResponse:
     payload = await _workout_detail_json(workout, user)
     # was_backfill=True здесь — ровно «милестоун не считать» (см. докстринг
     # _finish_rewards_json): настоящий статус до финиша уже не восстановить.
+    # Слайд тоннажа повторяется тем же: «до этой тренировки» считается по id,
+    # а занесение задним числом узнаётся по своей метке времени
+    # (finish_tonnage.looks_backfilled).
     payload["rewards"] = await _finish_rewards_json(
-        workout, user, [], was_backfill=True, announce_rank=False
+        workout, user, [], was_backfill=True, announce_rank=False,
+        celebrate_periods=not finish_tonnage.looks_backfilled(workout),
     )
     payload["replayed"] = True
     # Повтор комментарий не заказывает, но генерация, заказанная первым
@@ -2745,6 +2776,7 @@ routes += (
     + api_v1_guides.routes
     + api_v1_progress.routes
     + api_v1_progress_score.routes
+    + api_v1_standing.routes
     + api_v1_hall_of_fame.routes
     + api_v1_history.routes
     + api_v1_templates.routes
