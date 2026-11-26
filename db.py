@@ -933,6 +933,19 @@ CREATE TABLE IF NOT EXISTS site_crowd_stats (
     changed_on TEXT NOT NULL
 );
 
+-- «Место в зале» (crowd_standing.py): распределение лучших результатов
+-- атлетов за 90 дней по упражнению каталога (идентичность), пересчёт раз в
+-- сутки. payload — JSON с квантилями и гистограммой по когортам (все, мужчины,
+-- женщины) и базам (абсолют, к весу тела): ни одного id, ни одного значения
+-- отдельного человека, когорта меньше crowd_standing.K_MIN_USERS — только
+-- число атлетов. computed_on — UTC-день пересчёта: деплой не пересчитывает
+-- заново то, что уже посчитано сегодня.
+CREATE TABLE IF NOT EXISTS crowd_standing_buckets (
+    identity TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    computed_on TEXT NOT NULL
+);
+
 -- Продуктовая аналитика (analytics.py): события с постоянным машинным именем
 -- и свойствами — то, по чему строятся графики. Не user_events: там лента для
 -- чтения глазами (фраза, введённый текст), она меняется вместе с формулировками
@@ -11980,6 +11993,150 @@ async def save_site_crowd_state(rows: dict[str, tuple[str, str]]) -> None:
                 (identity, payload, changed_on),
             )
         await conn().commit()
+
+
+# Расчётный максимум для «Места в зале» (crowd_standing): Эпли по весу
+# подхода, без RPE и без личной формулы атлета — сравниваются все одной
+# меркой; подход длиннее config.E1RM_MAX_REPS повторов не считается (как
+# analytics.counts_for_e1rm). Колонка веса — параметр: у «… с весом» меряется
+# довесок (s.weight), у остального — нагрузка (LOAD_WEIGHT_SQL).
+def _standing_e1rm_sql(weight: str) -> str:
+    return (
+        f"CASE WHEN s.reps > {int(config.E1RM_MAX_REPS)} OR {weight} <= 0 THEN NULL "
+        f"WHEN s.reps <= 1 THEN {weight} ELSE {weight} * (1 + s.reps / 30.0) END"
+    )
+
+
+async def crowd_standing_bests(since: str, exclude: set[int]) -> list[tuple]:
+    """Сырьё «Места в зале» (crowd_standing.py): строка на (атлет,
+    идентичность упражнения) по закрытым тренировкам с `since` (UTC ISO).
+
+    Строка: (user_id, идентичность (`exercises.original_name`), лучший e1RM
+    по нагрузке в кг, лучший e1RM по довеску в кг, лучшие повторы в подходе,
+    пол, последний вес тела в кг или None). Фунты переводятся в кг. Свои
+    аккаунты и демо — мимо (`exclude` плюс все входы review_demo). Своё
+    упражнение без идентичности каталога сюда попадает с тем именем, что
+    лежит в original_name, — отсев по каталогу делает crowd_standing.
+
+    Перенесённая история считается: это настоящие тренировки атлета. Наружу
+    из этой функции ничего не уходит — её читает только crowd_standing,
+    который хранит квантили, а не людей."""
+    marks = ", ".join("?" for _ in exclude) or "-1"
+    demo = "SELECT user_id FROM auth_identities WHERE provider = 'review_demo'"
+    to_kg = f"CASE WHEN u.unit = 'lb' THEN {1 / config.LB_PER_KG!r} ELSE 1 END"
+    cur = await conn().execute(
+        "SELECT w.user_id, e.original_name, "
+        f"MAX({_standing_e1rm_sql(LOAD_WEIGHT_SQL)}) * {to_kg}, "
+        f"MAX({_standing_e1rm_sql('s.weight')}) * {to_kg}, "
+        "MAX(s.reps), u.gender, "
+        f"(SELECT bl.weight * {to_kg} FROM bodyweight_logs bl WHERE bl.telegram_id = w.user_id "
+        " ORDER BY bl.logged_at DESC, bl.id DESC LIMIT 1) "
+        "FROM sets s JOIN workout_blocks b ON b.id = s.block_id JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id JOIN users u ON u.telegram_id = w.user_id "
+        "WHERE w.status = 'finished' AND w.started_at >= ? AND s.reps > 0 "
+        "AND e.original_name IS NOT NULL AND e.original_name != '' "
+        f"AND w.user_id NOT IN ({marks}) AND w.user_id NOT IN ({demo}) "
+        "GROUP BY w.user_id, e.original_name",
+        (since, *exclude),
+    )
+    return [tuple(row) for row in await cur.fetchall()]
+
+
+async def crowd_standing_state() -> dict[str, tuple[str, str]]:
+    """Посчитанные корзины «Места в зале»: идентичность → (payload, computed_on)."""
+    cur = await conn().execute("SELECT identity, payload, computed_on FROM crowd_standing_buckets")
+    return {row[0]: (row[1], row[2]) for row in await cur.fetchall()}
+
+
+async def save_crowd_standing_state(rows: dict[str, str], computed_on: str) -> None:
+    """Заменить корзины целиком одной транзакцией: упражнение, выпавшее из
+    окна, уходит, а не висит вчерашними цифрами."""
+    async with _write_lock:
+        db = conn()
+        await db.execute("DELETE FROM crowd_standing_buckets")
+        await db.executemany(
+            "INSERT INTO crowd_standing_buckets (identity, payload, computed_on) VALUES (?, ?, ?)",
+            [(identity, payload, computed_on) for identity, payload in rows.items()],
+        )
+        await db.commit()
+
+
+async def standing_own_sets(
+    user_id: int, *, since: Optional[str] = None, workout_id: Optional[int] = None
+) -> list[aiosqlite.Row]:
+    """Подходы атлета для «Места в зале» — свои значения считаются по ним
+    вживую, а не из суточных корзин: рекорд, поставленный сегодня, виден
+    сразу. Закрытые тренировки с `since` (UTC ISO) или одна `workout_id`.
+    Строка: workout_id, started_at, exercise_id, display_name, original_name,
+    weight (записанный, у «… с весом» — довесок), load (нагрузка), reps — в
+    единицах атлета."""
+    where = ["w.user_id = ?", "w.status = 'finished'", "s.reps > 0",
+             "e.original_name IS NOT NULL", "e.original_name != ''"]
+    params: list[Any] = [user_id]
+    if since is not None:
+        where.append("w.started_at >= ?")
+        params.append(since)
+    if workout_id is not None:
+        where.append("w.id = ?")
+        params.append(workout_id)
+    cur = await conn().execute(
+        "SELECT w.id AS workout_id, w.started_at, s.exercise_id, e.display_name, e.original_name, "
+        f"s.weight, {LOAD_WEIGHT_SQL} AS load, s.reps "
+        "FROM sets s JOIN workout_blocks b ON b.id = s.block_id JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        f"WHERE {' AND '.join(where)} ORDER BY w.started_at, s.id",
+        params,
+    )
+    return await cur.fetchall()
+
+
+async def standing_bests_by_workout(user_id: int) -> list[aiosqlite.Row]:
+    """Лучшее атлета по каждой тренировке за всё время — по каждому имени
+    идентичности (original_name, как лежит в базе; сверку с каталогом делает
+    crowd_standing): workout_id, started_at, original_name, load_e1rm,
+    added_e1rm (той же меркой, что crowd_standing_bests, но в единицах
+    атлета), best_reps. Строка на (тренировку, упражнение): у атлета с годами
+    истории это тысячи строк, а не десятки тысяч подходов — итог тренировки
+    считает по ним рекорд, не загружая подходы."""
+    cur = await conn().execute(
+        "SELECT w.id AS workout_id, w.started_at, e.original_name, "
+        f"MAX({_standing_e1rm_sql(LOAD_WEIGHT_SQL)}) AS load_e1rm, "
+        f"MAX({_standing_e1rm_sql('s.weight')}) AS added_e1rm, MAX(s.reps) AS best_reps "
+        "FROM sets s JOIN workout_blocks b ON b.id = s.block_id JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0 "
+        "AND e.original_name IS NOT NULL AND e.original_name != '' "
+        "GROUP BY w.id, e.original_name",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
+async def tonnage_totals_before(
+    user_id: int, workout_id: int, *, month: Optional[str] = None, tz_offset: Optional[int] = None
+) -> tuple[int, int, float]:
+    """(тренировок, подходов, тоннаж по нагрузке в единицах атлета) по
+    закрытым тренировкам атлета с id меньше `workout_id` — «до этой
+    тренировки» для слайда тоннажа в итогах (finish_tonnage). `month`
+    ('YYYY-MM', местный месяц атлета) — только этот календарный месяц.
+    Перенесённая история (IMPORTED_WORKOUT_SQL) не считается: вехи месяца и
+    всего времени празднуют записанное у нас, а не загруженный файл.
+    Сравнение по id, а не по дате, — один и тот же ответ на повторный finish."""
+    where = ["w.user_id = ?", "w.status = 'finished'", "w.id < ?",
+             "w.import_batch_id IS NULL", "w.source != 'import'"]
+    params: list[Any] = [user_id, workout_id]
+    if month is not None:
+        day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+        where.append(f"substr({day}, 1, 7) = ?")
+        params.append(month)
+    cur = await conn().execute(
+        f"SELECT COUNT(DISTINCT w.id), COUNT(s.id), COALESCE(SUM({LOAD_WEIGHT_SQL} * s.reps), 0) "
+        "FROM workouts w JOIN workout_blocks b ON b.workout_id = w.id JOIN sets s ON s.block_id = b.id "
+        f"WHERE {' AND '.join(where)}",
+        params,
+    )
+    workouts, sets, tonnage = await cur.fetchone()
+    return int(workouts or 0), int(sets or 0), float(tonnage or 0)
 
 
 async def count_new_users_between(since: str, until: str) -> int:
