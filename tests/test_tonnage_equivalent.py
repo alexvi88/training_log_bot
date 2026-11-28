@@ -55,3 +55,15 @@ def test_equivalents_count_real_objects_not_inflated_pounds():
     kg_count = int(kg.split()[2])
     lb_count = int(lb.split()[2])
     assert kg_count > lb_count
+
+
+def test_workout_object_count_rounds_not_floors():
+    # 2.68т при бизоне 900кг — «2.7т», значит «3 бизона», а не 2 (владелец).
+    import finish_tonnage
+
+    assert finish_tonnage._times(2685, 900) == 3
+    assert finish_tonnage._times(2300, 900) == 3
+    assert finish_tonnage._times(2200, 900) == 2
+    assert finish_tonnage._times(950, 900) == 1
+    picked = finish_tonnage.workout_object(2685, seed=0, allowed=frozenset({"bison"}))
+    assert picked == ("bison", 3)
