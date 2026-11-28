@@ -141,6 +141,18 @@ async def test_ask_runs_the_models_sql_and_returns_its_answer(file_db, monkeypat
     assert json.loads(tool_out["output"])["rows"] == [["en", 1], ["ru", 1]]
     async with dbmod.conn().execute("SELECT count(*) FROM cost_events WHERE user_id = 1") as cur:
         assert (await cur.fetchone())[0] == 2
+    # Отвечает старшая модель, а не модель тренера.
+    assert first["model"] == config.OPENAI_ADMIN_DATA_MODEL != config.OPENAI_CHAT_MODEL
+
+
+async def test_ask_falls_back_to_luna_when_the_senior_model_fails(file_db, monkeypatch):
+    client = ResponsesScript([RuntimeError("model not available"), _text_body("Ответила Luna.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer, _history = await admin_data_ask.ask(1, "сколько атлетов?")
+
+    assert answer == "Ответила Luna."
+    assert [r["model"] for r in client.requests] == [config.OPENAI_ADMIN_DATA_MODEL, config.OPENAI_CHAT_MODEL]
 
 
 async def test_ask_respects_the_money_hard_stop(file_db, monkeypatch):
