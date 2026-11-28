@@ -6165,6 +6165,8 @@
   "standing.value.e1rm_added": "Added-weight e1RM ≈ {value}",
   "standing.value.rel": "e1RM ≈ {ratio} bodyweight",
   "standing.label.top": "top {top}%",
+  "standing.label.best": "No. 1 in the diary",
+  "standing.hint.best": "Nobody in the diary lifts more in this one. Hold the line.",
   "standing.label.to_median": "+{delta} to the middle",
   "standing.label.few_athletes": "not enough data yet",
   "standing.label.no_data": "no sets in 90 days",

@@ -280,6 +280,9 @@ class Placement:
     to_next: Optional[float]
     you_bin: int
     bucket: dict[str, Any]
+    #: Не слабее самого сильного в корзине — «№1 в дневнике» вместо «топ-5%»
+    #: (владелец: «топ-5%» лучшему читалось как «впереди ещё 5%»).
+    best: bool = False
 
 
 def percentile_of(q: list[float], value: float) -> float:
@@ -318,7 +321,10 @@ def place(bucket: dict[str, Any], value: float, cohort: str = "all") -> Optional
     if next_top is not None:
         need = q[100 - next_top] - value
         to_next = need if need > 0 else None
-    return Placement(cohort, n, True, top, None, next_top, to_next, you_bin, bucket)
+    best = value >= q[100]
+    if best:
+        next_top, to_next = None, None
+    return Placement(cohort, n, True, top, None, next_top, to_next, you_bin, bucket, best)
 
 
 def pick_bucket(entry: Optional[dict[str, Any]], gender: Optional[str], basis: str
@@ -486,7 +492,10 @@ def standing_json(
                          _value_text(best, used_basis, unit, bw_kg)),
                 "rel_available": rel_placement is not None}
     q = placement.bucket["q"]
-    if placement.above_median:
+    if placement.best:
+        label = i18n.t("standing.label.best")
+        hint = i18n.t("standing.hint.best")
+    elif placement.above_median:
         label = i18n.t("standing.label.top", top=placement.top)
         hint = None
         if placement.to_next is not None and placement.next_top is not None:

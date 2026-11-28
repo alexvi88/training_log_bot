@@ -6165,6 +6165,8 @@
   "standing.value.e1rm_added": "Ek ağırlık e1RM ≈ {value}",
   "standing.value.rel": "e1RM ≈ vücut ağırlığının {ratio} katı",
   "standing.label.top": "ilk %{top}",
+  "standing.label.best": "Günlükte 1 numara",
+  "standing.hint.best": "Günlükte bu harekette senden fazla kaldıran yok. Seviyeni koru.",
   "standing.label.to_median": "ortaya +{delta}",
   "standing.label.few_athletes": "henüz veri az",
   "standing.label.no_data": "90 günde set yok",

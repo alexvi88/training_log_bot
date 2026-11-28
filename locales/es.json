@@ -6165,6 +6165,8 @@
   "standing.value.e1rm_added": "e1RM del lastre ≈ {value}",
   "standing.value.rel": "e1RM ≈ {ratio} tu peso corporal",
   "standing.label.top": "top {top} %",
+  "standing.label.best": "N.º 1 del diario",
+  "standing.hint.best": "Nadie en el diario levanta más en este ejercicio. Mantén el nivel.",
   "standing.label.to_median": "+{delta} hasta la mitad",
   "standing.label.few_athletes": "aún faltan datos",
   "standing.label.no_data": "sin series en 90 días",

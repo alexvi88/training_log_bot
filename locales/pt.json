@@ -6165,6 +6165,8 @@
   "standing.value.e1rm_added": "e1RM da carga extra ≈ {value}",
   "standing.value.rel": "e1RM ≈ {ratio} o peso corporal",
   "standing.label.top": "top {top}%",
+  "standing.label.best": "Nº 1 do diário",
+  "standing.hint.best": "Ninguém no diário levanta mais neste exercício. Mantenha o nível.",
   "standing.label.to_median": "+{delta} até o meio",
   "standing.label.few_athletes": "ainda faltam dados",
   "standing.label.no_data": "sem séries em 90 dias",

@@ -84,6 +84,16 @@ def test_top_is_rounded_up_to_five_and_capped_by_size():
     assert crowd_standing.place(big, 240.0).next_top == 1
 
 
+def test_strongest_is_number_one_not_top_five():
+    """Лучшему — «№1 в дневнике», а не «топ-5%» (читалось как «впереди ещё 5%»)."""
+    bucket = crowd_standing.build_bucket([float(v) for v in range(1, 101)])
+    assert crowd_standing.place(bucket, 100.0).best
+    assert crowd_standing.place(bucket, 130.0).best  # живой рекорд сильнее вчерашнего максимума
+    assert not crowd_standing.place(bucket, 99.0).best
+    with i18n.use_lang("ru"):
+        assert i18n.t("standing.label.best") == "№1 в дневнике"
+
+
 def test_below_median_has_no_percent():
     bucket = crowd_standing.build_bucket([float(v) for v in range(1, 101)])
     p = crowd_standing.place(bucket, 30.0)

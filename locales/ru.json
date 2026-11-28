@@ -6166,6 +6166,8 @@
   "standing.value.e1rm_added": "e1RM довеска ≈ {value}",
   "standing.value.rel": "e1RM ≈ {ratio} веса тела",
   "standing.label.top": "топ-{top}%",
+  "standing.label.best": "№1 в дневнике",
+  "standing.hint.best": "Сильнее тебя в этом упражнении в дневнике никого. Держи планку.",
   "standing.label.to_median": "до середины +{delta}",
   "standing.label.few_athletes": "мало данных",
   "standing.label.no_data": "нет подходов за 90 дней",

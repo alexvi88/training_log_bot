@@ -6165,6 +6165,8 @@
   "standing.value.e1rm_added": "e1RM des Zusatzgewichts ≈ {value}",
   "standing.value.rel": "e1RM ≈ {ratio} Körpergewicht",
   "standing.label.top": "Top {top} %",
+  "standing.label.best": "Nr. 1 im Tagebuch",
+  "standing.hint.best": "Niemand im Tagebuch hebt hier mehr. Halt das Level.",
   "standing.label.to_median": "+{delta} bis zur Mitte",
   "standing.label.few_athletes": "noch zu wenig Daten",
   "standing.label.no_data": "keine Sätze in 90 Tagen",

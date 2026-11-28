@@ -6165,6 +6165,8 @@
   "standing.value.e1rm_added": "e1RM du lest ≈ {value}",
   "standing.value.rel": "e1RM ≈ {ratio} ton poids de corps",
   "standing.label.top": "top {top} %",
+  "standing.label.best": "N° 1 du journal",
+  "standing.hint.best": "Personne dans le journal ne soulève plus sur cet exercice. Garde le niveau.",
   "standing.label.to_median": "+{delta} jusqu’au milieu",
   "standing.label.few_athletes": "pas encore assez de données",
   "standing.label.no_data": "aucune série en 90 jours",
