@@ -649,6 +649,11 @@ async def finish_standing_json(workout: Any, user: Any) -> Optional[dict[str, An
         "hint": hint,
         "footnote": i18n.t(f"standing.finish.footnote.{after.cohort}", days=WINDOW_DAYS),
         "crowd_index": max(0, min(BINS - 1, round(stronger / 5) - 1)),
+        # «e1RM ≈ 148кг» — чем меряли (владелец: «упоминание 1ПМ» на слайде).
+        "value_text": _value_text(best, "abs", unit, None),
+        # Сильнейший в корзине — слайд пишет «№1 в дневнике» вместо «95%».
+        "best": after.best,
+        "best_label": i18n.t("standing.label.best") if after.best else None,
     }
 
 
