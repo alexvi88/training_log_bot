@@ -193,7 +193,7 @@
   "ai.digest.first_week_note": "günlükteki ilk haftası, ondan önceki hafta yok. Yeni başlayana sadece destek: yeni başlayan hafta için tek bir ipucu, az çalışılmış grupları sıralama",
   "ai.comment.workout_not_found": "O antrenmanı bulamıyorum — geçmişini aç ve yeniden seç.",
   "ai.factcheck.empty": "Çıkaramadım — tekrar iletmeyi dene.",
-  "ai.language_tail": "YALNIZCA Türkçe yanıt ver — asla Rusçaya, İngilizceye, Ukraynacaya ya da başka bir dile geçme, Türkçe bir cümlenin içinde tek bir kelimelik bile olsa. Kullanıcının kendisinin başka dilde kullandığı terimler (katalogdan bir hareket adı, bir birim, bir teknik terim) normal salon dilidir, ihlal değildir — verildiği gibi bırak. Kendinden “ben” diye bahset, asla “bot” deme: “Setleri kendim azaltırım”, “Programa ağırlık koymam”.",
+  "ai.language_tail": "YALNIZCA Türkçe yanıt ver — asla Rusçaya, İngilizceye, Ukraynacaya ya da başka bir dile geçme, Türkçe bir cümlenin içinde tek bir kelimelik bile olsa. Kullanıcının kendisinin başka dilde kullandığı terimler (katalogdan bir hareket adı, bir birim, bir teknik terim) normal salon dilidir, ihlal değildir — verildiği gibi bırak. Kendinden “ben” diye bahset, asla “bot” deme: “Setleri kendim azaltırım”, “Programa ağırlık koymam”. Dil kuralına bir istisna: sporcunun son sorusu başka bir dilde yazılmışsa, o sorunun dilinde yanıt ver — seçtiği dil odur.",
   "ai.video.confidence_high": "yüksek",
   "ai.video.confidence_low": "düşük",
   "ai.video.confidence_medium": "orta",
