@@ -89,13 +89,20 @@ def drawable_ids() -> frozenset[str]:
     return every - NEW_IDS
 
 
+def _times(total_kg: float, w: float) -> int:
+    """Сколько предметов в тоннаже — обычным округлением, не вниз: над
+    предметом стоит тоннаж, округлённый до десятой тонны, и 2.68т при бизоне
+    900кг «Это 2 бизона» читалось как ошибка (2.7 / 0.9 = 3, владелец)."""
+    return max(1, int(total_kg / w + 0.5))
+
+
 def heaviest_fit(total_kg: float) -> Optional[tuple[int, str, int]]:
     """(индекс, id, сколько целых) самого тяжёлого предмета, который тоннаж
     покрывает хотя бы раз; None — легче самого лёгкого."""
     best = None
     for i, (obj_id, w) in enumerate(_objects()):
         if w <= total_kg:
-            best = (i, obj_id, int(total_kg // w))
+            best = (i, obj_id, _times(total_kg, w))
     return best
 
 
@@ -108,9 +115,9 @@ def workout_object(
     if total_kg < MIN_KG:
         return None
     objects = [(obj_id, w) for obj_id, w in _objects() if allowed is None or obj_id in allowed]
-    candidates = [(obj_id, int(total_kg // w)) for obj_id, w in objects if 1 <= total_kg // w <= MAX_COUNT]
+    candidates = [(obj_id, _times(total_kg, w)) for obj_id, w in objects if w <= total_kg and _times(total_kg, w) <= MAX_COUNT]
     if not candidates:
-        fitting = [(obj_id, int(total_kg // w)) for obj_id, w in objects if w <= total_kg]
+        fitting = [(obj_id, _times(total_kg, w)) for obj_id, w in objects if w <= total_kg]
         return fitting[-1] if fitting else None
     return candidates[seed % len(candidates)]
 
