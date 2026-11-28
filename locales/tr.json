@@ -6165,7 +6165,7 @@
   "tonnage.slide.caption.workout": "{exercises, plural, one{# egzersiz} other{# egzersiz}}, {sets, plural, one{# set} other{# set}}",
   "tonnage.slide.caption.period": "{workouts, plural, one{# antrenman} other{# antrenman}}, {sets, plural, one{# set} other{# set}}",
   "tonnage.slide.next": "{count, plural, one{Sıradaki hedef: 1 {noun}, {weight}} other{Sıradaki hedef: {count} {noun}, {weight}}}",
-  "standing.intro": "Son {days, plural, one{# gün} other{# gün}} içindeki en iyi setini günlükteki diğer sporcularla kıyaslıyorum — isim yok, sadece sayılar. Bir egzersiz, yeterince sporcu kaydedince kıyasa girer.",
+  "standing.intro": "Son {days, plural, one{# gün} other{# gün}} içindeki en iyi setini günlükteki diğer sporcularla kıyaslıyorum. Bir egzersiz, yeterince sporcu kaydedince kıyasa girer.",
   "standing.reps": "{n, plural, one{# tekrar} other{# tekrar}}",
   "standing.value.reps": "{n, plural, one{# tekrar} other{# tekrar}}",
   "standing.value.e1rm": "e1RM ≈ {value}",
@@ -6190,8 +6190,8 @@
   "standing.finish.eyebrow": "YENİ REKOR · {name}",
   "standing.finish.headline": "{set} — sporcuların %{stronger} kadarından güçlüsün",
   "standing.finish.headline_gained": "{set} — sporcuların %{gained} kadarını daha geride bıraktın",
-  "standing.finish.footnote.all": "Seni günlükteki sporcular ile son {days, plural, one{# gün} other{# gün}} içindeki en iyi sete göre kıyaslıyorum. İsim yok, sadece sayılar.",
-  "standing.finish.footnote.male": "Seni günlükteki erkekler ile son {days, plural, one{# gün} other{# gün}} içindeki en iyi sete göre kıyaslıyorum. İsim yok, sadece sayılar.",
-  "standing.finish.footnote.female": "Seni günlükteki kadınlar ile son {days, plural, one{# gün} other{# gün}} içindeki en iyi sete göre kıyaslıyorum. İsim yok, sadece sayılar.",
+  "standing.finish.footnote.all": "Seni günlükteki sporcular ile son {days, plural, one{# gün} other{# gün}} içindeki en iyi sete göre kıyaslıyorum.",
+  "standing.finish.footnote.male": "Seni günlükteki erkekler ile son {days, plural, one{# gün} other{# gün}} içindeki en iyi sete göre kıyaslıyorum.",
+  "standing.finish.footnote.female": "Seni günlükteki kadınlar ile son {days, plural, one{# gün} other{# gün}} içindeki en iyi sete göre kıyaslıyorum.",
   "api.error.bad_standing_basis": "Böyle bir kıyas bilmiyorum. Ekranı yeniden aç."
 }
