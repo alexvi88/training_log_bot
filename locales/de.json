@@ -6102,7 +6102,7 @@
   "progress_score.detail.progression_from": "Kraftzuwachs rechne ich ab {date}",
   "progress_score.detail.progression_none": "rechne ich, sobald du einen Monat Training hast",
   "progress_score.detail.regularity": "2+ Trainings in {full} von {n, plural, one{# Woche} other{# Wochen}}",
-  "progress_score.detail.volume": "6+ Sätze jede Woche in {full} von {n, plural, one{# Muskelgruppe} other{# Muskelgruppen}}",
+  "progress_score.detail.volume": "Jede Woche grün: {full} von {n, plural, one{# Muskelgruppe} other{# Muskelgruppen}}",
   "progress_score.detail.volume_deload": "Deload diese Woche — zähle ich nicht ins Volumen",
   "progress_score.detail.volume_none": "noch keine Sätze nach Muskelgruppen",
   "progress_score.coach.empty": "Mach ein Training, dann rechne ich deine Bewertung.",

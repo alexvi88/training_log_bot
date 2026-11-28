@@ -6102,7 +6102,7 @@
   "progress_score.detail.progression_from": "conto a força a partir de {date}",
   "progress_score.detail.progression_none": "conto quando você tiver um mês de treinos",
   "progress_score.detail.regularity": "2+ treinos em {full} de {n, plural, one{# semana} other{# semanas}}",
-  "progress_score.detail.volume": "6+ séries toda semana em {full} de {n, plural, one{# grupo muscular} other{# grupos musculares}}",
+  "progress_score.detail.volume": "Verde em todas as semanas: {full} de {n, plural, one{# grupo muscular} other{# grupos musculares}}",
   "progress_score.detail.volume_deload": "semana de deload — não conto no volume",
   "progress_score.detail.volume_none": "ainda não há séries por grupo muscular",
   "progress_score.coach.empty": "Faça um treino e eu calculo sua nota.",

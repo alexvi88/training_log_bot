@@ -6102,7 +6102,7 @@
   "progress_score.detail.progression_from": "I'll count strength gains from {date}",
   "progress_score.detail.progression_none": "I'll count it once you have a month of workouts",
   "progress_score.detail.regularity": "2+ workouts in {full} of {n, plural, one{# week} other{# weeks}}",
-  "progress_score.detail.volume": "6+ sets every week in {full} of {n, plural, one{# muscle group} other{# muscle groups}}",
+  "progress_score.detail.volume": "Green every week: {full} of {n, plural, one{# muscle group} other{# muscle groups}}",
   "progress_score.detail.volume_deload": "deload this week — I'm leaving it out of volume",
   "progress_score.detail.volume_none": "no sets by muscle group yet",
   "progress_score.coach.empty": "Do a workout and I'll count your score.",
