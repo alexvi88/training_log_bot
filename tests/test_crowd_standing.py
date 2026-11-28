@@ -321,6 +321,7 @@ async def test_standing_in_rewards_only_on_record_above_median(fresh_db, lang):
     st = rewards["standing"]
     assert st is not None and st["exercise_id"] == ex and 5 <= st["top"] <= 50
     assert st["stronger_than"] == 100 - st["top"] and 0 <= st["crowd_index"] <= 19
+    assert st["value_text"].startswith("e1RM") and isinstance(st["best"], bool)
     assert st["gained"] is None or st["gained"] > 0
     assert set(st) >= {"name", "eyebrow", "headline", "hint", "footnote"}
     obj = rewards["tonnage_object"]
