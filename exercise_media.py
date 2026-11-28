@@ -451,7 +451,7 @@ FRAME_REVISION: dict[str, int] = {
     "ab_crunch_machine": 2,
     "decline_barbell_bench_press": 4,
     "sumo_deadlift": 4,
-    "seated_leg_curl": 2,
+    "seated_leg_curl": 3,
     "standing_front_barbell_raise_over_head": 3,
     "calf_machine_shoulder_shrug": 2,
     "cross_body_hammer_curl": 2,
