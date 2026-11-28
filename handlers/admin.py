@@ -10,7 +10,7 @@ from contextlib import suppress
 from html import escape
 from typing import Optional
 
-from aiogram import F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -1489,6 +1489,51 @@ async def _answer_data_question(message: Message, state: FSMContext, question: s
     for i, chunk in enumerate(chunks):
         last = i == len(chunks) - 1
         await message.answer(chunk, reply_markup=_data_dialog_keyboard() if last else None)
+
+
+_PERSISTENT_BUTTONS = (keyboards.BTN_MENU, keyboards.BTN_WORKOUT, keyboards.BTN_AI)
+
+
+def _leaves_data_dialog(event) -> bool:
+    """Ушёл ли админ из диалога /data этим апдейтом: любая кнопка, кроме
+    кнопок самого диалога, любая команда, кроме /data, и кнопки постоянной
+    клавиатуры («Меню», «Тренировка», «AI-тренер»)."""
+    if isinstance(event, CallbackQuery):
+        return not (event.data or "").startswith("admin:data:")
+    if isinstance(event, Message):
+        text = event.text or ""
+        if text.startswith("/"):
+            command = text[1:].split(maxsplit=1)[0].split("@", 1)[0] if len(text) > 1 else ""
+            return command.lower() != "data"
+        return any(text == button for button in _PERSISTENT_BUTTONS)
+    return False
+
+
+class DropDataDialogOnExit(BaseMiddleware):
+    """Ушёл из /data — диалог закрыт (владелец: «ушёл в меню, потом что-то
+    набираю, а оказывается ещё открыт этот режим»). Одно место на все выходы:
+    кнопки меню, инлайн-кнопки других экранов, команды. Висит на диспетчере
+    (`main.py`), а не на роутере админа: кнопку «Меню» забирает
+    `persistent_menu` раньше него, и до роутера админа апдейт не дошёл бы.
+
+    Снимаем только состояние /data и его историю — не `state.clear()`: /data
+    открывают и посреди тренировки, её каркас трогать нельзя (как
+    feedback.DropFeedbackStateOnCommand). Апдейт идёт дальше своему хендлеру.
+    Не админ — состояние даже не читаем (хранилище файловое)."""
+
+    async def __call__(self, handler, event, data):
+        state: FSMContext | None = data.get("state")
+        user = getattr(event, "from_user", None)
+        if (
+            state is not None
+            and user is not None
+            and _is_admin(user.id)
+            and _leaves_data_dialog(event)
+            and await state.get_state() == AdminFlow.data_dialog.state
+        ):
+            await state.set_state(None)
+            await state.update_data(**{_DATA_HISTORY_KEY: None})
+        return await handler(event, data)
 
 
 @router.callback_query(F.data == "admin:data:new")

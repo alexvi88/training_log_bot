@@ -523,6 +523,9 @@ async def main() -> None:
     dp.callback_query.outer_middleware(set_lang_middleware)
     dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
+    # Ушёл из /data (меню, другая кнопка, команда) — диалог по данным закрыт.
+    dp.message.outer_middleware(admin.DropDataDialogOnExit())
+    dp.callback_query.outer_middleware(admin.DropDataDialogOnExit())
     # Лог действий — тоже outer: в него должно попадать и то, чего не поймал ни
     # один хендлер (см. activity_log).
     dp.message.outer_middleware(activity_log.LogIncomingMessages())

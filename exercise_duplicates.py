@@ -23,9 +23,14 @@
 3. Квота кончилась, деньги на сегодня кончились, модель не настроена или
    ответила мусором — молча «maybe» резолвера. Ошибки атлет не видит никогда.
 
-Не предлагается: шаблон, копия которого у атлета уже живая (объединять надо
-со своим, его видно в списке своих), скрытые шаблоны каталога. У упражнения,
-которое само копия каталога (`original_name` — идентичность), кандидатов нет.
+Шаблон, копия которого у атлета уже живая, предлагается под именем этой копии
+(«Barbell Deadlift», а не «Становая тяга»): объединять своё «conventional
+deadlift» надо именно в неё, и `POST /exercise-templates/{id}/add` на уже
+форкнутый шаблон возвращает ту же копию. Раньше такие шаблоны выкидывались из
+списка, и модель, не видя становую, честно отвечала «ничего» (владелец:
+«странно, что мерж не распознал такое простое»). Не предлагаются скрытые
+шаблоны каталога. У упражнения, которое само копия каталога (`original_name` —
+идентичность), кандидатов нет.
 """
 
 from __future__ import annotations
@@ -56,7 +61,8 @@ MAX_CANDIDATES = 3
 # в списке, и запрос остаётся коротким.
 SHORTLIST_SIZE = 30
 _MAX_TOKENS = 300
-_CACHE_VERSION = 1
+# 2 — шаблоны со своей копией снова в списке: старые пустые ответы спросить заново.
+_CACHE_VERSION = 2
 
 SYSTEM_PROMPT = """You match a strength athlete's self-made exercise to the gym's exercise catalog.
 
@@ -83,14 +89,12 @@ def _is_catalog_copy(row: Any) -> bool:
 
 
 async def _catalog_for(user_id: int) -> list[Any]:
-    """Шаблоны, которые можно предложить: без скрытых и без тех, чья живая
-    копия у атлета уже есть."""
-    owned = {_fold(r["original_name"]) for r in await db.list_active_exercises_with_identity(user_id)}
+    """Шаблоны, которые можно предложить: весь каталог без скрытых, в том
+    числе те, чья копия у атлета уже есть (их покажем под именем копии)."""
     return [
         t for t in await db.list_all_exercise_templates()
         if t["user_id"] is None
         and not seed_data.is_catalog_hidden(t["name"])
-        and _fold(t["name"]) not in owned
     ]
 
 
@@ -101,8 +105,7 @@ def _by_popularity(rows: list[Any]) -> list[Any]:
 async def resolver_picks(name: str, catalog: list[Any]) -> tuple[Optional[Pick], list[Pick], list[Any]]:
     """Бесплатный шаг: (уверенный или None, «maybe» лучшие первыми, похожие
     шаблоны для короткого списка модели). Уверенный может оказаться вне
-    catalog (его копия у атлета уже есть) — тогда вызывающий не предлагает
-    ничего: это дубль своего упражнения, а не каталога.
+    catalog (скрытый шаблон) — тогда вызывающий не предлагает ничего.
 
     Уверенно — то же, что резолвер импорта считает точным: имя шаблона на
     любом языке, стандартное имя Hevy, те же слова в другом порядке и форме
@@ -309,7 +312,7 @@ async def picks_for(user_id: int, row: Any, lang: str, *, use_model: bool = True
             return maybes
         await _store(row, answered)
         cached = answered
-    # Копию шаблона могли завести после ответа модели — её не предлагаем.
+    # Шаблон могли скрыть из каталога после ответа модели — его не предлагаем.
     return [p for p in cached if p.identity in allowed][:MAX_CANDIDATES]
 
 
@@ -322,6 +325,12 @@ async def candidates_json(
     if not picks:
         return []
     templates = await db.find_global_templates_by_names([p.identity for p in picks])
+    # Своя живая копия шаблона — показываем её имя: объединять будем в неё.
+    own_names = {
+        _fold(r["original_name"]): r["display_name"]
+        for r in await db.list_active_exercises_with_identity(user_id)
+        if r["id"] != row["id"]
+    }
     out = []
     for pick in picks:
         template = templates.get(pick.identity)
@@ -330,7 +339,7 @@ async def candidates_json(
         group = rest_defaults.catalog_group(pick.identity) or seed_data.OTHER_GROUP_NAME
         out.append({
             "template_id": template["id"],
-            "name": seed_data.localized_exercise_name(template["name"], lang),
+            "name": own_names.get(_fold(template["name"])) or seed_data.localized_exercise_name(template["name"], lang),
             "original_name": template["name"],
             "group": seed_data.localized_muscle_group_name(group, lang),
             "group_id": template["primary_group_id"],

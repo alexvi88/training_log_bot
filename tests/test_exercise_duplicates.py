@@ -171,11 +171,13 @@ async def test_model_answer_is_cached_until_the_name_changes(fresh_db, monkeypat
     assert first == second
     assert [c["confidence"] for c in first] == ["sure", "maybe"]
     model.create.assert_awaited_once()
-    # Завёл копию шаблона — из закэшированного ответа он выпадает без нового вызова.
+    # Завёл копию шаблона — он остаётся в ответе под именем копии, без нового вызова.
     sumo = (await fresh_db.find_global_templates_by_names(["Становая тяга сумо"]))["Становая тяга сумо"]
-    await fresh_db.fork_exercise_from_template(USER, sumo["id"])
+    fork_id = await fresh_db.fork_exercise_from_template(USER, sumo["id"])
+    assert await fresh_db.update_exercise_name(fork_id, "Sumo DL")
     third = await _duplicates(client, exercise_id)
-    assert [c["original_name"] for c in third] == ["Становая тяга"]
+    assert [c["original_name"] for c in third] == ["Становая тяга", "Становая тяга сумо"]
+    assert third[1]["name"] == "Sumo DL"
     model.create.assert_awaited_once()
     # Переименовал — спрашиваем заново.
     assert await fresh_db.update_exercise_name(exercise_id, "deadlift conventional stance")
@@ -261,23 +263,41 @@ async def test_model_error_falls_back_silently(fresh_db, monkeypatch):
 # ---------- что не предлагается ----------
 
 
-async def test_catalog_copy_and_owned_templates_are_left_out(fresh_db, monkeypatch):
+async def test_catalog_copy_is_left_out_and_owned_template_comes_under_its_copy_name(fresh_db, monkeypatch):
     model = _install(monkeypatch, FakeModel({"Жим штанги лёжа": "sure"}))
     client = await _client(fresh_db, "ru")
     bench = (await fresh_db.find_global_templates_by_names(["Жим штанги лёжа"]))["Жим штанги лёжа"]
     fork_id = await fresh_db.fork_exercise_from_template(USER, bench["id"])
+    assert await fresh_db.update_exercise_name(fork_id, "Жим на скамье")
     # Копия каталога — пусто.
     assert await _duplicates(client, fork_id) == []
-    # Своё с тем же именем, что у шаблона, чья копия уже есть, — это дубль
-    # своего упражнения, а не каталога: пусто, модель не зовётся.
+    # Своё с тем же именем, что у шаблона, чья копия уже есть, — уверенный
+    # кандидат под именем копии, модель не зовётся.
     own_id = await _own(fresh_db, "barbell bench press")
-    assert await _duplicates(client, own_id) == []
-    # Подсказки резолвера тоже без своей копии.
-    other_id = await _own(fresh_db, "жим лёжа")
-    _install(monkeypatch, FakeModel(error=RuntimeError("boom")))
-    names = [c["original_name"] for c in await _duplicates(client, other_id)]
-    assert names and "Жим штанги лёжа" not in names
+    candidates = await _duplicates(client, own_id)
+    assert candidates[0]["original_name"] == "Жим штанги лёжа"
+    assert candidates[0]["name"] == "Жим на скамье"
+    assert candidates[0]["confidence"] == "sure"
     model.create.assert_not_awaited()
+
+
+async def test_owner_case_conventional_deadlift_finds_own_catalog_copy(fresh_db, monkeypatch):
+    """Владелец: «Barbell Deadlift» — его копия «Становой тяги», а своё
+    «conventional deadlift» модель раньше не могла сопоставить: становой не
+    было в её списке. Теперь она там, кандидат — под именем копии, и
+    «Добавить» отдаёт ту же копию, в неё и объединяем."""
+    _install(monkeypatch, FakeModel({"Становая тяга": "sure"}))
+    client = await _client(fresh_db, "en")
+    deadlift = (await fresh_db.find_global_templates_by_names(["Становая тяга"]))["Становая тяга"]
+    copy_id = await fresh_db.fork_exercise_from_template(USER, deadlift["id"])
+    assert await fresh_db.update_exercise_name(copy_id, "Barbell Deadlift")
+    own_id = await _own(fresh_db, "conventional deadlift")
+    candidates = await _duplicates(client, own_id)
+    assert candidates and candidates[0]["original_name"] == "Становая тяга"
+    assert candidates[0]["name"] == "Barbell Deadlift"
+    added = await client.post(f"/exercise-templates/{candidates[0]['template_id']}/add")
+    assert added.status_code in (200, 201), added.text
+    assert added.json()["id"] == copy_id
 
 
 async def test_foreign_exercise_is_404(fresh_db, monkeypatch):
