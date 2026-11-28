@@ -6165,7 +6165,7 @@
   "tonnage.slide.caption.workout": "{exercises, plural, one{# exercise} other{# exercises}}, {sets, plural, one{# set} other{# sets}}",
   "tonnage.slide.caption.period": "{workouts, plural, one{# workout} other{# workouts}}, {sets, plural, one{# set} other{# sets}}",
   "tonnage.slide.next": "{count, plural, one{Next up: one {noun}, {weight}} other{Next up: {count} {noun}, {weight}}}",
-  "standing.intro": "I stack your best set from the last {days, plural, one{# day} other{# days}} against other athletes in the diary — no names, just numbers. An exercise joins the comparison once enough athletes log it.",
+  "standing.intro": "I stack your best set from the last {days, plural, one{# day} other{# days}} against other athletes in the diary. An exercise joins the comparison once enough athletes log it.",
   "standing.reps": "{n, plural, one{# rep} other{# reps}}",
   "standing.value.reps": "{n, plural, one{# rep} other{# reps}}",
   "standing.value.e1rm": "e1RM ≈ {value}",
@@ -6190,8 +6190,8 @@
   "standing.finish.eyebrow": "NEW RECORD · {name}",
   "standing.finish.headline": "{set} — stronger than {stronger}% of athletes",
   "standing.finish.headline_gained": "{set} — another {gained}% of athletes behind you",
-  "standing.finish.footnote.all": "I compare you with athletes in the diary by best set over {days, plural, one{# day} other{# days}}. No names, just numbers.",
-  "standing.finish.footnote.male": "I compare you with men in the diary by best set over {days, plural, one{# day} other{# days}}. No names, just numbers.",
-  "standing.finish.footnote.female": "I compare you with women in the diary by best set over {days, plural, one{# day} other{# days}}. No names, just numbers.",
+  "standing.finish.footnote.all": "I compare you with athletes in the diary by best set over {days, plural, one{# day} other{# days}}.",
+  "standing.finish.footnote.male": "I compare you with men in the diary by best set over {days, plural, one{# day} other{# days}}.",
+  "standing.finish.footnote.female": "I compare you with women in the diary by best set over {days, plural, one{# day} other{# days}}.",
   "api.error.bad_standing_basis": "I don’t know that comparison. Reopen the screen."
 }

@@ -6165,7 +6165,7 @@
   "tonnage.slide.caption.workout": "{exercises, plural, one{# exercício} other{# exercícios}}, {sets, plural, one{# série} other{# séries}}",
   "tonnage.slide.caption.period": "{workouts, plural, one{# treino} other{# treinos}}, {sets, plural, one{# série} other{# séries}}",
   "tonnage.slide.next": "{count, plural, one{Próxima meta: 1 {noun}, {weight}} other{Próxima meta: {count} {noun}, {weight}}}",
-  "standing.intro": "Comparo a tua melhor série dos últimos {days, plural, one{# dia} other{# dias}} com outros atletas do diário — sem nomes, só números. Um exercício entra na comparação quando atletas suficientes o registam.",
+  "standing.intro": "Comparo a tua melhor série dos últimos {days, plural, one{# dia} other{# dias}} com outros atletas do diário. Um exercício entra na comparação quando atletas suficientes o registam.",
   "standing.reps": "{n, plural, one{# repetição} other{# repetições}}",
   "standing.value.reps": "{n, plural, one{# repetição} other{# repetições}}",
   "standing.value.e1rm": "e1RM ≈ {value}",
@@ -6190,8 +6190,8 @@
   "standing.finish.eyebrow": "NOVO RECORDE · {name}",
   "standing.finish.headline": "{set} — mais forte que {stronger}% dos atletas",
   "standing.finish.headline_gained": "{set} — mais {gained}% dos atletas ficaram para trás",
-  "standing.finish.footnote.all": "Comparo-te com os atletas do diário pela melhor série em {days, plural, one{# dia} other{# dias}}. Sem nomes, só números.",
-  "standing.finish.footnote.male": "Comparo-te com os homens do diário pela melhor série em {days, plural, one{# dia} other{# dias}}. Sem nomes, só números.",
-  "standing.finish.footnote.female": "Comparo-te com as mulheres do diário pela melhor série em {days, plural, one{# dia} other{# dias}}. Sem nomes, só números.",
+  "standing.finish.footnote.all": "Comparo-te com os atletas do diário pela melhor série em {days, plural, one{# dia} other{# dias}}.",
+  "standing.finish.footnote.male": "Comparo-te com os homens do diário pela melhor série em {days, plural, one{# dia} other{# dias}}.",
+  "standing.finish.footnote.female": "Comparo-te com as mulheres do diário pela melhor série em {days, plural, one{# dia} other{# dias}}.",
   "api.error.bad_standing_basis": "Não conheço essa comparação. Abre o ecrã de novo."
 }

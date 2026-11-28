@@ -6166,7 +6166,7 @@
   "tonnage.slide.caption.workout": "{exercises, plural, one{# упражнение} few{# упражнения} many{# упражнений} other{# упражнения}}, {sets, plural, one{# подход} few{# подхода} many{# подходов} other{# подхода}}",
   "tonnage.slide.caption.period": "{workouts, plural, one{# тренировка} few{# тренировки} many{# тренировок} other{# тренировки}}, {sets, plural, one{# подход} few{# подхода} many{# подходов} other{# подхода}}",
   "tonnage.slide.next": "{count, plural, one{Следующая цель — {noun}, {weight}} few{Следующая цель — {count} {noun}, {weight}} many{Следующая цель — {count} {noun}, {weight}} other{Следующая цель — {count} {noun}, {weight}}}",
-  "standing.intro": "Сравниваю твой лучший подход за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}} с атлетами дневника — без имён, только цифры. Упражнение попадает в сравнение, когда его пишет достаточно атлетов.",
+  "standing.intro": "Сравниваю твой лучший подход за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}} с атлетами дневника. Упражнение попадает в сравнение, когда его пишет достаточно атлетов.",
   "standing.reps": "{n, plural, one{# повтор} few{# повтора} many{# повторов} other{# повтора}}",
   "standing.value.reps": "{n, plural, one{# повтор} few{# повтора} many{# повторов} other{# повтора}}",
   "standing.value.e1rm": "e1RM ≈ {value}",
@@ -6191,8 +6191,8 @@
   "standing.finish.eyebrow": "НОВЫЙ РЕКОРД · {name}",
   "standing.finish.headline": "{set} — ты сильнее {stronger}% атлетов",
   "standing.finish.headline_gained": "{set} — ещё {gained}% атлетов позади",
-  "standing.finish.footnote.all": "Сравниваю с атлетами дневника по лучшему подходу за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}}. Без имён — только цифры.",
-  "standing.finish.footnote.male": "Сравниваю с мужчинами дневника по лучшему подходу за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}}. Без имён — только цифры.",
-  "standing.finish.footnote.female": "Сравниваю с женщинами дневника по лучшему подходу за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}}. Без имён — только цифры.",
+  "standing.finish.footnote.all": "Сравниваю с атлетами дневника по лучшему подходу за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}}.",
+  "standing.finish.footnote.male": "Сравниваю с мужчинами дневника по лучшему подходу за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}}.",
+  "standing.finish.footnote.female": "Сравниваю с женщинами дневника по лучшему подходу за {days, plural, one{# день} few{# дня} many{# дней} other{# дня}}.",
   "api.error.bad_standing_basis": "Не знаю такого сравнения. Открой экран заново."
 }

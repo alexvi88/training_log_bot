@@ -6165,7 +6165,7 @@
   "tonnage.slide.caption.workout": "{exercises, plural, one{# Übung} other{# Übungen}}, {sets, plural, one{# Satz} other{# Sätze}}",
   "tonnage.slide.caption.period": "{workouts, plural, one{# Training} other{# Trainings}}, {sets, plural, one{# Satz} other{# Sätze}}",
   "tonnage.slide.next": "{count, plural, one{Nächstes Ziel: 1 {noun}, {weight}} other{Nächstes Ziel: {count} {noun}, {weight}}}",
-  "standing.intro": "Ich vergleiche deinen besten Satz der letzten {days, plural, one{# Tag} other{# Tagen}} mit anderen Athleten im Tagebuch — ohne Namen, nur Zahlen. Eine Übung kommt in den Vergleich, sobald genug Athleten sie eintragen.",
+  "standing.intro": "Ich vergleiche deinen besten Satz der letzten {days, plural, one{# Tag} other{# Tagen}} mit anderen Athleten im Tagebuch. Eine Übung kommt in den Vergleich, sobald genug Athleten sie eintragen.",
   "standing.reps": "{n, plural, one{# Wiederholung} other{# Wiederholungen}}",
   "standing.value.reps": "{n, plural, one{# Wiederholung} other{# Wiederholungen}}",
   "standing.value.e1rm": "e1RM ≈ {value}",
@@ -6190,8 +6190,8 @@
   "standing.finish.eyebrow": "NEUER REKORD · {name}",
   "standing.finish.headline": "{set} — stärker als {stronger} % der Athleten",
   "standing.finish.headline_gained": "{set} — weitere {gained} % der Athleten hinter dir",
-  "standing.finish.footnote.all": "Ich vergleiche dich mit Athleten im Tagebuch nach dem besten Satz in {days, plural, one{# Tag} other{# Tagen}}. Ohne Namen, nur Zahlen.",
-  "standing.finish.footnote.male": "Ich vergleiche dich mit Männern im Tagebuch nach dem besten Satz in {days, plural, one{# Tag} other{# Tagen}}. Ohne Namen, nur Zahlen.",
-  "standing.finish.footnote.female": "Ich vergleiche dich mit Frauen im Tagebuch nach dem besten Satz in {days, plural, one{# Tag} other{# Tagen}}. Ohne Namen, nur Zahlen.",
+  "standing.finish.footnote.all": "Ich vergleiche dich mit Athleten im Tagebuch nach dem besten Satz in {days, plural, one{# Tag} other{# Tagen}}.",
+  "standing.finish.footnote.male": "Ich vergleiche dich mit Männern im Tagebuch nach dem besten Satz in {days, plural, one{# Tag} other{# Tagen}}.",
+  "standing.finish.footnote.female": "Ich vergleiche dich mit Frauen im Tagebuch nach dem besten Satz in {days, plural, one{# Tag} other{# Tagen}}.",
   "api.error.bad_standing_basis": "Diesen Vergleich kenne ich nicht. Öffne den Bildschirm neu."
 }
