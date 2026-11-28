@@ -23,8 +23,9 @@ e1RM по Эпли у упражнений с весом (подходы до co
 - Любая показанная цифра стоит минимум на config.STANDING_MIN_ATHLETES (20, как у цифр сайта) атлетах; «топ-1%» —
   только при TOP1_MIN_USERS, иначе потолок «топ-5%». Проценты — с шагом 5
   и вверх (ceil): «топ-35%» значит «не ниже 35%», не приукрашивая.
-- Ниже середины процента нет совсем: «до середины зала +7.5кг», никогда не
-  «в нижних X%».
+- Ниже середины места нет вовсе (решение владельца: «че людей
+  расстраивать»): упражнение недоступно с причиной `below_median`, в
+  списке `/v1/standing` его нет, карточка упражнения блок не рисует.
 - Сколько атлетов в корзине, наружу не уходит ни числом, ни ступенью
   (решение владельца: аудитория пока маленькая) — ни в тексте, ни в JSON.
   Порог K тоже не называется.
@@ -80,6 +81,7 @@ TOP_STEP = 5
 REASON_FEW = "few_athletes"
 REASON_NO_DATA = "no_data"
 REASON_NOT_CATALOG = "not_catalog"
+REASON_BELOW_MEDIAN = "below_median"
 
 _cache: dict[str, Any] = {"at": 0.0, "data": {}, "day": ""}
 _lock = asyncio.Lock()
@@ -491,20 +493,20 @@ def standing_json(
         return {**_empty(exercise_id, name, metric, used_basis, REASON_FEW,
                          _value_text(best, used_basis, unit, bw_kg)),
                 "rel_available": rel_placement is not None}
+    if not placement.above_median:
+        return {**_empty(exercise_id, name, metric, used_basis, REASON_BELOW_MEDIAN,
+                         _value_text(best, used_basis, unit, bw_kg)),
+                "rel_available": rel_placement is not None}
     q = placement.bucket["q"]
     if placement.best:
         label = i18n.t("standing.label.best")
         hint = i18n.t("standing.hint.best")
-    elif placement.above_median:
+    else:
         label = i18n.t("standing.label.top", top=placement.top)
         hint = None
         if placement.to_next is not None and placement.next_top is not None:
             hint = i18n.t("standing.hint.next", top=placement.next_top,
                           delta=_delta_text(placement.to_next, metric, used_basis, unit, best, bw_kg))
-    else:
-        delta = _delta_text(placement.to_median, metric, used_basis, unit, best, bw_kg)
-        label = i18n.t("standing.label.to_median", delta=delta)
-        hint = i18n.t("standing.hint.median", delta=delta)
     return {
         "available": True, "reason": None, "exercise_id": exercise_id, "name": name,
         "metric": metric, "basis": used_basis, "above_median": placement.above_median,
@@ -566,6 +568,8 @@ async def overview(user: Any, basis: str) -> dict[str, Any]:
             unit=user["unit"], gender=user["gender"], bw_kg=bw, buckets=buckets,
         )
         size = int(((buckets.get(identity) or {}).get("cohorts", {}).get("all", {}).get("abs") or {}).get("n") or 0)
+        if item["reason"] == REASON_BELOW_MEDIAN:
+            continue
         (available if item["available"] else few).append((size, best.name, item))
     available.sort(key=lambda x: (-x[0], x[1]))
     few.sort(key=lambda x: (-x[0], x[1]))

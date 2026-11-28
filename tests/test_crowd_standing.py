@@ -198,10 +198,12 @@ async def test_below_median_label_and_threshold(fresh_db):
     await crowd(fresh_db, BENCH, [100.0], start=59000)
     await crowd_standing.refresh(force=True)
     body = (await client.get(f"/exercises/{ex}/standing")).json()
-    assert body["available"] and not body["above_median"] and body["top"] is None
-    assert body["stronger_than"] is None and "%" not in body["label"]
-    assert body["label"].startswith("до середины +") and body["label"].endswith("кг")
-    assert body["hint"]
+    # Ниже середины места нет вовсе — ни процента, ни «до середины».
+    assert not body["available"] and body["reason"] == "below_median" and not body["above_median"]
+    assert body["top"] is None and body["stronger_than"] is None and body["histogram"] == []
+    assert "%" not in body["label"] and body["hint"]
+    overview = (await client.get("/standing")).json()
+    assert all(item["exercise_id"] != ex for item in overview["items"])
 
 
 async def test_reasons_and_404(fresh_db):
@@ -264,14 +266,20 @@ async def test_overview_orders_available_first(fresh_db):
     await crowd(fresh_db, BENCH, _spread(k + 5), start=50000)
     await crowd(fresh_db, SQUAT, _spread(k, 80, 180), start=52000)
     client = await _me(fresh_db)
-    await athlete(fresh_db, ME, BENCH, 100)
-    await athlete(fresh_db, ME, SQUAT, 150)
+    await athlete(fresh_db, ME, BENCH, 130)
+    await athlete(fresh_db, ME, SQUAT, 175)
     await athlete(fresh_db, ME, "Становая тяга", 150)
     await athlete(fresh_db, ME, None, 10, name="Мой жим")
     body = (await client.get("/standing")).json()
     assert body["basis"] == "abs" and body["intro"]
     names = [(i["name"], i["available"]) for i in body["items"]]
     assert names == [(BENCH, True), (SQUAT, True), ("Становая тяга", False)]
+    # Ниже середины — упражнения в списке нет вовсе.
+    await athlete(fresh_db, ME, "Жим штанги стоя", 1)
+    await crowd(fresh_db, "Жим штанги стоя", _spread(k, 40, 90), start=54000)
+    await crowd_standing.refresh(force=True)
+    names = [i["name"] for i in (await client.get("/standing")).json()["items"]]
+    assert "Жим штанги стоя" not in names and BENCH in names
 
 
 async def test_no_string_names_the_bucket_size(fresh_db):
