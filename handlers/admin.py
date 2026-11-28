@@ -1571,6 +1571,7 @@ EVENTS_CSV_MAX_ROWS = 200_000
 EVENTS_CSV_COLUMNS = ("ts", "user_id", "platform", "event", "props", "app_version", "own")
 EVENT_USERS_CSV_COLUMNS = (
     "user_id", "signup_date", "source", "lang", "signup_platform", "has_app", "own", "has_account",
+    "install_id",
 )
 # Воронка приложения до входа (api_v1_funnel, funnel_events): ключ — установка,
 # не аккаунт, поэтому отдельным файлом, а не строками событий.
@@ -1632,6 +1633,7 @@ async def write_event_users_csv(path: str, since: str, own: set[int]) -> int:
                 1 if row["has_app"] else 0,
                 1 if row["user_id"] in own else 0,
                 1 if row["has_account"] else 0,
+                row["install_id"] or "",
             ])
     return len(rows)
 

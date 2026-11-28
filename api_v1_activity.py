@@ -304,7 +304,15 @@ class LogApiActions(BaseHTTPMiddleware):
             return
         template = self._templates.get(request.scope.get("endpoint"), request.url.path)
         user_id = getattr(request.state, "user_id", None)
-        who = f"user={user_id}" if user_id is not None else "anon"
+        if user_id is not None:
+            who = f"user={user_id}"
+        else:
+            # Анонимный запрос — с началом id установки: так в журнале видно,
+            # одна это установка или разные (X-Install-Id, api_v1_common).
+            from api_v1_common import install_id as _install_id
+
+            install = _install_id(request)
+            who = f"anon install={install[:8]}" if install else "anon"
         logger.warning(
             "[ios] %s | %s %s | %s | %s",
             who,

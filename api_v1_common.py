@@ -226,6 +226,36 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
     )
 
 
+def install_id(request: Request) -> Optional[str]:
+    """Заголовок `X-Install-Id` — случайный UUID установки приложения (тот же,
+    что у воронки до входа, `api_v1_funnel`). Не UUID или нет — None."""
+    raw = (request.headers.get("x-install-id") or "").strip()
+    if not raw or len(raw) > 64:
+        return None
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError:
+        return None
+
+
+# Последняя установка, записанная для атлета в этом процессе: запись в базу —
+# только при смене, а не на каждый запрос.
+_INSTALL_SEEN: dict[int, str] = {}
+
+
+async def _remember_install(request: Request, user_id: int) -> None:
+    """Склеить установку с аккаунтом: шаги воронки до входа и анонимные
+    запросы (`X-Install-Id` в логе) — с атлетом после входа."""
+    install = install_id(request)
+    if install is None or _INSTALL_SEEN.get(user_id) == install:
+        return
+    try:
+        await db.set_user_install_id(user_id, install)
+        _INSTALL_SEEN[user_id] = install
+    except Exception:
+        logger.exception("install id not saved for user %s", user_id)
+
+
 async def authed_user_id(request: Request) -> int:
     """Bearer-токен → telegram_id, либо ApiError(401).
 
@@ -245,6 +275,7 @@ async def authed_user_id(request: Request) -> int:
     if user_id is None:
         raise ApiError(401, "unauthorized", "invalid or revoked token")
     request.state.user_id = user_id
+    await _remember_install(request, user_id)
     # Сам токен — для POST /auth/logout: он гасит только токен этого
     # устройства, а не все токены человека.
     request.state.api_token = token

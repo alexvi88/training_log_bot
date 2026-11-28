@@ -213,7 +213,12 @@ CREATE TABLE IF NOT EXISTS users (
     -- данные живут только под токеном этого телефона, пока человек не войдёт
     -- с Apple (api_v1.auth_apple с токеном гостя снимает флаг на том же
     -- user_id) или не привяжет Telegram (link_telegram_to_app_account).
-    is_guest INTEGER NOT NULL DEFAULT 0
+    is_guest INTEGER NOT NULL DEFAULT 0,
+    -- Случайный UUID установки приложения (заголовок X-Install-Id, тот же, что
+    -- у воронки до входа funnel_events): последний, с которым атлет приходил в
+    -- /v1. Склеивает шаги знакомства до входа с аккаунтом после. NULL — бот
+    -- или старое приложение без заголовка.
+    install_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -2116,6 +2121,8 @@ async def _migrate_schema() -> None:
         # 0 всем существующим: гостевых аккаунтов до этой колонки не было —
         # у каждого app-only аккаунта есть Apple ID или демо-вход.
         await _conn.execute("ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0")
+    if "install_id" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN install_id TEXT")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -3582,6 +3589,18 @@ async def create_app_only_user(
         await db.commit()
         cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (new_id,))
         return await cur.fetchone()
+
+
+async def set_user_install_id(telegram_id: int, install_id: str) -> None:
+    """Запомнить установку приложения, с которой атлет пришёл в /v1
+    (`api_v1_common.authed_user_id`). Пишет, только если id другой: тот же —
+    ни одной записи."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET install_id = ? WHERE telegram_id = ? AND install_id IS NOT ?",
+            (install_id, telegram_id, install_id),
+        )
+        await conn().commit()
 
 
 async def set_user_source(
@@ -12904,7 +12923,7 @@ async def analytics_event_users(since: str) -> list[aiosqlite.Row]:
     токен уже снят (выход, чистка), выходил «ios без приложения»."""
     cur = await conn().execute(
         "SELECT e.user_id, u.telegram_id IS NOT NULL AS has_account, u.created_at, u.source, "
-        "u.lang, u.telegram_linked, "
+        "u.lang, u.telegram_linked, u.install_id, "
         f"CASE WHEN u.telegram_id IS NULL THEN 0 ELSE ({_APP_USER_SQL} "
         "OR EXISTS (SELECT 1 FROM api_tokens t WHERE t.user_id = u.telegram_id)) END AS has_app "
         "FROM (SELECT DISTINCT user_id FROM analytics_events WHERE created_at >= ?) e "
