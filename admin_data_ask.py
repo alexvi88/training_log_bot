@@ -32,6 +32,7 @@ from typing import Any, Optional
 
 import ai_limits
 import ai_trainer
+import config
 import db
 
 logger = logging.getLogger(__name__)
@@ -212,7 +213,12 @@ def _system_prompt(schema: str, own_ids: set[int]) -> str:
         "- Агрегируй в SQL (COUNT, GROUP BY, date()), не тащи сырые строки.\n"
         "- Даты в базе — ISO-строки (UTC, если не сказано иное); сутки — date(столбец).\n"
         "- users.telegram_id — id атлета; у app-only атлетов он тоже есть. Свои аккаунты "
-        f"(админ, тест, демо) исключай из поведенческих выводов, если не спросили иначе: {own}.\n"
+        f"(админ, тест, демо): {own}. Из сумм, долей, воронок и средних их исключай. В списках и "
+        "топах отдельных атлетов (у кого больше всего, кто лучший) — не выкидывай, а показывай с "
+        "пометкой «свой»: админ — живой атлет, и его место владелец хочет видеть.\n"
+        "- Упражнение каталога на любом языке и после объединения — одна идентичность: "
+        "exercises.original_name (\"Жим штанги лёжа\" и т. п.), а не name/display_name. По "
+        "упражнению группируй и сравнивай атлетов по original_name.\n"
         "- Продуктовые события — analytics_events; суточная сводка — daily_metrics; лента "
         "действий для чтения глазами — user_events.\n"
         "- Таблицы с токенами закрыты (отказ «prohibited»/«not authorized» — не баг), столбцы с секретами и "
@@ -248,7 +254,9 @@ async def ask(
     admin_id: int, question: str, history: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Ответ на вопрос по данным и история диалога для следующего вопроса.
-    Ошибки модели летят наверх — их ловит хендлер."""
+    Отвечает старшая модель (`config.OPENAI_ADMIN_DATA_MODEL`); её сбой —
+    тот же вопрос модели тренера (Luna), с предупреждением в логе. Ошибки
+    Luna летят наверх — их ловит хендлер."""
     history = list(history or [])
     block = await ai_limits.hard_stop_block()
     if block is not None:
@@ -256,8 +264,21 @@ async def ask(
     path = await _db_path()
     schema = await asyncio.to_thread(schema_text, path)
     own_ids = await db.own_account_ids()
+    luna = ai_trainer.luna_backend()
+    smart = luna._replace(model=config.OPENAI_ADMIN_DATA_MODEL)
+    if smart.model != luna.model:
+        try:
+            return await _ask_with(smart, admin_id, question, history, path, schema, own_ids)
+        except Exception:
+            logger.warning("admin /data on %s failed — answering with %s", smart.model, luna.model, exc_info=True)
+    return await _ask_with(luna, admin_id, question, history, path, schema, own_ids)
+
+
+async def _ask_with(
+    backend: Any, admin_id: int, question: str, history: list[dict[str, Any]],
+    path: str, schema: str, own_ids: set[int],
+) -> tuple[str, list[dict[str, Any]]]:
     turn: list[dict[str, Any]] = [*_trim_history(history), {"role": "user", "content": question}]
-    backend = ai_trainer.luna_backend()
     for _ in range(MAX_ROUNDS):
         messages = [{"role": "system", "content": _system_prompt(schema, own_ids)}, *turn]
         text, calls, items = await ai_trainer._responses_round(

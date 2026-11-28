@@ -417,8 +417,12 @@ OPENAI_QUICK_REASONING_EFFORT = os.getenv("OPENAI_QUICK_REASONING_EFFORT", "none
 # medium — анализ, а не быстрый шаг. Ошибка или пустой ответ — разбор пишет
 # модель тренера (Luna) с предупреждением в логе, а не пропадает молча. Сменил id — допиши
 # его строку в LLM_PRICES_USD_PER_1K и CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL.
-OPENAI_ADMIN_DIGEST_MODEL = os.getenv("OPENAI_ADMIN_DIGEST_MODEL", "gpt-6.1-sol")
+OPENAI_ADMIN_DIGEST_MODEL = os.getenv("OPENAI_ADMIN_DIGEST_MODEL", "gpt-6.2-sol")
 OPENAI_ADMIN_DIGEST_REASONING_EFFORT = os.getenv("OPENAI_ADMIN_DIGEST_REASONING_EFFORT", "medium")
+# Админская /data (admin_data_ask) — та же старшая модель, что у разбора: SQL по
+# схеме базы пишет точнее Luna (владелец: «поставим на data модель поумнее»).
+# Только админ, HARD-стоп по деньгам держит. Сбой старшей — ответ Luna.
+OPENAI_ADMIN_DATA_MODEL = os.getenv("OPENAI_ADMIN_DATA_MODEL", "") or OPENAI_ADMIN_DIGEST_MODEL
 
 
 # --- Разбор техники по видео (Novita, Qwen3-VL — см. video_analysis.py) ------
@@ -751,6 +755,10 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     # CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL), запись в кэш $2.50 (как у Luna —
     # отдельного числа в usage нет, считается по ставке входа), выход $10.00.
     "gpt-6.1-sol": (0.002, 0.01),
+    # GPT-6.2 Sol — преемник 6.1 по той же цене ($2.00 вход, $0.10 кэш, $10.00
+    # выход за 1M, Standard, short context). Строку 6.1 не удалять: по ней
+    # считаются старые cost_events.
+    "gpt-6.2-sol": (0.002, 0.01),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():
@@ -791,6 +799,7 @@ CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL: dict[str, float] = {
     "gpt-6-luna": 0.1,
     # GPT-6.1 Sol: $0.10 кэшированного при $2.00 обычного входа.
     "gpt-6.1-sol": 0.05,
+    "gpt-6.2-sol": 0.05,
 }
 try:
     for _model, _mult in json.loads(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER_BY_MODEL_JSON", "{}")).items():
@@ -803,8 +812,8 @@ except (TypeError, ValueError, AttributeError, json.JSONDecodeError):
 # записи) — нет, там это отдельный тип. Прибавь их сверху для OpenAI — и каждое
 # размышление Luna посчиталось бы дважды.
 REASONING_INCLUDED_IN_COMPLETION: set[str] = {
-    "gpt-6-luna", "gpt-6.1-sol", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL, OPENAI_VISION_MODEL,
-    OPENAI_ADMIN_DIGEST_MODEL,
+    "gpt-6-luna", "gpt-6.1-sol", "gpt-6.2-sol", OPENAI_CHAT_MODEL, OPENAI_SEARCH_MODEL, OPENAI_VISION_MODEL,
+    OPENAI_ADMIN_DIGEST_MODEL, OPENAI_ADMIN_DATA_MODEL,
 }
 
 
