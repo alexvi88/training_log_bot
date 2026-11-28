@@ -16,6 +16,7 @@ import config
 import crowd_standing
 import finish_tonnage
 import i18n
+import lifecycle_events
 import seed_data
 
 BENCH = "Жим штанги лёжа"
@@ -129,12 +130,27 @@ def test_tonnage_milestones():
     assert finish_tonnage.crossed_lifetime(830000, 845000)  # каждые +420т после станции
     assert finish_tonnage.crossed_lifetime(1250000, 1270000)  # три станции
     assert finish_tonnage.next_target(500000) == ("space_station", 2)
-    assert finish_tonnage.crossed_month(13000, 25000)  # 1 автобус → 2 автобуса
-    assert not finish_tonnage.crossed_month(0, 25000)  # первая тренировка месяца — это и есть тренировка
-    assert not finish_tonnage.crossed_month(9000, 11000)  # всё ещё один тираннозавр
     assert finish_tonnage.workout_object(100, 1) is None
     obj, count = finish_tonnage.workout_object(5000, 7)
     assert 1 <= count <= finish_tonnage.MAX_COUNT and 5000 // dict(finish_tonnage._objects())[obj] == count
+    # Соседние номера тренировок — соседние предметы, не один и тот же.
+    picks = [finish_tonnage.workout_object(5000, n)[0] for n in range(6)]
+    assert all(a != b for a, b in zip(picks, picks[1:], strict=False))
+
+
+def test_new_objects_only_for_builds_that_draw_them():
+    assert finish_tonnage.client_build("1.0.9 (139)") == 139
+    assert finish_tonnage.client_build("1.0.9") is None and finish_tonnage.client_build(None) is None
+    every = {obj for obj, _w in finish_tonnage._objects()}
+    assert every >= finish_tonnage.NEW_IDS
+    with lifecycle_events.using("ios", "1.0.9 (138)"):
+        old = finish_tonnage.drawable_ids()
+    with lifecycle_events.using("ios", f"1.0.9 ({finish_tonnage.NEW_IDS_MIN_BUILD})"):
+        assert finish_tonnage.drawable_ids() == every
+    assert not old & finish_tonnage.NEW_IDS
+    for n in range(40):
+        obj, _c = finish_tonnage.workout_object(5000, n, old)
+        assert obj not in finish_tonnage.NEW_IDS
 
 
 def test_every_object_id_has_a_name_in_every_language():
@@ -182,10 +198,12 @@ async def test_below_median_label_and_threshold(fresh_db):
     await crowd(fresh_db, BENCH, [100.0], start=59000)
     await crowd_standing.refresh(force=True)
     body = (await client.get(f"/exercises/{ex}/standing")).json()
-    assert body["available"] and not body["above_median"] and body["top"] is None
-    assert body["stronger_than"] is None and "%" not in body["label"]
-    assert body["label"].startswith("до середины +") and body["label"].endswith("кг")
-    assert body["hint"]
+    # Ниже середины места нет вовсе — ни процента, ни «до середины».
+    assert not body["available"] and body["reason"] == "below_median" and not body["above_median"]
+    assert body["top"] is None and body["stronger_than"] is None and body["histogram"] == []
+    assert "%" not in body["label"] and body["hint"]
+    overview = (await client.get("/standing")).json()
+    assert all(item["exercise_id"] != ex for item in overview["items"])
 
 
 async def test_reasons_and_404(fresh_db):
@@ -248,14 +266,20 @@ async def test_overview_orders_available_first(fresh_db):
     await crowd(fresh_db, BENCH, _spread(k + 5), start=50000)
     await crowd(fresh_db, SQUAT, _spread(k, 80, 180), start=52000)
     client = await _me(fresh_db)
-    await athlete(fresh_db, ME, BENCH, 100)
-    await athlete(fresh_db, ME, SQUAT, 150)
+    await athlete(fresh_db, ME, BENCH, 130)
+    await athlete(fresh_db, ME, SQUAT, 175)
     await athlete(fresh_db, ME, "Становая тяга", 150)
     await athlete(fresh_db, ME, None, 10, name="Мой жим")
     body = (await client.get("/standing")).json()
     assert body["basis"] == "abs" and body["intro"]
     names = [(i["name"], i["available"]) for i in body["items"]]
     assert names == [(BENCH, True), (SQUAT, True), ("Становая тяга", False)]
+    # Ниже середины — упражнения в списке нет вовсе.
+    await athlete(fresh_db, ME, "Жим штанги стоя", 1)
+    await crowd(fresh_db, "Жим штанги стоя", _spread(k, 40, 90), start=54000)
+    await crowd_standing.refresh(force=True)
+    names = [i["name"] for i in (await client.get("/standing")).json()["items"]]
+    assert "Жим штанги стоя" not in names and BENCH in names
 
 
 async def test_no_string_names_the_bucket_size(fresh_db):
@@ -305,6 +329,7 @@ async def test_standing_in_rewards_only_on_record_above_median(fresh_db, lang):
     st = rewards["standing"]
     assert st is not None and st["exercise_id"] == ex and 5 <= st["top"] <= 50
     assert st["stronger_than"] == 100 - st["top"] and 0 <= st["crowd_index"] <= 19
+    assert st["value_text"].startswith("e1RM") and isinstance(st["best"], bool)
     assert st["gained"] is None or st["gained"] > 0
     assert set(st) >= {"name", "eyebrow", "headline", "hint", "footnote"}
     obj = rewards["tonnage_object"]
@@ -359,16 +384,14 @@ async def test_imported_history_celebrates_nothing(fresh_db):
     assert obj["period"] == "workout"
 
 
-async def test_month_threshold(fresh_db):
+async def test_workout_object_rotates_and_never_month(fresh_db):
     client = await _me(fresh_db)
     ex = await athlete(fresh_db, ME, BENCH, 10, days_ago=60)
     first = (await _finish(client, fresh_db, ex, 130, 10))["rewards"]["tonnage_object"]
-    assert first["period"] == "workout"  # первая в месяце
-    second = await _finish(client, fresh_db, ex, 200, 10)
+    second = await _finish(client, fresh_db, ex, 130, 10)
     obj = second["rewards"]["tonnage_object"]
-    # 1.3т → 3.3т: самый тяжёлый подходящий был легковушка, стал — она же, но
-    # не одна, а две: веха месяца.
-    assert obj["period"] == "month" and obj["id"] == "car" and obj["count"] == 2
+    # Тот же тоннаж, месячный рос — а слайд всё равно про тренировку, и предмет другой.
+    assert first["period"] == obj["period"] == "workout" and first["id"] != obj["id"]
     replay = await client.post(f"/workouts/{second['id']}/finish", json={})
     assert replay.json()["rewards"]["tonnage_object"] == obj
 

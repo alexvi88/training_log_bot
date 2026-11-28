@@ -527,17 +527,17 @@ async def test_m2_empty_weight_is_not_a_zero_kilo_record(fresh_db):
 # ---------- M3: e1RM только до 12 повторов ----------
 
 
-async def test_m3_e1rm_ignores_sets_longer_than_twelve_reps(fresh_db, user_id):
+async def test_m3_e1rm_counts_long_sets_too(fresh_db, user_id):
+    """Потолка повторов у e1RM нет (решение владельца): многоповторка тоже
+    даёт расчётный максимум по Эпли, а не ноль."""
     db = fresh_db
-    assert analytics.e1rm(5.0, 55) == 0.0
+    assert round(analytics.e1rm(5.0, 55), 1) == 14.2
     assert analytics.e1rm(100.0, 12) > 100.0
     session = analytics.SessionStats(1, "2026-08-07T10:00:00", [analytics.SetRow(5.0, 55), analytics.SetRow(5.0, 50)])
-    assert session.top_e1rm == 0.0
-    records = analytics.compute_personal_records([session])
-    assert records.max_e1rm == 0.0
+    assert round(session.top_e1rm, 1) == 14.2
     ex = await _fork(db, user_id, "Жим гантелей сидя")
     wid = await _log(db, user_id, ex, "2026-08-07T10:00:00", [(5.0, 55)])
-    assert await db.max_e1rm_before_workout(user_id, ex, wid + 1) == 0
+    assert round(await db.max_e1rm_before_workout(user_id, ex, wid + 1), 1) == 14.2
 
 
 # ---------- M4: что пропущено и почему; суперсеты ----------
