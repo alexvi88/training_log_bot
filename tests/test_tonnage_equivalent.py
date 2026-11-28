@@ -30,7 +30,7 @@ def test_count_is_always_in_a_sane_range():
 def test_declension_matches_count():
     assert formatting.format_tonnage_equivalent(200, seed=0) == "Это как 2 сенбернара 🐺"
     assert formatting.format_tonnage_equivalent(750, seed=0) == "Это как 9 сенбернаров 🐺"
-    assert formatting.format_tonnage_equivalent(125000, seed=1) == "Это как 25 слонов 🐘"
+    assert formatting.format_tonnage_equivalent(125000, seed=1) == "Это как 28 тракторов 🚜"
 
 
 def test_tonnage_in_pounds_never_becomes_tons():

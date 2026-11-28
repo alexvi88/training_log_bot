@@ -5,16 +5,23 @@
 названия — `tonnage.object.<id>` с ICU-формами): приложение рисует каждому id
 свой пиксельный спрайт.
 
-**Какой период.** По умолчанию — эта тренировка. Если она перевела тоннаж
-календарного месяца через новый предмет (самый тяжёлый подходящий предмет
-сменился или его стало больше) — месяц. Если тоннаж за всё время перешёл веху
-(`lifetime_milestones_up_to`: горбач, пассажирский самолёт, синий кит, космическая
-станция, дальше каждые +420т) — всё время, это главнее всего. Месяц и всё время считаются
+**Какой период.** Эта тренировка. Исключение одно — тоннаж за всё время
+перешёл веху (`lifetime_milestones_up_to`: горбач, пассажирский самолёт, синий
+кит, космическая станция, дальше каждые +420т): тогда всё время. Считается
 только по записанному у нас (`db.tonnage_totals_before`, без импорта), у
-занесения задним числом их нет вовсе — его вносят не по порядку.
+занесения задним числом вехи нет — его вносят не по порядку. Месяца нет: слайд
+про то, что человек сделал сегодня.
 
-**Тот же ответ на повтор.** «До этой тренировки» — по id тренировки, а
-предмет тренировки выбирается с сидом id: повторный finish отдаёт то же самое.
+**От тренировки к тренировке — новый предмет.** Подходящие предметы (тоннаж
+покрывает их от 1 до `MAX_COUNT` раз) идут по весу, а выбор — по порядковому
+номеру тренировки атлета: следующая тренировка того же тоннажа берёт соседний
+предмет, а не тот же. Повторный finish отдаёт то же самое — номер считается «до
+этой тренировки» по её id.
+
+**Новые предметы — только той сборке, что их рисует.** Приложение рисует
+спрайт по id; старая сборка на незнакомый id показывает блин. Поэтому предметы
+из `NEW_IDS` уходят в слайд, только если `X-App-Version` сборки не ниже
+`NEW_IDS_MIN_BUILD` (бот и сайт видят их всегда — там текст).
 
 **Только правда.** Количество — целые предметы, которые тоннаж покрывает
 полностью (вниз, а не до ближайшего): «Это 3 легковушки» — значит, поднято не
@@ -23,12 +30,12 @@
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any, Optional
 
 import config
 import formatting
 import i18n
+import lifecycle_events
 
 # Легче этого сравнивать не с чем — тот же порог, что у
 # formatting.format_tonnage_equivalent.
@@ -56,8 +63,30 @@ def crossed_lifetime(before_kg: float, after_kg: float) -> bool:
     return any(m > before_kg for m in lifetime_milestones_up_to(after_kg))
 
 
+# Предметы, которые приложение рисует только с этой сборки.
+NEW_IDS = frozenset({"gorilla", "moose", "bison", "giraffe", "hippo", "rhino", "tractor", "mammoth"})
+NEW_IDS_MIN_BUILD = 139
+
+
 def _objects() -> list[tuple[str, float]]:
     return [(obj_id, float(w)) for _e, w, obj_id in formatting._TONNAGE_OBJECTS]
+
+
+def client_build(app_version: Optional[str]) -> Optional[int]:
+    """Номер сборки из `X-App-Version` («1.0.9 (139)» → 139); None — не разобрать."""
+    if not app_version or "(" not in app_version:
+        return None
+    tail = app_version.rsplit("(", 1)[1].rstrip(") ")
+    return int(tail) if tail.isdigit() else None
+
+
+def drawable_ids() -> frozenset[str]:
+    """id, которые клиент этого запроса умеет нарисовать."""
+    every = frozenset(obj_id for obj_id, _w in _objects())
+    build = client_build(lifecycle_events.app_version())
+    if build is not None and build >= NEW_IDS_MIN_BUILD:
+        return every
+    return every - NEW_IDS
 
 
 def heaviest_fit(total_kg: float) -> Optional[tuple[int, str, int]]:
@@ -70,29 +99,19 @@ def heaviest_fit(total_kg: float) -> Optional[tuple[int, str, int]]:
     return best
 
 
-def crossed_month(before_kg: float, after_kg: float) -> bool:
-    """Месячный тоннаж перешёл через новый предмет: самый тяжёлый подходящий
-    сменился на более тяжёлый или его стало больше. С нуля (первая тренировка
-    месяца) — не считается: тогда месяц и есть эта тренировка."""
-    if before_kg <= 0:
-        return False
-    old, new = heaviest_fit(before_kg), heaviest_fit(after_kg)
-    if new is None:
-        return False
-    if old is None:
-        return True
-    return (new[0], new[2]) > (old[0], old[2])
-
-
-def workout_object(total_kg: float, seed: int) -> Optional[tuple[str, int]]:
+def workout_object(
+    total_kg: float, seed: int, allowed: Optional[frozenset[str]] = None,
+) -> Optional[tuple[str, int]]:
     """Предмет тренировки: из тех, что тоннаж покрывает от 1 до MAX_COUNT раз,
-    по сиду (id тренировки); None — слишком легко."""
+    `seed`-й по весу (порядковый номер тренировки — соседние тренировки берут
+    соседние предметы); None — слишком легко. `allowed` — что клиент рисует."""
     if total_kg < MIN_KG:
         return None
-    candidates = [(obj_id, int(total_kg // w)) for obj_id, w in _objects() if 1 <= total_kg // w <= MAX_COUNT]
+    objects = [(obj_id, w) for obj_id, w in _objects() if allowed is None or obj_id in allowed]
+    candidates = [(obj_id, int(total_kg // w)) for obj_id, w in objects if 1 <= total_kg // w <= MAX_COUNT]
     if not candidates:
-        fit = heaviest_fit(total_kg)
-        return None if fit is None else (fit[1], fit[2])
+        fitting = [(obj_id, int(total_kg // w)) for obj_id, w in objects if w <= total_kg]
+        return fitting[-1] if fitting else None
     return candidates[seed % len(candidates)]
 
 
@@ -153,12 +172,13 @@ async def tonnage_object_json(
     `exercises` — её подходы и упражнения. `celebrate_periods=False` —
     занесение задним числом: только сама тренировка."""
     import db
-    import timeutil
 
     unit = user["unit"]
     imported = db.is_imported_workout(workout)
+    seed = int(workout["id"])
     if celebrate_periods and not imported:
         _w, _s, life_before = await db.tonnage_totals_before(workout["user_id"], workout["id"])
+        seed = _w
         life_w, life_s = _w + 1, _s + sets
         before_kg, after_kg = formatting.to_kg(life_before, unit), formatting.to_kg(life_before + tonnage, unit)
         if tonnage > 0 and crossed_lifetime(before_kg, after_kg):
@@ -168,20 +188,7 @@ async def tonnage_object_json(
                     period="lifetime", total=life_before + tonnage, unit=unit, obj_id=fit[1], count=fit[2],
                     caption=i18n.t("tonnage.slide.caption.period", workouts=life_w, sets=life_s),
                 )
-        tz = timeutil.offset_hours(user)
-        month = _local_month(workout["started_at"], tz)
-        m_w, m_s, m_before = await db.tonnage_totals_before(
-            workout["user_id"], workout["id"], month=month, tz_offset=tz,
-        )
-        before_kg, after_kg = formatting.to_kg(m_before, unit), formatting.to_kg(m_before + tonnage, unit)
-        if tonnage > 0 and crossed_month(before_kg, after_kg):
-            fit = heaviest_fit(after_kg)
-            if fit is not None:
-                return slide_json(
-                    period="month", total=m_before + tonnage, unit=unit, obj_id=fit[1], count=fit[2],
-                    caption=i18n.t("tonnage.slide.caption.period", workouts=m_w + 1, sets=m_s + sets),
-                )
-    picked = workout_object(formatting.to_kg(tonnage, unit), int(workout["id"]))
+    picked = workout_object(formatting.to_kg(tonnage, unit), seed, drawable_ids())
     if picked is None:
         return None
     return slide_json(
@@ -197,12 +204,4 @@ def looks_backfilled(workout: Any) -> bool:
     всех `finished`, поэтому повтор finish узнаёт его так."""
     started, finished = workout["started_at"] or "", workout["finished_at"] or ""
     return started == finished and started[13:19] in (":00:00", ":30:00")
-
-
-def _local_month(started_at: str, tz_offset: int) -> str:
-    """'YYYY-MM' местного месяца тренировки — тот же сдвиг, что db._local_day."""
-    moment = dt.datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    if moment.tzinfo is not None:
-        moment = moment.astimezone(dt.timezone.utc).replace(tzinfo=None)
-    return (moment + dt.timedelta(hours=tz_offset)).strftime("%Y-%m")
 
