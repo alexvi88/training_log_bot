@@ -193,7 +193,7 @@
   "ai.digest.first_week_note": "es ist die erste Woche im Tagebuch, eine Woche davor gibt es nicht. Ein Neuling bekommt nur Unterstützung: ein Tipp für die neue Woche, zähl keine zu wenig trainierten Gruppen auf",
   "ai.comment.workout_not_found": "Ich finde das Training nicht — öffne deinen Verlauf und wähl es noch mal.",
   "ai.factcheck.empty": "Konnte nichts erkennen — leite es noch mal weiter.",
-  "ai.language_tail": "Antworte NUR auf Deutsch — wechsle nie ins Russische, Ukrainische, Englische oder eine andere Sprache, nicht mal ein Wort in einem deutschen Satz. Begriffe, die der Nutzer selbst in einer anderen Sprache benutzt hat (ein Übungsname aus dem Katalog, eine Einheit, ein Technikbegriff), sind normales Gym-Vokabular, kein Verstoß — übernimm sie so. Sprich von dir als „ich“, nie als „der Bot“: „Ich kürze die Sätze selbst“, „Gewichte trage ich nicht in den Plan ein“.",
+  "ai.language_tail": "Antworte NUR auf Deutsch — wechsle nie ins Russische, Ukrainische, Englische oder eine andere Sprache, nicht mal ein Wort in einem deutschen Satz. Begriffe, die der Nutzer selbst in einer anderen Sprache benutzt hat (ein Übungsname aus dem Katalog, eine Einheit, ein Technikbegriff), sind normales Gym-Vokabular, kein Verstoß — übernimm sie so. Sprich von dir als „ich“, nie als „der Bot“: „Ich kürze die Sätze selbst“, „Gewichte trage ich nicht in den Plan ein“. Eine Ausnahme von der Sprachregel: Ist die letzte Frage des Athleten in einer anderen Sprache geschrieben, antworte in der Sprache dieser Frage — die hat er gewählt.",
   "ai.video.confidence_high": "hoch",
   "ai.video.confidence_low": "niedrig",
   "ai.video.confidence_medium": "mittel",

@@ -193,7 +193,7 @@
   "ai.digest.first_week_note": "é a primeira semana dele no diário, não existe semana anterior. Um iniciante recebe só apoio: uma dica para a semana que começa, não listes grupos pouco treinados",
   "ai.comment.workout_not_found": "Não encontro esse treino — abre o teu histórico e escolhe outra vez.",
   "ai.factcheck.empty": "Não consegui perceber — tenta reencaminhar outra vez.",
-  "ai.language_tail": "Responde APENAS em português europeu (de Portugal) — nunca mudes para o russo, o inglês, o ucraniano ou qualquer outra língua, nem uma palavra dentro de uma frase em português. Termos que o próprio utilizador usou noutra língua (nome de exercício do catálogo, unidade, termo de técnica) são vocabulário normal de ginásio, não uma violação — mantém-nos como vieram. Fala de ti como “eu”, nunca “o bot”: “eu próprio corto as séries”, “eu não ponho pesos no programa”.",
+  "ai.language_tail": "Responde APENAS em português europeu (de Portugal) — nunca mudes para o russo, o inglês, o ucraniano ou qualquer outra língua, nem uma palavra dentro de uma frase em português. Termos que o próprio utilizador usou noutra língua (nome de exercício do catálogo, unidade, termo de técnica) são vocabulário normal de ginásio, não uma violação — mantém-nos como vieram. Fala de ti como “eu”, nunca “o bot”: “eu próprio corto as séries”, “eu não ponho pesos no programa”. Uma exceção à regra da língua: se a última pergunta do atleta estiver escrita noutra língua, responde na língua dessa pergunta — foi a que ele escolheu.",
   "ai.video.confidence_high": "alta",
   "ai.video.confidence_low": "baixa",
   "ai.video.confidence_medium": "média",
